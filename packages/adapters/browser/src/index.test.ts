@@ -1,0 +1,150 @@
+import { describe, expect, it, vi } from "vitest";
+import type { AccountContext } from "@publisher/domain";
+import { defaultCapabilities, type BrowserSessionManager } from "@publisher/adapters-core";
+import { BrowserAutomationAdapter, type BrowserPlatformDefinition } from "./index";
+
+const definition: BrowserPlatformDefinition = {
+  platformKey: "browser-test",
+  displayName: "浏览器测试平台",
+  category: "测试",
+  officialWebsite: "https://example.com/",
+  backendUrl: "https://example.com/backend",
+  loginUrl: "https://example.com/login",
+  officialSources: ["https://example.com/"],
+  capabilities: { ...defaultCapabilities },
+  version: "1.1.4",
+  blockingReason: "测试",
+  researchStatus: "partial"
+};
+
+const context = (): AccountContext => ({
+  accountId: "account-1",
+  accountName: "测试账号",
+  platformKey: definition.platformKey,
+  settings: { userActionId: "11111111-1111-4111-8111-111111111111", triggerSource: "CONNECT_ACCOUNT" }
+});
+
+function fixture(staysOnLogin = false, hasStoredSession = false, saveFails = false) {
+  let currentUrl = definition.loginUrl as string;
+  const page = {
+    goto: vi.fn(async (url: string) => { currentUrl = staysOnLogin ? definition.loginUrl as string : url; }),
+    url: vi.fn(() => currentUrl)
+  };
+  const session = { sessionIdHash: "owned-session", context: { pages: vi.fn(() => [page]) } };
+  const manager = {
+    open: vi.fn(async (_identity: unknown, _action: unknown, executionMode: "BACKGROUND" | "VISIBLE" = "VISIBLE") => ({ ...session, executionMode, headless: executionMode === "BACKGROUND" })),
+    save: vi.fn(async () => { if (saveFails) throw new Error("session save failed"); }),
+    close: vi.fn(async () => undefined),
+    closeAll: vi.fn(async () => undefined),
+    clear: vi.fn(),
+    hasStoredSession: vi.fn(() => hasStoredSession)
+  } as unknown as BrowserSessionManager;
+  return { adapter: new BrowserAutomationAdapter(definition, { sessionManager: manager }), manager, page };
+}
+
+describe("BrowserAutomationAdapter login lifecycle", () => {
+  it("verifies in the dedicated login session, saves storageState and closes without opening a second browser", async () => {
+    const { adapter, manager, page } = fixture();
+    const ctx = context();
+
+    await adapter.connectAccount(ctx);
+    await expect(adapter.completeConnection(ctx)).resolves.toBe("logged_in");
+
+    expect(manager.open).toHaveBeenCalledTimes(1);
+    expect(manager.open).toHaveBeenCalledWith(
+      { platformKey: definition.platformKey, accountId: ctx.accountId },
+      { userActionId: ctx.settings.userActionId, triggerSource: "CONNECT_ACCOUNT" },
+      "VISIBLE"
+    );
+    expect(page.goto).toHaveBeenLastCalledWith(definition.backendUrl, expect.anything());
+    expect(manager.save).toHaveBeenCalledTimes(1);
+    expect(manager.close).toHaveBeenCalledTimes(1);
+    expect(adapter.isConnectionPending(ctx)).toBe(false);
+  });
+
+  it("keeps the dedicated browser open when login or platform verification is not complete", async () => {
+    const { adapter, manager } = fixture(true);
+    const ctx = context();
+
+    await adapter.connectAccount(ctx);
+    await expect(adapter.completeConnection(ctx)).resolves.toBe("needs_user_action");
+
+    expect(manager.open).toHaveBeenCalledTimes(1);
+    expect(manager.save).not.toHaveBeenCalled();
+    expect(manager.close).not.toHaveBeenCalled();
+    expect(adapter.isConnectionPending(ctx)).toBe(true);
+  });
+
+  it("closes a failed login session without clearing a previously stored Session", async () => {
+    const { adapter, manager } = fixture(false, true, true);
+    const ctx = context();
+
+    await adapter.connectAccount(ctx);
+    await expect(adapter.completeConnection(ctx)).rejects.toThrow("session save failed");
+
+    expect(manager.close).toHaveBeenCalledTimes(1);
+    expect(manager.clear).not.toHaveBeenCalled();
+    expect(adapter.isConnectionPending(ctx)).toBe(false);
+  });
+
+  it("can close every browser resource owned by the adapter without clearing unrelated user browser processes", async () => {
+    const { adapter, manager } = fixture();
+    const ctx = context();
+    await adapter.connectAccount(ctx);
+
+    await adapter.closeOwnedSessions();
+
+    expect(manager.closeAll).toHaveBeenCalledTimes(1);
+    expect(adapter.isConnectionPending(ctx)).toBe(false);
+  });
+
+  it("passes an explicit BACKGROUND mode to the owned Playwright session and reports actual headless evidence", async () => {
+    const { adapter, manager } = fixture(false, true);
+    const ctx: AccountContext = { ...context(), settings: { userActionId: "22222222-2222-4222-8222-222222222222", triggerSource: "START_PUBLISH", browserExecutionMode: "BACKGROUND" } };
+
+    const opened = await adapter.openBackend(ctx);
+
+    expect(manager.open).toHaveBeenCalledWith(
+      { platformKey: definition.platformKey, accountId: ctx.accountId },
+      { userActionId: ctx.settings.userActionId, triggerSource: "START_PUBLISH" },
+      "BACKGROUND"
+    );
+    expect(opened).toMatchObject({ executionMode: "BACKGROUND", headless: true });
+    await adapter.releaseOperationSession(ctx);
+    expect(manager.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a VISIBLE operation session open for user handling", async () => {
+    const { adapter, manager } = fixture(false, true);
+    const ctx: AccountContext = { ...context(), settings: { userActionId: "77777777-7777-4777-8777-777777777777", triggerSource: "OPEN_BACKEND", browserExecutionMode: "VISIBLE" } };
+
+    await adapter.openBackend(ctx);
+    await adapter.releaseOperationSession(ctx);
+
+    expect(manager.close).not.toHaveBeenCalled();
+  });
+
+  it("releases the account browser session after a BACKGROUND publish job finishes", async () => {
+    const { adapter, manager } = fixture(false, true);
+    const ctx: AccountContext = {
+      ...context(),
+      settings: {
+        userActionId: "33333333-3333-4333-8333-333333333333",
+        triggerSource: "START_PUBLISH",
+        browserExecutionMode: "BACKGROUND",
+        dryRun: true
+      }
+    };
+
+    await expect(adapter.publishArticle(ctx, {
+      articleId: "article-1",
+      title: "测试标题",
+      body: "用于验证后台任务资源释放的正文",
+      summary: "",
+      tags: []
+    })).resolves.toMatchObject({ success: true, dryRun: true });
+
+    expect(manager.open).toHaveBeenCalledTimes(1);
+    expect(manager.close).toHaveBeenCalledTimes(1);
+  });
+});

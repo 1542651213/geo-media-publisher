@@ -1,0 +1,12 @@
+{
+  "name": "@publisher/adapters-lieju",
+  "version": "1.1.2",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@publisher/adapters-browser": "workspace:*",
+    "@publisher/adapters-core": "workspace:*",
+    "@publisher/domain": "workspace:*"
+  }
+}

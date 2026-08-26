@@ -1,0 +1,9 @@
+import { useEffect, useState } from "react";
+import type { JSX } from "react";
+import type { PlatformContentRules } from "@publisher/domain";
+
+export function PlatformRulesPage(): JSX.Element {
+  const [rules, setRules] = useState<PlatformContentRules[]>([]);
+  useEffect(() => { void window.publisherAPI.platforms.contentRules().then(setRules); }, []);
+  return <><div className="studio-hero quality-hero"><div><div className="eyebrow">V0.9.1 / 平台规则配置中心</div><h2>PlatformContentRules</h2><p>平台内容限制由主进程和数据库统一提供，审核页面不再维护平台规则常量。未验证规则使用保守默认值。</p></div><div className="studio-hero-badge">{rules.length} 个现有平台<br /><small>不新增平台 · 不修改 Adapter</small></div></div><section className="panel table-panel"><div className="panel-heading"><div><h3>内容规则</h3><span>来源、验证时间和 fallback 状态随规则一起保存。</span></div><button className="secondary-button" onClick={() => void window.publisherAPI.platforms.contentRules().then(setRules)}>刷新</button></div><div className="data-table rules-table"><div className="table-head"><span>平台</span><span>内容类型</span><span>标题</span><span>正文</span><span>摘要 / 标签 / 图片</span><span>能力 / 来源</span></div>{rules.map((rule) => <div className="table-row" key={rule.platformKey}><strong>{rule.platformKey}</strong><span>{rule.contentType}</span><span>{rule.titleMinLength}–{rule.titleMaxLength}</span><span>{rule.bodyMinLength}–{rule.bodyMaxLength}</span><span>{rule.summaryMaxLength} / {rule.maxTags} / {rule.maxImages}</span><span><b className={`status-pill ${rule.verificationStatus === "verified" ? "success" : "warning"}`}>{rule.verificationStatus}</b><small>{[rule.supportsLinks && "链接", rule.supportsMarkdown && "Markdown", rule.supportsHtml && "HTML"].filter(Boolean).join("、") || "无扩展能力"}</small><small>{rule.source ?? "source: unverified fallback"} · {rule.lastVerifiedAt ?? "未验证"}</small></span></div>)}</div></section></>;
+}

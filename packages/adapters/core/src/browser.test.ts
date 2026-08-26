@@ -1,0 +1,147 @@
+import { basename, relative, resolve } from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import type { Browser, BrowserContext } from "playwright-core";
+import type { CredentialStore } from "@publisher/security";
+import { BrowserRuntimeError, BrowserSessionManager, ExternalLaunchBlockedError, browserExecutionModeFromSettings, type UserInitiatedAction } from "./index";
+
+class MemoryCredentialStore implements CredentialStore {
+  private readonly values = new Map<string, string>();
+
+  get(key: string): string | null { return this.values.get(key) ?? null; }
+  set(key: string, value: string): void { this.values.set(key, value); }
+  delete(key: string): void { this.values.delete(key); }
+  has(key: string): boolean { return this.values.has(key); }
+}
+
+const userAction: UserInitiatedAction = { userActionId: "11111111-1111-4111-8111-111111111111", triggerSource: "CONNECT_ACCOUNT" };
+
+describe("BrowserSessionManager credential boundary", () => {
+  it("saves and clears storage state through the credential store without launching a browser", async () => {
+    const store = new MemoryCredentialStore();
+    const manager = new BrowserSessionManager(store);
+    const identity = { platformKey: "browser-platform", accountId: "account-1" };
+    const state = { cookies: [{ name: "session", value: "encrypted-by-store", domain: ".example.com", path: "/", expires: -1, httpOnly: true, secure: true, sameSite: "Lax" as const }], origins: [] };
+    const context = { storageState: vi.fn(async () => state) } as unknown as BrowserContext;
+
+    await manager.save(identity, context);
+
+    expect(store.get("session:browser-platform:account-1")).toBe(JSON.stringify(state));
+    expect(context.storageState).toHaveBeenCalledTimes(1);
+    manager.clear(identity);
+    expect(store.has("session:browser-platform:account-1")).toBe(false);
+  });
+
+  it("sanitizes every debug path segment and keeps it below the configured root", () => {
+    const root = resolve("browser-debug-artifacts");
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { debugArtifactsDir: root });
+
+    const artifact = manager.debugArtifactPath({ platformKey: "../tik?tok", accountId: "acct/../../1" }, "../shot.png");
+
+    expect(artifact).not.toBeNull();
+    if (!artifact) throw new Error("debug path was not created");
+    expect(relative(root, artifact).startsWith("..")) .toBe(false);
+    expect(basename(artifact)).toBe("___shot_png");
+    expect(artifact).not.toContain("../");
+    expect(artifact).not.toContain("..\\");
+  });
+
+  it("returns null when debug artifacts are disabled", () => {
+    const manager = new BrowserSessionManager(new MemoryCredentialStore());
+    expect(manager.debugArtifactPath({ platformKey: "platform", accountId: "account" }, "shot.png")).toBeNull();
+  });
+
+  it("prefers the independently updated Chrome channel and keeps the browser visible by default", async () => {
+    const context = { setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => ({ url: vi.fn(() => "about:blank") })), close: vi.fn() } as unknown as BrowserContext;
+    const browser = { newContext: vi.fn(async () => context) } as unknown as Browser;
+    const launchBrowser = vi.fn(async ({ channel, headless }: { channel: "msedge" | "chrome"; headless: boolean }) => {
+      expect(channel).toBe("chrome");
+      expect(headless).toBe(false);
+      return browser;
+    });
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser });
+
+    await expect(manager.open({ platformKey: "zhihu", accountId: "account-1" }, userAction)).resolves.toMatchObject({ browser, context });
+    expect(launchBrowser).toHaveBeenCalledTimes(1);
+    expect(launchBrowser).toHaveBeenCalledWith({ channel: "chrome", headless: false });
+  });
+
+  it("falls back to Edge when Chrome is unavailable", async () => {
+    const context = { setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => ({ url: vi.fn(() => "about:blank") })), close: vi.fn() } as unknown as BrowserContext;
+    const browser = { newContext: vi.fn(async () => context) } as unknown as Browser;
+    const launchBrowser = vi.fn(async ({ channel }: { channel: "msedge" | "chrome"; headless: boolean }) => {
+      if (channel === "chrome") throw new Error("Chrome is not installed");
+      return browser;
+    });
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser });
+
+    await expect(manager.open({ platformKey: "bilibili", accountId: "account-2" }, userAction)).resolves.toMatchObject({ browser, context });
+    expect(launchBrowser).toHaveBeenNthCalledWith(1, { channel: "chrome", headless: false });
+    expect(launchBrowser).toHaveBeenNthCalledWith(2, { channel: "msedge", headless: false });
+  });
+
+  it("uses headless only for an explicit per-action BACKGROUND execution mode", async () => {
+    const context = { setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => ({ url: vi.fn(() => "about:blank") })), close: vi.fn() } as unknown as BrowserContext;
+    const browser = { newContext: vi.fn(async () => context) } as unknown as Browser;
+    const launchBrowser = vi.fn(async () => browser);
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser });
+
+    await expect(manager.open({ platformKey: "zhihu", accountId: "background-account" }, { ...userAction, triggerSource: "START_PUBLISH" }, "BACKGROUND")).resolves.toMatchObject({ executionMode: "BACKGROUND", headless: true });
+    expect(launchBrowser).toHaveBeenCalledWith({ channel: "chrome", headless: true });
+    expect(browserExecutionModeFromSettings({ browserExecutionMode: "BACKGROUND" })).toBe("BACKGROUND");
+    expect(browserExecutionModeFromSettings({ browserExecutionMode: "UNKNOWN" })).toBe("VISIBLE");
+    expect(browserExecutionModeFromSettings({})).toBe("VISIBLE");
+  });
+
+  it("fails closed with a safe runtime error when no supported browser exists", async () => {
+    const launchBrowser = vi.fn(async () => { throw new Error("private executable path must not reach the UI"); });
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser });
+
+    const error = await manager.open({ platformKey: "zhihu", accountId: "account-3" }, userAction).catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(BrowserRuntimeError);
+    expect(error).toMatchObject({ diagnostic: { errorCode: "BROWSER_RUNTIME_NOT_FOUND", module: "BrowserSessionManager", attemptedChannels: ["chrome", "msedge"] } });
+    expect(error instanceof Error ? error.message : String(error)).toBe("未检测到 Microsoft Edge 或 Google Chrome，请安装浏览器后重试。");
+    expect(error instanceof Error ? error.message : String(error)).not.toContain("private executable path");
+  });
+
+  it("blocks APP_STARTUP before any external browser launch", async () => {
+    const launchBrowser = vi.fn(async () => { throw new Error("must not launch"); });
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser });
+
+    const error = await manager.open(
+      { platformKey: "zhihu", accountId: "startup-account" },
+      { userActionId: null, triggerSource: "APP_STARTUP" }
+    ).catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(ExternalLaunchBlockedError);
+    expect(error).toMatchObject({ code: "USER_ACTION_REQUIRED", diagnostic: { errorCode: "EXTERNAL_LAUNCH_BLOCKED", triggerSource: "APP_STARTUP", userActionId: null } });
+    expect(launchBrowser).not.toHaveBeenCalled();
+  });
+
+  it("requires a userActionId even for an otherwise allowed trigger source", async () => {
+    const launchBrowser = vi.fn(async () => { throw new Error("must not launch"); });
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser });
+
+    await expect(manager.open(
+      { platformKey: "zhihu", accountId: "missing-action-id" },
+      { userActionId: null, triggerSource: "START_PUBLISH" }
+    )).rejects.toBeInstanceOf(ExternalLaunchBlockedError);
+    expect(launchBrowser).not.toHaveBeenCalled();
+  });
+
+  it("attempts both context and browser cleanup and closeAll only touches owned sessions", async () => {
+    const contextClose = vi.fn(async () => { throw new Error("context close failed"); });
+    const browserClose = vi.fn(async () => undefined);
+    const context = { setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => ({ url: vi.fn(() => "about:blank") })), close: contextClose } as unknown as BrowserContext;
+    const browser = { newContext: vi.fn(async () => context), close: browserClose } as unknown as Browser;
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser: vi.fn(async () => browser) });
+
+    await manager.open({ platformKey: "zhihu", accountId: "owned-account" }, userAction);
+    await manager.closeAll();
+
+    expect(contextClose).toHaveBeenCalledTimes(1);
+    expect(browserClose).toHaveBeenCalledTimes(1);
+    await manager.closeAll();
+    expect(contextClose).toHaveBeenCalledTimes(1);
+    expect(browserClose).toHaveBeenCalledTimes(1);
+  });
+});

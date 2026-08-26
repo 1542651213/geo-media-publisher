@@ -1,0 +1,8 @@
+{
+  "name": "@publisher/adapters-qq-public",
+  "version": "0.5.1",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts", "./browser": "./src/browser.ts" },
+  "dependencies": { "@publisher/adapters-core": "workspace:*", "@publisher/adapters-browser": "workspace:*", "@publisher/adapters-manual": "workspace:*", "@publisher/domain": "workspace:*" }
+}

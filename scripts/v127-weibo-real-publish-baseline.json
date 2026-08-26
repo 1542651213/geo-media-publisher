@@ -1,0 +1,33 @@
+{
+  "version": "v1.2.0",
+  "platformKey": "weibo",
+  "browserMode": "VISIBLE",
+  "contentModel": "ordinary_post",
+  "bodyFilled": true,
+  "imageUploaded": true,
+  "clickCount": 1,
+  "finalSubmitCount": 1,
+  "externalId": "Rf17LuR6n",
+  "externalUrl": "https://weibo.com/4020073566/Rf17LuR6n",
+  "bodyMatch": true,
+  "urlReachable": true,
+  "job": {
+    "count": 1,
+    "id": "d9582333-7b4f-4957-a3a3-ad5abf1c0300",
+    "status": "Success"
+  },
+  "publishRecord": {
+    "count": 1,
+    "id": "4a46a856-0beb-4d13-9855-09e41201ef39",
+    "status": "Published",
+    "success": true,
+    "verificationStatus": "Verified"
+  },
+  "submissionIntent": {
+    "count": 1,
+    "id": "e090aaf4-e53c-49bd-9000-300524159bb3",
+    "state": "Submitted",
+    "finalSubmitCount": 1
+  },
+  "sourceEvidence": "output/v125-weibo-correct-external-evidence.json"
+}

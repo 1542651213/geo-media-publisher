@@ -1,0 +1,50 @@
+import { AdapterRegistry, type BrowserRuntimeEvent } from "@publisher/adapters-core";
+import { BaijiahaoBrowserAdapter } from "@publisher/adapters-baijiahao/browser";
+import { BilibiliBrowserAdapter } from "@publisher/adapters-bilibili/browser";
+import { DouyinOfficialAdapter } from "@publisher/adapters-douyin";
+import { FacebookPagesAdapter } from "@publisher/adapters-facebook";
+import { KuaishouAdapter } from "@publisher/adapters-kuaishou";
+import { SohuBrowserAdapter } from "@publisher/adapters-sohu-media/browser";
+import { TestPlatformAdapter } from "@publisher/adapters-test";
+import { TikTokAdapter } from "@publisher/adapters-tiktok";
+import { ToutiaoAdapter } from "@publisher/adapters-toutiao";
+import { ToutiaoArticleBrowserAdapter } from "@publisher/adapters-toutiao/browser";
+import { WeChatOfficialAdapter } from "@publisher/adapters-wechat";
+import { WechatChannelsSemiAutoAdapter } from "@publisher/adapters-wechat-channels/semi-auto";
+import { WeiboBrowserAdapter } from "@publisher/adapters-weibo/browser";
+import { YouTubeAdapter } from "@publisher/adapters-youtube";
+import { XiaohongshuAdapter } from "@publisher/adapters-xiaohongshu";
+import { ZhihuBrowserAdapter } from "@publisher/adapters-zhihu/browser";
+import { QqPublicBrowserAdapter } from "@publisher/adapters-qq-public/browser";
+import { LiejuBrowserAdapter } from "@publisher/adapters-lieju";
+import { CnblogsOfficialApiAdapter } from "@publisher/adapters-cnblogs";
+import type { CredentialStore } from "@publisher/security";
+import type { Logger } from "@publisher/logger";
+
+export function createRuntimeAdapterRegistry(credentials: CredentialStore, includeTestPlatform: boolean, logger?: Logger): AdapterRegistry {
+  const registry = new AdapterRegistry();
+  const onBrowserRuntimeEvent = (event: BrowserRuntimeEvent): void => {
+    if (event.code === "BROWSER_RUNTIME_SELECTED") logger?.info("BROWSER_RUNTIME", event.code, "已选择系统浏览器运行时", event);
+    else logger?.warn("BROWSER_RUNTIME", event.code, "未检测到可用系统浏览器", event);
+  };
+  if (includeTestPlatform) registry.register(new TestPlatformAdapter("success"));
+  registry.register(new WeChatOfficialAdapter({ credentialStore: credentials }));
+  registry.register(new DouyinOfficialAdapter({ credentialStore: credentials }));
+  registry.register(new KuaishouAdapter({ credentialStore: credentials }));
+  registry.register(new BilibiliBrowserAdapter({ credentialStore: credentials, onBrowserRuntimeEvent }));
+  registry.register(new YouTubeAdapter({ credentialStore: credentials }));
+  registry.register(new TikTokAdapter({ credentialStore: credentials }));
+  registry.register(new ToutiaoAdapter({ credentialStore: credentials }));
+  registry.register(new ToutiaoArticleBrowserAdapter({ credentialStore: credentials, onBrowserRuntimeEvent }));
+  registry.register(new FacebookPagesAdapter({ credentialStore: credentials }));
+  registry.register(new WeiboBrowserAdapter({ credentialStore: credentials, onBrowserRuntimeEvent }));
+  registry.register(new BaijiahaoBrowserAdapter({ credentialStore: credentials, onBrowserRuntimeEvent }));
+  registry.register(new ZhihuBrowserAdapter({ credentialStore: credentials, onBrowserRuntimeEvent }));
+  registry.register(new SohuBrowserAdapter({ credentialStore: credentials, onBrowserRuntimeEvent }));
+  registry.register(new QqPublicBrowserAdapter({ credentialStore: credentials, onBrowserRuntimeEvent }));
+  registry.register(new LiejuBrowserAdapter({ credentialStore: credentials, onBrowserRuntimeEvent }));
+  registry.register(new CnblogsOfficialApiAdapter());
+  registry.register(new WechatChannelsSemiAutoAdapter());
+  registry.register(new XiaohongshuAdapter());
+  return registry;
+}

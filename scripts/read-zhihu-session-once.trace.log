@@ -1,0 +1,29 @@
+2026-08-24T08:44:21.608Z module_started
+2026-08-24T08:44:21.609Z electron_imported
+2026-08-24T08:44:21.609Z waiting_for_ready
+2026-08-24T08:45:36.131Z module_started
+2026-08-24T08:45:36.132Z electron_imported
+2026-08-24T08:45:36.132Z waiting_for_ready
+2026-08-24T08:45:57.868Z module_started
+2026-08-24T08:45:57.869Z electron_imported
+2026-08-24T08:45:57.869Z encryption_available:false
+2026-08-24T08:45:57.870Z error:safeStorage cannot be used before app is ready
+2026-08-24T08:45:57.871Z cleanup
+2026-08-24T08:46:29.118Z module_started
+2026-08-24T08:46:29.119Z electron_imported
+2026-08-24T08:46:29.120Z waiting_for_ready
+2026-08-24T08:46:29.161Z encryption_available:true
+2026-08-24T08:46:29.162Z error:Error while decrypting the ciphertext provided to safeStorage.decryptString.
+2026-08-24T08:46:29.164Z cleanup
+2026-08-24T08:46:39.776Z module_started
+2026-08-24T08:46:39.776Z electron_imported
+2026-08-24T08:46:39.777Z waiting_for_ready
+2026-08-24T08:46:39.818Z encryption_available:true
+2026-08-24T08:46:39.820Z decrypted
+2026-08-24T08:46:39.821Z cleanup
+2026-08-24T08:46:46.824Z module_started
+2026-08-24T08:46:46.825Z electron_imported
+2026-08-24T08:46:46.825Z waiting_for_ready
+2026-08-24T08:46:46.863Z encryption_available:true
+2026-08-24T08:46:46.865Z decrypted
+2026-08-24T08:46:46.866Z cleanup
