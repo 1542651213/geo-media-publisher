@@ -41,7 +41,7 @@
 Append this test to `tests/xiaohongshu-account-routing.test.ts`:
 
 ```ts
-  it("keeps a second account row independent even when identity evidence repeats an external ID", () => {
+  it("does not merge a second account when identity evidence belongs to another account", () => {
     const directory = mkdtempSync(join(tmpdir(), "publisher-xhs-routing-isolation-"));
     tempDirs.push(directory);
     const opened = openDatabase(join(directory, "publisher.db"), migrationDir);
@@ -51,15 +51,15 @@ Append this test to `tests/xiaohongshu-account-routing.test.ts`:
     const second = opened.repository.createAccount({ platformKey: "xiaohongshu", name: "小红书账号 B" });
 
     const syncedFirst = opened.repository.syncBrowserPlatformAccount({ accountId: first.id, platformKey: "xiaohongshu", accountName: "创作者昵称", externalAccountId: "same-stable-profile", browserSessionId: "session:xiaohongshu:" + first.id });
-    const syncedSecond = opened.repository.syncBrowserPlatformAccount({ accountId: second.id, platformKey: "xiaohongshu", accountName: "创作者昵称", externalAccountId: "same-stable-profile", browserSessionId: "session:xiaohongshu:" + second.id });
-
     expect(syncedFirst.id).toBe(first.id);
-    expect(syncedSecond.id).toBe(second.id);
+    expect(() => opened.repository.syncBrowserPlatformAccount({ accountId: second.id, platformKey: "xiaohongshu", accountName: "创作者昵称", externalAccountId: "same-stable-profile", browserSessionId: "session:xiaohongshu:" + second.id })).toThrow(/外部账号.*其他内部账号|external.*account/i);
     expect(opened.repository.listAccounts().filter((candidate) => candidate.platformKey === "xiaohongshu")).toHaveLength(2);
     expect(opened.repository.listAccounts().find((candidate) => candidate.id === first.id)?.browserSessionId).toContain(first.id);
-    expect(opened.repository.listAccounts().find((candidate) => candidate.id === second.id)?.browserSessionId).toContain(second.id);
+    expect(opened.repository.listAccounts().find((candidate) => candidate.id === second.id)).toMatchObject({ loginStatus: "unknown", browserSessionId: null });
   });
 ```
+
+Add a second case with `externalAccountId: "stable-profile-a"` and `externalAccountId: "stable-profile-b"` that asserts two rows remain logged in and their `browserSessionId` values contain different internal account IDs.
 
 - [ ] **Step 2: Run the focused test and verify the failure is the current external-ID merge**
 
@@ -69,11 +69,13 @@ Expected: FAIL because `syncBrowserPlatformAccount` currently finds `existingByE
 
 - [ ] **Step 3: Write the minimal repository implementation**
 
-In `packages/db/src/repository.ts`, remove the `existingByExternal` query and `targetId` variable from `syncBrowserPlatformAccount`. Use `input.accountId` in both the account `UPDATE`, the `upsertAccountAuthorization` call, and the returned `SELECT`. Keep `preservedExternalId` so an omitted external ID preserves an already verified value on the same row, while an explicit `null` clears it.
+In `packages/db/src/repository.ts`, keep the external-ID uniqueness guard but change it from implicit merge to explicit fail-closed behavior: query an existing row with the same non-null `externalAccountId`, and if it belongs to another internal account, throw `new Error("平台外部账号已绑定到其他内部账号")` before any update. Use `input.accountId` in the account `UPDATE`, the `upsertAccountAuthorization` call, and the returned `SELECT`. Keep `preservedExternalId` so an omitted external ID preserves an already verified value on the same row, while an explicit `null` clears it.
 
 The resulting core must have this shape:
 
 ```ts
+      const existingByExternal = input.externalAccountId ? this.db.prepare("SELECT id FROM accounts WHERE platform_key=? AND external_account_id=? AND id<>?").get(input.platformKey, input.externalAccountId, input.accountId) as Row | undefined : undefined;
+      if (existingByExternal) throw new Error("平台外部账号已绑定到其他内部账号");
       const timestamp = input.lastVerifiedAt ?? now();
       const preservedExternalId = input.externalAccountId === undefined ? (typeof current.external_account_id === "string" ? current.external_account_id : null) : input.externalAccountId;
       this.db.prepare("UPDATE accounts SET platform_account_name=COALESCE(NULLIF(?,''),platform_account_name), login_status='logged_in', enabled=1, paused_reason=NULL, connection_mode='BrowserAutomation', authorization_status='Authorized', browser_session_id=?, external_account_id=?, last_verified_at=?, last_login_check_at=?, last_used_at=?, updated_at=? WHERE id=? AND platform_key=?").run(input.accountName?.trim() ?? "", input.browserSessionId, preservedExternalId, timestamp, timestamp, timestamp, timestamp, input.accountId, input.platformKey);
