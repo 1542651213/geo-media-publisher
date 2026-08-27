@@ -23,6 +23,15 @@
 - Do not modify Weibo, Toutiao, Sohu, Zhihu, Publisher state-machine, Scheduler, SubmissionIntent, or PublishRecord business implementations.
 - Preserve uncommitted user changes already present in the worktree; stage only files belonging to the current task at each commit.
 
+## Execution status — 2026-08-27
+
+- Tasks 1–5: implemented and covered by focused tests. The ordinary `xiaohongshu` route is distinct from `xiaohongshu_business` and `xiaohongshu_private`; runtime `platforms:list` overlays `accountConnectionMode=BrowserAutomation` without changing publish transport.
+- Account semantics: `连接账号` creates the first record only when no row exists, or reuses exactly one incomplete row; `+ 添加账号` always creates a fresh UUID before login, including when connected accounts exist. Multiple incomplete rows require an explicit selection and never choose the first row.
+- Login/identity acceptance: login lifecycle completion is checked first; identity readback is a separate adapter call and persistence step. Nickname-only evidence updates `accountName` and leaves `externalAccountId` null; no identifier is guessed.
+- Account-level routing: login, re-login, session check, backend open, disconnect, self-test, and gate-only actions carry the selected internal `accountId`; missing or ambiguous selection fails closed.
+- Installed app order completed: source focused tests/build → Electron-target native/package → stop exact installed process → backup old resources/native unpacked directory → replace → restart installed executable. Current installed app is running at `C:\GMP116ZhihuL5\Geo Media Publisher\Geo Media Publisher.exe`.
+- Remaining owner boundary: click ordinary `小红书` → `+ 添加账号` in the running app, complete only normal platform login/security verification in the resulting visible BrowserSession, then continue identity readback and account-specific gate-only. No real publish path is enabled.
+
 ---
 
 ### Task 1: Prove catalog registration and independent account identity storage
