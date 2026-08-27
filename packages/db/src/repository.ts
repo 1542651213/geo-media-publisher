@@ -1867,12 +1867,12 @@ export class AppRepository {
     const current = this.db.prepare("SELECT * FROM accounts WHERE id=? AND platform_key=?").get(input.accountId, input.platformKey) as Row | undefined;
     if (!current) throw new Error("知乎账号映射不存在");
     const existingByExternal = input.externalAccountId ? this.db.prepare("SELECT id FROM accounts WHERE platform_key=? AND external_account_id=? AND id<>?").get(input.platformKey, input.externalAccountId, input.accountId) as Row | undefined : undefined;
-    const targetId = existingByExternal ? textValue(existingByExternal.id) : input.accountId;
+    if (existingByExternal) throw new Error("平台外部账号已绑定到其他内部账号");
     const timestamp = input.lastVerifiedAt ?? now();
     const preservedExternalId = input.externalAccountId === undefined ? (typeof current.external_account_id === "string" ? current.external_account_id : null) : input.externalAccountId;
-    this.db.prepare("UPDATE accounts SET platform_account_name=COALESCE(NULLIF(?,''),platform_account_name), login_status='logged_in', enabled=1, paused_reason=NULL, connection_mode='BrowserAutomation', authorization_status='Authorized', browser_session_id=?, external_account_id=?, last_verified_at=?, last_login_check_at=?, last_used_at=?, updated_at=? WHERE id=? AND platform_key=?").run(input.accountName?.trim() ?? "", input.browserSessionId, preservedExternalId, timestamp, timestamp, timestamp, timestamp, targetId, input.platformKey);
-    this.upsertAccountAuthorization({ accountId: targetId, platformKey: input.platformKey, authorizationType: "BrowserAutomation", status: "Authorized", providerAccountId: preservedExternalId, providerAccountName: input.accountName ?? null });
-    return toAccount(this.db.prepare("SELECT * FROM accounts WHERE id=?").get(targetId) as Row);
+    this.db.prepare("UPDATE accounts SET platform_account_name=COALESCE(NULLIF(?,''),platform_account_name), login_status='logged_in', enabled=1, paused_reason=NULL, connection_mode='BrowserAutomation', authorization_status='Authorized', browser_session_id=?, external_account_id=?, last_verified_at=?, last_login_check_at=?, last_used_at=?, updated_at=? WHERE id=? AND platform_key=?").run(input.accountName?.trim() ?? "", input.browserSessionId, preservedExternalId, timestamp, timestamp, timestamp, timestamp, input.accountId, input.platformKey);
+    this.upsertAccountAuthorization({ accountId: input.accountId, platformKey: input.platformKey, authorizationType: "BrowserAutomation", status: "Authorized", providerAccountId: preservedExternalId, providerAccountName: input.accountName ?? null });
+    return toAccount(this.db.prepare("SELECT * FROM accounts WHERE id=?").get(input.accountId) as Row);
   }
 
   markPlatformAccountDisconnected(accountId: string, platformKey: string): Account {
