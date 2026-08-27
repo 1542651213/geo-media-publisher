@@ -41,4 +41,24 @@ describe("runtime AdapterRegistry", () => {
     expect(article.manifest).toMatchObject({ transport: "browser", integrationMode: "BrowserAutomation", supportsArticle: true, supportsVideo: false });
     expect(() => registry.getForContent("toutiao", "image")).toThrow(/unsupported content kind/i);
   });
+
+  it("routes Xiaohongshu article content to BrowserAutomation and rejects video", () => {
+    const registry = createRuntimeAdapterRegistry(new MemoryCredentialStore(), false);
+    const article = registry.getForContent("xiaohongshu", "article");
+    expect(article.constructor.name).toBe("XiaohongshuBrowserAdapter");
+    expect(article.manifest).toMatchObject({ platformKey: "xiaohongshu", transport: "browser", integrationMode: "BrowserAutomation", supportsArticle: true, supportsVideo: false });
+    expect(() => registry.getForContent("xiaohongshu", "video")).toThrow(/no adapter registered/i);
+  });
+
+  it("keeps ordinary Xiaohongshu separate from the historical merchant/private catalog rows", () => {
+    const csvRows = readFileSync(join(process.cwd(), "PLATFORMS.csv"), "utf8").split(/\r?\n/u).slice(1).filter(Boolean).map((line) => line.split(","));
+    const byKey = new Map(csvRows.map((row) => [row[0]?.replace(/^\uFEFF/u, ""), row]));
+    expect(byKey.get("xiaohongshu")?.[1]).toBe("小红书");
+    expect(byKey.get("xiaohongshu")?.[7]).toBe("browser");
+    expect(byKey.get("xiaohongshu")?.[11]).toBe("BrowserAutomation");
+    expect(byKey.get("xiaohongshu_business")?.[1]).toBe("小红书商家号");
+    expect(byKey.get("xiaohongshu_private")?.[1]).toBe("小红书私信版");
+    expect(byKey.get("xiaohongshu_business")?.[0]).not.toBe(byKey.get("xiaohongshu")?.[0]);
+    expect(byKey.get("xiaohongshu_private")?.[0]).not.toBe(byKey.get("xiaohongshu")?.[0]);
+  });
 });

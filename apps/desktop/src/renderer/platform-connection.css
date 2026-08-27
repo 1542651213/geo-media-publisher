@@ -20,6 +20,13 @@
 .platform-detail-facts b { color:#40566f; margin-top:5px; }
 .platform-account-summary { display:flex; gap:15px; align-items:center; flex-wrap:wrap; padding:13px 0; color:#74849a; font-size:11px; }
 .platform-account-summary strong { color:#334b66; }
+.platform-account-picker { margin-top:18px; padding:16px 22px; }
+.platform-account-picker-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:8px; margin-top:12px; }
+.platform-account-picker-item { display:grid; grid-template-columns:1fr auto; gap:4px 10px; text-align:left; border:1px solid #e4eaf1; border-radius:6px; padding:10px 12px; background:#fff; color:#52677f; cursor:pointer; }
+.platform-account-picker-item:hover,.platform-account-picker-item.is-selected { border-color:#82a9dc; background:#f4f8ff; }
+.platform-account-picker-item strong { color:#334b66; font-size:12px; }
+.platform-account-picker-item span { grid-column:1 / -1; color:#9aa8b7; font-size:10px; word-break:break-all; }
+.platform-account-picker-item em { color:#2f9666; font-size:10px; font-style:normal; }
 .platform-credential-box { max-width:600px; }
 .platform-detail-actions { margin-top:17px; align-items:center; }
 .platform-detail-note { margin:14px 0 0; color:#8b98a7; font-size:10px; line-height:1.6; }

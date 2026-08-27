@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { JSX } from "react";
 import type { Account, LoginSession, Platform } from "@publisher/domain";
 import type { AccountManagementRow as AccountManagementRowView } from "../shared/api";
+import { accountConnectionTarget } from "./v11-ui-model";
 import { accountStatusLabel, authorizationLabel, connectionErrorMessage, platformConnectionActions, platformConnectionKind, type PlatformConnectionAction, type PlatformConnectionKind } from "./platform-connection-ui";
 
 type Navigate = (route: "accounts") => void;
@@ -29,6 +30,7 @@ export function PlatformConnectionCenter({ refresh, onNavigate }: PlatformConnec
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [messages, setMessages] = useState<Record<string, string>>({});
   const [credentialValues, setCredentialValues] = useState<Record<string, Record<string, string>>>({});
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
 
   const load = (): void => {
     void Promise.all([window.publisherAPI.platforms.list(), window.publisherAPI.accounts.overview()]).then(([nextPlatforms, nextOverview]) => {
@@ -41,30 +43,31 @@ export function PlatformConnectionCenter({ refresh, onNavigate }: PlatformConnec
 
   const selectedPlatform = platforms.find((item) => item.platformKey === selectedPlatformKey) ?? null;
   const selectedRows = selectedPlatform ? overview.filter((item) => item.account.platformKey === selectedPlatform.platformKey) : [];
-  const selectedRow = selectedRows.find((item) => item.accountStatus === "Connected") ?? selectedRows[0] ?? null;
+  const selectedRow = selectedRows.find((item) => item.account.id === selectedAccountId) ?? (selectedRows.length === 1 ? selectedRows[0] : null);
 
-  const rowsByPlatform = useMemo(() => {
-    const result = new Map<string, AccountManagementRowView>();
-    for (const row of overview) {
-      const existing = result.get(row.account.platformKey);
-      if (!existing || row.accountStatus === "Connected") result.set(row.account.platformKey, row);
-    }
-    return result;
-  }, [overview]);
+  useEffect(() => {
+    if (selectedAccountId && !selectedRows.some((item) => item.account.id === selectedAccountId)) setSelectedAccountId(null);
+  }, [selectedAccountId, selectedRows]);
 
   const updateMessage = (platformKey: string, message: string): void => setMessages((current) => ({ ...current, [platformKey]: message }));
 
-  const accountFor = async (platform: Platform): Promise<Account> => {
-    const existing = overview.filter((item) => item.account.platformKey === platform.platformKey).find((item) => item.accountStatus !== "Connected");
-    if (existing) return existing.account;
-    return window.publisherAPI.accounts.create({ platformKey: platform.platformKey, name: `${platform.displayName}账号` });
+  const accountFor = async (platform: Platform, intent: "connect" | "add" | "relogin", accountId?: string): Promise<Account> => {
+    const rows = overview.filter((item) => item.account.platformKey === platform.platformKey);
+    const target = accountId ? { accountId, createAccount: false } : accountConnectionTarget(rows, intent);
+    if (target.accountId) {
+      const account = rows.find((item) => item.account.id === target.accountId)?.account;
+      if (!account) throw new Error("未找到指定的平台账号，已拒绝回退到其他账号");
+      return account;
+    }
+    if (!target.createAccount) throw new Error("请先选择要重新登录的账号");
+    return window.publisherAPI.accounts.create({ platformKey: platform.platformKey, name: `${platform.displayName}账号 ${rows.length + 1}` });
   };
 
-  const openConnection = async (platform: Platform, mode: "connect" | "relogin" | "reauthorize"): Promise<void> => {
+  const openConnection = async (platform: Platform, mode: "connect" | "add" | "relogin" | "reauthorize", accountId?: string): Promise<void> => {
     setBusyKey(platform.platformKey);
     updateMessage(platform.platformKey, "正在准备连接…");
     try {
-      const account = await accountFor(platform);
+      const account = await accountFor(platform, mode === "reauthorize" ? "relogin" : mode, accountId);
       const current = overview.find((item) => item.account.id === account.id);
       if (platformConnectionKind(platform) === "oauth") {
         const status = current?.credentialStatus ?? await window.publisherAPI.accounts.credentialStatus(account.id, account.platformKey);
@@ -176,12 +179,19 @@ export function PlatformConnectionCenter({ refresh, onNavigate }: PlatformConnec
     }
   };
 
-  const actionFor = (platform: Platform, action: PlatformConnectionAction): void => {
-    const row = rowsByPlatform.get(platform.platformKey) ?? null;
-    if (action.kind === "connect" || action.kind === "relogin" || action.kind === "reauthorize") void openConnection(platform, action.kind);
+  const actionFor = (platform: Platform, action: PlatformConnectionAction, row: AccountManagementRowView | null = selectedRow): void => {
+    if (action.kind === "connect" || action.kind === "add-account") void openConnection(platform, action.kind === "add-account" ? "add" : "connect");
+    else if (action.kind === "relogin" || action.kind === "reauthorize") {
+      if (!row) {
+        setSelectedPlatformKey(platform.platformKey);
+        updateMessage(platform.platformKey, "请先选择要重新登录的账号，系统不会自动回退到其他账号。");
+        return;
+      }
+      void openConnection(platform, action.kind, row.account.id);
+    }
     else if (action.kind === "configure") {
       setSelectedPlatformKey(platform.platformKey);
-      if (!row) void accountFor(platform).then(() => load());
+      if (!row) void accountFor(platform, "connect").then(() => load());
       updateMessage(platform.platformKey, "请在下方配置开放平台应用凭据。");
     } else if (action.kind === "view-account") setSelectedPlatformKey(platform.platformKey);
     else if (action.kind === "open-backend" && row) void window.publisherAPI.accounts.openBackend(row.account.id, platform.platformKey).then(() => updateMessage(platform.platformKey, "已使用保存的 Session 打开创作后台。"), (error: unknown) => updateMessage(platform.platformKey, connectionErrorMessage(error)));
@@ -190,16 +200,21 @@ export function PlatformConnectionCenter({ refresh, onNavigate }: PlatformConnec
 
   return <>
     <div className="page-title"><div><div className="eyebrow">账号管理 / V1.0.1</div><h2>平台能力目录</h2><p>从这里选择平台并直接连接账号；Adapter、账号、授权和发布验证状态分开显示。</p></div><button className="secondary-button" onClick={() => onNavigate("accounts")}>查看全部账号</button></div>
-    <section className="platform-grid connection-platform-grid">{platforms.map((platform, index) => <PlatformCard key={platform.platformKey} platform={platform} row={rowsByPlatform.get(platform.platformKey) ?? null} index={index} busy={busyKey === platform.platformKey} message={messages[platform.platformKey]} onSelect={() => setSelectedPlatformKey(platform.platformKey)} onAction={(action) => actionFor(platform, action)} />)}</section>
-    {selectedPlatform && <PlatformDetail platform={selectedPlatform} row={selectedRow} rows={selectedRows} credentialValues={credentialValues[selectedRow?.account.id ?? ""] ?? {}} busy={busyKey === selectedPlatform.platformKey} message={messages[selectedPlatform.platformKey]} onCredentialChange={(key, value) => { if (!selectedRow) return; setCredentialValues((current) => ({ ...current, [selectedRow.account.id]: { ...(current[selectedRow.account.id] ?? {}), [key]: value } })); }} onSaveCredentials={() => void saveCredentials(selectedPlatform, selectedRow)} onAction={(action) => actionFor(selectedPlatform, action)} onCheck={() => void checkLogin(selectedPlatform, selectedRow)} onDisconnect={() => void disconnect(selectedPlatform, selectedRow)} onClose={() => setSelectedPlatformKey(null)} />}
+    <section className="platform-grid connection-platform-grid">{platforms.map((platform, index) => { const rows = overview.filter((item) => item.account.platformKey === platform.platformKey); const cardRow = rows.length === 1 ? rows[0] : null; const hasConnectedAccount = rows.some((item) => item.accountStatus === "Connected"); const cardActions: PlatformConnectionAction[] | undefined = rows.length > 1 ? (hasConnectedAccount ? [{ kind: "view-account", label: "查看账号" }, { kind: "add-account", label: "+ 添加账号" }] : [{ kind: "connect", label: "连接账号" }]) : undefined; return <PlatformCard key={platform.platformKey} platform={platform} row={cardRow} actions={cardActions} index={index} busy={busyKey === platform.platformKey} message={messages[platform.platformKey]} onSelect={() => { setSelectedPlatformKey(platform.platformKey); if (rows.length === 1) setSelectedAccountId(rows[0].account.id); else setSelectedAccountId(null); }} onAction={(action) => actionFor(platform, action, cardRow)} />; })}</section>
+    {selectedPlatform && selectedRows.length > 1 && <PlatformAccountPicker rows={selectedRows} selectedAccountId={selectedAccountId} onSelectAccount={setSelectedAccountId} />}
+    {selectedPlatform && <PlatformDetail platform={selectedPlatform} row={selectedRow} rows={selectedRows} credentialValues={credentialValues[selectedRow?.account.id ?? ""] ?? {}} busy={busyKey === selectedPlatform.platformKey} message={messages[selectedPlatform.platformKey]} onCredentialChange={(key, value) => { if (!selectedRow) return; setCredentialValues((current) => ({ ...current, [selectedRow.account.id]: { ...(current[selectedRow.account.id] ?? {}), [key]: value } })); }} onSaveCredentials={() => void saveCredentials(selectedPlatform, selectedRow)} onAction={(action) => actionFor(selectedPlatform, action, selectedRow)} onCheck={() => void checkLogin(selectedPlatform, selectedRow)} onDisconnect={() => void disconnect(selectedPlatform, selectedRow)} onClose={() => setSelectedPlatformKey(null)} />}
     {activeConnection && <ConnectionDialog connection={activeConnection} onChangeCallback={(callbackUrl) => setActiveConnection((current) => current ? { ...current, callbackUrl } : current)} onCompleteBrowser={() => void completeBrowserLogin()} onCompleteOAuth={() => void completeOAuth()} onCancel={() => void cancelConnection()} onClose={() => setActiveConnection(null)} />}
   </>;
 }
 
-function PlatformCard({ platform, row, index, busy, message, onSelect, onAction }: { platform: Platform; row: AccountManagementRowView | null; index: number; busy: boolean; message?: string; onSelect: () => void; onAction: (action: PlatformConnectionAction) => void }): JSX.Element {
-  const actions = platformConnectionActions(platform, row);
-  const connected = row?.accountStatus === "Connected";
-  return <div className={`platform-card connection-platform-card ${connected ? "is-connected" : ""}`} onClick={onSelect} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onSelect(); }}><div className={`platform-logo logo-${index % 6}`}>{platform.platformKey === "test" ? "T" : platform.displayName.slice(0, 1)}</div><div className="platform-card-heading"><strong>{platform.displayName}</strong><span>{platform.category}</span></div><div className="platform-status-lines"><div><span>接入方式</span><b>{integrationModeLabel(platform)}</b></div><div><span>Adapter</span><b>{platform.adapterStatus === "ready" ? "已就绪" : "不可用"}</b></div><div><span>账号</span><b>{accountStatusLabel(row)}</b></div><div><span>授权</span><b>{authorizationLabel(platform, row)}</b></div><div><span>发布验证</span><b>{row?.publishVerification === "PublishPassed" ? "已通过" : row?.publishVerification === "DryRunPassed" ? "Dry Run 已通过" : "未测试"}</b></div></div>{connected && <div className="connected-account-summary">{row.providerAccountName ?? row.account.name} · Session {platformConnectionKind(platform) === "browser" ? "有效" : "已授权"}</div>}<div className="platform-actions" onClick={(event) => event.stopPropagation()}>{actions.map((action) => <button key={action.kind} className={action.kind === "connect" || action.kind === "configure" ? "primary-button" : "mini-button"} disabled={busy} onClick={() => onAction(action)}>{busy && (action.kind === "connect" || action.kind === "relogin" || action.kind === "reauthorize") ? "正在打开…" : action.label}</button>)}</div>{message && <div className="platform-message">{message}</div>}</div>;
+function PlatformCard({ platform, row, actions: suppliedActions, index, busy, message, onSelect, onAction }: { platform: Platform; row: AccountManagementRowView | null; actions?: PlatformConnectionAction[]; index: number; busy: boolean; message?: string; onSelect: () => void; onAction: (action: PlatformConnectionAction) => void }): JSX.Element {
+  const actions = suppliedActions ?? platformConnectionActions(platform, row);
+  const connected = row?.accountStatus === "Connected" || suppliedActions?.some((action) => action.kind === "view-account") === true;
+  return <div className={`platform-card connection-platform-card ${connected ? "is-connected" : ""}`} onClick={onSelect} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onSelect(); }}><div className={`platform-logo logo-${index % 6}`}>{platform.platformKey === "test" ? "T" : platform.displayName.slice(0, 1)}</div><div className="platform-card-heading"><strong>{platform.displayName}</strong><span>{platform.category}</span></div><div className="platform-status-lines"><div><span>接入方式</span><b>{integrationModeLabel(platform)}</b></div><div><span>Adapter</span><b>{platform.adapterStatus === "ready" ? "已就绪" : "不可用"}</b></div><div><span>账号</span><b>{accountStatusLabel(row)}</b></div><div><span>授权</span><b>{authorizationLabel(platform, row)}</b></div><div><span>发布验证</span><b>{row?.publishVerification === "PublishPassed" ? "已通过" : row?.publishVerification === "DryRunPassed" ? "Dry Run 已通过" : "未测试"}</b></div></div>{connected && row && <div className="connected-account-summary">{row.providerAccountName ?? row.account.name} · Session {platformConnectionKind(platform) === "browser" ? "有效" : "已授权"}</div>}<div className="platform-actions" onClick={(event) => event.stopPropagation()}>{actions.map((action) => <button key={action.kind} className={action.kind === "connect" || action.kind === "configure" ? "primary-button" : "mini-button"} disabled={busy} onClick={() => onAction(action)}>{busy && (action.kind === "connect" || action.kind === "relogin" || action.kind === "reauthorize") ? "正在打开…" : action.label}</button>)}</div>{message && <div className="platform-message">{message}</div>}</div>;
+}
+
+function PlatformAccountPicker({ rows, selectedAccountId, onSelectAccount }: { rows: AccountManagementRowView[]; selectedAccountId: string | null; onSelectAccount: (accountId: string) => void }): JSX.Element {
+  return <section className="panel platform-account-picker"><div className="panel-heading"><div><div className="eyebrow">账号选择</div><h3>选择要操作的账号</h3><span>所有登录、验证、后台和断开操作都绑定到明确的内部 accountId。</span></div></div><div className="platform-account-picker-list">{rows.map((item) => { const name = item.providerAccountName ?? item.account.accountName ?? item.account.accountAlias ?? item.account.name; return <button key={item.account.id} className={`platform-account-picker-item ${item.account.id === selectedAccountId ? "is-selected" : ""}`} onClick={() => onSelectAccount(item.account.id)}><strong>{name}</strong><span>{item.account.id}</span><em>{accountStatusLabel(item)}</em></button>; })}</div></section>;
 }
 
 function PlatformDetail({ platform, row, rows, credentialValues, busy, message, onCredentialChange, onSaveCredentials, onAction, onCheck, onDisconnect, onClose }: { platform: Platform; row: AccountManagementRowView | null; rows: AccountManagementRowView[]; credentialValues: Record<string, string>; busy: boolean; message?: string; onCredentialChange: (key: string, value: string) => void; onSaveCredentials: () => void; onAction: (action: PlatformConnectionAction) => void; onCheck: () => void; onDisconnect: () => void; onClose: () => void }): JSX.Element {

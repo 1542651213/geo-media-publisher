@@ -102,6 +102,19 @@ export const isOnlineAccount = (account: Pick<Account, "enabled" | "loginStatus"
 export const connectedAccountsForPlatform = (accounts: Account[], platformKey: string): Account[] =>
   accounts.filter((account) => account.enabled && account.loginStatus === "logged_in" && account.platformKey === platformKey);
 
+export type AccountConnectionIntent = "connect" | "add" | "relogin";
+
+export function accountConnectionTarget(rows: AccountManagementRow[], intent: AccountConnectionIntent): { accountId: string | null; createAccount: boolean } {
+  if (intent === "add") return { accountId: null, createAccount: true };
+  const incomplete = rows.find((row) => row.accountStatus !== "Connected");
+  if (incomplete) return { accountId: incomplete.account.id, createAccount: false };
+  return { accountId: null, createAccount: intent === "connect" };
+}
+
+export function platformHasConnectedAccount(rows: AccountManagementRow[]): boolean {
+  return rows.some((row) => row.accountStatus === "Connected");
+}
+
 export const contentReviewModeLabel = (mode: ContentReviewMode): string => ({ Off: "关闭审核", WarningOnly: "仅提醒", Strict: "严格审核" })[mode];
 
 export const articleListStatusLabel = (article: Pick<Article, "status" | "publishCount">, qualityStatus: string | null | undefined, rawMode: unknown): "可发布" | "有提醒" | "已发布" | "需要处理" => {

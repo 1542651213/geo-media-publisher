@@ -2,7 +2,7 @@ import type { AccountManagementRow } from "../shared/api";
 import type { Platform } from "@publisher/domain";
 
 export type PlatformConnectionKind = "browser" | "oauth" | "manual" | "blocked" | "not_implemented";
-export type PlatformConnectionActionKind = "connect" | "view-account" | "open-backend" | "relogin" | "configure" | "reauthorize" | "instructions" | "reason" | "unsupported";
+export type PlatformConnectionActionKind = "connect" | "view-account" | "open-backend" | "relogin" | "add-account" | "configure" | "reauthorize" | "instructions" | "reason" | "unsupported";
 
 export interface PlatformConnectionAction {
   kind: PlatformConnectionActionKind;
@@ -25,13 +25,13 @@ export function platformConnectionKind(platform: Platform): PlatformConnectionKi
 
 export function platformConnectionActions(platform: Platform, row: AccountManagementRow | null): PlatformConnectionAction[] {
   const kind = platformConnectionKind(platform);
-  if (kind === "browser" && (row?.accountStatus === "Expired" || row?.accountStatus === "NeedsLogin")) return [{ kind: "relogin", label: "重新登录" }];
+  if (kind === "browser" && (row?.accountStatus === "Expired" || row?.accountStatus === "NeedsLogin")) return [{ kind: "relogin", label: "重新登录" }, { kind: "add-account", label: "+ 添加账号" }];
   if (kind === "blocked") return [{ kind: "reason", label: "查看原因" }];
   if (kind === "not_implemented") return [{ kind: "unsupported", label: "暂未支持" }];
   if (kind === "manual") return [{ kind: "instructions", label: "查看接入说明" }];
   if (kind === "browser") {
-    if (row?.accountStatus === "Connected") return [{ kind: "view-account", label: "查看账号" }, { kind: "open-backend", label: "打开后台" }, { kind: "relogin", label: "重新登录" }];
-    return [{ kind: "connect", label: "连接账号" }];
+    if (row?.accountStatus === "Connected") return [{ kind: "view-account", label: "查看账号" }, { kind: "open-backend", label: "打开后台" }, { kind: "relogin", label: "重新登录" }, { kind: "add-account", label: "+ 添加账号" }];
+    return [{ kind: "connect", label: "连接账号" }, { kind: "add-account", label: "+ 添加账号" }];
   }
   if (!row?.credentialStatus.configured) return [{ kind: "configure", label: "配置开放平台应用" }];
   if (row.accountStatus === "Connected") return [{ kind: "view-account", label: "查看账号" }, { kind: "reauthorize", label: "重新授权" }];

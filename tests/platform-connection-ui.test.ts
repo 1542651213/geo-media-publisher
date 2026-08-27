@@ -22,10 +22,10 @@ function row(overrides: Partial<AccountManagementRow> = {}): AccountManagementRo
 describe("V1.0.1 platform connection UI decisions", () => {
   it("shows browser connection actions and separates adapter readiness from account state", () => {
     expect(platformConnectionKind(platform())).toBe("browser");
-    expect(platformConnectionActions(platform(), row()).map((item) => item.label)).toEqual(["连接账号"]);
+    expect(platformConnectionActions(platform(), row()).map((item) => item.label)).toEqual(["连接账号", "+ 添加账号"]);
     expect(accountStatusLabel(row())).toBe("未连接");
     expect(authorizationLabel(platform(), row())).toBe("不适用");
-    expect(platformConnectionActions(platform(), row({ accountStatus: "Connected", authorizationStatus: "Authorized" })).map((item) => item.label)).toEqual(["查看账号", "打开后台", "重新登录"]);
+    expect(platformConnectionActions(platform(), row({ accountStatus: "Connected", authorizationStatus: "Authorized" })).map((item) => item.label)).toEqual(["查看账号", "打开后台", "重新登录", "+ 添加账号"]);
   });
 
   it("uses configure/connect/reauthorize actions for OAuth without exposing internal states", () => {
@@ -38,9 +38,9 @@ describe("V1.0.1 platform connection UI decisions", () => {
   it("uses the runtime account connection mode for Toutiao and offers relogin for attention states", () => {
     const toutiao = platform({ platformKey: "toutiao", transport: "official_api", integrationMode: "API", accountConnectionMode: "BrowserAutomation" });
     expect(platformConnectionKind(toutiao)).toBe("browser");
-    expect(platformConnectionActions(toutiao, row({ platform: toutiao })).map((item) => item.kind)).toEqual(["connect"]);
-    expect(platformConnectionActions(toutiao, row({ platform: toutiao, accountStatus: "NeedsLogin" })).map((item) => item.kind)).toEqual(["relogin"]);
-    expect(platformConnectionActions(toutiao, row({ platform: toutiao, accountStatus: "Expired" })).map((item) => item.kind)).toEqual(["relogin"]);
+    expect(platformConnectionActions(toutiao, row({ platform: toutiao })).map((item) => item.kind)).toEqual(["connect", "add-account"]);
+    expect(platformConnectionActions(toutiao, row({ platform: toutiao, accountStatus: "NeedsLogin" })).map((item) => item.kind)).toEqual(["relogin", "add-account"]);
+    expect(platformConnectionActions(toutiao, row({ platform: toutiao, accountStatus: "Expired" })).map((item) => item.kind)).toEqual(["relogin", "add-account"]);
   });
 
   it("keeps manual, blocked and not implemented platforms fail-closed", () => {
