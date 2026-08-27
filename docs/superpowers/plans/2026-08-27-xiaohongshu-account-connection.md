@@ -236,9 +236,9 @@ Expected: FAIL with missing helper exports and the current connected browser act
 
 - [ ] **Step 3: Implement the minimal pure helpers and BrowserAutomation action**
 
-In `v11-ui-model.ts`, implement `accountConnectionTarget` as follows: `add` always returns `{ accountId:null, createAccount:true }`; `connect` may return the first incomplete container or `{ accountId:null, createAccount:true }` when no container exists; `relogin` returns the first incomplete container only when one exists, otherwise `{ accountId:null, createAccount:false }` so a relogin cannot silently create a new account. `platformHasConnectedAccount` returns `rows.some((row) => row.accountStatus === "Connected")`.
+In `v11-ui-model.ts`, implement `accountConnectionTarget` as follows: `add` always returns `{ accountId:null, createAccount:true }`; `connect` may reuse an incomplete container only when exactly one incomplete container exists, and may create a new container only when there are no rows; `relogin` reuses an incomplete container only when exactly one exists, otherwise returns `{ accountId:null, createAccount:false }`. Multiple incomplete rows therefore require an explicit account selection and never choose the first row. `platformHasConnectedAccount` returns `rows.some((row) => row.accountStatus === "Connected")`.
 
-In `platform-connection-ui.ts`, extend `PlatformConnectionActionKind` with `add-account`, and return `[{ kind:"view-account", label:"查看账号" }, { kind:"open-backend", label:"打开后台" }, { kind:"relogin", label:"重新登录" }, { kind:"add-account", label:"+ 添加账号" }]` for a connected BrowserAutomation row. For an unconnected browser platform, retain `连接账号` and add the explicit add action only where the platform already has a connected account; the detail view will always expose it.
+In `platform-connection-ui.ts`, extend `PlatformConnectionActionKind` with `add-account`, and return `[{ kind:"view-account", label:"查看账号" }, { kind:"open-backend", label:"打开后台" }, { kind:"relogin", label:"重新登录" }, { kind:"add-account", label:"+ 添加账号" }]` for a connected BrowserAutomation row. A platform with multiple account rows shows `选择账号` plus `+ 添加账号`; a platform with no rows shows `连接账号` plus `+ 添加账号`. No card action may route to a first account implicitly.
 
 - [ ] **Step 4: Wire V11AccountsCenter to exact IDs and fresh account creation**
 

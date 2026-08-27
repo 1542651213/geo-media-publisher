@@ -87,6 +87,18 @@ describe("V1.1.3 platform self-test state and evidence", () => {
     expect(repository.getPublishRecords()).toHaveLength(0);
   });
 
+  it("routes an explicit internal account ID even when an external platform ID is present", async () => {
+    const { repository, service, account } = fixture();
+    repository.syncBrowserPlatformAccount({ accountId: account.id, platformKey: "test", accountName: "平台昵称", externalAccountId: "external-test-id", browserSessionId: "session:test:" + account.id });
+
+    const run = await service.runSafe(account.id);
+
+    expect(run.platformKey).toBe("test");
+    expect(run.platformAccountId).toBe(account.id);
+    expect(repository.listJobs()).toHaveLength(0);
+    expect(repository.getPublishRecords()).toHaveLength(0);
+  });
+
   it("uses a unique short Baijiahao self-test title and body", () => {
     const content = transparentSelfTestContent("baijiahao", "百家号", new Date("2026-08-25T07:08:09.000Z"));
     expect(content.title).toBe("GMP 百家号真实发布测试 2026-08-25 15:08:09");

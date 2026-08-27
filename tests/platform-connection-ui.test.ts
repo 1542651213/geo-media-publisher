@@ -49,6 +49,8 @@ describe("V1.0.1 platform connection UI decisions", () => {
     expect(platformConnectionModeLabel(platform())).toBe("浏览器自动化");
     expect(platformConnectionModeLabel(platform({ integrationMode: "API", accountConnectionMode: "BrowserAutomation" }))).toBe("浏览器自动化");
     expect(readFileSync("apps/desktop/src/renderer/V11Workspace.tsx", "utf8")).toContain("platformConnectionModeLabel(platform)");
+    expect(readFileSync("apps/desktop/src/renderer/PlatformConnectionCenter.tsx", "utf8")).toContain("accountConnectionMode");
+    expect(readFileSync("apps/desktop/src/renderer/PlatformSelfTestCenter.tsx", "utf8")).toContain("accountConnectionMode");
   });
 
   it("keeps manual, blocked and not implemented platforms fail-closed", () => {
