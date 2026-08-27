@@ -3,6 +3,7 @@ import type { Dispatch, JSX, SetStateAction } from "react";
 import { defaultAccountSelection, normalizeContentReviewMode, selectRelevantBrandFacts, type Account, type Article, type Brand, type ContentQualityIssue, type ContentReviewMode, type ExcelImportPreview, type ImageAsset, type Platform, type PublishJob } from "@publisher/domain";
 import type { AccountManagementRow, ContentStudioTaskView } from "../shared/api";
 import { accountCapabilityText, accountCenterPriority, accountConnectionTarget, accountStatusLabel, articleListStatusLabel, articleReviewLabel, articleReviewTone, canPublishWithReviewMode, connectedAccountsForPlatform, contentReviewModeLabel, imageMatchReason, isOnlineAccount, loadAccountCenterData, orderPlatformCatalog, platformAvailability, platformCapabilityText, platformConnectionModeLabel, platformLabel, publishStatusLabel, publishStatusTone, searchOrderedPlatforms, type V11NavigationTarget } from "./v11-ui-model";
+import { disconnectFeedbackMessage } from "./platform-connection-ui";
 
 type QualityStatusByArticle = Record<string, string>;
 
@@ -12,6 +13,14 @@ const cityTagDefaults = ["江苏", "苏州", "木渎", "吴中", "通用"];
 const usageTagDefaults = ["治理现场", "检测设备", "消杀现场", "白蚁现场", "办公环境", "企业形象", "团队", "门店", "资质证书", "营业资料", "通用"];
 const imageCategories = ["全部", ...usageTagDefaults];
 const standardPlatforms = ["zhihu", "weibo", "toutiao", "douyin", "lieju", "cnblogs"];
+
+export type BrowserLoginResultClassification = "SUCCESS" | "NEEDS_USER_ACTION" | "CONTRACT_MISMATCH";
+
+export function classifyBrowserLoginResult(result: { accountStatus?: unknown }): BrowserLoginResultClassification {
+  if (result.accountStatus === "Connected") return "SUCCESS";
+  if (result.accountStatus === "NeedsLogin") return "NEEDS_USER_ACTION";
+  return "CONTRACT_MISMATCH";
+}
 
 function isProductionArticle(article: Article): boolean {
   return productionSources.has(article.source ?? "production");
@@ -313,12 +322,12 @@ export function V11AccountsCenter({ refresh, refreshKey, onNavigate }: { refresh
     } catch (error) { setMessage(error instanceof Error ? error.message : "平台自测失败"); }
     finally { setBusy(""); }
   };
-  const completeLogin = async (): Promise<void> => { if (!pendingLogin) return; setBusy(pendingLogin.accountId); setLoginHint(""); try { const result = await window.publisherAPI.accounts.completeLogin(pendingLogin.accountId, pendingLogin.platformKey, ""); if (result.accountStatus !== "Connected") { setLoginHint("暂未检测到登录成功，请继续在浏览器完成登录。"); return; } setLoginSucceeded(true); setMessage(""); load(); refresh(); } catch { setLoginHint("暂未检测到登录成功，请继续在浏览器完成登录。"); } finally { setBusy(""); } };
+  const completeLogin = async (): Promise<void> => { if (!pendingLogin) return; setBusy(pendingLogin.accountId); setLoginHint(""); try { const result = await window.publisherAPI.accounts.completeLogin(pendingLogin.accountId, pendingLogin.platformKey, ""); const classification = classifyBrowserLoginResult(result); if (classification === "CONTRACT_MISMATCH") throw new Error("LOGIN_RESULT_CONTRACT_MISMATCH: accounts:complete-login 返回了未知 accountStatus"); if (classification === "NEEDS_USER_ACTION") { setLoginHint("暂未检测到登录成功，请继续在浏览器完成登录。"); return; } setLoginSucceeded(true); setMessage(""); load(); refresh(); } catch (error) { setLoginHint(error instanceof Error ? error.message : "登录完成检查失败"); } finally { setBusy(""); } };
   const cancelPendingLogin = async (): Promise<void> => { if (!pendingLogin) return; setBusy(pendingLogin.accountId); try { await window.publisherAPI.accounts.cancelLogin(pendingLogin.accountId, pendingLogin.platformKey); } finally { setPendingLogin(null); setLoginSucceeded(false); setLoginHint(""); setBusy(""); load(); } };
   const finishLogin = (): void => { setPendingLogin(null); setLoginSucceeded(false); setLoginHint(""); setDetailsKey(null); load(); };
   const openPlatform = async (platform: Platform, row?: AccountManagementRow): Promise<void> => { setBusy(row?.account.id ?? platform.platformKey); try { if (row && (platform.accountConnectionMode ?? platform.integrationMode) === "BrowserAutomation") await window.publisherAPI.accounts.openBackend(row.account.id, platform.platformKey); else await window.publisherAPI.platforms.open(platform.platformKey); setMessage(`已打开${platform.displayName}官方入口。`); load(); } catch (error) { setMessage(error instanceof Error ? error.message : "平台入口暂时无法打开"); } finally { setBusy(""); } };
   const checkLogin = async (row: AccountManagementRow): Promise<void> => { setBusy(row.account.id); try { const result = await window.publisherAPI.accounts.checkLogin(row.account.id, row.account.platformKey); setMessage(result.loginStatus === "logged_in" ? `${row.account.accountAlias || row.account.name} 登录有效。` : `${row.account.accountAlias || row.account.name} 需要重新登录或完成验证。`); load(); refresh(); } catch (error) { setMessage(error instanceof Error ? error.message : "登录检查失败"); } finally { setBusy(""); } };
-  const disconnect = async (row: AccountManagementRow): Promise<void> => { setBusy(row.account.id); try { await window.publisherAPI.accounts.disconnect(row.account.id, row.account.platformKey); setMessage(`已断开 ${row.account.accountAlias || row.account.name}；其他账号 Session 未受影响。`); load(); refresh(); } catch (error) { setMessage(error instanceof Error ? error.message : "断开失败"); } finally { setBusy(""); } };
+  const disconnect = async (row: AccountManagementRow): Promise<void> => { setBusy(row.account.id); try { const result = await window.publisherAPI.accounts.disconnect(row.account.id, row.account.platformKey); setMessage(disconnectFeedbackMessage(result, row.account.accountAlias || row.account.name)); load(); refresh(); } catch (error) { setMessage(error instanceof Error ? error.message : "断开失败"); } finally { setBusy(""); } };
   const rename = async (row: AccountManagementRow, alias: string): Promise<void> => { if (!alias.trim()) return; await window.publisherAPI.accounts.update(row.account.id, { accountAlias: alias.trim() }); load(); refresh(); };
   const toggleFavorite = (platformKey: string): void => { const next = favorites.includes(platformKey) ? favorites.filter((key) => key !== platformKey) : [...favorites, platformKey]; setFavorites(next); void window.publisherAPI.settings.update("favoritePlatformKeys", next.join(",")); };
   const accounts = overview.map((row) => row.account);

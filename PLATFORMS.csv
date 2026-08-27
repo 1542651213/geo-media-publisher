@@ -2,7 +2,7 @@
 douyin,抖音,内容/视频,是,官方开放平台视频发布Adapter,verified,WaitingForUser,official_api,https://open.douyin.com/,需开放平台应用审核及video.create权限,2026-08-20,OAuth
 kuaishou,快手,内容/视频,是,官方文档标注视频发布接入暂停；Adapter 保留契约注入和安全失败边界,verified,Blocked,official_api,https://open.kuaishou.com/,官方当前暂停接入，需平台恢复/客服确认后才能真实验证,2026-08-20,Blocked
 wechat_channels,视频号,内容/视频,是,先SemiAuto：自动准备内容并打开视频号助手，用户最终确认,partial,WaitingForUser,semi_auto,https://channels.weixin.qq.com/,系统不自动绕过验证或点击最终发布,2026-08-21,SemiAuto
-xiaohongshu,小红书,图文/视频,是,官方小程序笔记发布能力必须由用户触发；Adapter 不执行后台静默发布,partial,Blocked,official_sdk,https://miniapp.xiaohongshu.com/,需小程序/开发者审核和用户在官方组件确认，暂无公开后台回查 API,2026-08-20,Blocked
+xiaohongshu,小红书,图文,是,用户自有账号 BrowserAutomation gate-only：登录、身份识别、图片/标题/正文/发布控件 discovery；不点击最终发布,partial,WaitingForUser,browser,https://creator.xiaohongshu.com/,必须由账号所有者完成登录和平台正常安全验证；本轮只验证真实页面，不执行最终发布,2026-08-27,BrowserAutomation
 bilibili,哔哩哔哩,视频/专栏,是,用户自有账号 Browser Automation：登录、保存Session、打开创作中心、生成任务,partial,WaitingForUser,browser,https://member.bilibili.com/,首阶段不自动点击最终发布；需用户完成验证码/安全验证并确认真实发布,2026-08-21,BrowserAutomation
 baijiahao,百家号,图文,是,用户自有账号 Browser Automation：登录、保存Session、打开作者后台、生成草稿任务,partial,WaitingForUser,browser,https://baijiahao.baidu.com/,首阶段不自动点击最终发布；需用户完成验证码/安全验证并确认真实发布,2026-08-21,BrowserAutomation
 toutiao,头条号,图文/内容,是,官方开放平台视频发布Adapter,verified,WaitingForUser,official_api,https://open.douyin.com/platform/,需应用审核和头条视频发布权限,2026-08-20,API

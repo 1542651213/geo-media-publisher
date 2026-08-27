@@ -3,7 +3,7 @@ import type { JSX } from "react";
 import type { Account, LoginSession, Platform } from "@publisher/domain";
 import type { AccountManagementRow as AccountManagementRowView } from "../shared/api";
 import { accountConnectionTarget } from "./v11-ui-model";
-import { accountStatusLabel, authorizationLabel, connectionErrorMessage, platformAccountStatusLabel, platformAuthorizationStatusLabel, platformConnectionActions, platformConnectionKind, type PlatformConnectionAction, type PlatformConnectionKind } from "./platform-connection-ui";
+import { accountStatusLabel, authorizationLabel, connectionErrorMessage, disconnectFeedbackMessage, platformAccountStatusLabel, platformAuthorizationStatusLabel, platformConnectionActions, platformConnectionKind, type PlatformConnectionAction, type PlatformConnectionKind } from "./platform-connection-ui";
 
 type Navigate = (route: "accounts") => void;
 type ConnectionPhase = "opening" | "waiting" | "verifying" | "success" | "error";
@@ -168,8 +168,8 @@ export function PlatformConnectionCenter({ refresh, onNavigate }: PlatformConnec
     if (!row || !window.confirm("只断开本地安全凭据，不会宣称平台端已经撤销授权。确定继续吗？")) return;
     setBusyKey(platform.platformKey);
     try {
-      await window.publisherAPI.accounts.disconnect(row.account.id, platform.platformKey);
-      updateMessage(platform.platformKey, "已断开本地连接。");
+      const result = await window.publisherAPI.accounts.disconnect(row.account.id, platform.platformKey);
+      updateMessage(platform.platformKey, disconnectFeedbackMessage(result, row.account.accountAlias || row.account.name));
       load();
       refresh();
     } catch (error) {

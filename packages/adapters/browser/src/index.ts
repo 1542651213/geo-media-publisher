@@ -11,7 +11,8 @@ import type {
   PublishVideoInput,
   ValidationResult
 } from "@publisher/domain";
-import { BrowserSessionManager, browserExecutionModeFromSettings, browserSessionIdHash, PlatformAdapterError, userInitiatedActionFromSettings, type BrowserExecutionMode, type BrowserRuntimeEvent, type BrowserSession } from "@publisher/adapters-core";
+import { randomUUID } from "node:crypto";
+import { BrowserSessionManager, browserExecutionModeFromSettings, browserSessionCredentialKey, browserSessionIdHash, PlatformAdapterError, userInitiatedActionFromSettings, type BrowserExecutionMode, type BrowserRuntimeEvent, type BrowserSession } from "@publisher/adapters-core";
 import type { CredentialStore } from "@publisher/security";
 import type { AutomationAdapter, AutomationPrepareResult } from "@publisher/adapters-core";
 
@@ -37,6 +38,44 @@ export interface BrowserAutomationAdapterOptions {
   sessionManager?: BrowserSessionManager;
   timeoutMs?: number;
   onBrowserRuntimeEvent?: (event: BrowserRuntimeEvent) => void;
+  onConnectionDiagnostic?: (diagnostic: BrowserConnectionDiagnostic) => void;
+}
+
+export type BrowserConnectionDiagnosticPhase = "BEGIN_LOGIN_PAGE" | "COMPLETE_LOGIN_PAGE";
+
+export interface BrowserConnectionDiagnostic {
+  phase: BrowserConnectionDiagnosticPhase;
+  timestamp: string;
+  platformKey: string;
+  accountId: string;
+  adapterDebugId: string;
+  browserSessionManagerDebugId: string;
+  sessionKey: string;
+  activeSessionFound: boolean;
+  pendingLogin: boolean;
+  contextCount: number;
+  pageCount: number;
+  contextDebugId: string | null;
+  pageDebugId: string | null;
+  pageUrl: string | null;
+  pageTitle: string | null;
+  pageClosed: boolean | null;
+}
+
+export interface BrowserSessionScopeEvidence {
+  platformKey: string;
+  accountId: string;
+  sessionKey: string;
+  sessionIdHash: string;
+  pageUrl: string;
+  pageTitle: string;
+  pageCount: number;
+  ownerVisiblePage: boolean;
+  adapterDebugId: string;
+  browserSessionManagerDebugId: string;
+  contextDebugId: string;
+  pageDebugId: string;
+  pageClosed: boolean;
 }
 
 export class BrowserAutomationError extends PlatformAdapterError {
@@ -65,8 +104,10 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
   readonly automationType = "BrowserAutomation" as const;
   protected readonly definition: BrowserPlatformDefinition;
   protected readonly sessionManager: BrowserSessionManager;
-  private readonly activeSessions = new Map<string, BrowserSession>();
-  private readonly pendingConnections = new Set<string>();
+  private readonly fallbackActiveSessions = new Map<string, BrowserSession>();
+  private readonly fallbackPendingConnections = new Set<string>();
+  private readonly onConnectionDiagnostic?: (diagnostic: BrowserConnectionDiagnostic) => void;
+  readonly adapterDebugId = randomUUID();
 
   constructor(definition: BrowserPlatformDefinition, options: BrowserAutomationAdapterOptions = {}) {
     this.definition = definition;
@@ -74,6 +115,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     const sessionManager = options.sessionManager ?? (options.credentialStore ? new BrowserSessionManager(options.credentialStore, { timeoutMs: options.timeoutMs ?? 30_000, onRuntimeEvent: options.onBrowserRuntimeEvent }) : undefined);
     if (!sessionManager) throw new Error("BrowserAutomationAdapter requires a safe CredentialStore or BrowserSessionManager");
     this.sessionManager = sessionManager;
+    this.onConnectionDiagnostic = options.onConnectionDiagnostic;
     this.manifest = {
       platformKey: definition.platformKey,
       displayName: definition.displayName,
@@ -104,10 +146,11 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     const identity = this.identity(ctx);
     await this.closeActive(identity);
     const session = await this.sessionManager.open(identity, userInitiatedActionFromSettings(ctx.settings), "VISIBLE");
-    this.activeSessions.set(this.key(ctx), session);
-    this.pendingConnections.add(this.key(ctx));
+    this.rememberActiveSession(identity, session);
+    this.markConnectionPending(identity);
     const page = await this.page(session);
     await this.navigate(page, this.definition.loginUrl ?? this.definition.backendUrl);
+    await this.emitConnectionDiagnostic("BEGIN_LOGIN_PAGE", ctx, session);
     return {
       sessionId: `browser-${this.platformKey}-${ctx.accountId}-${Date.now()}`,
       requiresUserAction: true,
@@ -120,35 +163,37 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
 
   async completeConnection(ctx: AccountContext): Promise<LoginStatus> {
     const identity = this.identity(ctx);
-    const key = this.key(ctx);
-    const session = this.pendingConnections.has(key) ? this.activeSessions.get(key) : undefined;
-    if (!session) return "needs_user_action";
+    const session = this.connectionPending(identity) ? this.activeSession(identity) : null;
+    await this.emitConnectionDiagnostic("COMPLETE_LOGIN_PAGE", ctx, session);
+    if (!session) throw new BrowserAutomationError("USER_ACTION_REQUIRED", `ACTIVE_LOGIN_SESSION_NOT_FOUND: accountId=${ctx.accountId} 的可见登录 Session 已丢失，请重新开始连接`);
     const page = await this.page(session);
-    await this.navigate(page, this.definition.backendUrl);
-    if (this.isLoginPage(page.url()) || this.isVerificationUrl(page.url())) return "needs_user_action";
-    try {
-      await this.sessionManager.save(identity, session.context);
-    } catch (error) {
+    if (!this.keepConnectionPageForCompletion(ctx)) await this.navigate(page, this.definition.backendUrl);
+    const pageStatus = await this.inspectConnectionPage(ctx, page);
+    if (pageStatus !== "logged_in") return pageStatus;
+    if (this.deferConnectionPersistence(ctx)) return "logged_in";
+    try { await this.saveConnectionSession(ctx); }
+    catch (error) {
       try { await this.closeActive(identity); } catch { /* preserve the save failure */ }
-      this.pendingConnections.delete(key);
+      this.finishConnection(identity);
       throw error;
     }
-    this.pendingConnections.delete(key);
-    try { await this.closeActive(identity); } catch { /* the Session is already persisted */ }
+    this.finishConnection(identity);
+    if (!this.keepConnectionSessionOpenAfterCompletion(ctx)) {
+      try { await this.closeActive(identity); } catch { /* the Session is already persisted */ }
+    }
     return "logged_in";
   }
 
   async cancelConnection(ctx: AccountContext): Promise<void> {
     try { await this.closeActive(this.identity(ctx)); }
-    finally { this.pendingConnections.delete(this.key(ctx)); }
+    finally { this.finishConnection(this.identity(ctx)); }
   }
 
-  isConnectionPending(ctx: AccountContext): boolean { return this.pendingConnections.has(this.key(ctx)); }
+  isConnectionPending(ctx: AccountContext): boolean { return this.connectionPending(this.identity(ctx)); }
 
   async checkSession(ctx: AccountContext): Promise<LoginStatus> {
-    const key = this.key(ctx);
-    if (this.pendingConnections.has(key)) return "needs_user_action";
     const identity = this.identity(ctx);
+    if (this.connectionPending(identity)) return "needs_user_action";
     const executionMode = browserExecutionModeFromSettings(ctx.settings);
     let hasStored = false;
     try {
@@ -156,7 +201,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     } catch {
       return "needs_user_action";
     }
-    const active = this.activeSessions.get(key);
+    const active = this.activeSession(identity);
     let session: BrowserSession;
     try {
       session = active ?? await this.sessionManager.open(identity, userInitiatedActionFromSettings(ctx.settings), executionMode);
@@ -165,7 +210,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
       throw error;
     }
     const ownsActiveSession = Boolean(active);
-    if (!active) this.activeSessions.set(key, session);
+    if (!active) this.rememberActiveSession(identity, session);
     try {
       const page = await this.page(session);
       await this.navigate(page, this.definition.backendUrl);
@@ -253,11 +298,11 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
   }
 
   async logout(ctx: AccountContext): Promise<void> {
-    const key = this.key(ctx);
+    const identity = this.identity(ctx);
     try { await this.closeActive(this.identity(ctx)); }
     finally {
-      this.pendingConnections.delete(key);
-      this.sessionManager.clear(this.identity(ctx));
+      this.finishConnection(identity);
+      this.sessionManager.clear(identity);
     }
   }
 
@@ -265,12 +310,71 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     if (browserExecutionModeFromSettings(ctx.settings) === "BACKGROUND") await this.closeActive(this.identity(ctx));
   }
 
+  async releaseConnectionSession(ctx: AccountContext): Promise<void> {
+    const identity = this.identity(ctx);
+    try { await this.closeActive(identity); }
+    finally { this.finishConnection(identity); }
+  }
+
+  async getBrowserSessionEvidence(ctx: AccountContext): Promise<BrowserSessionScopeEvidence | null> {
+    const session = this.activeSession(this.identity(ctx));
+    if (!session) return null;
+    const page = await this.page(session);
+    const pages = session.context.pages();
+    if (!pages.includes(page)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", `BrowserSession/Page mismatch：accountId=${ctx.accountId} 的 owner Page 不属于当前 Context`);
+    const candidate = page as unknown as { title?: () => Promise<string> };
+    const pageTitle = typeof candidate.title === "function" ? await candidate.title().catch(() => "") : "";
+    return {
+      platformKey: this.platformKey,
+      accountId: ctx.accountId,
+      sessionKey: browserSessionCredentialKey(this.identity(ctx)),
+      sessionIdHash: session.sessionIdHash,
+      pageUrl: page.url(),
+      pageTitle,
+      pageCount: pages.length,
+      ownerVisiblePage: session.executionMode === "VISIBLE" && !session.headless,
+      adapterDebugId: this.adapterDebugId,
+      browserSessionManagerDebugId: this.sessionManager.debugId,
+      contextDebugId: session.contextDebugId ?? objectDebugId(session.context, "context"),
+      pageDebugId: session.pageDebugId ?? objectDebugId(page, "page"),
+      pageClosed: this.isPageClosed(page)
+    };
+  }
+
   async closeOwnedSessions(): Promise<void> {
     try { await this.sessionManager.closeAll(); }
     finally {
-      this.activeSessions.clear();
-      this.pendingConnections.clear();
+      this.fallbackActiveSessions.clear();
+      this.fallbackPendingConnections.clear();
     }
+  }
+
+  getBrowserConnectionDebugIds(): { adapterDebugId: string; browserSessionManagerDebugId: string } {
+    return { adapterDebugId: this.adapterDebugId, browserSessionManagerDebugId: this.sessionManager.debugId };
+  }
+
+  getBrowserConnectionDebugState(ctx: AccountContext): {
+    requestedAccountId: string;
+    activeSessionKeys: string[];
+    targetSessionFound: boolean;
+    targetSessionState: "MISSING" | "OPEN_PENDING" | "OPEN_NOT_PENDING";
+    adapterDebugId: string;
+    browserSessionManagerDebugId: string;
+    contextDebugId: string | null;
+    pageDebugId: string | null;
+  } {
+    const identity = this.identity(ctx);
+    const session = this.activeSession(identity);
+    return {
+      requestedAccountId: ctx.accountId,
+      activeSessionKeys: this.activeSessionKeys(identity),
+      targetSessionFound: Boolean(session),
+      targetSessionState: !session ? "MISSING" : this.connectionPending(identity) ? "OPEN_PENDING" : "OPEN_NOT_PENDING",
+      adapterDebugId: this.adapterDebugId,
+      browserSessionManagerDebugId: this.sessionManager.debugId,
+      contextDebugId: session?.contextDebugId ?? (session ? objectDebugId(session.context, "context") : null),
+      pageDebugId: session?.pageDebugId ?? (session ? objectDebugId(session.page, "page") : null)
+    };
   }
 
   protected sessionHash(ctx: AccountContext): string { return browserSessionIdHash(this.identity(ctx)); }
@@ -286,28 +390,50 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
 
   /** Returns the already prepared visible session without navigating it. Platform L5 code may use this lifecycle hook, but selectors and submit actions stay platform-specific. */
   protected async activeBackendPage(ctx: AccountContext): Promise<{ page: Awaited<ReturnType<BrowserSession["context"]["newPage"]>>; session: BrowserSession } | null> {
-    const session = this.activeSessions.get(this.key(ctx));
+    const session = this.activeSession(this.identity(ctx));
     if (!session || session.executionMode !== browserExecutionModeFromSettings(ctx.settings)) return null;
     return { page: await this.page(session), session };
   }
 
   protected async getOrOpen(ctx: AccountContext): Promise<BrowserSession | null> {
     const executionMode = browserExecutionModeFromSettings(ctx.settings);
-    const active = this.activeSessions.get(this.key(ctx));
+    const identity = this.identity(ctx);
+    const active = this.activeSession(identity);
     if (active?.executionMode === executionMode) return active;
-    if (active) await this.closeActive(this.identity(ctx));
-    if (!this.sessionManager.hasStoredSession(this.identity(ctx))) return null;
-    const session = await this.sessionManager.open(this.identity(ctx), userInitiatedActionFromSettings(ctx.settings), executionMode);
-    this.activeSessions.set(this.key(ctx), session);
+    if (active) await this.closeActive(identity);
+    if (!this.sessionManager.hasStoredSession(identity)) return null;
+    const session = await this.sessionManager.open(identity, userInitiatedActionFromSettings(ctx.settings), executionMode);
+    this.rememberActiveSession(identity, session);
     return session;
   }
 
   protected async page(session: BrowserSession) {
-    // Production sessions always create this page in BrowserSessionManager.open.
-    // The fallback keeps lightweight adapter test doubles compatible without
-    // weakening the owned Page invariant in the real harness.
-    return session.page ?? session.context.pages()[0] ?? session.context.newPage();
+    const context = session.context as unknown as { pages?: () => Awaited<ReturnType<BrowserSession["context"]["pages"]>> } | undefined;
+    const pages = typeof context?.pages === "function" ? context.pages() : undefined;
+    const page = session.page ?? pages?.[0];
+    if (!page) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "BrowserSession/Page mismatch：当前 account-scoped Session 没有可验证的 owner Page");
+    if (pages && !pages.includes(page)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "BrowserSession/Page mismatch：当前 owner Page 不属于 account-scoped BrowserContext");
+    return page;
   }
+
+  protected async saveConnectionSession(ctx: AccountContext): Promise<void> {
+    const identity = this.identity(ctx);
+    const session = this.activeSession(identity);
+    if (!session) throw new BrowserAutomationError("USER_ACTION_REQUIRED", `ACTIVE_LOGIN_SESSION_NOT_FOUND: accountId=${ctx.accountId} 的可见登录 Session 已丢失，请重新开始连接`);
+    await this.sessionManager.save(identity, session.context);
+  }
+
+  protected markConnectionComplete(identity: { platformKey: string; accountId: string }): void { this.finishConnection(identity); }
+
+  protected deferConnectionPersistence(_ctx: AccountContext): boolean { return false; }
+
+  protected keepConnectionPageForCompletion(_ctx: AccountContext): boolean { return false; }
+
+  protected async inspectConnectionPage(_ctx: AccountContext, page: Awaited<ReturnType<BrowserSession["context"]["newPage"]>>): Promise<LoginStatus> {
+    return this.isLoginPage(page.url()) || this.isVerificationUrl(page.url()) ? "needs_user_action" : "logged_in";
+  }
+
+  protected keepConnectionSessionOpenAfterCompletion(_ctx: AccountContext): boolean { return false; }
 
   protected async navigate(page: Awaited<ReturnType<BrowserSession["context"]["newPage"]>>, url: string): Promise<void> {
     try {
@@ -325,14 +451,128 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
   }
 
   protected isLoginPage(url: string): boolean { return this.definition.loginUrlPattern?.test(url) ?? /\/login(?:[/?#]|$)|\/signin(?:[/?#]|$)|passport|auth/iu.test(url); }
-  private isVerificationUrl(url: string): boolean { return /captcha|security[-_/]?check|sms[-_/]?verify|qr[-_/]?login|risk[-_/]?control/iu.test(url); }
+  protected isVerificationUrl(url: string): boolean { return /captcha|security[-_/]?check|sms[-_/]?verify|qr[-_/]?login|risk[-_/]?control/iu.test(url); }
   private isVerificationMessage(value: string): boolean { return /captcha|human|security|验证码|短信|安全验证|人机/iu.test(value); }
   private identity(ctx: AccountContext): { platformKey: string; accountId: string } { return { platformKey: this.platformKey, accountId: ctx.accountId }; }
-  private key(ctx: AccountContext): string { return `${this.platformKey}:${ctx.accountId}`; }
+  private activeSession(identity: { platformKey: string; accountId: string }): BrowserSession | null {
+    const manager = this.sessionManager as unknown as { getActiveSession?: (value: { platformKey: string; accountId: string }) => BrowserSession | null; clearActiveSession?: (value: { platformKey: string; accountId: string }) => void };
+    const managed = manager.getActiveSession?.(identity) ?? null;
+    const session = managed ?? this.fallbackActiveSessions.get(`${identity.platformKey}:${identity.accountId}`) ?? null;
+    if (session && this.isPageClosed(session.page)) {
+      manager.clearActiveSession?.(identity);
+      this.fallbackActiveSessions.delete(`${identity.platformKey}:${identity.accountId}`);
+      return null;
+    }
+    return session;
+  }
+
+  private activeSessionKeys(identity: { platformKey: string; accountId: string }): string[] {
+    const manager = this.sessionManager as unknown as { getActiveSessionKeys?: () => string[] };
+    const managed = manager.getActiveSessionKeys?.();
+    if (managed) return [...new Set(managed)];
+    const active = this.fallbackActiveSessions.has(`${identity.platformKey}:${identity.accountId}`) ? [browserSessionCredentialKey(identity)] : [];
+    return active;
+  }
+
+  private rememberActiveSession(identity: { platformKey: string; accountId: string }, session: BrowserSession): void {
+    const manager = this.sessionManager as unknown as { setActiveSession?: (value: { platformKey: string; accountId: string }, value2: BrowserSession) => void };
+    manager.setActiveSession?.(identity, session);
+    this.fallbackActiveSessions.set(`${identity.platformKey}:${identity.accountId}`, session);
+  }
+
+  private markConnectionPending(identity: { platformKey: string; accountId: string }): void {
+    const manager = this.sessionManager as unknown as { markConnectionPending?: (value: { platformKey: string; accountId: string }) => void };
+    manager.markConnectionPending?.(identity);
+    this.fallbackPendingConnections.add(`${identity.platformKey}:${identity.accountId}`);
+  }
+
+  private connectionPending(identity: { platformKey: string; accountId: string }): boolean {
+    const manager = this.sessionManager as unknown as { isConnectionPending?: (value: { platformKey: string; accountId: string }) => boolean };
+    return Boolean(manager.isConnectionPending?.(identity)) || this.fallbackPendingConnections.has(`${identity.platformKey}:${identity.accountId}`);
+  }
+
+  private finishConnection(identity: { platformKey: string; accountId: string }): void {
+    const manager = this.sessionManager as unknown as { clearConnectionPending?: (value: { platformKey: string; accountId: string }) => void };
+    manager.clearConnectionPending?.(identity);
+    this.fallbackPendingConnections.delete(`${identity.platformKey}:${identity.accountId}`);
+  }
+
   private async closeActive(identity: { platformKey: string; accountId: string }): Promise<void> {
     const key = `${identity.platformKey}:${identity.accountId}`;
-    const active = this.activeSessions.get(key);
+    const active = this.activeSession(identity);
     try { if (active) await this.sessionManager.close(active); }
-    finally { this.activeSessions.delete(key); }
+    finally {
+      const manager = this.sessionManager as unknown as { clearActiveSession?: (value: { platformKey: string; accountId: string }, value2?: BrowserSession) => void };
+      manager.clearActiveSession?.(identity, active ?? undefined);
+      this.fallbackActiveSessions.delete(key);
+    }
   }
+
+  private isPageClosed(page: unknown): boolean {
+    if (!page || typeof page !== "object") return false;
+    const candidate = page as { isClosed?: () => boolean };
+    return typeof candidate.isClosed === "function" && candidate.isClosed();
+  }
+
+  private async emitConnectionDiagnostic(phase: BrowserConnectionDiagnosticPhase, ctx: AccountContext, session: BrowserSession | null): Promise<void> {
+    if (!this.onConnectionDiagnostic) return;
+    let contextCount = 0;
+    let pageCount = 0;
+    let contextDebugId: string | null = null;
+    let pageDebugId: string | null = null;
+    let pageUrl: string | null = null;
+    let pageTitle: string | null = null;
+    let pageClosed: boolean | null = null;
+    try {
+      if (session) {
+        contextCount = 1;
+        contextDebugId = session.contextDebugId ?? objectDebugId(session.context, "context");
+        const pages = typeof session.context.pages === "function" ? session.context.pages() : [];
+        pageCount = pages.length;
+        const page = session.page ?? pages[0];
+        if (page) {
+          pageDebugId = session.pageDebugId ?? objectDebugId(page, "page");
+          pageClosed = this.isPageClosed(page);
+          pageUrl = typeof page.url === "function" ? page.url() : null;
+          const titled = page as unknown as { title?: () => Promise<string> };
+          pageTitle = typeof titled.title === "function" ? await titled.title().catch(() => "") : null;
+        }
+        const browser = session.browser as unknown as { contexts?: () => unknown[] };
+        if (typeof browser?.contexts === "function") contextCount = browser.contexts().length;
+      }
+    } catch {
+      // Diagnostics must remain best-effort even when the owner closes a Page/Context.
+    }
+    try {
+      this.onConnectionDiagnostic({
+        phase,
+        timestamp: new Date().toISOString(),
+        platformKey: this.platformKey,
+        accountId: ctx.accountId,
+        adapterDebugId: this.adapterDebugId,
+        browserSessionManagerDebugId: this.sessionManager.debugId,
+        sessionKey: browserSessionCredentialKey(this.identity(ctx)),
+        activeSessionFound: Boolean(session),
+        pendingLogin: this.connectionPending(this.identity(ctx)),
+        contextCount,
+        pageCount,
+        contextDebugId,
+        pageDebugId,
+        pageUrl,
+        pageTitle,
+        pageClosed
+      });
+    } catch {
+      // Diagnostics must never change the login result.
+    }
+  }
+}
+
+const objectDebugIds = new WeakMap<object, string>();
+function objectDebugId(value: object, kind: "context" | "page"): string {
+  const existing = objectDebugIds.get(value);
+  if (existing) return existing;
+  const created = `${kind}-${randomUUID()}`;
+  objectDebugIds.set(value, created);
+  return created;
 }

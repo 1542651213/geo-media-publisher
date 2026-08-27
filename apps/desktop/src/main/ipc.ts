@@ -5,12 +5,12 @@ import { basename, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { backupDatabase, validateDatabaseBackup, type AIBatchTarget, type AppRepository, type ContentStudioTaskPayload, type HumanReviewSubmitInput } from "@publisher/db";
-import type { BatchGenerationInput, ContentStudioGenerationInput } from "../shared/api";
+import type { AccountDisconnectResult, BatchGenerationInput, ContentStudioGenerationInput } from "../shared/api";
 import { AIProviderError, DeepSeekErrorMapper, DeepSeekProvider, FallbackAIProvider, MockAIProvider, OpenAICompatibleProvider, contentHash, type AIConnectionDiagnostic, type AIConnectionResult, type AIProvider } from "@publisher/ai";
 import { MockImageProvider, OpenAICompatibleImageProvider, persistGeneratedImage, type ImageProvider } from "@publisher/image";
 import { exportLogBundle } from "@publisher/logger";
 import { CredentialDecryptError, type CredentialStatus, type CredentialStore } from "@publisher/security";
-import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STUDIO_PLATFORM_KEYS, EXCEL_ADVANCED_ARTICLE_HEADERS, EXCEL_SIMPLE_ARTICLE_HEADERS, PROMOTION_STRENGTHS, SEARCH_INTENTS, checkGeneratedArticleQuality, selectRelevantBrandFacts, type AccountContext, type AIUsage, type CredentialField, type ContentStudioPlatformKey, type ExcelImportPreview, type ImageAsset } from "@publisher/domain";
+import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STUDIO_PLATFORM_KEYS, EXCEL_ADVANCED_ARTICLE_HEADERS, EXCEL_SIMPLE_ARTICLE_HEADERS, PROMOTION_STRENGTHS, SEARCH_INTENTS, checkGeneratedArticleQuality, selectRelevantBrandFacts, type AccountContext, type AccountProfile, type AIUsage, type CredentialField, type ContentStudioPlatformKey, type ExcelImportPreview, type ImageAsset } from "@publisher/domain";
 import { BrowserRuntimeError, assertExternalLaunchAllowed, browserSessionCredentialKey, browserSessionIdHash, isAutomationAdapter, type AdapterRegistry, type AutomationAdapter, type ExternalLaunchTriggerSource, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
 import type { PublisherService, PersistentScheduler } from "@publisher/publisher";
@@ -23,9 +23,17 @@ import { writeAdvancedExcelTemplate, writeSimpleExcelTemplate } from "./excel-te
 import { buildExcelImportErrorReportCsv, readExcelArticleFile } from "./excel-import";
 import { PlatformSelfTestService } from "./platform-self-test";
 import type { ProcessDiagnostics } from "./process-diagnostics";
-import { addAccountConnectionModes, browserAccountConnectionResult } from "./account-connection";
+import { addAccountConnectionModes, browserAccountConnectionResult, browserAccountDisconnectResult } from "./account-connection";
 
 const idSchema = z.string().min(1);
+function safeErrorCode(error: unknown): string {
+  if (error && typeof error === "object" && "code" in error) {
+    const value = (error as { code?: unknown }).code;
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return error instanceof Error ? error.name : "UNKNOWN";
+}
+
 const brandInputSchema = z.object({ name: z.string().min(1), companyName: z.string().min(1), description: z.string().optional(), industry: z.string().optional(), officialWebsite: z.string().optional(), notes: z.string().optional(), mainBusiness: z.string().optional(), serviceRegions: z.array(z.string()).optional(), advantages: z.array(z.string()).optional(), contact: z.record(z.string(), z.string()).optional(), establishedAt: z.string().optional(), address: z.string().optional(), serviceProcess: z.string().optional(), afterSales: z.string().optional(), faq: z.string().optional(), certificates: z.string().optional(), patents: z.string().optional(), equipment: z.string().optional(), cases: z.string().optional(), aiForbiddenClaims: z.array(z.string()).optional() });
 const knowledgeCategorySchema = z.enum(BRAND_KNOWLEDGE_CATEGORIES.map((item) => item.key));
 const brandKnowledgeSchema = z.object({ brandId: idSchema, category: knowledgeCategorySchema, title: z.string().trim().min(1).max(200), content: z.string().trim().min(1).max(20_000), enabled: z.boolean().optional() });
@@ -108,8 +116,8 @@ export function registerIpc(deps: IpcDependencies): void {
       secrets: resolveAccountSecrets(accountId, platformKey)
     };
   };
-  const syncBrowserAccount = async (adapter: AutomationAdapter, accountId: string, platformKey: string, action: UserInitiatedAction) => {
-    const profile = adapter.getAccountProfile ? await adapter.getAccountProfile(accountContext(accountId, platformKey, action)) : undefined;
+  const syncBrowserAccount = async (adapter: AutomationAdapter, accountId: string, platformKey: string, action: UserInitiatedAction, profileOverride?: AccountProfile) => {
+    const profile = profileOverride ?? (adapter.getAccountProfile ? await adapter.getAccountProfile(accountContext(accountId, platformKey, action)) : undefined);
     const localAccount = repository.listAccounts().find((item) => item.id === accountId);
     return repository.syncBrowserPlatformAccount({
       accountId,
@@ -571,20 +579,47 @@ export function registerIpc(deps: IpcDependencies): void {
     return oauthSessions.begin(input.accountId, input.platformKey, action);
   });
   register("accounts:complete-login", async (_event, payload) => {
-    const input = z.object({ accountId: idSchema, platformKey: idSchema, callbackUrl: z.string().max(8192) }).parse(payload);
-    const adapter = registry.getForConnection(input.platformKey);
+    const input = z.object({ accountId: idSchema, platformKey: idSchema, callbackUrl: z.string().max(8192), pendingLogin: z.object({ accountId: idSchema, platformKey: idSchema }).optional() }).parse(payload);
     const action = createUserAction("CONNECT_ACCOUNT");
+    logger.info("ACCOUNT", "COMPLETE_LOGIN_REQUEST", "收到 Renderer 完成登录请求", { platformKey: input.platformKey, accountId: input.accountId, userActionId: action.userActionId, pendingLogin: input.pendingLogin ?? null, timestamp: new Date().toISOString() });
+    if (input.pendingLogin && (input.pendingLogin.accountId !== input.accountId || input.pendingLogin.platformKey !== input.platformKey)) {
+      logger.warn("ACCOUNT", "COMPLETE_LOGIN_ACCOUNT_ID_MISMATCH", "Renderer pendingLogin 与 IPC 请求不一致，已停止 Adapter 调查", { requestedAccountId: input.accountId, requestedPlatformKey: input.platformKey, pendingLoginAccountId: input.pendingLogin.accountId, pendingLoginPlatformKey: input.pendingLogin.platformKey, userActionId: action.userActionId });
+      logger.info("ACCOUNT", "COMPLETE_CONNECTION_ENTERED", "Adapter 未进入：Renderer accountId mismatch", { entered: false, accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId });
+      throw new Error("COMPLETE_LOGIN_ACCOUNT_ID_MISMATCH: Renderer pendingLogin 与请求账号不一致");
+    }
+    const adapter = registry.getForConnection(input.platformKey);
     if (isAutomationAdapter(adapter)) {
-      const status = await adapter.completeConnection(accountContext(input.accountId, input.platformKey, action));
+      const completedContext = accountContext(input.accountId, input.platformKey, action);
+      const debugState = adapter.getBrowserConnectionDebugState?.(completedContext);
+      logger.info("ACCOUNT", "ACTIVE_LOGIN_SESSION_STATE", "complete-login 调用 Adapter 前的 active Session 状态", { timestamp: new Date().toISOString(), ...(debugState ?? { requestedAccountId: input.accountId, activeSessionKeys: [], targetSessionFound: false, targetSessionState: "MISSING" }) });
+      logger.info("ACCOUNT", "COMPLETE_CONNECTION_ENTERED", "即将调用 Adapter.completeConnection", { entered: true, accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, targetSessionFound: debugState?.targetSessionFound ?? false });
+      let status: Awaited<ReturnType<typeof adapter.completeConnection>>;
+      try {
+        status = await adapter.completeConnection(completedContext);
+      } catch (error) {
+        logger.warn("ACCOUNT", "COMPLETE_LOGIN_RESPONSE", "Adapter.completeConnection 返回错误", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, status: null, reason: error instanceof Error ? error.message.slice(0, 300) : "unknown", errorCode: safeErrorCode(error) });
+        throw error;
+      }
       if (status !== "logged_in") {
         repository.updateAccount(input.accountId, { loginStatus: "needs_user_action", pausedReason: "浏览器仍停留在登录或安全验证页面" });
-        return { configured: false, accountStatus: "NeedsLogin" as const, authorizationStatus: "Unknown" as const, accountId: null, accountName: null, scopes: [], expiresAt: null };
+        const result = { configured: false, accountStatus: "NeedsLogin" as const, authorizationStatus: "Unknown" as const, accountId: null, accountName: null, scopes: [], expiresAt: null };
+        logger.info("ACCOUNT", "COMPLETE_LOGIN_RESPONSE", "主进程完成登录结果", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, status, reason: "CHECK_LOGIN_NOT_PASSED", errorCode: null, resultContract: { configured: result.configured, accountStatus: result.accountStatus, authorizationStatus: result.authorizationStatus } });
+        return result;
       }
-      const account = await syncBrowserAccount(adapter, input.accountId, input.platformKey, action);
-      logger.info("ACCOUNT", "LOGIN_SUCCEEDED", "平台登录成功，Session 已安全保存，登录专用浏览器已关闭", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId });
-        return browserAccountConnectionResult(account);
+      const profile = adapter.getAccountProfile ? await adapter.getAccountProfile(completedContext) : undefined;
+      await adapter.persistConnectionSession?.(completedContext);
+      const account = await syncBrowserAccount(adapter, input.accountId, input.platformKey, action, profile);
+      const sessionEvidence = await adapter.getBrowserSessionEvidence?.(completedContext);
+      await adapter.releaseConnectionSession?.(completedContext);
+      logger.info("ACCOUNT", "LOGIN_SUCCEEDED", "平台登录成功，Session 已安全保存，身份已回写，登录专用浏览器已关闭", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, sessionEvidence: sessionEvidence ?? null });
+      const result = browserAccountConnectionResult(account);
+      logger.info("ACCOUNT", "COMPLETE_LOGIN_RESPONSE", "主进程完成登录结果", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, status, reason: null, errorCode: null, resultContract: { configured: result.configured, accountStatus: result.accountStatus, authorizationStatus: result.authorizationStatus } });
+      return result;
     }
-    return oauthSessions.complete(input.accountId, input.platformKey, input.callbackUrl);
+    logger.info("ACCOUNT", "COMPLETE_CONNECTION_ENTERED", "Adapter 未进入：当前平台走 OAuth completion", { entered: false, accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId });
+    const result = await oauthSessions.complete(input.accountId, input.platformKey, input.callbackUrl);
+    logger.info("ACCOUNT", "COMPLETE_LOGIN_RESPONSE", "主进程 OAuth 完成登录结果", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, status: "logged_in", reason: null, errorCode: null, resultContract: { configured: result.configured, accountStatus: result.accountStatus, authorizationStatus: result.authorizationStatus } });
+    return result;
   });
   register("accounts:refresh-login", async (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);
@@ -608,14 +643,29 @@ export function registerIpc(deps: IpcDependencies): void {
   });
   register("accounts:disconnect", async (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);
+    const account = repository.listAccounts().find((item) => item.id === input.accountId && item.platformKey === input.platformKey);
+    if (!account) throw new Error("账号与平台不匹配");
     const adapter = registry.getForConnection(input.platformKey);
-    if (isAutomationAdapter(adapter)) { await adapter.logout(accountContext(input.accountId, input.platformKey, createUserAction("CONNECT_ACCOUNT"))); repository.markPlatformAccountDisconnected(input.accountId, input.platformKey); }
+    const action = createUserAction("CONNECT_ACCOUNT");
+    let result: AccountDisconnectResult;
+    if (isAutomationAdapter(adapter)) {
+      const context = accountContext(input.accountId, input.platformKey, action);
+      const activeSession = adapter.getBrowserConnectionDebugState?.(context)?.targetSessionFound ?? false;
+      result = browserAccountDisconnectResult({ loginStatus: account.loginStatus, credentialPresent: credentials.has(browserSessionCredentialKey({ platformKey: input.platformKey, accountId: input.accountId })), activeSession });
+      await adapter.logout(context);
+      repository.markPlatformAccountDisconnected(input.accountId, input.platformKey);
+    }
     else if (input.platformKey === "cnblogs") {
       for (const field of adapter.getCredentialSchema()) credentials.delete(`account:${input.accountId}:${input.platformKey}:${field.key}`);
       repository.updateAccount(input.accountId, { loginStatus: "logged_out", pausedReason: null });
       repository.upsertAccountAuthorization({ accountId: input.accountId, platformKey: input.platformKey, authorizationType: "AppCredential", status: "NotAuthorized" });
-    } else oauthSessions.disconnect(input.accountId, input.platformKey);
-    return { disconnected: true, accountStatus: "NotConnected" as const };
+      result = browserAccountDisconnectResult({ loginStatus: account.loginStatus, credentialPresent: true, activeSession: false });
+    } else {
+      result = browserAccountDisconnectResult({ loginStatus: account.loginStatus, credentialPresent: true, activeSession: false });
+      oauthSessions.disconnect(input.accountId, input.platformKey);
+    }
+    logger.info("ACCOUNT", "DISCONNECT_RESULT", "账号本地连接断开结果已返回", { accountId: input.accountId, platformKey: input.platformKey, outcome: result.outcome, accountRowRetained: true });
+    return result;
   });
   register("accounts:open-backend", async (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);

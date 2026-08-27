@@ -1,5 +1,205 @@
 # Project State
 
+## V1.4.3 Xiaohongshu multi-account hardening — CODE PASS / INSTALLED PASS / LIVE SESSION BLOCKED / GATE BLOCKED / REAL PUBLISH NOT_RUN - 2026-08-27
+
+本轮继续收口普通 `xiaohongshu` BrowserAutomation 的多账号管理与断开 UX。没有真实发布小红书笔记，没有点击最终发布，没有创建或重建 Job，也没有修改已 PASS 的微博、今日头条或搜狐发布业务实现。生产库只读审计确认普通小红书有两个独立 account rows；本轮没有在生产库调用账号 2 的断开动作，以保留 owner 原有账号状态，断开行为由精确 accountId 的源码回归覆盖。
+
+### 本轮状态边界
+
+| 状态 | Result | 说明 |
+| --- | --- | --- |
+| `XIAOHONGSHU_ACCOUNT_MANAGEMENT` | `VERIFIED`（代码/隔离回归） | 每个账号动作携带 exact `platformKey + accountId`；账号容器保留；删除账号能力不存在；缺失账号 fail-closed。 |
+| `CODE PASS` | `PASS` | 断开结果契约、幂等语义、凭据/Session 隔离、Renderer feedback 与刷新均通过回归。 |
+| `INSTALLED PASS` | `PASS` | r7 Electron 37.10.3/x64 包已替换并启动；exe、app.asar、better-sqlite3 native 与本轮包 hash 一致；保留新 rollback backup。UIA 可读到安装版窗口和 shell，但 Chromium 内容树仅暴露有限菜单，因此未把未独立观察到的账号 DOM 冒充为 UI PASS。 |
+| `LIVE SESSION PASS` | `NOT_PASS` | 账号 1 的持久化 Session key 存在，但只读 gate 检测到平台正常安全验证阻塞。 |
+| `GATE PASS` | `NOT_PASS` | gate-only 在 Login / Session 停止，未进入身份和编辑器 gates。 |
+| `REAL PUBLISH PASS` | `NOT_RUN` | 本轮明确禁止真实最终发布。 |
+| `XIAOHONGSHU_READY_FOR_REAL_SELF_TEST` | `NO` | 安全验证完成前不满足 READY 条件。 |
+
+### 生产账号审计
+
+从 production repository 精确读取到 2 个 `platformKey=xiaohongshu` account rows：
+
+| accountId | accountAlias | accountName | externalAccountId | loginStatus | enabled | authorizationStatus | browserSessionId | pausedReason |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `54b390ac-d81e-440a-baeb-d00f9f346cc3` | 小红书账号 1 | 小红书账号 1 | `960803317` | `needs_user_action` | `true` | `Authorized` | present | 等待用户完成平台正常验证 |
+| `88c590d9-4c4f-46c9-b1c5-61e2eac43b2d` | 小红书账号 2 | `null` | `null` | `logged_out` | `true` | `NotAuthorized` | absent | 连接已取消 |
+
+credentials 只做 key presence 检查，没有读取或输出内容：账号 1 的 `session:xiaohongshu:54b390ac-d81e-440a-baeb-d00f9f346cc3` 存在，账号 2 对应 key 不存在。账号 1 没有重新创建；账号 2 的精确 ID 来自 Repository，没有根据 UI 截图猜测。
+
+### 账号 2 断开无反馈：精确根因与修复
+
+根因是 `B4 + B5`：账号 2 原本就是 `logged_out`、没有 active BrowserSession、没有 credential，旧 IPC 仍执行后端清理并返回一个无区分的通用成功结果；Renderer 也只显示通用“已断开”，所以用户看不到“本来已经断开”的明确反馈。不是 Renderer handler 未触发、错误 accountId 或 IPC 未调用，也不是删除语义。
+
+本轮新增 `DISCONNECTED` / `ALREADY_DISCONNECTED` 结果契约。IPC 先按 `accountId + platformKey` 精确校验，未知账号直接 fail-closed；BrowserAutomation 只清理目标账号的 Session key/active Session，Repository 将目标行置为 logged out 并清除 stale paused reason，保留 account row。Renderer 显示明确结果后刷新 overview；没有新增 `accounts:delete` 或 `accounts:remove`，因此 `ACCOUNT_CONTAINER_DELETE_AVAILABLE = NO`。
+
+### 多账号回归与 gate-only
+
+回归覆盖了 account A/B 的 credential、active Session、login state 和 account row 隔离；B 断开不改变 A，A relogin 不覆盖 B，缺失 account 不 fallback 到 A，gate-only 必须显式使用 `XIAOHONGSHU_ACCOUNT_ID`。修正了 gate runner 中的环境变量拼写，并保持 Login / Session 先于身份读取与持久化。
+
+账号 1 gate-only 使用 exact accountId 单次执行，结果为 `FAILED_CLOSED`，error code 为 `SECURITY_VERIFICATION_REQUIRED`。数据库发布域保持不变：`publish_jobs 15 -> 15`、`submission_intents 12 -> 12`、`publish_records 9 -> 9`；`finalSubmitCount=0`，Job/Intent/PublishRecord 均未创建，`PublishPassed=NOT_PASS`。证据见 [output/v142-xiaohongshu-gate-only.json](C:/Users/Administrator/Desktop/codex_media_publisher_starter/output/v142-xiaohongshu-gate-only.json) 和 [output/v143-xiaohongshu-multi-account-hardening.json](C:/Users/Administrator/Desktop/codex_media_publisher_starter/output/v143-xiaohongshu-multi-account-hardening.json)。
+
+### 源码、安装版与 owner 边界
+
+当前源码新鲜验证为：focused 15 files / 124 tests PASS；`pnpm test` 72 files / 445 tests PASS；`pnpm typecheck` PASS；`pnpm lint` PASS；`pnpm build` PASS。安装版 r7 已部署到 `C:\GMP116ZhihuL5\Geo Media Publisher\Geo Media Publisher.exe`，新 rollback backup 为 `C:\GMP116ZhihuL5\Geo Media Publisher.previous-20260827-xiaohongshu-account-connection-r7`；production-data 与 credentials.enc 保留。
+
+`OWNER_ACTION_REQUIRED`：平台为小红书，`accountId=54b390ac-d81e-440a-baeb-d00f9f346cc3`。owner 回来后在已重启安装版普通“小红书”卡片中点击该已有账号的“重新登录/连接现有账号”，在应用拥有的可见 BrowserSession 中完成平台正常登录和安全验证，再点击“我已完成登录”。不要点击“+ 添加账号”、不要切换账号 2、不要点击最终发布。完成后才能继续同一 accountId 的 Login → Account Identity → Identity Persistence → gate-only。
+
+## V1.4.2 Xiaohongshu login false-negative bounded bugfix — SOURCE_FIXED / INSTALLED_DEPLOYED / WAITING_OWNER_LOGIN - 2026-08-27
+
+本轮严格只修复普通 `xiaohongshu` BrowserAutomation 的登录误判与账号连接 Session 生命周期，没有创建新账号、没有切换账号、没有使用 Computer Use，也没有修改 Publisher、Scheduler、SubmissionIntent、PublishRecord 或其他平台 Adapter。修复后的 Electron-target 安装包已完成受控替换并重启；owner 的既有账号记录和生产数据保持不变。
+
+### 根因与修复
+
+| 项目 | Result | 说明 |
+| --- | --- | --- |
+| 旧登录误判根因 | `CONFIRMED` | 旧逻辑把整页 body 文本中的“登录/验证码/安全验证/二维码”等宽泛关键词当作阻塞证据，Creator 首页普通文案因此可能覆盖已登录正向信号。 |
+| 登录正向证据 | `FIXED` | 仅在没有明确登录页/可见登录表单/可见阻塞验证时，使用 Creator host 与至少两个正向信号（发布笔记、笔记管理、数据看板、创作服务平台、账号状态正常、账号身份）判定 `logged_in`。 |
+| 安全验证证据 | `FIXED` | 必须是当前可见、阻塞操作且具有表单/二维码/CAPTCHA/滑块/安全 modal 语义；隐藏 DOM、脚本文本、帮助文案、导航中的普通关键词不再阻塞。 |
+| Session/Page 绑定 | `FIXED` | `completeConnection`、identity readback 和 `getBrowserSessionEvidence` 使用同一 exact account-scoped Page；真实 Context/Page 不一致时 fail-closed，禁止用新 Page 替代 owner Page。 |
+| 连接生命周期 | `FIXED` | XHS 登录完成后先保留 owner Page；IPC 完成身份读取与 account persistence 后才调用 `releaseConnectionSession`。 |
+| 身份保存 | `FIXED` | 可靠昵称可保存；`externalAccountId` 仅来自稳定“小红书账号”字段或稳定 profile URL，不能证明时保持 `null`。 |
+
+### 本轮源码验证与真实边界
+
+测试先 RED 后 GREEN：XHS false-negative、隐藏验证文案、可见验证码/滑块、真实登录页、稳定账号字段、同一 Page 生命周期、Session/Page mismatch、无 stored Session 不新建 Context/Page、显式 accountId 与零副作用均有回归覆盖。最终 focused suite 为 4 files / 47 tests PASS；`pnpm test` 为 72 files / 424 tests PASS；`pnpm typecheck`、`pnpm lint`、`pnpm build` 均 PASS。
+
+使用唯一既有 accountId `54b390ac-d81e-440a-baeb-d00f9f346cc3` 重新执行 source gate-only：platform/route 与 accountId 通过，期望 Session key 为 `session:xiaohongshu:54b390ac-d81e-440a-baeb-d00f9f346cc3`；在安装包替换前，生产 account row 的 `browserSessionIdPresent=false`，因此 Login / Session 安全停止为 `LOGIN_REQUIRED`。本轮不把缺失持久化 Session 误记为 `SECURITY_VERIFICATION_REQUIRED`，不新建 Context/Page 来替代 owner 当前页面，也不创建新账号或切换账号。
+
+真实 gate 结果为 `FAILED_CLOSED`，没有进入 Account Identity 或编辑器 gates。`finalSubmitCount=0`；`publish_jobs 15 -> 15`、`submission_intents 12 -> 12`、`publish_records 9 -> 9`；Job/Intent/PublishRecord 均未创建，`PublishPassed=NOT_PASS`，`XIAOHONGSHU_READY_FOR_REAL_SELF_TEST=NO`。随后已用 r6 安装包完成 Electron 37.10.3/x64 目标替换并重启同一安装程序（主 PID `23176`），exe/app.asar/native 与构建包 hash 一致，生产 `publisher.db` 与 `credentials.enc` 均保留；当前停止在 owner 人工登录边界，尚未宣称 Login/Identity/Gate 通过。证据见 [output/v142-xiaohongshu-account-connection.json](output/v142-xiaohongshu-account-connection.json) 与 [output/v142-xiaohongshu-gate-only.json](output/v142-xiaohongshu-gate-only.json)。
+
+### Installed-app handoff boundary
+
+安装版已运行于 `C:\GMP116ZhihuL5\Geo Media Publisher\Geo Media Publisher.exe`，主 PID `23176`，窗口正常响应。原 accountId `54b390ac-d81e-440a-baeb-d00f9f346cc3` 已在保留的生产数据库中核验，期望 Session key 仍为 `session:xiaohongshu:54b390ac-d81e-440a-baeb-d00f9f346cc3`。请 owner 在该安装版窗口的普通“小红书”账号卡片中，对这个已有账号执行“重新登录/连接现有账号”动作；不要点击“+ 添加账号”，不要创建第二个账号。完成平台正常登录与安全验证后，点击“我已完成登录”，再由同一 accountId 继续 Login → Account Identity → Identity Persistence；只有这些通过后才会执行 gate-only。当前尚未运行安装版 post-login gate。
+
+## V1.4.2 Xiaohongshu desktop account connection — IMPLEMENTED / ACCOUNT_CREATED / GATE_BLOCKED - 2026-08-27 (historical milestone)
+
+本轮已将普通 `xiaohongshu` BrowserAutomation 接入桌面端真实账号链路。`xiaohongshu_business`（小红书商家号）和 `xiaohongshu_private`（小红书私信版）仍为独立历史平台 key，没有被改名或复用。运行时 `platforms:list` 通过现有 `accountConnectionMode` overlay 暴露 `BrowserAutomation`，不改变发布 transport。
+
+### 连接、添加账号和身份验收语义
+
+| 项目 | Result | 规则/证据 |
+| --- | --- | --- |
+| 普通平台卡片 | `IMPLEMENTED` | `platformKey=xiaohongshu`，`displayName=小红书`，图文/文章 BrowserAutomation；旧商家号、私信版保留 |
+| 连接账号 | `IMPLEMENTED` | 无账号时创建首个 record；恰有一个未完成账号时复用它；多个未完成账号时要求明确选择，绝不选第一项 |
+| `+ 添加账号` | `IMPLEMENTED` | 始终先调用 `accounts.create` 生成新的 UUID，再以该 UUID 打开登录；已有已登录账号也不覆盖 |
+| 登录 vs Identity | `IMPLEMENTED` | 先验收 BrowserAutomation 登录状态，再单独执行身份侦察和回写；昵称只能保存为 `accountName`，不猜 `externalAccountId` |
+| 账号级动作 | `IMPLEMENTED` | login/relogin/check/open/disconnect/self-test/gate-only 均显式携带内部 `accountId`；缺失或歧义时 fail-closed，禁止 fallback 到第一个账号 |
+| 多账号 Session | `PASS`（代码/测试） | Session 以 `platformKey + accountId` 隔离；A/B 记录、身份冲突和单账号失效互不覆盖 |
+| gate-only | `PASS`（代码/测试） | 只读停在 final-submit discovery；不创建 Job、SubmissionIntent、PublishRecord，不写 `PublishPassed=PASS` |
+
+### Installed app deployment
+
+该历史阶段曾按“source focused tests/build → Electron-target native/package → 停止 exact installed process → 备份 exe/app.asar/catalog/app.asar.unpacked → 替换 → 重启同一 installed executable”完成部署。当前最新安装状态见上方 `Installed-app handoff boundary`；r5 可恢复备份位于 `C:\GMP116ZhihuL5\Geo Media Publisher.previous-20260827-xiaohongshu-account-connection-r5`。r4 曾因 host/Electron native ABI 不匹配退出，已通过 Electron 37.10.3 target prebuild 重新打包并由 r5 修复。
+
+### Owner continuation result
+
+已确认桌面端普通“小红书”卡片可见，并且现有唯一账号记录为 `54b390ac-d81e-440a-baeb-d00f9f346cc3`；本轮没有创建新账号，也没有切换账号。历史运行曾因旧检测器误报安全验证而停止；本轮修复后的 source gate-only 重新检查到该 exact account 没有可用持久化 BrowserSession，因此准确返回 `LOGIN_REQUIRED`，没有继续身份读取、身份持久化或编辑器操作。
+
+按安全边界已立即停止：没有绕过验证码、二维码、短信、滑块或风控验证。本轮不要求 owner 再次登录；后续只能由修复后的运行实例复用该 exact accountId 的 owner Page 完成 Login → Account Identity → Identity Persistence，再继续同一 accountId 的 gate-only。不要创建新账号、切换账号或点击最终发布。
+
+### 本轮真实执行与验证
+
+Focused Xiaohongshu/account/desktop routing：9 个文件 / 54 tests PASS；`pnpm test`：72 个文件 / 412 tests PASS；`pnpm typecheck` PASS；`pnpm lint` PASS；`pnpm build` PASS。installed app 仍为同一 r5 可执行文件，PID 6588，窗口“矩阵发布工作台”，Responding=True。实际 gate-only 数据库计数保持 `publish_jobs 15 -> 15`、`submission_intents 12 -> 12`、`publish_records 9 -> 9`，最终提交次数为 `0`。
+
+证据文件：[output/v142-xiaohongshu-account-connection.json](output/v142-xiaohongshu-account-connection.json)。实施计划：[docs/superpowers/plans/2026-08-27-xiaohongshu-account-connection.md](docs/superpowers/plans/2026-08-27-xiaohongshu-account-connection.md)。
+
+## V1.4.2 Xiaohongshu BrowserAutomation gate-only - CODE_COMPLETE / GATE_BLOCKED - 2026-08-27
+
+本轮已在正式 `xiaohongshu` key 下接入独立 BrowserAutomation 图文能力和 `scripts/v142-xiaohongshu-gate-only.mts` runner。现有 `account`、Adapter Registry、Repository、BrowserSessionManager 和 `platformKey + accountId` Session 隔离均被复用；没有修改多账号架构，也没有新增 migration、Job、SubmissionIntent 或 PublishRecord 模型。
+
+### 代码与安全边界
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Platform Registered | `PASS`（代码） | `xiaohongshu -> XiaohongshuBrowserAdapter`；transport=`browser`；integrationMode=`BrowserAutomation`；article/image-post only；video=`false` |
+| Account ID | `PASS` | runner 使用显式 `XIAOHONGSHU_ACCOUNT_ID=54b390ac-d81e-440a-baeb-d00f9f346cc3`，禁止 fallback |
+| Account Identity | `NOT_RUN` | Login / Session gate 先行命中 `SECURITY_VERIFICATION_REQUIRED`，未读取页面身份；adapter 仍只在有稳定 profile URL/ID 时保存 external ID，不猜测 |
+| Browser Session Isolation | `PASS`（代码/测试） | `session:xiaohongshu:{accountId}`；A/B、缺失账号、A 失效不切换 B 的测试通过 |
+| Login / Session | `FAIL_CLOSED` | 同一 exact accountId 的 BrowserSession 检测到安全验证状态；未绕过、未继续 |
+| Image-post / Upload / Title / Body / Required / Settings / Final Control | `NOT_RUN` | Login / Session 未通过，按 fail-closed 停止 |
+| Final Submit Count | `0` | runner 和 adapter 均禁止点击最终发布控件 |
+| Job Created | `NO` | 独立 runner 不调用 Job Queue |
+| Intent Created | `NO` | 独立 runner 不创建 SubmissionIntent |
+| PublishRecord Created | `NO` | 独立 runner 不创建 PublishRecord |
+| PublishPassed | `NOT_PASS` | gate-only 永不写成发布通过 |
+| Ready for Real SELF_TEST | `NO` | 真实 gate-only 在 Login / Session 阶段被安全验证阻断 |
+
+### Runner evidence
+
+`output/v142-xiaohongshu-gate-only.json` 已生成，结果为 `FAILED_CLOSED`，真实原因是 `SECURITY_VERIFICATION_REQUIRED`；使用了明确 accountId `54b390ac-d81e-440a-baeb-d00f9f346cc3`，没有 fallback。数据库计数保持不变：`publish_jobs 15 -> 15`、`submission_intents 12 -> 12`、`publish_records 9 -> 9`；`finalSubmitCount=0`。没有联网下载素材，没有执行任何平台发布，身份也没有在未通过登录验收时被猜测或写回。
+
+真实运行命令（仅当同一 owner 在同一 accountId 上完成正常验证并点击“已完成登录”后）：
+
+`$env:XIAOHONGSHU_ACCOUNT_ID="<explicit-account-id>"; pnpm exec electron scripts/v142-xiaohongshu-gate-only-entry.mjs`
+
+本轮额外修正 runner 顺序为 `Login / Session → Account Identity → Identity Persistence`。即使后续所有 gate 通过，也只输出 `XIAOHONGSHU_READY_FOR_REAL_SELF_TEST = YES`，随后停止；本轮不执行真实发布。
+
+## V1.4.1 Sohu reconciliation parser 修正 - PUBLISHED / VERIFIED / PASS - 2026-08-27
+
+本轮仅修正搜狐 reconciliation/content-list 状态解析并复用历史 Job 做一次只读回收；绝对没有重新发布，没有调用 `finalSubmit`，没有点击发布/提交控件，也没有创建替代 Job、SubmissionIntent 或 PublishRecord。v140 的 `Rejected` 结论已保留为历史 evidence，但已明确标注为 reconciliation parser false positive：上一版从过大的页面/内容管理容器读取状态，顶部统计“未通过 0”混入目标文章上下文，并在单篇状态判断中优先命中 `未通过`；本轮改为目标文章行自身状态文本优先，列表统计只作为唯一匹配时的辅助证据。
+
+### 本轮 Sohu reconciliation 结果
+
+| 项目 | Result | Evidence |
+| --- | --- | --- |
+| Article Unique Match | `YES` | 精确标题 `Geo Media Publisher 发布链路测试`；时间 `2026-08-25 13:58`；当前账号唯一匹配；内容管理行取得公开链接 |
+| Platform Status | `Published` | 目标文章行自身未显示拒稿；“全部 1 / 已发布 1 / 审核中 0 / 未通过 0 / 草稿 0 / 定时发布 0”只作为列表级辅助证据；唯一目标行被收口为 Published |
+| Previous Rejected Was False Positive | `YES` | v140 的 `SOHU_REAL_PUBLISH_REJECTED` 是 parser false positive；历史文件未篡改 |
+| External ID | `1067296027` | 从真实搜狐内容管理行公开 href 回收 |
+| External URL | `https://www.sohu.com/a/1067296027_122970301` | 从真实管理行 href 回收，未猜测 URL |
+| Public Verification | `PASS / Verified` | 公开页正常加载，标题一致，不是 404、删除或审核页 |
+| Existing Job Reused | `YES` | `6fb37664-4340-4e1a-accd-865987e907df`：`NeedsReconciliation -> Success` |
+| Existing Intent Reused | `YES` | `5fcfbc88-5719-415d-b6b0-d992cbe9cfa5`：`Unknown -> Submitted`；External ID 已回填 |
+| Existing PublishRecord Reused | `YES` | `0fa3c07a-d854-4680-b39b-2b52fa12f64e`：`Prepared/WaitingUser -> Published/Verified` |
+| Historical Final Submit Count | `1` | reconciliation 前后均为 `1` |
+| New Final Submit Count | `0` | 本轮无 final submit、无发布控件点击 |
+| PublishPassed | `PASS` | 已发布列表唯一匹配 + 公开页严格验证 |
+| Final Result | `SOHU_REAL_PUBLISH=PASS` | 证据：`output/v141-sohu-published-reconciliation.json` |
+
+### 本轮数据库变化
+
+| 表 | Before -> After | 本轮新增 |
+| --- | ---: | ---: |
+| `publish_jobs` | `15 -> 15` | 0 |
+| `submission_intents` | `12 -> 12` | 0 |
+| `publish_records` | `9 -> 9` | 0 |
+
+本轮保留原 v140 evidence，并新增独立 v141 evidence；没有删除或改写历史结论。后续不得再次提交或为获得 PASS 重发同一文章。
+
+### 本轮验证
+
+Focused Sohu（`packages/adapters/sohu-media/src/browser.test.ts` + `tests/v119-sohu-reconciliation.test.ts`）PASS（33 tests）；`pnpm test` PASS（68 个 test files / 377 个 tests）；`pnpm typecheck` PASS；`pnpm lint` PASS；`pnpm build` PASS。
+
+## V1.4.0 Sohu 历史真实提交只读 reconciliation - REJECTED / NO REPUBLISH - 2026-08-27
+
+本轮只复用历史搜狐 Job 做一次真实只读回查：未创建新 Job、SubmissionIntent 或 PublishRecord，未点击任何发布/提交控件，未重试，也未访问或修改头条、知乎、百家号、微博流程。历史文章 `Geo Media Publisher 发布链路测试` 在搜狐内容管理页被标题唯一匹配，页面状态明确为 `未通过 / Rejected`；因此按 fail-closed 规则返回 `STILL_UNCERTAIN`，记录平台审核失败证据并禁止重发。由于当前核心状态机不把平台审核状态映射为新的闭环状态，旧 Job 继续保持 `NeedsReconciliation`，没有伪造 `Published` 或 `ConfirmedNotPublished`。
+
+### 本轮 Sohu reconciliation 结果
+
+| 项目 | Result | Evidence |
+| --- | --- | --- |
+| Evidence | `output/v140-sohu-reconciliation.json` | 真实 Electron + 应用自有 BrowserSession；仅调用旧 Job reconciliation API |
+| Account | PASS | `33418593-16eb-4ba4-8d61-0a0189cccd2e`；与历史 Job 账号一致 |
+| Management URL | PASS | `https://mp.sohu.com/mpfe/v4/contentManagement/first/page?newsType=1` |
+| Article match | UNIQUE | 标题出现次数 `1`；唯一匹配公开链接 `https://www.sohu.com/a/1067296027_122970301`；External ID `1067296027` |
+| Platform status | `Rejected` | 搜狐内容管理行明确显示 `未通过`；返回 `SOHU_REAL_PUBLISH_REJECTED`，禁止重发 |
+| Read-only verification | PASS | 仅导航、读取管理页 DOM、读取旧持久化状态；没有发布控件点击 |
+| Final submit count | `1 -> 1` | 历史真实最终提交仍为唯一一次；本轮新增 `0` |
+| Job | unchanged | `6fb37664-4340-4e1a-accd-865987e907df` 仍为 `NeedsReconciliation` |
+| SubmissionIntent | unchanged | `5fcfbc88-5719-415d-b6b0-d992cbe9cfa5` 仍为 `Unknown`，`final_submit_count=1` |
+| PublishRecord | unchanged | `0fa3c07a-d854-4680-b39b-2b52fa12f64e` 仍为 `Prepared / WaitingUser`，无 URL/External ID |
+
+### 本轮数据库变化
+
+| 表 | Before -> After | 本轮新增 |
+| --- | ---: | ---: |
+| `publish_jobs` | `15 -> 15` | 0 |
+| `submission_intents` | `12 -> 12` | 0 |
+| `publish_records` | `9 -> 9` | 0 |
+
+本轮没有调用 `verifyPublished`，因为平台明确返回 `Rejected`；没有把管理页链接误记为成功发布证据。`totalContentCount` 的 icon 字体类名 `mp-iconnumber_1` 未被误解析为数字，保持 `null`，不参与错误的负向结论。
+
 ## V1.3.9 Toutiao 只读 reconciliation - PUBLISHED / PASS - 2026-08-26
 
 本轮全程为只读平台核验和既有记录收口：没有点击任何发布控件、没有创建第二篇文章、没有重试，也没有创建新的 Job、SubmissionIntent 或 PublishRecord。应用自有 BrowserSession 确认当前账号为 `3841036825934266 / 潭底观鱼`，Login 为 `logged_in`，`ACCOUNT_COMPLETION_PROMPT` 仅作为 warning。作品管理页真实 DOM 为 `https://mp.toutiao.com/profile_v4/manage/content/all`，以标题、提交分钟、当前账号唯一匹配本次文章。首次回查看到 `08-26 15:38 / 审核中` 并将不确定状态收口为 `Submitted`；后续只读复查看到同一行变为 `已发布`，因此继续回收公开证据并完成验证。

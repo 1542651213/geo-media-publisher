@@ -3,8 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDatabase } from "@publisher/db";
+import type { BrowserSession, BrowserSessionManager } from "@publisher/adapters-core";
+import type { AccountContext } from "@publisher/domain";
 import { createRuntimeAdapterRegistry } from "../apps/desktop/src/main/adapter-registry";
-import { browserAccountConnectionResult } from "../apps/desktop/src/main/account-connection";
+import { browserAccountConnectionResult, browserAccountDisconnectResult } from "../apps/desktop/src/main/account-connection";
+import { XiaohongshuBrowserAdapter } from "../packages/adapters/xiaohongshu/src/browser";
 import type { CredentialStore } from "@publisher/security";
 
 const migrationDir = join(process.cwd(), "packages", "db", "migrations");
@@ -90,5 +93,87 @@ describe("Xiaohongshu account routing and identity persistence", () => {
 
     expect(result).toMatchObject({ accountId: account.id, accountName: "平台昵称", accountStatus: "Connected", authorizationStatus: "Authorized" });
     expect(result.accountId).not.toBe("平台昵称");
+  });
+
+  it("classifies a logged-out account with no credential or active Session as an explicit idempotent result", () => {
+    expect(browserAccountDisconnectResult({ loginStatus: "logged_out", credentialPresent: false, activeSession: false })).toMatchObject({
+      disconnected: true,
+      accountStatus: "NotConnected",
+      outcome: "ALREADY_DISCONNECTED"
+    });
+  });
+
+  it("classifies a logged-out account with stale credential as disconnected so cleanup is observable", () => {
+    expect(browserAccountDisconnectResult({ loginStatus: "logged_out", credentialPresent: true, activeSession: false })).toMatchObject({
+      disconnected: true,
+      accountStatus: "NotConnected",
+      outcome: "DISCONNECTED"
+    });
+  });
+
+  it("clears only account B credential and active Session while preserving account A", async () => {
+    const credentials = new MemoryCredentialStore();
+    const active = new Map<string, BrowserSession>();
+    const sessionA = { sessionIdHash: "session-a" } as BrowserSession;
+    const sessionB = { sessionIdHash: "session-b" } as BrowserSession;
+    active.set("xiaohongshu:account-a", sessionA);
+    active.set("xiaohongshu:account-b", sessionB);
+    credentials.set("session:xiaohongshu:account-a", "encrypted-a");
+    credentials.set("session:xiaohongshu:account-b", "encrypted-b");
+    const manager = {
+      debugId: "manager-test",
+      getActiveSession: (identity: { platformKey: string; accountId: string }) => active.get(`${identity.platformKey}:${identity.accountId}`) ?? null,
+      clearActiveSession: (identity: { platformKey: string; accountId: string }, session?: BrowserSession) => {
+        const key = `${identity.platformKey}:${identity.accountId}`;
+        if (!session || active.get(key) === session) active.delete(key);
+      },
+      close: async (session: BrowserSession) => {
+        for (const [key, current] of active) if (current === session) active.delete(key);
+      },
+      clear: (identity: { platformKey: string; accountId: string }) => credentials.delete(`session:${identity.platformKey}:${identity.accountId}`)
+    } as unknown as BrowserSessionManager;
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: manager });
+    const context = (accountId: string): AccountContext => ({ accountId, accountName: accountId, platformKey: "xiaohongshu", settings: {}, secrets: {} });
+
+    await adapter.logout(context("account-b"));
+
+    expect(credentials.has("session:xiaohongshu:account-a")).toBe(true);
+    expect(credentials.has("session:xiaohongshu:account-b")).toBe(false);
+    expect(active.get("xiaohongshu:account-a")).toBe(sessionA);
+    expect(active.has("xiaohongshu:account-b")).toBe(false);
+  });
+
+  it("fails closed for an unknown account without selecting the sibling account", () => {
+    const directory = mkdtempSync(join(tmpdir(), "publisher-xhs-routing-missing-"));
+    tempDirs.push(directory);
+    const opened = openDatabase(join(directory, "publisher.db"), migrationDir);
+    databases.push(opened.db);
+    opened.repository.seedPlatformCatalog(platformCsv);
+    const first = opened.repository.createAccount({ platformKey: "xiaohongshu", name: "小红书账号 A" });
+    const second = opened.repository.createAccount({ platformKey: "xiaohongshu", name: "小红书账号 B" });
+
+    expect(() => opened.repository.markPlatformAccountDisconnected("missing-account", "xiaohongshu")).toThrow(/账号不存在/iu);
+    expect(opened.repository.listAccounts().find((candidate) => candidate.id === first.id)?.loginStatus).toBe("unknown");
+    expect(opened.repository.listAccounts().find((candidate) => candidate.id === second.id)?.loginStatus).toBe("unknown");
+  });
+
+  it("retains the disconnected account row while leaving the sibling account unchanged", () => {
+    const directory = mkdtempSync(join(tmpdir(), "publisher-xhs-routing-disconnect-"));
+    tempDirs.push(directory);
+    const opened = openDatabase(join(directory, "publisher.db"), migrationDir);
+    databases.push(opened.db);
+    opened.repository.seedPlatformCatalog(platformCsv);
+    const first = opened.repository.createAccount({ platformKey: "xiaohongshu", name: "小红书账号 A" });
+    const second = opened.repository.createAccount({ platformKey: "xiaohongshu", name: "小红书账号 B" });
+    opened.repository.syncBrowserPlatformAccount({ accountId: first.id, platformKey: "xiaohongshu", accountName: "创作者甲", externalAccountId: "stable-profile-a", browserSessionId: "session:xiaohongshu:" + first.id });
+    opened.repository.syncBrowserPlatformAccount({ accountId: second.id, platformKey: "xiaohongshu", accountName: "创作者乙", externalAccountId: "stable-profile-b", browserSessionId: "session:xiaohongshu:" + second.id });
+    const beforeFirst = opened.repository.listAccounts().find((candidate) => candidate.id === first.id);
+
+    const disconnected = opened.repository.markPlatformAccountDisconnected(second.id, "xiaohongshu");
+    const afterFirst = opened.repository.listAccounts().find((candidate) => candidate.id === first.id);
+
+    expect(disconnected).toMatchObject({ id: second.id, loginStatus: "logged_out", browserSessionId: null, authorizationStatus: "NotAuthorized" });
+    expect(opened.repository.listAccounts().filter((candidate) => candidate.platformKey === "xiaohongshu")).toHaveLength(2);
+    expect(afterFirst).toEqual(beforeFirst);
   });
 });

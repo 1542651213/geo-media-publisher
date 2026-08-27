@@ -1,5 +1,5 @@
 import { mkdir } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import type { Browser, BrowserContext, Page } from "playwright-core";
 import type { CredentialStore } from "@publisher/security";
@@ -96,6 +96,9 @@ export interface BrowserSession {
   sessionIdHash: string;
   executionMode: BrowserExecutionMode;
   headless: boolean;
+  /** Process-memory-only identity used to prove Context/Page continuity. */
+  contextDebugId?: string;
+  pageDebugId?: string;
 }
 
 export interface BrowserSessionManagerOptions {
@@ -124,11 +127,17 @@ export function browserSessionIdHash(identity: BrowserSessionIdentity): string {
 /** Platform-neutral session storage. Platform adapters own navigation and selectors. */
 export class PlaywrightSessionManager {
   private readonly ownedSessions = new Set<BrowserSession>();
+  private readonly activeSessions = new Map<string, BrowserSession>();
+  private readonly pendingConnections = new Set<string>();
+  readonly debugId = randomUUID();
 
   constructor(private readonly credentials: CredentialStore, private readonly options: BrowserSessionManagerOptions = {}) {}
 
   async open(identity: BrowserSessionIdentity, action: UserInitiatedAction, executionMode: BrowserExecutionMode = "VISIBLE"): Promise<BrowserSession> {
     assertExternalLaunchAllowed(action);
+    const existing = this.getActiveSession(identity);
+    if (existing?.executionMode === executionMode) return existing;
+    if (existing) await this.close(existing);
     const stored = this.credentials.get(browserSessionCredentialKey(identity));
     let storageState: StorageState | undefined;
     if (stored) {
@@ -152,8 +161,9 @@ export class PlaywrightSessionManager {
       await browser.close().catch(() => undefined);
       throw new BrowserRuntimeError({ errorCode: "BROWSER_RUNTIME_LAUNCH_FAILED", module: "BrowserSessionManager", timestamp: new Date().toISOString(), attemptedChannels: [...SYSTEM_BROWSER_CHANNELS] });
     }
-    const session = { browser, context, page, hasStoredSession: Boolean(storageState), sessionIdHash: browserSessionIdHash(identity), executionMode, headless };
+    const session = { browser, context, page, hasStoredSession: Boolean(storageState), sessionIdHash: browserSessionIdHash(identity), executionMode, headless, contextDebugId: randomUUID(), pageDebugId: randomUUID() };
     this.ownedSessions.add(session);
+    this.activeSessions.set(browserSessionCredentialKey(identity), session);
     return session;
   }
 
@@ -166,6 +176,34 @@ export class PlaywrightSessionManager {
 
   clear(identity: BrowserSessionIdentity): void { this.credentials.delete(browserSessionCredentialKey(identity)); }
 
+  getActiveSession(identity: BrowserSessionIdentity): BrowserSession | null {
+    const key = browserSessionCredentialKey(identity);
+    const session = this.activeSessions.get(key);
+    if (!session) return null;
+    if (this.isSessionClosed(session)) {
+      this.activeSessions.delete(key);
+      return null;
+    }
+    return session;
+  }
+
+  getActiveSessionKeys(): string[] { return [...this.activeSessions.keys()]; }
+
+  setActiveSession(identity: BrowserSessionIdentity, session: BrowserSession): void {
+    this.activeSessions.set(browserSessionCredentialKey(identity), session);
+  }
+
+  clearActiveSession(identity: BrowserSessionIdentity, session?: BrowserSession): void {
+    const key = browserSessionCredentialKey(identity);
+    if (!session || this.activeSessions.get(key) === session) this.activeSessions.delete(key);
+  }
+
+  markConnectionPending(identity: BrowserSessionIdentity): void { this.pendingConnections.add(browserSessionCredentialKey(identity)); }
+
+  isConnectionPending(identity: BrowserSessionIdentity): boolean { return this.pendingConnections.has(browserSessionCredentialKey(identity)); }
+
+  clearConnectionPending(identity: BrowserSessionIdentity): void { this.pendingConnections.delete(browserSessionCredentialKey(identity)); }
+
   async screenshot(page: Page, outputPath: string): Promise<string> {
     await mkdir(dirname(outputPath), { recursive: true });
     await page.screenshot({ path: outputPath, fullPage: true });
@@ -177,12 +215,15 @@ export class PlaywrightSessionManager {
     try { await session.context.close(); } catch (error) { firstError = error; }
     try { await session.browser.close(); } catch (error) { firstError ??= error; }
     this.ownedSessions.delete(session);
+    for (const [key, active] of this.activeSessions) if (active === session) this.activeSessions.delete(key);
     if (firstError) throw firstError;
   }
 
   async closeAll(): Promise<void> {
     const sessions = [...this.ownedSessions];
     await Promise.allSettled(sessions.map((session) => this.close(session)));
+    this.activeSessions.clear();
+    this.pendingConnections.clear();
   }
 
   debugArtifactPath(identity: BrowserSessionIdentity, fileName: string): string | null {
@@ -217,6 +258,12 @@ export class PlaywrightSessionManager {
     const diagnostic: BrowserRuntimeDiagnostic = { errorCode: "BROWSER_RUNTIME_NOT_FOUND", module: "BrowserSessionManager", timestamp: new Date().toISOString(), attemptedChannels: [...SYSTEM_BROWSER_CHANNELS] };
     this.options.onRuntimeEvent?.({ code: "BROWSER_RUNTIME_NOT_FOUND", attemptedChannels: [...SYSTEM_BROWSER_CHANNELS] });
     throw new BrowserRuntimeError(diagnostic);
+  }
+
+  private isSessionClosed(session: BrowserSession): boolean {
+    if (!session.page || typeof session.page !== "object") return false;
+    const page = session.page as unknown as { isClosed?: () => boolean };
+    return typeof page.isClosed === "function" && page.isClosed();
   }
 
 }

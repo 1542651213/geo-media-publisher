@@ -50,6 +50,16 @@ describe("runtime AdapterRegistry", () => {
     expect(() => registry.getForContent("xiaohongshu", "video")).toThrow(/no adapter registered/i);
   });
 
+  it("reuses one long-lived Xiaohongshu adapter and BrowserSessionManager for both login IPC stages", () => {
+    const registry = createRuntimeAdapterRegistry(new MemoryCredentialStore(), false);
+    const beginAdapter = registry.getForConnection("xiaohongshu") as unknown as { getBrowserConnectionDebugIds: () => { adapterDebugId: string; browserSessionManagerDebugId: string } };
+    const completeAdapter = registry.getForConnection("xiaohongshu") as unknown as { getBrowserConnectionDebugIds: () => { adapterDebugId: string; browserSessionManagerDebugId: string } };
+
+    expect(completeAdapter).toBe(beginAdapter);
+    expect(completeAdapter.getBrowserConnectionDebugIds().adapterDebugId).toBe(beginAdapter.getBrowserConnectionDebugIds().adapterDebugId);
+    expect(completeAdapter.getBrowserConnectionDebugIds().browserSessionManagerDebugId).toBe(beginAdapter.getBrowserConnectionDebugIds().browserSessionManagerDebugId);
+  });
+
   it("keeps ordinary Xiaohongshu separate from the historical merchant/private catalog rows", () => {
     const csvRows = readFileSync(join(process.cwd(), "PLATFORMS.csv"), "utf8").split(/\r?\n/u).slice(1).filter(Boolean).map((line) => line.split(","));
     const byKey = new Map(csvRows.map((row) => [row[0]?.replace(/^\uFEFF/u, ""), row]));

@@ -87,10 +87,10 @@ describe("V0.4 platform integration", () => {
         return counts;
       }, {});
       expect(lifecycleCounts).toEqual({
-        WaitingForUser: 13,
+        WaitingForUser: 14,
         Developing: 2,
         ManualOnly: 21,
-        Blocked: 2,
+        Blocked: 1,
         NotImplemented: 3
       });
     } finally {

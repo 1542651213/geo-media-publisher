@@ -1,4 +1,5 @@
 import type { AccountManagementRow } from "../shared/api";
+import type { AccountDisconnectResult } from "../shared/api";
 import type { Platform } from "@publisher/domain";
 
 export type PlatformConnectionKind = "browser" | "oauth" | "manual" | "blocked" | "not_implemented";
@@ -7,6 +8,11 @@ export type PlatformConnectionActionKind = "connect" | "view-account" | "open-ba
 export interface PlatformConnectionAction {
   kind: PlatformConnectionActionKind;
   label: string;
+}
+
+export function disconnectFeedbackMessage(result: Pick<AccountDisconnectResult, "outcome"> | { outcome?: unknown }, accountName: string): string {
+  if (result.outcome === "ALREADY_DISCONNECTED") return `${accountName} 当前已处于未连接状态。`;
+  return `已断开${accountName}；账号容器已保留，其他账号 Session 未受影响。`;
 }
 
 export function connectionErrorMessage(error: unknown): string {

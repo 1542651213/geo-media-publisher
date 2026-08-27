@@ -13,6 +13,7 @@ import { AIContentStudio } from "./AIContentStudio";
 import { QualityGatePage } from "./QualityGatePage";
 import { PlatformRulesPage } from "./PlatformRulesPage";
 import { PlatformConnectionCenter } from "./PlatformConnectionCenter";
+import { disconnectFeedbackMessage } from "./platform-connection-ui";
 import { ImageLibraryPage } from "./ImageLibraryPage";
 import { PlatformSelfTestCenter } from "./PlatformSelfTestCenter";
 import { EnterpriseProfileManager } from "./EnterpriseProfileManager";
@@ -279,7 +280,7 @@ function AccountsCenterPage({ refresh }: { refresh: () => void }): JSX.Element {
   };
   const disconnect = async (account: Account): Promise<void> => {
     if (!window.confirm("只断开本地安全凭据，不会宣称平台端已经撤销授权。确定继续吗？")) return;
-    try { await window.publisherAPI.accounts.disconnect(account.id, account.platformKey); setMessages((current) => ({ ...current, [account.id]: "已断开本地连接；Provider 端撤权状态需以平台为准" })); load(); }
+    try { const result = await window.publisherAPI.accounts.disconnect(account.id, account.platformKey); setMessages((current) => ({ ...current, [account.id]: disconnectFeedbackMessage(result, account.accountAlias || account.name) })); load(); }
     catch (error) { setMessages((current) => ({ ...current, [account.id]: error instanceof Error ? error.message : "断开连接失败" })); }
   };
   const wizardRow = overview.find((row) => row.account.id === wizardAccountId && row.account.platformKey === "wechat_official");

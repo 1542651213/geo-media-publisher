@@ -1,6 +1,6 @@
 # 平台能力矩阵（V0.4）
 
-研究日期：2026-08-20。范围为 `PLATFORMS.csv` 的 39 个外部平台；本地 TestPlatform 不计入。
+研究日期：2026-08-20；小红书 gate-only 工程状态补充于 2026-08-27。范围为 `PLATFORMS.csv` 的 39 个外部平台；本地 TestPlatform 不计入。
 
 逐平台运行状态、认证、内容类型、Dry Run、Publish、阻塞与下一步以 [V0.4 平台状态](V0.4_PLATFORM_STATUS.md) 为准。CSV 同时保存每个平台唯一生命周期、传输方式、官方入口、阻塞原因和最后核验日期，应用启动时会同步该目录。
 
@@ -10,7 +10,8 @@
 |---|---|---|
 | 已有官方 API Adapter | 微信公众号、抖音、快手、哔哩哔哩、TikTok、YouTube、今日头条、Facebook Pages | 代码和 mock 测试不能升级真实状态；Facebook Pages 限定文本/链接且为 `CodeComplete`，没有真实 Dry Run |
 | 官方 API/SDK 已确认但未实现 | 新浪微博、爱奇艺、Instagram Professional | 只能标记 `NotImplemented`；必须按平台建立独立 Adapter、鉴权、测试和回查 |
-| 官方能力当前阻塞 | 小红书、企鹅号 | 小红书新分享 SDK 接入暂停且缺少结果回查；企鹅号新开发者及第三方服务申请暂停 |
+| 小红书 BrowserAutomation gate-only | 小红书 | 现有账号可通过应用自有 Session 做身份、图文编辑器、图片/标题/正文和最终控件 discovery；本轮不点击最终发布、不创建 Job/Intent/PublishRecord，也不声明 `PublishPassed` |
+| 官方能力当前阻塞 | 企鹅号 | 企鹅号新开发者及第三方服务申请暂停 |
 | 仅人工操作 | 其余 25 个平台 | 未确认公开内容写入 API 或官方允许的 Browser 自动化，保持 `ManualOnly` |
 | 扩展占位 | 其他账号 | 不建立“万能 Adapter”；确定具体平台后新增唯一 key 和独立包 |
 
@@ -29,7 +30,8 @@
 ## 官方能力边界
 
 - 发布优先级固定为官方 API → 官方 SDK → 官方明确允许的 Browser 自动化 → ManualOnly。
-- 本轮没有任何外部平台获得“官方允许 Browser 自动化”的证据，因此 Browser 列全部为否。
+- 小红书本轮只实现账号所有者主动触发的 BrowserAutomation gate-only 路径；这不是官方 API/SDK 授权，也不等于平台允许后台自动化。
+- BrowserAutomation 只使用账号隔离的 `session:{platformKey}:{accountId}`，遇到登录、安全验证或页面证据不足立即暂停。
 - 验证码、安全验证、人机验证、账号注册和 OAuth 不得绕过；遇到时暂停对应账号。
 - Facebook 仅覆盖 Pages，不包含个人主页。Instagram 仅覆盖 Business/Creator 专业账号，且必须是独立 Adapter。
 - 爱奇艺号 API 已确认支持 Token 鉴权、视频上传/发布、`qipuId` 和状态查询，但当前 endpoint 合同仍需真实控制台确认。

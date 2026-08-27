@@ -42,6 +42,16 @@ export function resolveExplicitXiaohongshuAccount(accounts: Account[], accountId
   return account;
 }
 
+export function resolveXiaohongshuAccountId(cliAccountId: string | null | undefined, environmentAccountId: string | null | undefined): string {
+  const requested = cliAccountId?.trim() || environmentAccountId?.trim() || "";
+  if (!requested) throw new Error("XIAOHONGSHU_ACCOUNT_ID is required; account fallback is forbidden");
+  return requested;
+}
+
+export function classifyXiaohongshuLoginFailure(loginStatus: string, storedSessionPresent: boolean): "LOGIN_REQUIRED" | "SECURITY_VERIFICATION_REQUIRED" {
+  return loginStatus === "needs_user_action" && storedSessionPresent ? "SECURITY_VERIFICATION_REQUIRED" : "LOGIN_REQUIRED";
+}
+
 export function isXiaohongshuReady(gates: GateStateMap, finalSubmitCount: number, securityVerification: string): boolean {
   const expected: Record<string, GateResult> = {
     "Account Identity": "PASS",

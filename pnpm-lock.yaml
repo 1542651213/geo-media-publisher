@@ -399,6 +399,9 @@ importers:
 
   packages/adapters/xiaohongshu:
     dependencies:
+      '@publisher/adapters-browser':
+        specifier: workspace:*
+        version: link:../browser
       '@publisher/adapters-core':
         specifier: workspace:*
         version: link:../core

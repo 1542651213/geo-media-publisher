@@ -29,8 +29,17 @@
 - Account semantics: `连接账号` creates the first record only when no row exists, or reuses exactly one incomplete row; `+ 添加账号` always creates a fresh UUID before login, including when connected accounts exist. Multiple incomplete rows require an explicit selection and never choose the first row.
 - Login/identity acceptance: login lifecycle completion is checked first; identity readback is a separate adapter call and persistence step. Nickname-only evidence updates `accountName` and leaves `externalAccountId` null; no identifier is guessed.
 - Account-level routing: login, re-login, session check, backend open, disconnect, self-test, and gate-only actions carry the selected internal `accountId`; missing or ambiguous selection fails closed.
-- Installed app order completed: source focused tests/build → Electron-target native/package → stop exact installed process → backup old resources/native unpacked directory → replace → restart installed executable. Current installed app is running at `C:\GMP116ZhihuL5\Geo Media Publisher\Geo Media Publisher.exe`.
-- Remaining owner boundary: click ordinary `小红书` → `+ 添加账号` in the running app, complete only normal platform login/security verification in the resulting visible BrowserSession, then continue identity readback and account-specific gate-only. No real publish path is enabled.
+- Installed app order completed for the login-fix package: source focused tests/build → Electron-target native/package → stop exact installed process → backup old resources/native unpacked directory → replace → restart installed executable. Current installed app is running at `C:\GMP116ZhihuL5\Geo Media Publisher\Geo Media Publisher.exe` (main PID `23176`); the r6 exe/app.asar/native hashes match the package and production data/credentials were preserved.
+- Owner continuation result (historical pre-bugfix): the running app showed the ordinary `小红书` card with one explicit account record, `54b390ac-d81e-440a-baeb-d00f9f346cc3`; the old account-specific gate-only stopped with a false-positive security classification. The current bugfix run does not ask the owner to repeat login or switch accounts; it stops because that exact account has no persisted BrowserSession available to the source runner.
+- Latest verification: focused tests PASS (9 files / 54 tests), `pnpm test` PASS (72 files / 412 tests), `pnpm typecheck` PASS, `pnpm lint` PASS, and `pnpm build` PASS. Gate-only database deltas are zero for Job, SubmissionIntent, and PublishRecord, with final-submit count zero.
+
+### False-negative bugfix continuation — 2026-08-27
+
+- Root cause confirmed: XHS login detection treated whole-page keyword text as security evidence, and the generic connection lifecycle closed the owner Page before identity readback could reuse it.
+- TDD fix is complete: visible blocking evidence is contextual; Creator positive signals are combined; exact account-scoped Page/Context membership is checked; XHS keeps the login Session open until identity readback/persistence finishes; an account with no stored Session is not inspected by creating a replacement Context/Page.
+- Current focused bugfix suite: 4 files / 47 tests PASS. Full suite: 72 files / 424 tests PASS. `pnpm typecheck`, `pnpm lint`, and `pnpm build` PASS.
+- Exact-account source gate-only was rerun for `54b390ac-d81e-440a-baeb-d00f9f346cc3`; it stopped at Login / Session with `LOGIN_REQUIRED` because the production account row has no persisted BrowserSession. This is not an owner-page verdict and no Computer Use was used.
+- No new account, no account switch, no real publish, and no Job/SubmissionIntent/PublishRecord side effect. The installed r6 app has now been restarted. The exact existing account remains the only target; owner must use its existing “重新登录/连接现有账号” action, never “+ 添加账号”, then complete manual login before post-restart Login → Identity → gate-only verification.
 
 ---
 

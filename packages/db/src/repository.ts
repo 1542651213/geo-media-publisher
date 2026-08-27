@@ -1879,7 +1879,7 @@ export class AppRepository {
     const current = this.db.prepare("SELECT * FROM accounts WHERE id=? AND platform_key=?").get(accountId, platformKey) as Row | undefined;
     if (!current) throw new Error("账号不存在");
     const timestamp = now();
-    this.db.prepare("UPDATE accounts SET login_status='logged_out', authorization_status='NotAuthorized', browser_session_id=NULL, last_login_check_at=?, updated_at=? WHERE id=? AND platform_key=?").run(timestamp, timestamp, accountId, platformKey);
+    this.db.prepare("UPDATE accounts SET login_status='logged_out', authorization_status='NotAuthorized', browser_session_id=NULL, paused_reason=NULL, last_login_check_at=?, updated_at=? WHERE id=? AND platform_key=?").run(timestamp, timestamp, accountId, platformKey);
     this.upsertAccountAuthorization({ accountId, platformKey, authorizationType: "BrowserAutomation", status: "NotAuthorized", providerAccountId: typeof current.external_account_id === "string" ? current.external_account_id : null, providerAccountName: typeof current.name === "string" ? current.name : null });
     return toAccount(this.db.prepare("SELECT * FROM accounts WHERE id=?").get(accountId) as Row);
   }

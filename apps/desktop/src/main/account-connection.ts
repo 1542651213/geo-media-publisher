@@ -1,5 +1,6 @@
 import type { AdapterRegistry } from "@publisher/adapters-core";
 import type { Account, Platform } from "@publisher/domain";
+import type { AccountDisconnectResult } from "../shared/api";
 
 export interface BrowserAccountConnectionResult {
   configured: true;
@@ -21,6 +22,11 @@ export function browserAccountConnectionResult(account: Pick<Account, "id" | "ac
     scopes: [],
     expiresAt: null
   };
+}
+
+export function browserAccountDisconnectResult(input: { loginStatus: Account["loginStatus"]; credentialPresent: boolean; activeSession: boolean }): AccountDisconnectResult {
+  const alreadyDisconnected = input.loginStatus === "logged_out" && !input.credentialPresent && !input.activeSession;
+  return { disconnected: true, accountStatus: "NotConnected", outcome: alreadyDisconnected ? "ALREADY_DISCONNECTED" : "DISCONNECTED" };
 }
 
 /**

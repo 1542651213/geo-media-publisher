@@ -144,4 +144,25 @@ describe("BrowserSessionManager credential boundary", () => {
     expect(contextClose).toHaveBeenCalledTimes(1);
     expect(browserClose).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps one account-scoped active Page and pending marker available across adapter instances", async () => {
+    const page = { url: vi.fn(() => "https://creator.xiaohongshu.com/new/home"), isClosed: vi.fn(() => false) };
+    const context = { setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => page), pages: vi.fn(() => [page]), close: vi.fn(async () => undefined) } as unknown as BrowserContext;
+    const browser = { newContext: vi.fn(async () => context), contexts: vi.fn(() => [context]), close: vi.fn(async () => undefined) } as unknown as Browser;
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser: vi.fn(async () => browser) });
+    const identity = { platformKey: "xiaohongshu", accountId: "account-a" };
+
+    const first = await manager.open(identity, userAction, "VISIBLE");
+    manager.markConnectionPending(identity);
+    const second = await manager.open(identity, userAction, "VISIBLE");
+
+    expect(second).toBe(first);
+    expect(manager.getActiveSession(identity)).toBe(first);
+    expect(manager.isConnectionPending(identity)).toBe(true);
+    expect(manager.debugId).toMatch(/^[0-9a-f-]{36}$/iu);
+    manager.clearConnectionPending(identity);
+    expect(manager.isConnectionPending(identity)).toBe(false);
+    await manager.close(first);
+    expect(manager.getActiveSession(identity)).toBeNull();
+  });
 });
