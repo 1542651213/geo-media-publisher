@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDatabase } from "@publisher/db";
 import { createRuntimeAdapterRegistry } from "../apps/desktop/src/main/adapter-registry";
+import { browserAccountConnectionResult } from "../apps/desktop/src/main/account-connection";
 import type { CredentialStore } from "@publisher/security";
 
 const migrationDir = join(process.cwd(), "packages", "db", "migrations");
@@ -75,5 +76,19 @@ describe("Xiaohongshu account routing and identity persistence", () => {
     expect(opened.repository.listAccounts().filter((candidate) => candidate.platformKey === "xiaohongshu")).toHaveLength(2);
     expect(opened.repository.listAccounts().find((candidate) => candidate.id === first.id)).toMatchObject({ externalAccountId: "stable-profile-a", browserSessionId: "session:xiaohongshu:" + first.id });
     expect(opened.repository.listAccounts().find((candidate) => candidate.id === second.id)).toMatchObject({ externalAccountId: "stable-profile-b", browserSessionId: "session:xiaohongshu:" + second.id });
+  });
+
+  it("returns the internal account ID while keeping platform nickname as identity", () => {
+    const directory = mkdtempSync(join(tmpdir(), "publisher-xhs-routing-result-"));
+    tempDirs.push(directory);
+    const opened = openDatabase(join(directory, "publisher.db"), migrationDir);
+    databases.push(opened.db);
+    opened.repository.seedPlatformCatalog(platformCsv);
+    const account = opened.repository.createAccount({ platformKey: "xiaohongshu", name: "本地容器 A", accountAlias: "本地容器 A" });
+    const saved = opened.repository.syncBrowserPlatformAccount({ accountId: account.id, platformKey: "xiaohongshu", accountName: "平台昵称", externalAccountId: null, browserSessionId: "session:xiaohongshu:" + account.id });
+    const result = browserAccountConnectionResult(saved);
+
+    expect(result).toMatchObject({ accountId: account.id, accountName: "平台昵称", accountStatus: "Connected", authorizationStatus: "Authorized" });
+    expect(result.accountId).not.toBe("平台昵称");
   });
 });

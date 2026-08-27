@@ -1,5 +1,27 @@
 import type { AdapterRegistry } from "@publisher/adapters-core";
-import type { Platform } from "@publisher/domain";
+import type { Account, Platform } from "@publisher/domain";
+
+export interface BrowserAccountConnectionResult {
+  configured: true;
+  accountStatus: "Connected";
+  authorizationStatus: "Authorized";
+  accountId: string;
+  accountName: string | null;
+  scopes: string[];
+  expiresAt: null;
+}
+
+export function browserAccountConnectionResult(account: Pick<Account, "id" | "accountName" | "name">): BrowserAccountConnectionResult {
+  return {
+    configured: true,
+    accountStatus: "Connected",
+    authorizationStatus: "Authorized",
+    accountId: account.id,
+    accountName: account.accountName ?? account.name,
+    scopes: [],
+    expiresAt: null
+  };
+}
 
 /**
  * Account lifecycle capability is intentionally overlaid on the repository

@@ -11,7 +11,7 @@ import { MockImageProvider, OpenAICompatibleImageProvider, persistGeneratedImage
 import { exportLogBundle } from "@publisher/logger";
 import { CredentialDecryptError, type CredentialStatus, type CredentialStore } from "@publisher/security";
 import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STUDIO_PLATFORM_KEYS, EXCEL_ADVANCED_ARTICLE_HEADERS, EXCEL_SIMPLE_ARTICLE_HEADERS, PROMOTION_STRENGTHS, SEARCH_INTENTS, checkGeneratedArticleQuality, selectRelevantBrandFacts, type AccountContext, type AIUsage, type CredentialField, type ContentStudioPlatformKey, type ExcelImportPreview, type ImageAsset } from "@publisher/domain";
-import { BrowserRuntimeError, assertExternalLaunchAllowed, browserSessionCredentialKey, browserSessionIdHash, isAutomationAdapter, type AdapterRegistry, type ExternalLaunchTriggerSource, type UserInitiatedAction } from "@publisher/adapters-core";
+import { BrowserRuntimeError, assertExternalLaunchAllowed, browserSessionCredentialKey, browserSessionIdHash, isAutomationAdapter, type AdapterRegistry, type AutomationAdapter, type ExternalLaunchTriggerSource, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
 import type { PublisherService, PersistentScheduler } from "@publisher/publisher";
 import { resumePersistentBatches, runPersistentBatchTask } from "./ai-batch";
@@ -23,7 +23,7 @@ import { writeAdvancedExcelTemplate, writeSimpleExcelTemplate } from "./excel-te
 import { buildExcelImportErrorReportCsv, readExcelArticleFile } from "./excel-import";
 import { PlatformSelfTestService } from "./platform-self-test";
 import type { ProcessDiagnostics } from "./process-diagnostics";
-import { addAccountConnectionModes } from "./account-connection";
+import { addAccountConnectionModes, browserAccountConnectionResult } from "./account-connection";
 
 const idSchema = z.string().min(1);
 const brandInputSchema = z.object({ name: z.string().min(1), companyName: z.string().min(1), description: z.string().optional(), industry: z.string().optional(), officialWebsite: z.string().optional(), notes: z.string().optional(), mainBusiness: z.string().optional(), serviceRegions: z.array(z.string()).optional(), advantages: z.array(z.string()).optional(), contact: z.record(z.string(), z.string()).optional(), establishedAt: z.string().optional(), address: z.string().optional(), serviceProcess: z.string().optional(), afterSales: z.string().optional(), faq: z.string().optional(), certificates: z.string().optional(), patents: z.string().optional(), equipment: z.string().optional(), cases: z.string().optional(), aiForbiddenClaims: z.array(z.string()).optional() });
@@ -107,6 +107,18 @@ export function registerIpc(deps: IpcDependencies): void {
       },
       secrets: resolveAccountSecrets(accountId, platformKey)
     };
+  };
+  const syncBrowserAccount = async (adapter: AutomationAdapter, accountId: string, platformKey: string, action: UserInitiatedAction) => {
+    const profile = adapter.getAccountProfile ? await adapter.getAccountProfile(accountContext(accountId, platformKey, action)) : undefined;
+    const localAccount = repository.listAccounts().find((item) => item.id === accountId);
+    return repository.syncBrowserPlatformAccount({
+      accountId,
+      platformKey,
+      accountName: profile?.accountName ?? localAccount?.name,
+      browserSessionId: browserSessionIdHash({ platformKey, accountId }),
+      ...(adapter.getAccountProfile ? { externalAccountId: profile?.accountId ?? null } : {}),
+      lastVerifiedAt: new Date().toISOString()
+    });
   };
   const oauthSessions = new OAuthSessionManager({ repository, registry, credentials, logger, accountContext });
   const platformSelfTests = new PlatformSelfTestService({ repository, registry, publisher, resolveAccountSecrets, logger });
@@ -568,9 +580,9 @@ export function registerIpc(deps: IpcDependencies): void {
         repository.updateAccount(input.accountId, { loginStatus: "needs_user_action", pausedReason: "浏览器仍停留在登录或安全验证页面" });
         return { configured: false, accountStatus: "NeedsLogin" as const, authorizationStatus: "Unknown" as const, accountId: null, accountName: null, scopes: [], expiresAt: null };
       }
-      const account = repository.syncBrowserPlatformAccount({ accountId: input.accountId, platformKey: input.platformKey, accountName: repository.listAccounts().find((item) => item.id === input.accountId)?.name, browserSessionId: browserSessionIdHash({ platformKey: input.platformKey, accountId: input.accountId }), lastVerifiedAt: new Date().toISOString() });
+      const account = await syncBrowserAccount(adapter, input.accountId, input.platformKey, action);
       logger.info("ACCOUNT", "LOGIN_SUCCEEDED", "平台登录成功，Session 已安全保存，登录专用浏览器已关闭", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId });
-      return { configured: true, accountStatus: "Connected" as const, authorizationStatus: "Authorized" as const, accountId: account.platformAccountId, accountName: account.name, scopes: [], expiresAt: null };
+        return browserAccountConnectionResult(account);
     }
     return oauthSessions.complete(input.accountId, input.platformKey, input.callbackUrl);
   });
@@ -581,7 +593,7 @@ export function registerIpc(deps: IpcDependencies): void {
     if (isAutomationAdapter(adapter)) {
       const status = await adapter.checkSession(accountContext(input.accountId, input.platformKey, action));
       if (status !== "logged_in") throw new Error("浏览器 Session 仍需用户完成登录");
-      repository.syncBrowserPlatformAccount({ accountId: input.accountId, platformKey: input.platformKey, accountName: repository.listAccounts().find((item) => item.id === input.accountId)?.name, browserSessionId: browserSessionIdHash({ platformKey: input.platformKey, accountId: input.accountId }), lastVerifiedAt: new Date().toISOString() });
+      await syncBrowserAccount(adapter, input.accountId, input.platformKey, action);
       return { accountStatus: "Connected" as const, authorizationStatus: "Authorized" as const, expiresAt: null };
     }
     return oauthSessions.refresh(input.accountId, input.platformKey);
@@ -620,7 +632,7 @@ export function registerIpc(deps: IpcDependencies): void {
     try {
       const status = await adapter.checkLogin(accountContext(input.accountId, input.platformKey, action));
       if (status === "logged_in" && isAutomationAdapter(adapter)) {
-        repository.syncBrowserPlatformAccount({ accountId: input.accountId, platformKey: input.platformKey, accountName: repository.listAccounts().find((item) => item.id === input.accountId)?.name, browserSessionId: browserSessionIdHash({ platformKey: input.platformKey, accountId: input.accountId }), lastVerifiedAt: new Date().toISOString() });
+        await syncBrowserAccount(adapter, input.accountId, input.platformKey, action);
       }
       else if (status === "logged_in" && input.platformKey === "cnblogs") {
         const profile = adapter.getAccountProfile ? await adapter.getAccountProfile(accountContext(input.accountId, input.platformKey, action)) : undefined;
