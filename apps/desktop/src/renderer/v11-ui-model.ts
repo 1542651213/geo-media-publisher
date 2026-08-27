@@ -106,9 +106,9 @@ export type AccountConnectionIntent = "connect" | "add" | "relogin";
 
 export function accountConnectionTarget(rows: AccountManagementRow[], intent: AccountConnectionIntent): { accountId: string | null; createAccount: boolean } {
   if (intent === "add") return { accountId: null, createAccount: true };
-  const incomplete = rows.find((row) => row.accountStatus !== "Connected");
-  if (incomplete) return { accountId: incomplete.account.id, createAccount: false };
-  return { accountId: null, createAccount: intent === "connect" };
+  const incomplete = rows.filter((row) => row.accountStatus !== "Connected");
+  if (incomplete.length === 1) return { accountId: incomplete[0].account.id, createAccount: false };
+  return { accountId: null, createAccount: rows.length === 0 && intent === "connect" };
 }
 
 export function platformHasConnectedAccount(rows: AccountManagementRow[]): boolean {
@@ -189,6 +189,16 @@ export const platformCapabilityText = (platform: Platform): string => {
   if (platformAvailability(platform) === "developing") return "接入能力正在准备中";
   const capabilities = [platform.capabilities.article ? "文章" : "", platform.capabilities.imagePost ? "图文" : "", platform.capabilities.video ? "视频" : ""].filter(Boolean);
   return capabilities.length ? `支持${capabilities.join("、")}内容` : "可打开官方平台处理内容";
+};
+
+export const platformConnectionModeLabel = (platform: Platform): string => {
+  const mode = platform.accountConnectionMode ?? platform.integrationMode;
+  if (mode === "BrowserAutomation" || platform.transport === "browser") return "浏览器自动化";
+  if (mode === "SemiAuto" || platform.transport === "semi_auto") return "半自动";
+  if (mode === "OAuth" || platform.authStrategy === "OAuth2" || platform.authStrategy === "OAuth2PKCE") return "OAuth";
+  if (mode === "API" || platform.transport === "official_api" || platform.transport === "official_sdk") return "官方 API";
+  if (mode === "Blocked") return "不可接入";
+  return "人工";
 };
 
 export const accountCapabilityText = (platform: Platform, publishVerification: string): string => {

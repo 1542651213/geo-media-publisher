@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import type { Platform } from "@publisher/domain";
 import type { AccountManagementRow } from "../apps/desktop/src/shared/api";
 import { accountStatusLabel, authorizationLabel, connectionErrorMessage, platformConnectionActions, platformConnectionKind } from "../apps/desktop/src/renderer/platform-connection-ui";
+import { platformConnectionModeLabel } from "../apps/desktop/src/renderer/v11-ui-model";
 
 function platform(overrides: Partial<Platform> = {}): Platform {
   return {
@@ -41,6 +43,12 @@ describe("V1.0.1 platform connection UI decisions", () => {
     expect(platformConnectionActions(toutiao, row({ platform: toutiao })).map((item) => item.kind)).toEqual(["connect", "add-account"]);
     expect(platformConnectionActions(toutiao, row({ platform: toutiao, accountStatus: "NeedsLogin" })).map((item) => item.kind)).toEqual(["relogin", "add-account"]);
     expect(platformConnectionActions(toutiao, row({ platform: toutiao, accountStatus: "Expired" })).map((item) => item.kind)).toEqual(["relogin", "add-account"]);
+  });
+
+  it("shows BrowserAutomation as the actual connection mode in the account center", () => {
+    expect(platformConnectionModeLabel(platform())).toBe("浏览器自动化");
+    expect(platformConnectionModeLabel(platform({ integrationMode: "API", accountConnectionMode: "BrowserAutomation" }))).toBe("浏览器自动化");
+    expect(readFileSync("apps/desktop/src/renderer/V11Workspace.tsx", "utf8")).toContain("platformConnectionModeLabel(platform)");
   });
 
   it("keeps manual, blocked and not implemented platforms fail-closed", () => {

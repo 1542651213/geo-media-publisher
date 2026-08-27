@@ -47,6 +47,21 @@ export function accountStatusLabel(row: AccountManagementRow | null): string {
   return "暂不可用";
 }
 
+export function platformAccountStatusLabel(rows: AccountManagementRow[]): string {
+  if (rows.length === 0) return "未连接";
+  const connectedCount = rows.filter((row) => row.accountStatus === "Connected").length;
+  if (connectedCount === rows.length) return `${rows.length} 个已登录`;
+  if (connectedCount > 0) return `${connectedCount}/${rows.length} 个已登录`;
+  const connectingCount = rows.filter((row) => row.accountStatus === "Connecting").length;
+  if (connectingCount > 0) return `${connectingCount}/${rows.length} 个连接中`;
+  return `${rows.length} 个账号待处理`;
+}
+
+export function platformAuthorizationStatusLabel(rows: AccountManagementRow[], kind: PlatformConnectionKind): string {
+  if (kind === "browser") return rows.some((row) => row.accountStatus === "Connected") ? "已完成" : "待处理";
+  return rows.some((row) => row.accountStatus === "Connected") ? "已完成" : "待处理";
+}
+
 export function authorizationLabel(platform: Platform, row: AccountManagementRow | null): string {
   if (platformConnectionKind(platform) === "browser") return row?.accountStatus === "Connected" ? "已完成" : "不适用";
   if (platformConnectionKind(platform) === "oauth") {

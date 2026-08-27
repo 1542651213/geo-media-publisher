@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import type { AccountManagementRow } from "../apps/desktop/src/shared/api";
 import { accountConnectionTarget, platformHasConnectedAccount } from "../apps/desktop/src/renderer/v11-ui-model";
+import { platformAccountStatusLabel, platformAuthorizationStatusLabel } from "../apps/desktop/src/renderer/platform-connection-ui";
 
 function row(id: string, accountStatus: AccountManagementRow["accountStatus"]): AccountManagementRow {
   return {
@@ -32,6 +33,8 @@ describe("BrowserAutomation account creation semantics", () => {
   it("fails closed when relogin has no selected or incomplete account", () => {
     expect(accountConnectionTarget([], "relogin")).toEqual({ accountId: null, createAccount: false });
     expect(accountConnectionTarget([row("account-connected", "Connected")], "relogin")).toEqual({ accountId: null, createAccount: false });
+    expect(accountConnectionTarget([row("account-a", "NeedsLogin"), row("account-b", "NeedsLogin")], "connect")).toEqual({ accountId: null, createAccount: false });
+    expect(accountConnectionTarget([row("account-a", "NeedsLogin"), row("account-b", "NeedsLogin")], "relogin")).toEqual({ accountId: null, createAccount: false });
   });
 
   it("does not route the capability center through a platform-wide first account", () => {
@@ -39,5 +42,16 @@ describe("BrowserAutomation account creation semantics", () => {
     expect(source).not.toContain("rowsByPlatform");
     expect(source).toContain("selectedAccountId");
     expect(source).toContain('"add-account"');
+    expect(source).toContain('kind: "view-account", label: "选择账号"');
+    expect(readFileSync("apps/desktop/src/renderer/V11Workspace.tsx", "utf8")).toContain("browser && !connected && rows.length === 0");
+    expect(readFileSync("apps/desktop/src/renderer/V11Workspace.tsx", "utf8")).toContain("const accountId = row.account.id");
+    expect(readFileSync("apps/desktop/src/renderer/V11Workspace.tsx", "utf8")).toContain("runSafe(accountId)");
+  });
+
+  it("summarizes multiple accounts without calling a connected platform not connected", () => {
+    const rows = [row("account-a", "Connected"), row("account-b", "NeedsLogin")];
+    expect(platformAccountStatusLabel(rows)).toBe("1/2 个已登录");
+    expect(platformAuthorizationStatusLabel(rows, "browser")).toBe("已完成");
+    expect(platformAccountStatusLabel([row("account-a", "NeedsLogin"), row("account-b", "Expired")])).toBe("2 个账号待处理");
   });
 });
