@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { JSX } from "react";
 import type { Account, LoginSession, Platform } from "@publisher/domain";
 import type { AccountManagementRow as AccountManagementRowView } from "../shared/api";
@@ -42,7 +42,7 @@ export function PlatformConnectionCenter({ refresh, onNavigate }: PlatformConnec
   useEffect(load, [refresh]);
 
   const selectedPlatform = platforms.find((item) => item.platformKey === selectedPlatformKey) ?? null;
-  const selectedRows = selectedPlatform ? overview.filter((item) => item.account.platformKey === selectedPlatform.platformKey) : [];
+  const selectedRows = useMemo(() => selectedPlatform ? overview.filter((item) => item.account.platformKey === selectedPlatform.platformKey) : [], [overview, selectedPlatform]);
   const selectedRow = selectedRows.find((item) => item.account.id === selectedAccountId) ?? (selectedRows.length === 1 ? selectedRows[0] : null);
 
   useEffect(() => {
