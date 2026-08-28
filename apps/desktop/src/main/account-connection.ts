@@ -24,8 +24,8 @@ export function browserAccountConnectionResult(account: Pick<Account, "id" | "ac
   };
 }
 
-export function browserAccountDisconnectResult(input: { loginStatus: Account["loginStatus"]; credentialPresent: boolean; activeSession: boolean }): AccountDisconnectResult {
-  const alreadyDisconnected = input.loginStatus === "logged_out" && !input.credentialPresent && !input.activeSession;
+export function browserAccountDisconnectResult(input: { loginStatus: Account["loginStatus"]; credentialPresent: boolean; activeSession: boolean; archived?: boolean }): AccountDisconnectResult {
+  const alreadyDisconnected = (input.archived === true || input.loginStatus === "logged_out") && !input.credentialPresent && !input.activeSession;
   return { disconnected: true, accountStatus: "NotConnected", outcome: alreadyDisconnected ? "ALREADY_DISCONNECTED" : "DISCONNECTED" };
 }
 

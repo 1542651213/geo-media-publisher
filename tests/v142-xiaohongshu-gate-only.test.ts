@@ -85,9 +85,9 @@ describe("v142 Xiaohongshu gate-only runner helpers", () => {
     const source = readFileSync(join(process.cwd(), "apps", "desktop", "src", "main", "ipc.ts"), "utf8");
     const completion = source.indexOf("status = await adapter.completeConnection(completedContext);");
     const profile = source.indexOf("const profile = adapter.getAccountProfile ? await adapter.getAccountProfile(completedContext) : undefined;", completion);
-    const persistence = source.indexOf("await adapter.persistConnectionSession?.(completedContext);", profile);
-    const sync = source.indexOf("const account = await syncBrowserAccount(adapter, input.accountId, input.platformKey, action, profile);", persistence);
-    const release = source.indexOf("await adapter.releaseConnectionSession?.(completedContext);", sync);
+    const persistence = source.indexOf("await adapter.persistConnectionSession?.(effectiveContext);", profile);
+    const sync = source.indexOf("const account = await syncBrowserAccount(adapter, effectiveAccountId, input.platformKey, action, profile);", persistence);
+    const release = source.indexOf("await adapter.releaseConnectionSession?.(effectiveContext);", sync);
     expect(completion).toBeGreaterThan(-1);
     expect(profile).toBeGreaterThan(completion);
     expect(persistence).toBeGreaterThan(profile);

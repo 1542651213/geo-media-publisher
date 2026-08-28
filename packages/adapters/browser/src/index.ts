@@ -316,6 +316,22 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     finally { this.finishConnection(identity); }
   }
 
+  rebindAccountSession(from: AccountContext, to: AccountContext): void {
+    const fromIdentity = this.identity(from);
+    const toIdentity = this.identity(to);
+    const manager = this.sessionManager as unknown as { rebind?: (source: { platformKey: string; accountId: string }, target: { platformKey: string; accountId: string }) => void };
+    if (typeof manager.rebind !== "function") throw new Error("BrowserSessionManager 不支持安全 Session 重绑定");
+    manager.rebind(fromIdentity, toIdentity);
+    const fromKey = fromIdentity.platformKey + ":" + fromIdentity.accountId;
+    const toKey = toIdentity.platformKey + ":" + toIdentity.accountId;
+    const active = this.fallbackActiveSessions.get(fromKey);
+    if (active) {
+      this.fallbackActiveSessions.delete(fromKey);
+      this.fallbackActiveSessions.set(toKey, active);
+    }
+    if (this.fallbackPendingConnections.delete(fromKey)) this.fallbackPendingConnections.add(toKey);
+  }
+
   async getBrowserSessionEvidence(ctx: AccountContext): Promise<BrowserSessionScopeEvidence | null> {
     const session = this.activeSession(this.identity(ctx));
     if (!session) return null;

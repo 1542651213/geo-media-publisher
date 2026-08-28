@@ -1839,8 +1839,29 @@ export class AppRepository {
     return transaction();
   }
 
-  listAccounts(): Account[] {
-    return (this.db.prepare("SELECT * FROM accounts ORDER BY platform_key, name").all() as Row[]).map(toAccount);
+  listAccounts(options: { includeArchived?: boolean } = {}): Account[] {
+    const sql = options.includeArchived ? "SELECT * FROM accounts ORDER BY platform_key, name" : "SELECT * FROM accounts WHERE archived_at IS NULL ORDER BY platform_key, name";
+    return (this.db.prepare(sql).all() as Row[]).map(toAccount);
+  }
+
+  getAccountById(accountId: string, platformKey?: string): Account | null {
+    const row = platformKey
+      ? this.db.prepare("SELECT * FROM accounts WHERE id=? AND platform_key=?").get(accountId, platformKey) as Row | undefined
+      : this.db.prepare("SELECT * FROM accounts WHERE id=?").get(accountId) as Row | undefined;
+    return row ? toAccount(row) : null;
+  }
+
+  findArchivedAccountByExternalIdForConnection(accountId: string, platformKey: string, externalAccountId: string): Account | null {
+    const current = this.getAccountById(accountId, platformKey);
+    if (!current) throw new Error("账号不存在");
+    if (current.externalAccountId || current.archivedAt) return null;
+    const references = this.db.prepare("SELECT (SELECT COUNT(*) FROM publish_jobs WHERE account_id=?) + (SELECT COUNT(*) FROM submission_intents WHERE account_id=?) + (SELECT COUNT(*) FROM publish_records WHERE account_id=?) AS count").get(accountId, accountId, accountId) as Row;
+    if (intValue(references.count) > 0) return null;
+    const active = this.db.prepare("SELECT id FROM accounts WHERE platform_key=? AND external_account_id=? AND archived_at IS NULL AND id<>?").get(platformKey, externalAccountId, accountId) as Row | undefined;
+    if (active) throw new Error("平台外部账号已绑定到其他内部账号");
+    const rows = this.db.prepare("SELECT * FROM accounts WHERE platform_key=? AND external_account_id=? AND archived_at IS NOT NULL ORDER BY updated_at DESC").all(platformKey, externalAccountId) as Row[];
+    if (rows.length > 1) throw new Error("归档账号身份不唯一，拒绝自动恢复");
+    return rows[0] ? toAccount(rows[0]) : null;
   }
 
   getAccountAuthorization(accountId: string, platformKey: string): AccountAuthorizationView | null {
@@ -1870,18 +1891,33 @@ export class AppRepository {
     if (existingByExternal) throw new Error("平台外部账号已绑定到其他内部账号");
     const timestamp = input.lastVerifiedAt ?? now();
     const preservedExternalId = input.externalAccountId === undefined ? (typeof current.external_account_id === "string" ? current.external_account_id : null) : input.externalAccountId;
-    this.db.prepare("UPDATE accounts SET platform_account_name=COALESCE(NULLIF(?,''),platform_account_name), login_status='logged_in', enabled=1, paused_reason=NULL, connection_mode='BrowserAutomation', authorization_status='Authorized', browser_session_id=?, external_account_id=?, last_verified_at=?, last_login_check_at=?, last_used_at=?, updated_at=? WHERE id=? AND platform_key=?").run(input.accountName?.trim() ?? "", input.browserSessionId, preservedExternalId, timestamp, timestamp, timestamp, timestamp, input.accountId, input.platformKey);
+    this.db.prepare("UPDATE accounts SET platform_account_name=COALESCE(NULLIF(?,''),platform_account_name), login_status='logged_in', enabled=1, paused_reason=NULL, connection_mode='BrowserAutomation', authorization_status='Authorized', browser_session_id=?, external_account_id=?, archived_at=NULL, last_verified_at=?, last_login_check_at=?, last_used_at=?, updated_at=? WHERE id=? AND platform_key=?").run(input.accountName?.trim() ?? "", input.browserSessionId, preservedExternalId, timestamp, timestamp, timestamp, timestamp, input.accountId, input.platformKey);
     this.upsertAccountAuthorization({ accountId: input.accountId, platformKey: input.platformKey, authorizationType: "BrowserAutomation", status: "Authorized", providerAccountId: preservedExternalId, providerAccountName: input.accountName ?? null });
     return toAccount(this.db.prepare("SELECT * FROM accounts WHERE id=?").get(input.accountId) as Row);
   }
 
-  markPlatformAccountDisconnected(accountId: string, platformKey: string): Account {
+  markPlatformAccountDisconnected(accountId: string, platformKey: string, authorizationType = "BrowserAutomation"): Account {
     const current = this.db.prepare("SELECT * FROM accounts WHERE id=? AND platform_key=?").get(accountId, platformKey) as Row | undefined;
     if (!current) throw new Error("账号不存在");
     const timestamp = now();
-    this.db.prepare("UPDATE accounts SET login_status='logged_out', authorization_status='NotAuthorized', browser_session_id=NULL, paused_reason=NULL, last_login_check_at=?, updated_at=? WHERE id=? AND platform_key=?").run(timestamp, timestamp, accountId, platformKey);
-    this.upsertAccountAuthorization({ accountId, platformKey, authorizationType: "BrowserAutomation", status: "NotAuthorized", providerAccountId: typeof current.external_account_id === "string" ? current.external_account_id : null, providerAccountName: typeof current.name === "string" ? current.name : null });
+    const disconnect = this.db.transaction(() => {
+      this.db.prepare("UPDATE accounts SET login_status='logged_out', authorization_status='NotAuthorized', browser_session_id=NULL, paused_reason=NULL, archived_at=COALESCE(archived_at,?), last_login_check_at=?, updated_at=? WHERE id=? AND platform_key=?").run(timestamp, timestamp, timestamp, accountId, platformKey);
+      this.upsertAccountAuthorization({ accountId, platformKey, authorizationType, status: "NotAuthorized", providerAccountId: typeof current.external_account_id === "string" ? current.external_account_id : null, providerAccountName: typeof current.name === "string" ? current.name : null });
+    });
+    disconnect();
     return toAccount(this.db.prepare("SELECT * FROM accounts WHERE id=?").get(accountId) as Row);
+  }
+
+  restoreArchivedAccountByExternalId(platformKey: string, externalAccountId: string): Account {
+    const active = this.db.prepare("SELECT id FROM accounts WHERE platform_key=? AND external_account_id=? AND archived_at IS NULL").get(platformKey, externalAccountId) as Row | undefined;
+    if (active) throw new Error("平台外部账号已绑定到其他内部账号");
+    const rows = this.db.prepare("SELECT * FROM accounts WHERE platform_key=? AND external_account_id=? AND archived_at IS NOT NULL ORDER BY updated_at DESC").all(platformKey, externalAccountId) as Row[];
+    if (rows.length === 0) throw new Error("归档账号不存在");
+    if (rows.length > 1) throw new Error("归档账号身份不唯一，拒绝自动恢复");
+    const accountId = textValue(rows[0]?.id);
+    const timestamp = now();
+    this.db.prepare("UPDATE accounts SET archived_at=NULL, enabled=1, login_status='logged_out', authorization_status='NotAuthorized', browser_session_id=NULL, paused_reason=NULL, updated_at=? WHERE id=? AND platform_key=? AND external_account_id=? AND archived_at IS NOT NULL").run(timestamp, accountId, platformKey, externalAccountId);
+    return toAccount(this.db.prepare("SELECT * FROM accounts WHERE id=? AND platform_key=?").get(accountId, platformKey) as Row);
   }
 
   syncOfficialApiAccount(input: { accountId: string; platformKey: string; accountName?: string | null; externalAccountId?: string | null; lastVerifiedAt?: string }): Account {
@@ -2501,7 +2537,7 @@ export class AppRepository {
     const availableArticles = count(`SELECT COUNT(*) count FROM articles a WHERE a.status IN ('available','partially_published') AND ${productionSource}`);
     const benchmarkArticles = count(`SELECT COUNT(*) count FROM articles a WHERE ${benchmarkSource}`);
     const aiUsage = this.aiUsageStats();
-    return { publishedToday, pendingJobs: count("SELECT COUNT(*) count FROM publish_jobs WHERE status IN ('Pending','Scheduled','Retry')"), failedJobs: count("SELECT COUNT(*) count FROM publish_jobs WHERE status='Failed'"), runningJobs: count("SELECT COUNT(*) count FROM publish_jobs WHERE status IN ('Running','Preparing','Submitting','Publishing')"), totalAccounts: count("SELECT COUNT(*) count FROM accounts"), onlineAccounts: count("SELECT COUNT(*) count FROM accounts WHERE login_status='logged_in' AND enabled=1"), expiredAccounts: count("SELECT COUNT(*) count FROM accounts WHERE login_status IN ('expired','logged_out')"), availableArticles, generatedToday: count(`SELECT COUNT(*) count FROM articles a WHERE a.generated_at >= date('now') AND ${productionSource}`), estimatedStockDays: availableArticles > 0 ? Math.max(1, Math.round(availableArticles / Math.max(1, count("SELECT COUNT(*) count FROM accounts WHERE enabled=1")))) : 0, activeAiTasks: count("SELECT COUNT(*) count FROM ai_tasks WHERE status IN ('pending','running')") + count("SELECT COUNT(*) count FROM content_studio_tasks WHERE status IN ('pending','running')"), benchmarkArticles, productionArticles: availableArticles, ...aiUsage };
+    return { publishedToday, pendingJobs: count("SELECT COUNT(*) count FROM publish_jobs WHERE status IN ('Pending','Scheduled','Retry')"), failedJobs: count("SELECT COUNT(*) count FROM publish_jobs WHERE status='Failed'"), runningJobs: count("SELECT COUNT(*) count FROM publish_jobs WHERE status IN ('Running','Preparing','Submitting','Publishing')"), totalAccounts: count("SELECT COUNT(*) count FROM accounts WHERE archived_at IS NULL"), onlineAccounts: count("SELECT COUNT(*) count FROM accounts WHERE archived_at IS NULL AND login_status='logged_in' AND enabled=1"), expiredAccounts: count("SELECT COUNT(*) count FROM accounts WHERE archived_at IS NULL AND login_status IN ('expired','logged_out')"), availableArticles, generatedToday: count(`SELECT COUNT(*) count FROM articles a WHERE a.generated_at >= date('now') AND ${productionSource}`), estimatedStockDays: availableArticles > 0 ? Math.max(1, Math.round(availableArticles / Math.max(1, count("SELECT COUNT(*) count FROM accounts WHERE archived_at IS NULL AND enabled=1")))) : 0, activeAiTasks: count("SELECT COUNT(*) count FROM ai_tasks WHERE status IN ('pending','running')") + count("SELECT COUNT(*) count FROM content_studio_tasks WHERE status IN ('pending','running')"), benchmarkArticles, productionArticles: availableArticles, ...aiUsage };
   }
 
   aiUsageStats(): { aiGeneratedToday: number; aiInputTokensToday: number; aiOutputTokensToday: number; aiEstimatedCostToday: number | null } {
@@ -2856,7 +2892,7 @@ function toPlatform(row: Row): Platform {
     officialSources: stringArray(row.official_sources_json)
   };
 }
-function toAccount(row: Row): Account { const publishMode = ["auto", "manual", "assisted"].includes(textValue(row.publish_mode)) ? textValue(row.publish_mode) as Account["publishMode"] : "inherit"; const authorizationStatus = ["NotAuthorized", "Authorized", "Partial", "Revoked", "Unknown"].includes(textValue(row.authorization_status)) ? textValue(row.authorization_status) as Account["authorizationStatus"] : "Unknown"; const connectionMode = ["BrowserAutomation", "OfficialAPI", "OAuth", "Manual"].includes(textValue(row.connection_mode)) ? textValue(row.connection_mode) as Account["connectionMode"] : "Manual"; const alias = textValue(row.account_alias) || textValue(row.name); return { id: textValue(row.id), platformAccountId: textValue(row.id), platformKey: textValue(row.platform_key), name: alias, accountAlias: alias, accountName: typeof row.platform_account_name === "string" ? row.platform_account_name : null, groupId: typeof row.group_id === "string" ? row.group_id : null, enabled: boolValue(row.enabled), loginStatus: row.login_status as Account["loginStatus"], pausedReason: typeof row.paused_reason === "string" ? row.paused_reason : null, lastLoginCheck: typeof row.last_login_check_at === "string" ? row.last_login_check_at : null, lastPublishAt: typeof row.last_publish_at === "string" ? row.last_publish_at : null, todayPublishCount: intValue(row.today_publish_count), allowAutoPublish: publishMode === "auto" || (row.publish_mode === undefined && boolValue(row.allow_auto_publish)), publishMode, minimumIntervalSeconds: intValue(row.minimum_interval_seconds), failedCount: intValue(row.failed_count), connectionMode, authorizationStatus, browserSessionId: typeof row.browser_session_id === "string" ? row.browser_session_id : null, externalAccountId: typeof row.external_account_id === "string" ? row.external_account_id : null, lastVerifiedAt: typeof row.last_verified_at === "string" ? row.last_verified_at : null, lastUsedAt: typeof row.last_used_at === "string" ? row.last_used_at : null }; }
+function toAccount(row: Row): Account { const publishMode = ["auto", "manual", "assisted"].includes(textValue(row.publish_mode)) ? textValue(row.publish_mode) as Account["publishMode"] : "inherit"; const authorizationStatus = ["NotAuthorized", "Authorized", "Partial", "Revoked", "Unknown"].includes(textValue(row.authorization_status)) ? textValue(row.authorization_status) as Account["authorizationStatus"] : "Unknown"; const connectionMode = ["BrowserAutomation", "OfficialAPI", "OAuth", "Manual"].includes(textValue(row.connection_mode)) ? textValue(row.connection_mode) as Account["connectionMode"] : "Manual"; const alias = textValue(row.account_alias) || textValue(row.name); return { id: textValue(row.id), platformAccountId: textValue(row.id), platformKey: textValue(row.platform_key), name: alias, accountAlias: alias, accountName: typeof row.platform_account_name === "string" ? row.platform_account_name : null, groupId: typeof row.group_id === "string" ? row.group_id : null, enabled: boolValue(row.enabled), loginStatus: row.login_status as Account["loginStatus"], pausedReason: typeof row.paused_reason === "string" ? row.paused_reason : null, lastLoginCheck: typeof row.last_login_check_at === "string" ? row.last_login_check_at : null, lastPublishAt: typeof row.last_publish_at === "string" ? row.last_publish_at : null, todayPublishCount: intValue(row.today_publish_count), allowAutoPublish: publishMode === "auto" || (row.publish_mode === undefined && boolValue(row.allow_auto_publish)), publishMode, minimumIntervalSeconds: intValue(row.minimum_interval_seconds), failedCount: intValue(row.failed_count), connectionMode, authorizationStatus, browserSessionId: typeof row.browser_session_id === "string" ? row.browser_session_id : null, externalAccountId: typeof row.external_account_id === "string" ? row.external_account_id : null, lastVerifiedAt: typeof row.last_verified_at === "string" ? row.last_verified_at : null, lastUsedAt: typeof row.last_used_at === "string" ? row.last_used_at : null, archivedAt: typeof row.archived_at === "string" ? row.archived_at : null }; }
 function toAccountAuthorization(row: Row): AccountAuthorizationView {
   const status = ["NotAuthorized", "Authorized", "Partial", "Revoked", "Unknown"].includes(textValue(row.status)) ? textValue(row.status) as AccountAuthorizationView["status"] : "Unknown";
   return { accountId: textValue(row.account_id), platformKey: textValue(row.platform_key), authorizationType: textValue(row.authorization_type), status, scopes: stringArray(row.scopes_json), expiresAt: typeof row.expires_at === "string" ? row.expires_at : null, providerAccountId: typeof row.provider_account_id === "string" ? row.provider_account_id : null, providerAccountName: typeof row.provider_account_name === "string" ? row.provider_account_name : null, updatedAt: textValue(row.updated_at) };

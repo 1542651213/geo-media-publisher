@@ -102,8 +102,8 @@ export function registerIpc(deps: IpcDependencies): void {
     logger.info("EXTERNAL_LAUNCH", "USER_INITIATED_ACTION", "已记录用户发起的平台操作", action);
     return action;
   };
-  const accountContext = (accountId: string, platformKey: string, action?: UserInitiatedAction): AccountContext => {
-    const account = repository.listAccounts().find((item) => item.id === accountId);
+  const accountContext = (accountId: string, platformKey: string, action?: UserInitiatedAction, includeArchived = false): AccountContext => {
+    const account = includeArchived ? repository.getAccountById(accountId, platformKey) : repository.listAccounts().find((item) => item.id === accountId && item.platformKey === platformKey);
     if (!account || account.platformKey !== platformKey) throw new Error("账号与平台不匹配");
     return {
       accountId,
@@ -607,10 +607,19 @@ export function registerIpc(deps: IpcDependencies): void {
         return result;
       }
       const profile = adapter.getAccountProfile ? await adapter.getAccountProfile(completedContext) : undefined;
-      await adapter.persistConnectionSession?.(completedContext);
-      const account = await syncBrowserAccount(adapter, input.accountId, input.platformKey, action, profile);
-      const sessionEvidence = await adapter.getBrowserSessionEvidence?.(completedContext);
-      await adapter.releaseConnectionSession?.(completedContext);
+      const archivedAccount = profile?.accountId ? repository.findArchivedAccountByExternalIdForConnection(input.accountId, input.platformKey, profile.accountId) : null;
+      const effectiveAccountId = archivedAccount?.id ?? input.accountId;
+      const effectiveContext = effectiveAccountId === input.accountId ? completedContext : accountContext(effectiveAccountId, input.platformKey, action, true);
+      if (archivedAccount) {
+        if (!adapter.rebindAccountSession) throw new Error("无法安全恢复归档账号：Adapter 不支持 Session 重绑定");
+        repository.restoreArchivedAccountByExternalId(input.platformKey, profile?.accountId ?? "");
+        adapter.rebindAccountSession(completedContext, effectiveContext);
+      }
+      await adapter.persistConnectionSession?.(effectiveContext);
+      const account = await syncBrowserAccount(adapter, effectiveAccountId, input.platformKey, action, profile);
+      if (archivedAccount) repository.markPlatformAccountDisconnected(input.accountId, input.platformKey, adapter.manifest.authStrategy);
+      const sessionEvidence = await adapter.getBrowserSessionEvidence?.(effectiveContext);
+      await adapter.releaseConnectionSession?.(effectiveContext);
       logger.info("ACCOUNT", "LOGIN_SUCCEEDED", "平台登录成功，Session 已安全保存，身份已回写，登录专用浏览器已关闭", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, sessionEvidence: sessionEvidence ?? null });
       const result = browserAccountConnectionResult(account);
       logger.info("ACCOUNT", "COMPLETE_LOGIN_RESPONSE", "主进程完成登录结果", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, status, reason: null, errorCode: null, resultContract: { configured: result.configured, accountStatus: result.accountStatus, authorizationStatus: result.authorizationStatus } });
@@ -643,28 +652,29 @@ export function registerIpc(deps: IpcDependencies): void {
   });
   register("accounts:disconnect", async (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);
-    const account = repository.listAccounts().find((item) => item.id === input.accountId && item.platformKey === input.platformKey);
+    const account = repository.getAccountById(input.accountId, input.platformKey);
     if (!account) throw new Error("账号与平台不匹配");
     const adapter = registry.getForConnection(input.platformKey);
     const action = createUserAction("CONNECT_ACCOUNT");
     let result: AccountDisconnectResult;
     if (isAutomationAdapter(adapter)) {
-      const context = accountContext(input.accountId, input.platformKey, action);
+      const context = accountContext(input.accountId, input.platformKey, action, true);
       const activeSession = adapter.getBrowserConnectionDebugState?.(context)?.targetSessionFound ?? false;
-      result = browserAccountDisconnectResult({ loginStatus: account.loginStatus, credentialPresent: credentials.has(browserSessionCredentialKey({ platformKey: input.platformKey, accountId: input.accountId })), activeSession });
+      result = browserAccountDisconnectResult({ loginStatus: account.loginStatus, credentialPresent: credentials.has(browserSessionCredentialKey({ platformKey: input.platformKey, accountId: input.accountId })), activeSession, archived: account.archivedAt != null });
       await adapter.logout(context);
-      repository.markPlatformAccountDisconnected(input.accountId, input.platformKey);
+      repository.markPlatformAccountDisconnected(input.accountId, input.platformKey, adapter.manifest.authStrategy);
     }
     else if (input.platformKey === "cnblogs") {
+      const credentialPresent = adapter.getCredentialSchema().some((field) => credentials.has(`account:${input.accountId}:${input.platformKey}:${field.key}`));
       for (const field of adapter.getCredentialSchema()) credentials.delete(`account:${input.accountId}:${input.platformKey}:${field.key}`);
-      repository.updateAccount(input.accountId, { loginStatus: "logged_out", pausedReason: null });
-      repository.upsertAccountAuthorization({ accountId: input.accountId, platformKey: input.platformKey, authorizationType: "AppCredential", status: "NotAuthorized" });
-      result = browserAccountDisconnectResult({ loginStatus: account.loginStatus, credentialPresent: true, activeSession: false });
+      result = browserAccountDisconnectResult({ loginStatus: account.loginStatus, credentialPresent, activeSession: false, archived: account.archivedAt != null });
+      repository.markPlatformAccountDisconnected(input.accountId, input.platformKey, adapter.manifest.authStrategy);
     } else {
-      result = browserAccountDisconnectResult({ loginStatus: account.loginStatus, credentialPresent: true, activeSession: false });
+      result = browserAccountDisconnectResult({ loginStatus: account.loginStatus, credentialPresent: false, activeSession: false, archived: account.archivedAt != null });
       oauthSessions.disconnect(input.accountId, input.platformKey);
+      repository.markPlatformAccountDisconnected(input.accountId, input.platformKey, adapter.manifest.authStrategy);
     }
-    logger.info("ACCOUNT", "DISCONNECT_RESULT", "账号本地连接断开结果已返回", { accountId: input.accountId, platformKey: input.platformKey, outcome: result.outcome, accountRowRetained: true });
+    logger.info("ACCOUNT", "DISCONNECT_RESULT", "账号本地连接已断开并从活动账号中心移除", { accountId: input.accountId, platformKey: input.platformKey, outcome: result.outcome, accountRowArchived: true });
     return result;
   });
   register("accounts:open-backend", async (_event, payload) => {

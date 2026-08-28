@@ -157,7 +157,7 @@ describe("Xiaohongshu account routing and identity persistence", () => {
     expect(opened.repository.listAccounts().find((candidate) => candidate.id === second.id)?.loginStatus).toBe("unknown");
   });
 
-  it("retains the disconnected account row while leaving the sibling account unchanged", () => {
+  it("archives the disconnected account row while leaving the sibling account unchanged", () => {
     const directory = mkdtempSync(join(tmpdir(), "publisher-xhs-routing-disconnect-"));
     tempDirs.push(directory);
     const opened = openDatabase(join(directory, "publisher.db"), migrationDir);
@@ -173,7 +173,9 @@ describe("Xiaohongshu account routing and identity persistence", () => {
     const afterFirst = opened.repository.listAccounts().find((candidate) => candidate.id === first.id);
 
     expect(disconnected).toMatchObject({ id: second.id, loginStatus: "logged_out", browserSessionId: null, authorizationStatus: "NotAuthorized" });
-    expect(opened.repository.listAccounts().filter((candidate) => candidate.platformKey === "xiaohongshu")).toHaveLength(2);
+    expect(opened.repository.listAccounts().filter((candidate) => candidate.platformKey === "xiaohongshu")).toHaveLength(1);
+    expect(opened.repository.listAccounts({ includeArchived: true }).filter((candidate) => candidate.platformKey === "xiaohongshu")).toHaveLength(2);
+    expect(opened.repository.getAccountById(second.id, "xiaohongshu")).toMatchObject({ archivedAt: expect.any(String) });
     expect(afterFirst).toEqual(beforeFirst);
   });
 });

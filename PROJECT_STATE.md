@@ -1,5 +1,59 @@
 # Project State
 
+## V1.4.3 Account Disconnect Archive Lifecycle — CODE PASS / INSTALLED PASS / GATE NOT_RUN / REAL PUBLISH NOT_RUN - 2026-08-28
+
+本轮将账号“断开”收口为“移除活动账号容器”：精确清理目标 `platformKey + accountId` 的 BrowserSession 和 Credential，设置 `logged_out`，写入 `archived_at`，并让该 row 从活动账号中心消失；不物理删除 account，不破坏历史 Job、SubmissionIntent 或 PublishRecord 引用。本轮没有断开生产小红书账号 1，没有执行小红书 gate，没有创建 SELF_TEST，没有点击最终发布。
+
+### 本轮验收状态
+
+| 状态 | Result | 证据/边界 |
+| --- | --- | --- |
+| `ACCOUNT_DISCONNECT_REMOVES_ACTIVE_ROW` | `PASS` | controlled test DB 中目标 row 从默认 `listAccounts()` 消失；历史查询仍可按原 accountId 读取。 |
+| `ACCOUNT_HISTORY_PRESERVED` | `PASS` | `publish_jobs.account_id`、`submission_intents.account_id`、`publish_records.account_id` 保持原引用；测试中的 PublishRecord 可继续读取。 |
+| `ACCOUNT_SOFT_DELETE_IMPLEMENTED` | `PASS` | migration `0022_v143_account_archive.sql` 新增 `accounts.archived_at` 与索引；无 account DELETE IPC/Repository 行为。 |
+| `SIBLING_ACCOUNT_ISOLATION` | `PASS` | A/B controlled regression 覆盖目标 archive 不改变 sibling login state、active row、Session 或 Credential。 |
+| `CREDENTIAL_ISOLATION` | `PASS` | 只清理 `session:{platformKey}:{accountId}` 的 exact key；sibling key 保留。 |
+| `SESSION_ISOLATION` | `PASS` | 只关闭目标 BrowserSession；BrowserSessionManager rebind/disconnect 均按 exact composite key。 |
+| `IDEMPOTENT_DISCONNECT` | `PASS` | archived 或已 logged_out 且无 Session/Credential 的目标返回 `ALREADY_DISCONNECTED`，不抛异常。 |
+| `READD_SAME_ACCOUNT_BEHAVIOR` | `PASS_WITH_FAIL_CLOSED_BOUNDARY` | adapter 提供唯一稳定 external identity 时恢复原 archived container 并 rebind Session；无身份、冲突或身份不唯一时拒绝 dedupe，不猜测。 |
+| `PHYSICAL_DELETE_USED` | `NO` | 没有新增 `accounts:delete/remove`，没有物理 DELETE。 |
+| `FINAL_SUBMIT_COUNT` | `0` | 本轮 gate 未执行；最终发布按钮没有点击。 |
+| `CODE PASS` | `PASS` | 13 focused files / 110 tests、73 files / 453 full tests、typecheck、lint、build fresh 通过。 |
+| `INSTALLED PASS` | `PASS` | 独立 v143 包已部署；migration resource 补齐后 fresh restart 应用 0022，进程 Responding=true，发布域计数不变。账号动作未在安装版点击。 |
+| `LIVE SESSION PASS` | `NOT_CLAIMED` | 本轮没有执行小红书 live Session restore；生产 account 1 的 session key 只做存在性检查。 |
+| `GATE PASS` | `NOT_RUN` | 按本轮要求，lifecycle 修复前不继续 Xiaohongshu gate。 |
+| `REAL PUBLISH PASS` | `NOT_RUN` | 严格禁止真实发布。 |
+| `XIAOHONGSHU_READY_FOR_REAL_SELF_TEST` | `NO` | 本轮没有运行 gate，不满足 READY 判定。 |
+
+### 生产数据库只读基线与安装版 smoke
+
+部署前只读基线：普通 `platformKey=xiaohongshu` 有 2 个 account rows；`publish_jobs=15`、`submission_intents=12`、`publish_records=9`。本轮没有在生产库调用 disconnect，也没有修改账号、Job、Intent 或 PublishRecord。
+
+安装版部署初次 smoke 发现旧安装目录缺少 Electron `extraResources` 中的 0022 文件；已停止 exact installed executable，备份旧 migration 目录，补拷贝唯一 `0022_v143_account_archive.sql` 后重启。fresh smoke 现在确认 `accounts.archived_at` 存在、最新 migration 为 `0022_v143_account_archive.sql`、两个小红书 row 仍分别存在且未归档、三类发布数据仍为 `15 / 12 / 9`。安装版 exe、app.asar、better-sqlite3 native 与 v143 构建包 hash 一致。
+
+当前生产小红书账号（只输出非敏感状态）：
+
+| accountId | loginStatus | enabled | authorizationStatus | browserSessionId | credential key | archivedAt |
+| --- | --- | --- | --- | --- | --- | --- |
+| `54b390ac-d81e-440a-baeb-d00f9f346cc3` | `logged_in` | `true` | `Authorized` | present | present | `null` |
+| `88c590d9-4c4f-46c9-b1c5-61e2eac43b2d` | `logged_out` | `true` | `NotAuthorized` | absent | absent | `null` |
+
+`credentials.enc` 只做 key presence 检查，没有读取、解密或输出任何 credential value。安装版 smoke 没有执行账号操作；账号中心 Chromium DOM 没有在 owner 不在场时独立点击观察，因此不把 UI 操作冒充为已实测。
+
+### 断开无反馈的根因与实现
+
+精确根因是旧 lifecycle 合约只实现了“断开连接”，没有实现“从活动账号中心移除”：`markPlatformAccountDisconnected` 仅更新 logged-out/session 字段，`listAccounts()` 无 archived 过滤，所以 row 永久留在活动列表。账号 2 本来已 `logged_out`、无 active Session、无 Credential 时还命中 B4 后端幂等清理；旧 IPC/Renderer 只暴露通用成功，形成 B5 的“无反馈”。
+
+现在 IPC 先用 `repository.getAccountById(accountId, platformKey)` 精确寻址，BrowserAutomation 关闭 exact Session、清理 exact credential，Repository 在事务中写 `logged_out`、`NotAuthorized`、`browser_session_id=NULL`、`archived_at=timestamp`；默认 `listAccounts()` 过滤 `archived_at IS NULL`，`includeArchived`/`getAccountById` 保留历史访问。Renderer 显示“已移除……历史发布记录保留”或“当前已处于未连接状态；活动账号已移除”，随后立即 refresh；按钮改为“移除”，确认文案为“移除后会清除此账号的登录状态和本地会话，但不会删除历史发布记录。确定继续吗？”。
+
+当前没有安全、测试覆盖的物理 account delete 能力：`ACCOUNT_CONTAINER_DELETE_AVAILABLE = NO`。本轮没有把 disconnect 改成 DELETE。
+
+### 证据与回滚
+
+证据见 [output/v143-xiaohongshu-multi-account-hardening.json](C:/Users/Administrator/Desktop/codex_media_publisher_starter/output/v143-xiaohongshu-multi-account-hardening.json)。安装包目录为 `C:\Users\Administrator\Desktop\codex_media_publisher_starter\release\win-unpacked-xiaohongshu-account-archive-v143\win-unpacked`；安装路径为 `C:\GMP116ZhihuL5\Geo Media Publisher\Geo Media Publisher.exe`；本轮 rollback 为 `C:\GMP116ZhihuL5\Geo Media Publisher.previous-20260828-xiaohongshu-account-archive-v143`。production-data 与 `credentials.enc` 均保留。
+
+本轮源码/测试修改文件及 evidence 只涉及账号 archive lifecycle、精确 Session rebind、Xiaohongshu account-center/UI regression、迁移、PROJECT_STATE 与 v143 evidence；未修改 Sohu/Toutiao/release 的业务实现。工作区已有的 Sohu 与 release dirty changes 未 stage、未覆盖、未回滚。
+
 ## V1.4.3 Xiaohongshu multi-account hardening — CODE PASS / INSTALLED PASS / LIVE SESSION BLOCKED / GATE BLOCKED / REAL PUBLISH NOT_RUN - 2026-08-27
 
 本轮继续收口普通 `xiaohongshu` BrowserAutomation 的多账号管理与断开 UX。没有真实发布小红书笔记，没有点击最终发布，没有创建或重建 Job，也没有修改已 PASS 的微博、今日头条或搜狐发布业务实现。生产库只读审计确认普通小红书有两个独立 account rows；本轮没有在生产库调用账号 2 的断开动作，以保留 owner 原有账号状态，断开行为由精确 accountId 的源码回归覆盖。

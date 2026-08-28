@@ -11,8 +11,8 @@ export interface PlatformConnectionAction {
 }
 
 export function disconnectFeedbackMessage(result: Pick<AccountDisconnectResult, "outcome"> | { outcome?: unknown }, accountName: string): string {
-  if (result.outcome === "ALREADY_DISCONNECTED") return `${accountName} 当前已处于未连接状态。`;
-  return `已断开${accountName}；账号容器已保留，其他账号 Session 未受影响。`;
+  if (result.outcome === "ALREADY_DISCONNECTED") return `${accountName} 当前已处于未连接状态；活动账号已移除。`;
+  return `已移除${accountName}；已清除登录状态和本地会话，历史发布记录保留。`;
 }
 
 export function connectionErrorMessage(error: unknown): string {

@@ -411,6 +411,8 @@ export interface Account {
   externalAccountId?: string | null;
   lastVerifiedAt?: string | null;
   lastUsedAt?: string | null;
+  /** Non-destructive lifecycle marker; archived accounts remain queryable by id for history. */
+  archivedAt?: string | null;
 }
 
 export type PlatformAccount = Account;

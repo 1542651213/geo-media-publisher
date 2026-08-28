@@ -76,7 +76,7 @@ describe("V1.1.2 Lieju multi-account isolation", () => {
     repository.syncBrowserPlatformAccount({ accountId: first.id, platformKey: "lieju", accountName: "平台账号甲", externalAccountId: "lieju-a", browserSessionId: "session-a-renewed" });
     expect(repository.listAccounts().find((account) => account.id === second.id)?.browserSessionId).toBe("session-b");
     repository.markPlatformAccountDisconnected(first.id, "lieju");
-    expect(repository.listAccounts().find((account) => account.id === first.id)?.browserSessionId).toBeNull();
+    expect(repository.getAccountById(first.id, "lieju")?.browserSessionId).toBeNull();
     expect(repository.listAccounts().find((account) => account.id === second.id)).toMatchObject({ loginStatus: "logged_in", browserSessionId: "session-b" });
   });
 

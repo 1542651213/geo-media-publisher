@@ -39,6 +39,8 @@ export interface AutomationAdapter extends PlatformAdapter {
   releaseConnectionSession?(ctx: AccountContext): Promise<void>;
   /** Persists a deferred visible login Session after same-Page identity readback. */
   persistConnectionSession?(ctx: AccountContext): Promise<void>;
+  /** Rebinds a just-connected account-scoped Session to a uniquely restored archived account. */
+  rebindAccountSession?(from: AccountContext, to: AccountContext): void;
   /** Returns non-secret evidence proving which account-scoped browser Page is being used. */
   getBrowserSessionEvidence?(ctx: AccountContext): Promise<{
     platformKey: string;

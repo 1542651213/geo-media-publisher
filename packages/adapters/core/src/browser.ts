@@ -176,6 +176,24 @@ export class PlaywrightSessionManager {
 
   clear(identity: BrowserSessionIdentity): void { this.credentials.delete(browserSessionCredentialKey(identity)); }
 
+  rebind(from: BrowserSessionIdentity, to: BrowserSessionIdentity): void {
+    const fromKey = browserSessionCredentialKey(from);
+    const toKey = browserSessionCredentialKey(to);
+    if (fromKey === toKey) return;
+    if (this.activeSessions.has(toKey) || this.pendingConnections.has(toKey) || this.credentials.has(toKey)) throw new Error("目标账号已有 Session 或连接状态，拒绝重绑定");
+    const active = this.activeSessions.get(fromKey);
+    if (active) {
+      this.activeSessions.delete(fromKey);
+      this.activeSessions.set(toKey, active);
+    }
+    if (this.pendingConnections.delete(fromKey)) this.pendingConnections.add(toKey);
+    const stored = this.credentials.get(fromKey);
+    if (stored !== null) {
+      this.credentials.set(toKey, stored);
+      this.credentials.delete(fromKey);
+    }
+  }
+
   getActiveSession(identity: BrowserSessionIdentity): BrowserSession | null {
     const key = browserSessionCredentialKey(identity);
     const session = this.activeSessions.get(key);

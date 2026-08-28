@@ -68,11 +68,11 @@ describe("BrowserAutomation account creation semantics", () => {
   });
 
   it("shows explicit feedback for an already disconnected account", () => {
-    expect(disconnectFeedbackMessage({ outcome: "ALREADY_DISCONNECTED" }, "小红书账号 2")).toBe("小红书账号 2 当前已处于未连接状态。");
+    expect(disconnectFeedbackMessage({ outcome: "ALREADY_DISCONNECTED" }, "小红书账号 2")).toBe("小红书账号 2 当前已处于未连接状态；活动账号已移除。");
   });
 
   it("shows explicit feedback for a disconnected account and keeps the row refresh contract", () => {
-    expect(disconnectFeedbackMessage({ outcome: "DISCONNECTED" }, "小红书账号 2")).toBe("已断开小红书账号 2；账号容器已保留，其他账号 Session 未受影响。");
+    expect(disconnectFeedbackMessage({ outcome: "DISCONNECTED" }, "小红书账号 2")).toBe("已移除小红书账号 2；已清除登录状态和本地会话，历史发布记录保留。");
   });
 
   it("routes disconnect through the exact requested account ID and exposes an outcome", () => {
@@ -87,12 +87,30 @@ describe("BrowserAutomation account creation semantics", () => {
     expect(disconnectBlock).not.toContain("connectedRows[0]");
   });
 
-  it("keeps the BrowserAutomation disconnect row instead of deleting an account container", () => {
+  it("routes BrowserAutomation removal to archive instead of deleting an account container", () => {
     const source = readFileSync("apps/desktop/src/main/ipc.ts", "utf8");
     const start = source.indexOf('register("accounts:disconnect"');
     const end = source.indexOf('register("accounts:open-backend"', start);
     const disconnectBlock = source.slice(start, end);
     expect(disconnectBlock).toContain("markPlatformAccountDisconnected");
     expect(disconnectBlock).not.toMatch(/deleteAccount|accounts:delete|accounts:remove/iu);
+    expect(source).toContain("accountRowArchived");
+  });
+
+  it("uses the stable-identity restore path without introducing platform-wide account fallback", () => {
+    const mainSource = readFileSync("apps/desktop/src/main/ipc.ts", "utf8");
+    expect(mainSource).toContain("findArchivedAccountByExternalIdForConnection");
+    expect(mainSource).toContain("restoreArchivedAccountByExternalId");
+    expect(mainSource).toContain("rebindAccountSession");
+    expect(mainSource).not.toContain("accounts[0]");
+  });
+
+  it("uses removal wording and the history-preserving confirmation", () => {
+    const workspaceSource = readFileSync("apps/desktop/src/renderer/V11Workspace.tsx", "utf8");
+    const appSource = readFileSync("apps/desktop/src/renderer/App.tsx", "utf8");
+    expect(workspaceSource).toContain(">移除</button>");
+    expect(workspaceSource).toContain("移除后会清除此账号的登录状态和本地会话，但不会删除历史发布记录。");
+    expect(appSource).toContain(">移除</button>");
+    expect(appSource).toContain("移除后会清除此账号的登录状态和本地会话，但不会删除历史发布记录。");
   });
 });
