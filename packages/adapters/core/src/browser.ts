@@ -163,6 +163,7 @@ export interface BrowserSessionManagerOptions {
   /** Explicit opt-in for legacy snapshot seeding. Persistent profiles are canonical by default. */
   persistentProfileCredentialSnapshotPlatforms?: readonly string[];
   launchPersistentContext?: (userDataDir: string, options: { channel: SystemBrowserChannel; headless: boolean; storageState?: StorageState }) => Promise<BrowserContext>;
+  writeProfileInitializedMarker?: (markerPath: string) => Promise<void>;
   onSessionLifecycle?: (event: BrowserSessionLifecycleEvent) => void;
   platformPolicies?: Readonly<Record<string, Partial<BrowserSessionPlatformPolicy>>>;
 }
@@ -259,14 +260,8 @@ export class PlaywrightSessionManager {
         await this.closeUnregisteredSession(session);
         throw new Error("Browser session open was cancelled by closeAll");
       }
-      await writeFile(join(persistentProfilePath, ".gmp-profile-initialized"), "v1\n", { flag: "a" });
-      this.ownedSessions.add(session);
-      this.sessionIdentities.set(session, identity);
-      this.activeSessions.set(browserSessionCredentialKey(identity), session);
-      this.observeBrowserDisconnect(identity, session);
-      this.updateRuntimeState(browserSessionCredentialKey(identity), "UNVERIFIED", session.contextDebugId ?? null, null);
-      this.emitSessionLifecycle({ phase: "OPEN_COMPLETED", identity, session, browserConnected: this.browserConnected(session.browser) });
-      return session;
+      await this.writeProfileInitializedMarker(join(persistentProfilePath, ".gmp-profile-initialized"));
+      return this.registerOpenSession(identity, session, closeAllGeneration);
     }
     const browserLaunch = await this.launchSystemBrowser(headless);
     const browser = browserLaunch.browser;
@@ -287,17 +282,7 @@ export class PlaywrightSessionManager {
       throw new BrowserRuntimeError({ errorCode: "BROWSER_RUNTIME_LAUNCH_FAILED", module: "BrowserSessionManager", timestamp: new Date().toISOString(), attemptedChannels: [...SYSTEM_BROWSER_CHANNELS] });
     }
     const session = { browser, context, page, hasStoredSession: Boolean(storageState), sessionIdHash: browserSessionIdHash(identity), executionMode, headless, storageMode: "EPHEMERAL_STORAGE_STATE" as const, profilePath: null, browserChannel: browserLaunch.channel, credentialSnapshotInjected: Boolean(storageState), contextDebugId: randomUUID(), pageDebugId: randomUUID() };
-    if (closeAllGeneration !== this.closeAllGeneration) {
-      await this.closeUnregisteredSession(session);
-      throw new Error("Browser session open was cancelled by closeAll");
-    }
-    this.ownedSessions.add(session);
-    this.sessionIdentities.set(session, identity);
-    this.activeSessions.set(browserSessionCredentialKey(identity), session);
-    this.observeBrowserDisconnect(identity, session);
-    this.updateRuntimeState(browserSessionCredentialKey(identity), "UNVERIFIED", session.contextDebugId ?? null, null);
-    this.emitSessionLifecycle({ phase: "OPEN_COMPLETED", identity, session, browserConnected: this.browserConnected(session.browser) });
-    return session;
+    return this.registerOpenSession(identity, session, closeAllGeneration);
   }
 
   async save(identity: BrowserSessionIdentity, context: BrowserContext): Promise<void> {
@@ -638,6 +623,28 @@ export class PlaywrightSessionManager {
   private async closeUnregisteredSession(session: BrowserSession): Promise<void> {
     await session.context.close().catch(() => undefined);
     if (session.storageMode !== "PERSISTENT_PROFILE") await session.browser.close().catch(() => undefined);
+  }
+
+  private async registerOpenSession(identity: BrowserSessionIdentity, session: BrowserSession, closeAllGeneration: number): Promise<BrowserSession> {
+    if (closeAllGeneration !== this.closeAllGeneration) {
+      await this.closeUnregisteredSession(session);
+      throw new Error("Browser session open was cancelled by closeAll");
+    }
+    this.ownedSessions.add(session);
+    this.sessionIdentities.set(session, identity);
+    this.activeSessions.set(browserSessionCredentialKey(identity), session);
+    this.observeBrowserDisconnect(identity, session);
+    this.updateRuntimeState(browserSessionCredentialKey(identity), "UNVERIFIED", session.contextDebugId ?? null, null);
+    this.emitSessionLifecycle({ phase: "OPEN_COMPLETED", identity, session, browserConnected: this.browserConnected(session.browser) });
+    return session;
+  }
+
+  private async writeProfileInitializedMarker(markerPath: string): Promise<void> {
+    if (this.options.writeProfileInitializedMarker) {
+      await this.options.writeProfileInitializedMarker(markerPath);
+      return;
+    }
+    await writeFile(markerPath, "v1\n", { flag: "a" });
   }
 
 }

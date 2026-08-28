@@ -449,6 +449,58 @@ describe("BrowserSessionManager credential boundary", () => {
     expect(manager.getRuntimeAuthState(identity).state).toBe("UNVERIFIED");
   });
 
+  it("does not register a persistent-profile session after closeAll starts during profile marker write", async () => {
+    const root = await mkdtemp(join(tmpdir(), "publisher-browser-profile-closeall-write-race-test-"));
+    let resolveWriteStarted: (() => void) | undefined;
+    let releaseWrite: (() => void) | undefined;
+    const writeStarted = new Promise<void>((resolve) => { resolveWriteStarted = resolve; });
+    const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const writeProfileInitializedMarker = vi.fn(async () => {
+      resolveWriteStarted?.();
+      await writeGate;
+    });
+
+    try {
+      let pageClosed = false;
+      const page = {
+        isClosed: vi.fn(() => pageClosed),
+        url: vi.fn(() => "about:blank")
+      };
+      const browser = {
+        close: vi.fn(async () => undefined),
+        isConnected: vi.fn(() => !pageClosed)
+      } as unknown as Browser;
+      const context = {
+        browser: vi.fn(() => browser),
+        setDefaultTimeout: vi.fn(),
+        newPage: vi.fn(async () => page),
+        pages: vi.fn(() => [page]),
+        close: vi.fn(async () => { pageClosed = true; })
+      } as unknown as BrowserContext;
+      const manager = new BrowserSessionManager(new MemoryCredentialStore(), {
+        browserProfileRootDir: root,
+        persistentProfilePlatforms: ["xiaohongshu"],
+        platformPolicies: { xiaohongshu: { retainContextAfterPageClose: true, requireActiveContextForOperations: true } },
+        launchPersistentContext: vi.fn(async () => context),
+        writeProfileInitializedMarker
+      } as never);
+      const identity = { platformKey: "xiaohongshu", accountId: "account-closeall-write-race" };
+
+      const opening = manager.open(identity, userAction);
+      await writeStarted;
+      const closing = manager.closeAll();
+      releaseWrite?.();
+      await Promise.allSettled([opening, closing]);
+
+      expect(writeProfileInitializedMarker).toHaveBeenCalledTimes(1);
+      expect(context.close).toHaveBeenCalledTimes(1);
+      expect(manager.getActiveSession(identity)).toBeNull();
+      expect(manager.getRuntimeAuthState(identity).state).toBe("UNVERIFIED");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps authenticated runtime state after Page close and clears it on Browser disconnect", async () => {
     let disconnected: (() => void) | undefined;
     let canonicalPageClosed = false;
