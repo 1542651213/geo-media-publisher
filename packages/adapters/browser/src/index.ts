@@ -113,6 +113,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
   protected readonly sessionManager: BrowserSessionManager;
   private readonly fallbackActiveSessions = new Map<string, BrowserSession>();
   private readonly fallbackPendingConnections = new Set<string>();
+  private readonly diagnosticColdOpenAllowances = new Set<string>();
   private readonly onConnectionDiagnostic?: (diagnostic: BrowserConnectionDiagnostic) => void;
   readonly adapterDebugId = randomUUID();
 
@@ -438,15 +439,19 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
 
   /** Diagnostic-only access to the account-owned session without navigation. */
   protected diagnosticBrowserSession(ctx: AccountContext): BrowserSession | null {
-    return this.activeSession(this.identity(ctx));
+    const identity = this.identity(ctx);
+    const active = this.activeSession(identity);
+    if (!active && this.requiresActiveContextForOperations(identity)) this.allowDiagnosticColdOpenOnce(identity);
+    return active;
   }
 
   protected async getOrOpen(ctx: AccountContext): Promise<BrowserSession | null> {
     const executionMode = browserExecutionModeFromSettings(ctx.settings);
     const identity = this.identity(ctx);
+    const diagnosticColdOpenAllowed = this.consumeDiagnosticColdOpenAllowance(identity);
     const active = this.activeSession(identity);
     if (active?.executionMode === executionMode) return active;
-    if (this.requiresActiveContextForOperations(identity)) return null;
+    if (this.requiresActiveContextForOperations(identity) && !diagnosticColdOpenAllowed) return null;
     if (active) await this.closeActive(identity);
     if (!this.sessionManager.hasStoredSession(identity)) return null;
     const session = await this.sessionManager.open(identity, userInitiatedActionFromSettings(ctx.settings), executionMode);
@@ -587,6 +592,19 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
       updatedAt: new Date(0).toISOString(),
       reason: null
     };
+  }
+
+  private allowDiagnosticColdOpenOnce(identity: { platformKey: string; accountId: string }): void {
+    const key = `${identity.platformKey}:${identity.accountId}`;
+    this.diagnosticColdOpenAllowances.add(key);
+    queueMicrotask(() => { this.diagnosticColdOpenAllowances.delete(key); });
+  }
+
+  private consumeDiagnosticColdOpenAllowance(identity: { platformKey: string; accountId: string }): boolean {
+    const key = `${identity.platformKey}:${identity.accountId}`;
+    const allowed = this.diagnosticColdOpenAllowances.has(key);
+    if (allowed) this.diagnosticColdOpenAllowances.delete(key);
+    return allowed;
   }
 
   private async emitConnectionDiagnostic(phase: BrowserConnectionDiagnosticPhase, ctx: AccountContext, session: BrowserSession | null): Promise<void> {

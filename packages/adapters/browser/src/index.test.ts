@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AccountContext } from "@publisher/domain";
-import { defaultCapabilities, type BrowserSessionManager } from "@publisher/adapters-core";
+import { defaultCapabilities, type BrowserSession, type BrowserSessionManager, type BrowserSessionRuntimeState } from "@publisher/adapters-core";
 import { BrowserAutomationAdapter, type BrowserPlatformDefinition } from "./index";
 
 const definition: BrowserPlatformDefinition = {
@@ -23,6 +23,25 @@ const context = (): AccountContext => ({
   platformKey: definition.platformKey,
   settings: { userActionId: "11111111-1111-4111-8111-111111111111", triggerSource: "CONNECT_ACCOUNT" }
 });
+
+class TestBrowserAutomationAdapter extends BrowserAutomationAdapter {
+  async activeBackendPageForTest(ctx: AccountContext) {
+    return this.activeBackendPage(ctx);
+  }
+
+  async diagnosticSessionForTest(ctx: AccountContext) {
+    return this.diagnosticBrowserSession(ctx) ?? await this.getOrOpen(ctx);
+  }
+}
+
+function pageFixture(initialUrl = definition.backendUrl as string, isClosed = false) {
+  let currentUrl = initialUrl;
+  return {
+    goto: vi.fn(async (url: string) => { currentUrl = url; }),
+    url: vi.fn(() => currentUrl),
+    isClosed: vi.fn(() => isClosed)
+  };
+}
 
 function fixture(staysOnLogin = false, hasStoredSession = false, saveFails = false) {
   let currentUrl = definition.loginUrl as string;
@@ -128,6 +147,105 @@ describe("BrowserAutomationAdapter login lifecycle", () => {
 
     await expect(adapter.openBackend(ctx)).rejects.toMatchObject({ code: "USER_ACTION_REQUIRED" });
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it("uses an operation Page for policy-enabled backend operations", async () => {
+    const canonicalPage = pageFixture("https://example.com/home");
+    const operationPage = pageFixture("https://example.com/operation");
+    const session = {
+      sessionIdHash: "owned-session",
+      executionMode: "VISIBLE",
+      headless: false,
+      page: canonicalPage,
+      context: { pages: vi.fn(() => [canonicalPage]) }
+    } as unknown as BrowserSession;
+    const manager = {
+      getActiveSession: vi.fn(() => session),
+      requiresActiveContextForOperations: vi.fn(() => true),
+      openOperationPage: vi.fn(async () => ({ session, page: operationPage, pageDebugId: "operation-page-debug-id" })),
+      getRuntimeAuthState: vi.fn(() => ({ state: "AUTHENTICATED", contextDebugId: "context-1", updatedAt: new Date(0).toISOString(), reason: null })),
+      debugId: "manager-debug-id"
+    } as unknown as BrowserSessionManager;
+    const adapter = new BrowserAutomationAdapter({ ...definition, platformKey: "xiaohongshu" }, { sessionManager: manager });
+    const ctx: AccountContext = { ...context(), platformKey: "xiaohongshu" };
+
+    const opened = await adapter.openBackend(ctx);
+
+    expect(manager.openOperationPage).toHaveBeenCalledWith(
+      { platformKey: "xiaohongshu", accountId: ctx.accountId },
+      { userActionId: ctx.settings.userActionId, triggerSource: "CONNECT_ACCOUNT" },
+      "VISIBLE"
+    );
+    expect(canonicalPage.goto).not.toHaveBeenCalled();
+    expect(operationPage.goto).toHaveBeenCalledWith(definition.backendUrl, expect.anything());
+    expect(opened.backendUrl).toBe(definition.backendUrl);
+  });
+
+  it("keeps retained-context sessions addressable after the canonical Page closes", async () => {
+    const closedPage = pageFixture("https://example.com/original", true);
+    const retainedPage = pageFixture("https://example.com/retained");
+    const session = {
+      sessionIdHash: "owned-session",
+      executionMode: "VISIBLE",
+      headless: false,
+      page: closedPage,
+      context: { pages: vi.fn(() => [closedPage, retainedPage]) }
+    } as unknown as BrowserSession;
+    const manager = {
+      getActiveSession: vi.fn(() => session),
+      retainsContextAfterPageClose: vi.fn(() => true),
+      debugId: "manager-debug-id"
+    } as unknown as BrowserSessionManager;
+    const adapter = new TestBrowserAutomationAdapter({ ...definition, platformKey: "xiaohongshu" }, { sessionManager: manager });
+    const ctx: AccountContext = { ...context(), platformKey: "xiaohongshu" };
+
+    const active = await adapter.activeBackendPageForTest(ctx);
+
+    expect(active).toMatchObject({ session });
+    expect(active?.page).toBe(retainedPage);
+  });
+
+  it("passes through runtime auth state from the shared session manager", () => {
+    const runtimeState: BrowserSessionRuntimeState = {
+      state: "DISCONNECTED",
+      contextDebugId: "context-123",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+      reason: "browser disconnected"
+    };
+    const manager = {
+      getRuntimeAuthState: vi.fn(() => runtimeState),
+      debugId: "manager-debug-id"
+    } as unknown as BrowserSessionManager;
+    const adapter = new BrowserAutomationAdapter({ ...definition, platformKey: "xiaohongshu" }, { sessionManager: manager });
+    const ctx: AccountContext = { ...context(), platformKey: "xiaohongshu" };
+
+    expect(adapter.getBrowserRuntimeState(ctx)).toBe(runtimeState);
+  });
+
+  it("allows the explicit diagnostic-only path to cold-open while normal backend remains blocked", async () => {
+    const restoredPage = pageFixture("https://example.com/restored");
+    const restoredSession = {
+      sessionIdHash: "owned-session",
+      executionMode: "VISIBLE",
+      headless: false,
+      page: restoredPage,
+      context: { pages: vi.fn(() => [restoredPage]) }
+    } as unknown as BrowserSession;
+    const open = vi.fn(async () => restoredSession);
+    const manager = {
+      getActiveSession: vi.fn(() => null),
+      requiresActiveContextForOperations: vi.fn(() => true),
+      hasStoredSession: vi.fn(() => true),
+      open,
+      getRuntimeAuthState: vi.fn(() => ({ state: "UNVERIFIED", contextDebugId: null, updatedAt: new Date(0).toISOString(), reason: null })),
+      debugId: "manager-debug-id"
+    } as unknown as BrowserSessionManager;
+    const adapter = new TestBrowserAutomationAdapter({ ...definition, platformKey: "xiaohongshu" }, { sessionManager: manager });
+    const ctx: AccountContext = { ...context(), platformKey: "xiaohongshu" };
+
+    await expect(adapter.openBackend(ctx)).rejects.toMatchObject({ code: "USER_ACTION_REQUIRED" });
+    await expect(adapter.diagnosticSessionForTest(ctx)).resolves.toBe(restoredSession);
+    expect(open).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a VISIBLE operation session open for user handling", async () => {
