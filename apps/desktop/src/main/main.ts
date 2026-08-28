@@ -39,7 +39,7 @@ async function createWindow(): Promise<void> {
   const appLogPath = join(dataDirectory, "logs", "app.log");
   const logger = createFileLogger(appLogPath);
   const credentials = new SafeStorageCredentialStore(join(dataDirectory, "credentials.enc"), safeStorage);
-  const registry = createRuntimeAdapterRegistry(credentials, isDevelopment, logger, join(app.getPath("userData"), "browser-profiles"));
+  const registry = createRuntimeAdapterRegistry(credentials, isDevelopment, logger, join(app.getPath("userData"), "browser-profiles"), join(dataDirectory, "credentials.enc"));
   ownedBrowserSessionClosers.add(async () => {
     const closableAdapters = registry.listAll().filter((adapter): adapter is typeof adapter & { closeOwnedSessions(): Promise<void> } => typeof (adapter as { closeOwnedSessions?: unknown }).closeOwnedSessions === "function");
     await Promise.allSettled(closableAdapters.map((adapter) => adapter.closeOwnedSessions()));

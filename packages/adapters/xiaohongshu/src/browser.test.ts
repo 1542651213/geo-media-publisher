@@ -277,6 +277,28 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     });
   });
 
+  it("emits live-login and before-close auth diagnostics without exposing storage values", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "数据看板"] });
+    const diagnostics: Array<Record<string, unknown>> = [];
+    const adapter = new XiaohongshuBrowserAdapter({
+      sessionManager: fixture.manager,
+      loginStabilityWindowMs: 0,
+      onAuthStateDiagnostic: (diagnostic: Record<string, unknown>) => diagnostics.push(diagnostic)
+    } as never);
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    await expect(adapter.completeConnection(ctx)).resolves.toBe("logged_in");
+    const lifecycle = adapter as unknown as { persistConnectionSession: (context: AccountContext) => Promise<void> };
+    await lifecycle.persistConnectionSession(ctx);
+
+    expect(diagnostics.map((diagnostic) => diagnostic.phase)).toEqual(["LIVE_LOGIN_BEFORE_CLOSE", "AUTH_STATE_BEFORE_CLOSE"]);
+    expect(diagnostics[0]).toMatchObject({ platformKey: "xiaohongshu", accountId: "account-a", stableObservationPassed: true });
+    expect(diagnostics[1]).toMatchObject({ platformKey: "xiaohongshu", accountId: "account-a", authState: null });
+    expect(JSON.stringify(diagnostics)).not.toMatch(/"value"|secret/iu);
+  });
+
   it("exposes an article-only BrowserAutomation capability", () => {
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: setupPage().manager });
     expect(adapter.manifest).toMatchObject({ platformKey: "xiaohongshu", transport: "browser", integrationMode: "BrowserAutomation", supportsArticle: true, supportsVideo: false });

@@ -1,4 +1,4 @@
-import { AdapterRegistry, BrowserSessionManager, type BrowserRuntimeEvent } from "@publisher/adapters-core";
+import { AdapterRegistry, BrowserSessionManager, type BrowserRuntimeEvent, type BrowserSessionLifecycleEvent } from "@publisher/adapters-core";
 import { BaijiahaoBrowserAdapter } from "@publisher/adapters-baijiahao/browser";
 import { BilibiliBrowserAdapter } from "@publisher/adapters-bilibili/browser";
 import { DouyinOfficialAdapter } from "@publisher/adapters-douyin";
@@ -21,15 +21,19 @@ import { CnblogsOfficialApiAdapter } from "@publisher/adapters-cnblogs";
 import type { CredentialStore } from "@publisher/security";
 import type { Logger } from "@publisher/logger";
 import type { BrowserConnectionDiagnostic } from "@publisher/adapters-browser";
-import type { XiaohongshuLoginEvaluation } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuAuthStateDiagnostic, XiaohongshuLoginEvaluation } from "@publisher/adapters-xiaohongshu/browser";
 
-export function createRuntimeAdapterRegistry(credentials: CredentialStore, includeTestPlatform: boolean, logger?: Logger, browserProfileRootDir?: string): AdapterRegistry {
+export function createRuntimeAdapterRegistry(credentials: CredentialStore, includeTestPlatform: boolean, logger?: Logger, browserProfileRootDir?: string, credentialFilePath?: string): AdapterRegistry {
   const registry = new AdapterRegistry();
   const onBrowserRuntimeEvent = (event: BrowserRuntimeEvent): void => {
     if (event.code === "BROWSER_RUNTIME_SELECTED") logger?.info("BROWSER_RUNTIME", event.code, "已选择系统浏览器运行时", event);
     else logger?.warn("BROWSER_RUNTIME", event.code, "未检测到可用系统浏览器", event);
   };
-  const browserSessionManager = new BrowserSessionManager(credentials, { onRuntimeEvent: onBrowserRuntimeEvent, browserProfileRootDir, persistentProfilePlatforms: ["xiaohongshu"] });
+  const onBrowserSessionLifecycle = (event: BrowserSessionLifecycleEvent): void => {
+    if (event.platformKey !== "xiaohongshu") return;
+    logger?.info("ACCOUNT", `XHS_BROWSER_SESSION_${event.phase}`, "小红书 BrowserSession 生命周期诊断", event as unknown as Record<string, unknown>);
+  };
+  const browserSessionManager = new BrowserSessionManager(credentials, { onRuntimeEvent: onBrowserRuntimeEvent, onSessionLifecycle: onBrowserSessionLifecycle, browserProfileRootDir, persistentProfilePlatforms: ["xiaohongshu"] });
   const beginDiagnostics = new Map<string, BrowserConnectionDiagnostic>();
   const connectionDiagnosticKey = (diagnostic: BrowserConnectionDiagnostic): string => `${diagnostic.platformKey}:${diagnostic.accountId}`;
   const onXiaohongshuConnectionDiagnostic = (diagnostic: BrowserConnectionDiagnostic): void => {
@@ -46,6 +50,9 @@ export function createRuntimeAdapterRegistry(credentials: CredentialStore, inclu
   };
   const onXiaohongshuLoginEvaluation = (evaluation: XiaohongshuLoginEvaluation): void => {
     logger?.info("ACCOUNT", evaluation.phase, "小红书 installed-app 当前 Page 登录证据", { ...evaluation });
+  };
+  const onXiaohongshuAuthStateDiagnostic = (diagnostic: XiaohongshuAuthStateDiagnostic): void => {
+    logger?.info("ACCOUNT", "XHS_AUTH_STATE_DIAGNOSTIC", "小红书 auth state 重启诊断", diagnostic as unknown as Record<string, unknown>);
   };
   if (includeTestPlatform) registry.register(new TestPlatformAdapter("success"));
   registry.register(new WeChatOfficialAdapter({ credentialStore: credentials }));
@@ -70,7 +77,9 @@ export function createRuntimeAdapterRegistry(credentials: CredentialStore, inclu
     sessionManager: browserSessionManager,
     onBrowserRuntimeEvent,
     onConnectionDiagnostic: onXiaohongshuConnectionDiagnostic,
-    onLoginEvaluation: onXiaohongshuLoginEvaluation
+    onLoginEvaluation: onXiaohongshuLoginEvaluation,
+    onAuthStateDiagnostic: onXiaohongshuAuthStateDiagnostic,
+    credentialFilePath
   }));
   return registry;
 }

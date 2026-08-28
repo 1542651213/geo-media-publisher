@@ -12,7 +12,7 @@ import type {
   ValidationResult
 } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
-import { BrowserSessionManager, browserExecutionModeFromSettings, browserSessionCredentialKey, browserSessionIdHash, PlatformAdapterError, userInitiatedActionFromSettings, type BrowserExecutionMode, type BrowserRuntimeEvent, type BrowserSession, type BrowserSessionStorageMode } from "@publisher/adapters-core";
+import { BrowserSessionManager, browserExecutionModeFromSettings, browserSessionCredentialKey, browserSessionIdHash, PlatformAdapterError, userInitiatedActionFromSettings, type BrowserExecutionMode, type BrowserRuntimeEvent, type BrowserSession, type BrowserSessionStorageMode, type SystemBrowserChannel } from "@publisher/adapters-core";
 import type { CredentialStore } from "@publisher/security";
 import type { AutomationAdapter, AutomationPrepareResult } from "@publisher/adapters-core";
 
@@ -80,6 +80,8 @@ export interface BrowserSessionScopeEvidence {
   pageClosed: boolean;
   storageMode: BrowserSessionStorageMode;
   profilePath: string | null;
+  browserChannel: SystemBrowserChannel | null;
+  headless: boolean;
 }
 
 export class BrowserAutomationError extends PlatformAdapterError {
@@ -359,7 +361,9 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
       pageDebugId: session.pageDebugId ?? objectDebugId(page, "page"),
       pageClosed: this.isPageClosed(page),
       storageMode: session.storageMode,
-      profilePath: session.profilePath
+      profilePath: session.profilePath,
+      browserChannel: session.browserChannel ?? null,
+      headless: session.headless
     };
   }
 
@@ -415,6 +419,11 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     const session = this.activeSession(this.identity(ctx));
     if (!session || session.executionMode !== browserExecutionModeFromSettings(ctx.settings)) return null;
     return { page: await this.page(session), session };
+  }
+
+  /** Diagnostic-only access for a platform adapter that needs to snapshot its own live session before close. */
+  protected activeBrowserSession(ctx: AccountContext): BrowserSession | null {
+    return this.activeSession(this.identity(ctx));
   }
 
   protected async getOrOpen(ctx: AccountContext): Promise<BrowserSession | null> {

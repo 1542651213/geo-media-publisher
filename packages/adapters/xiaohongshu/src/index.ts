@@ -3,6 +3,7 @@ import { mapManualError } from "@publisher/adapters-manual";
 import { XiaohongshuBrowserAdapter } from "./browser";
 
 export * from "./browser";
+export * from "./auth-state-diagnostics";
 
 export function mapXiaohongshuError(message: string, httpStatus?: number): ErrorCode { return mapManualError(message, httpStatus); }
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import type { Browser, BrowserContext } from "playwright-core";
 import type { CredentialStore } from "@publisher/security";
-import { BrowserRuntimeError, BrowserSessionManager, ExternalLaunchBlockedError, browserExecutionModeFromSettings, type UserInitiatedAction } from "./index";
+import { BrowserRuntimeError, BrowserSessionManager, ExternalLaunchBlockedError, browserExecutionModeFromSettings, type BrowserSessionLifecycleEvent, type UserInitiatedAction } from "./index";
 
 class MemoryCredentialStore implements CredentialStore {
   private readonly values = new Map<string, string>();
@@ -256,6 +256,71 @@ describe("BrowserSessionManager credential boundary", () => {
       expect(calls[0]?.storageState).toEqual(state);
       expect(calls[1]?.storageState).toBeUndefined();
       await secondManager.close(second);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("emits ordered lifecycle evidence and awaits persistent context close", async () => {
+    const root = await mkdtemp(join(tmpdir(), "publisher-browser-profile-lifecycle-test-"));
+    try {
+      let browserConnected = true;
+      const page = { url: vi.fn(() => "about:blank"), isClosed: vi.fn(() => false) };
+      const browser = { isConnected: vi.fn(() => browserConnected), close: vi.fn(async () => undefined) } as unknown as Browser;
+      const context = {
+        browser: vi.fn(() => browser),
+        setDefaultTimeout: vi.fn(),
+        newPage: vi.fn(async () => page),
+        pages: vi.fn(() => [page]),
+        close: vi.fn(async () => { browserConnected = false; })
+      } as unknown as BrowserContext;
+      const events: BrowserSessionLifecycleEvent[] = [];
+      const manager = new BrowserSessionManager(new MemoryCredentialStore(), {
+        browserProfileRootDir: root,
+        persistentProfilePlatforms: ["xiaohongshu"],
+        launchPersistentContext: vi.fn(async () => context),
+        onSessionLifecycle: (event: BrowserSessionLifecycleEvent) => events.push(event)
+      } as never);
+      const identity = { platformKey: "xiaohongshu", accountId: "account-lifecycle" };
+
+      const session = await manager.open(identity, userAction);
+      await manager.close(session);
+
+      expect(events.map((event) => event.phase)).toEqual(["OPEN_STARTED", "OPEN_COMPLETED", "CLOSE_STARTED", "CONTEXT_CLOSE_COMPLETED", "CLOSE_COMPLETED"]);
+      expect(events.every((event) => event.platformKey === identity.platformKey && event.accountId === identity.accountId)).toBe(true);
+      expect(events.at(-1)).toMatchObject({ storageMode: "PERSISTENT_PROFILE", browserConnected: false });
+      expect(browser.close).not.toHaveBeenCalled();
+      expect(manager.getActiveSession(identity)).toBeNull();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("emits close failure after cleanup when persistent context close rejects", async () => {
+    const root = await mkdtemp(join(tmpdir(), "publisher-browser-profile-close-failure-test-"));
+    try {
+      const page = { url: vi.fn(() => "about:blank"), isClosed: vi.fn(() => false) };
+      const browser = { isConnected: vi.fn(() => true) } as unknown as Browser;
+      const context = {
+        browser: vi.fn(() => browser),
+        setDefaultTimeout: vi.fn(),
+        newPage: vi.fn(async () => page),
+        pages: vi.fn(() => [page]),
+        close: vi.fn(async () => { throw new Error("close failed"); })
+      } as unknown as BrowserContext;
+      const events: BrowserSessionLifecycleEvent[] = [];
+      const manager = new BrowserSessionManager(new MemoryCredentialStore(), {
+        browserProfileRootDir: root,
+        persistentProfilePlatforms: ["xiaohongshu"],
+        launchPersistentContext: vi.fn(async () => context),
+        onSessionLifecycle: (event: BrowserSessionLifecycleEvent) => events.push(event)
+      } as never);
+      const identity = { platformKey: "xiaohongshu", accountId: "account-close-failure" };
+      const session = await manager.open(identity, userAction);
+
+      await expect(manager.close(session)).rejects.toThrow("close failed");
+      expect(events.map((event) => event.phase)).toEqual(["OPEN_STARTED", "OPEN_COMPLETED", "CLOSE_STARTED", "CLOSE_FAILED"]);
+      expect(manager.getActiveSession(identity)).toBeNull();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

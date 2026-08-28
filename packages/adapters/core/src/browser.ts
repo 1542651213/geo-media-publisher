@@ -101,9 +101,31 @@ export interface BrowserSession {
   headless: boolean;
   storageMode: BrowserSessionStorageMode;
   profilePath: string | null;
+  browserChannel?: SystemBrowserChannel;
   /** Process-memory-only identity used to prove Context/Page continuity. */
   contextDebugId?: string;
   pageDebugId?: string;
+}
+
+export type BrowserSessionLifecyclePhase =
+  | "OPEN_STARTED"
+  | "OPEN_COMPLETED"
+  | "CLOSE_STARTED"
+  | "CONTEXT_CLOSE_COMPLETED"
+  | "CLOSE_COMPLETED"
+  | "CLOSE_FAILED";
+
+export interface BrowserSessionLifecycleEvent {
+  phase: BrowserSessionLifecyclePhase;
+  timestamp: string;
+  platformKey: string;
+  accountId: string;
+  storageMode: BrowserSessionStorageMode;
+  profilePath: string | null;
+  browserChannel: SystemBrowserChannel | null;
+  contextDebugId: string | null;
+  pageDebugId: string | null;
+  browserConnected: boolean | null;
 }
 
 export interface BrowserSessionManagerOptions {
@@ -116,6 +138,7 @@ export interface BrowserSessionManagerOptions {
   /** Only these platform keys may use persistent profiles. */
   persistentProfilePlatforms?: readonly string[];
   launchPersistentContext?: (userDataDir: string, options: { channel: SystemBrowserChannel; headless: boolean; storageState?: StorageState }) => Promise<BrowserContext>;
+  onSessionLifecycle?: (event: BrowserSessionLifecycleEvent) => void;
 }
 
 export interface BrowserSessionIdentity {
@@ -148,6 +171,7 @@ export class PlaywrightSessionManager {
   private readonly ownedSessions = new Set<BrowserSession>();
   private readonly activeSessions = new Map<string, BrowserSession>();
   private readonly pendingConnections = new Set<string>();
+  private readonly sessionIdentities = new WeakMap<BrowserSession, BrowserSessionIdentity>();
   readonly debugId = randomUUID();
 
   constructor(private readonly credentials: CredentialStore, private readonly options: BrowserSessionManagerOptions = {}) {}
@@ -164,10 +188,12 @@ export class PlaywrightSessionManager {
     }
     const headless = executionMode === "BACKGROUND";
     const persistentProfilePath = this.persistentProfilePath(identity);
+    this.emitSessionLifecycle({ phase: "OPEN_STARTED", identity, storageMode: persistentProfilePath ? "PERSISTENT_PROFILE" : "EPHEMERAL_STORAGE_STATE", profilePath: persistentProfilePath, browserChannel: null, contextDebugId: null, pageDebugId: null, browserConnected: null });
     const profileInitialized = persistentProfilePath ? await pathExists(join(persistentProfilePath, ".gmp-profile-initialized")) : false;
     if (persistentProfilePath) await mkdir(persistentProfilePath, { recursive: true });
     if (persistentProfilePath) {
-      const context = await this.launchPersistentBrowser(persistentProfilePath, headless, profileInitialized ? undefined : storageState);
+      const persistentLaunch = await this.launchPersistentBrowser(persistentProfilePath, headless, profileInitialized ? undefined : storageState);
+      const context = persistentLaunch.context;
       const browser = context.browser();
       if (!browser) {
         await context.close().catch(() => undefined);
@@ -182,12 +208,15 @@ export class PlaywrightSessionManager {
         throw new BrowserRuntimeError({ errorCode: "BROWSER_RUNTIME_LAUNCH_FAILED", module: "BrowserSessionManager", timestamp: new Date().toISOString(), attemptedChannels: [...SYSTEM_BROWSER_CHANNELS] });
       }
       await writeFile(join(persistentProfilePath, ".gmp-profile-initialized"), "v1\n", { flag: "a" });
-      const session = { browser, context, page, hasStoredSession: Boolean(storageState) || profileInitialized, sessionIdHash: browserSessionIdHash(identity), executionMode, headless, storageMode: "PERSISTENT_PROFILE" as const, profilePath: persistentProfilePath, contextDebugId: randomUUID(), pageDebugId: randomUUID() };
+      const session = { browser, context, page, hasStoredSession: Boolean(storageState) || profileInitialized, sessionIdHash: browserSessionIdHash(identity), executionMode, headless, storageMode: "PERSISTENT_PROFILE" as const, profilePath: persistentProfilePath, browserChannel: persistentLaunch.channel, contextDebugId: randomUUID(), pageDebugId: randomUUID() };
       this.ownedSessions.add(session);
+      this.sessionIdentities.set(session, identity);
       this.activeSessions.set(browserSessionCredentialKey(identity), session);
+      this.emitSessionLifecycle({ phase: "OPEN_COMPLETED", identity, session, browserConnected: this.browserConnected(session.browser) });
       return session;
     }
-    const browser = await this.launchSystemBrowser(headless);
+    const browserLaunch = await this.launchSystemBrowser(headless);
+    const browser = browserLaunch.browser;
     let context: BrowserContext;
     try {
       context = await browser.newContext(storageState ? { storageState } : {});
@@ -204,9 +233,11 @@ export class PlaywrightSessionManager {
       await browser.close().catch(() => undefined);
       throw new BrowserRuntimeError({ errorCode: "BROWSER_RUNTIME_LAUNCH_FAILED", module: "BrowserSessionManager", timestamp: new Date().toISOString(), attemptedChannels: [...SYSTEM_BROWSER_CHANNELS] });
     }
-    const session = { browser, context, page, hasStoredSession: Boolean(storageState), sessionIdHash: browserSessionIdHash(identity), executionMode, headless, storageMode: "EPHEMERAL_STORAGE_STATE" as const, profilePath: null, contextDebugId: randomUUID(), pageDebugId: randomUUID() };
+    const session = { browser, context, page, hasStoredSession: Boolean(storageState), sessionIdHash: browserSessionIdHash(identity), executionMode, headless, storageMode: "EPHEMERAL_STORAGE_STATE" as const, profilePath: null, browserChannel: browserLaunch.channel, contextDebugId: randomUUID(), pageDebugId: randomUUID() };
     this.ownedSessions.add(session);
+    this.sessionIdentities.set(session, identity);
     this.activeSessions.set(browserSessionCredentialKey(identity), session);
+    this.emitSessionLifecycle({ phase: "OPEN_COMPLETED", identity, session, browserConnected: this.browserConnected(session.browser) });
     return session;
   }
 
@@ -272,13 +303,18 @@ export class PlaywrightSessionManager {
   }
 
   async close(session: BrowserSession): Promise<void> {
+    const identity = this.sessionIdentities.get(session);
+    if (identity) this.emitSessionLifecycle({ phase: "CLOSE_STARTED", identity, session, browserConnected: this.browserConnected(session.browser) });
     let firstError: unknown;
     try { await session.context.close(); } catch (error) { firstError = error; }
+    if (!firstError && identity) this.emitSessionLifecycle({ phase: "CONTEXT_CLOSE_COMPLETED", identity, session, browserConnected: this.browserConnected(session.browser) });
     if (session.storageMode !== "PERSISTENT_PROFILE") {
       try { await session.browser.close(); } catch (error) { firstError ??= error; }
     }
     this.ownedSessions.delete(session);
+    this.sessionIdentities.delete(session);
     for (const [key, active] of this.activeSessions) if (active === session) this.activeSessions.delete(key);
+    if (identity) this.emitSessionLifecycle({ phase: firstError ? "CLOSE_FAILED" : "CLOSE_COMPLETED", identity, session, browserConnected: this.browserConnected(session.browser) });
     if (firstError) throw firstError;
   }
 
@@ -295,7 +331,7 @@ export class PlaywrightSessionManager {
     return join(this.options.debugArtifactsDir, safe(identity.platformKey), safe(identity.accountId), safe(fileName));
   }
 
-  private async launchSystemBrowser(headless: boolean): Promise<Browser> {
+  private async launchSystemBrowser(headless: boolean): Promise<{ browser: Browser; channel: SystemBrowserChannel }> {
     let launchBrowser = this.options.launchBrowser;
     if (!launchBrowser) {
       try {
@@ -312,7 +348,7 @@ export class PlaywrightSessionManager {
       try {
         const browser = await launchBrowser({ channel, headless });
         this.options.onRuntimeEvent?.({ code: "BROWSER_RUNTIME_SELECTED", channel, headless });
-        return browser;
+        return { browser, channel };
       } catch {
         // The next system browser is the supported fallback. Internal launch details stay out of the UI.
       }
@@ -323,7 +359,7 @@ export class PlaywrightSessionManager {
     throw new BrowserRuntimeError(diagnostic);
   }
 
-  private async launchPersistentBrowser(userDataDir: string, headless: boolean, storageState: StorageState | undefined): Promise<BrowserContext> {
+  private async launchPersistentBrowser(userDataDir: string, headless: boolean, storageState: StorageState | undefined): Promise<{ context: BrowserContext; channel: SystemBrowserChannel }> {
     let launchPersistentContext = this.options.launchPersistentContext;
     if (!launchPersistentContext) {
       try {
@@ -340,7 +376,7 @@ export class PlaywrightSessionManager {
       try {
         const context = await launchPersistentContext(userDataDir, { channel, headless, ...(storageState ? { storageState } : {}) });
         this.options.onRuntimeEvent?.({ code: "BROWSER_RUNTIME_SELECTED", channel, headless });
-        return context;
+        return { context, channel };
       } catch {
         // The next system browser is the supported fallback. Internal launch details stay out of the UI.
       }
@@ -361,6 +397,32 @@ export class PlaywrightSessionManager {
     if (!session.page || typeof session.page !== "object") return false;
     const page = session.page as unknown as { isClosed?: () => boolean };
     return typeof page.isClosed === "function" && page.isClosed();
+  }
+
+  private browserConnected(browser: Browser): boolean | null {
+    const candidate = browser as unknown as { isConnected?: () => boolean };
+    return typeof candidate.isConnected === "function" ? candidate.isConnected() : null;
+  }
+
+  private emitSessionLifecycle(input: { phase: BrowserSessionLifecyclePhase; identity: BrowserSessionIdentity; session?: BrowserSession; storageMode?: BrowserSessionStorageMode; profilePath?: string | null; browserChannel?: SystemBrowserChannel | null; contextDebugId?: string | null; pageDebugId?: string | null; browserConnected?: boolean | null }): void {
+    if (!this.options.onSessionLifecycle) return;
+    const session = input.session;
+    try {
+      this.options.onSessionLifecycle({
+        phase: input.phase,
+        timestamp: new Date().toISOString(),
+        platformKey: input.identity.platformKey,
+        accountId: input.identity.accountId,
+        storageMode: input.storageMode ?? session?.storageMode ?? "EPHEMERAL_STORAGE_STATE",
+        profilePath: input.profilePath ?? session?.profilePath ?? null,
+        browserChannel: input.browserChannel ?? session?.browserChannel ?? null,
+        contextDebugId: input.contextDebugId ?? session?.contextDebugId ?? null,
+        pageDebugId: input.pageDebugId ?? session?.pageDebugId ?? null,
+        browserConnected: input.browserConnected ?? (session ? this.browserConnected(session.browser) : null)
+      });
+    } catch {
+      // Diagnostics must never change the browser lifecycle result.
+    }
   }
 
 }

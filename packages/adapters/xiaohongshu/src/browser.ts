@@ -1,7 +1,8 @@
 import type { AccountContext, AccountProfile, LoginStatus, PublishArticleInput, ValidationResult } from "@publisher/domain";
 import type { AutomationPrepareResult, BrowserSession } from "@publisher/adapters-core";
-import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomationAdapterOptions, type BrowserPlatformDefinition } from "@publisher/adapters-browser";
+import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomationAdapterOptions, type BrowserPlatformDefinition, type BrowserSessionScopeEvidence } from "@publisher/adapters-browser";
 import type { Locator, Page } from "playwright-core";
+import { collectXhsAuthStateMetadata, type XhsAuthStateMetadata } from "./auth-state-diagnostics";
 
 const XIAOHONGSHU_CREATOR_HOME = "https://creator.xiaohongshu.com/";
 const XIAOHONGSHU_IMAGE_POST_ENTRY_SELECTOR = 'a[href*="/publish/publish"]';
@@ -18,6 +19,8 @@ const XIAOHONGSHU_FINAL_SUBMIT_SELECTOR = 'button, [role="button"]';
 const XIAOHONGSHU_IMAGE_POST_PATTERN = /图文|笔记|image\s*post|image|note/iu;
 const XIAOHONGSHU_VIDEO_PATTERN = /视频|video/iu;
 const XIAOHONGSHU_FINAL_SUBMIT_PATTERN = /发布(笔记|图文)?|提交|发表|publish|submit/iu;
+const DEFAULT_LOGIN_STABILITY_WINDOW_MS = 4000;
+const LOGIN_STABILITY_SAMPLE_INTERVAL_MS = 250;
 
 const definition: BrowserPlatformDefinition = {
   platformKey: "xiaohongshu",
@@ -133,10 +136,35 @@ export interface XiaohongshuLoginEvaluation {
   positiveSignalCount: number;
   blockingSignalCount: number;
   loginClassification: XiaohongshuLoginDecision;
+  stableObservationWindowMs: number;
+  stableObservationSamples: number;
+  stableObservationPassed: boolean;
+}
+
+export type XiaohongshuAuthStateDiagnosticPhase = "LIVE_LOGIN_BEFORE_CLOSE" | "AUTH_STATE_BEFORE_CLOSE";
+
+export interface XiaohongshuAuthStateDiagnostic {
+  phase: XiaohongshuAuthStateDiagnosticPhase;
+  timestamp: string;
+  platformKey: string;
+  accountId: string;
+  sessionKey: string;
+  sessionIdHash: string;
+  storageMode: BrowserSession["storageMode"];
+  profilePath: string | null;
+  sessionEvidence: BrowserSessionScopeEvidence;
+  authState: XhsAuthStateMetadata | null;
+  stableObservationWindowMs: number | null;
+  stableObservationSamples: number | null;
+  stableObservationPassed: boolean | null;
+  error: { name: string; message: string } | null;
 }
 
 export interface XiaohongshuBrowserAdapterOptions extends BrowserAutomationAdapterOptions {
   onLoginEvaluation?: (evaluation: XiaohongshuLoginEvaluation) => void;
+  onAuthStateDiagnostic?: (diagnostic: XiaohongshuAuthStateDiagnostic) => void;
+  credentialFilePath?: string;
+  loginStabilityWindowMs?: number;
 }
 
 export function classifyXiaohongshuLoginEvidence(evidence: XiaohongshuLoginEvidence): XiaohongshuLoginDecision {
@@ -392,10 +420,16 @@ export function classifyXiaohongshuPublishSettings(settings: Array<{ label: stri
 
 export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
   private readonly onLoginEvaluation?: (evaluation: XiaohongshuLoginEvaluation) => void;
+  private readonly onAuthStateDiagnostic?: (diagnostic: XiaohongshuAuthStateDiagnostic) => void;
+  private readonly credentialFilePath: string | null;
+  private readonly loginStabilityWindowMs: number;
 
   constructor(options: XiaohongshuBrowserAdapterOptions = {}) {
     super(definition, options);
     this.onLoginEvaluation = options.onLoginEvaluation;
+    this.onAuthStateDiagnostic = options.onAuthStateDiagnostic;
+    this.credentialFilePath = options.credentialFilePath ?? null;
+    this.loginStabilityWindowMs = Math.max(0, options.loginStabilityWindowMs ?? DEFAULT_LOGIN_STABILITY_WINDOW_MS);
   }
 
   override async validateArticle(article: PublishArticleInput): Promise<ValidationResult> {
@@ -529,7 +563,16 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
 
   async persistConnectionSession(ctx: AccountContext): Promise<void> {
     await this.saveConnectionSession(ctx);
+    await this.emitAuthStateDiagnostic(ctx, "AUTH_STATE_BEFORE_CLOSE", null, null, null);
     this.markConnectionComplete({ platformKey: this.platformKey, accountId: ctx.accountId });
+  }
+
+  /** Diagnostic-only snapshot of the already-open account-scoped session. It never navigates or mutates the page. */
+  async collectAuthStateMetadata(ctx: AccountContext): Promise<XhsAuthStateMetadata | null> {
+    const session = this.activeBrowserSession(ctx);
+    if (!session) return null;
+    const page = await this.page(session);
+    return collectXhsAuthStateMetadata({ context: session.context, page, profilePath: session.profilePath, credentialFilePath: this.credentialFilePath });
   }
 
   protected override keepConnectionSessionOpenAfterCompletion(_ctx: AccountContext): boolean { return true; }
@@ -542,19 +585,74 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     // logged-in result; otherwise a home-page probe can race a later /login.
     await waitForProbe(page);
     const pageUrl = page.url();
-    if (this.isLoginPage(pageUrl)) return "expired";
-    if (this.isVerificationUrl(pageUrl)) return "needs_user_action";
+    if (this.isLoginPage(pageUrl)) {
+      await this.emitLoginEvaluation(ctx, page, emptyPageEvidence(page), "login_required", phase);
+      return "expired";
+    }
+    if (this.isVerificationUrl(pageUrl)) {
+      await this.emitLoginEvaluation(ctx, page, emptyPageEvidence(page), "needs_user_action", phase);
+      return "needs_user_action";
+    }
     const evidence = await readXiaohongshuPageEvidence(page);
-    const decision = evidence.available ? classifyXiaohongshuLoginEvidence(evidence.login) : "unknown";
-    await this.emitLoginEvaluation(ctx, page, evidence, decision, phase);
+    let decision = evidence.available ? classifyXiaohongshuLoginEvidence(evidence.login) : "unknown";
+    let stableObservationWindowMs = 0;
+    let stableObservationSamples = 0;
+    let stableObservationPassed = false;
+    if (!evidence.available) {
+      decision = "logged_in";
+      stableObservationSamples = 1;
+      stableObservationPassed = true;
+    } else if (decision === "logged_in") {
+      const stable = await this.observeStableLogin(page, evidence);
+      decision = stable.decision;
+      stableObservationWindowMs = stable.windowMs;
+      stableObservationSamples = stable.samples;
+      stableObservationPassed = stable.passed;
+      if (stable.evidence !== evidence) {
+        await this.emitLoginEvaluation(ctx, page, stable.evidence, decision, phase, stableObservationWindowMs, stableObservationSamples, stableObservationPassed);
+        if (decision === "logged_in" && phase === "COMPLETE_LOGIN_CHECK" && this.isConnectionPending(ctx)) {
+          await this.emitAuthStateDiagnostic(ctx, "LIVE_LOGIN_BEFORE_CLOSE", stableObservationWindowMs, stableObservationSamples, stableObservationPassed);
+        }
+        return this.loginStatusFromDecision(decision);
+      }
+    }
+    await this.emitLoginEvaluation(ctx, page, evidence, decision, phase, stableObservationWindowMs, stableObservationSamples, stableObservationPassed);
+    if (decision === "logged_in" && phase === "COMPLETE_LOGIN_CHECK" && this.isConnectionPending(ctx)) {
+      await this.emitAuthStateDiagnostic(ctx, "LIVE_LOGIN_BEFORE_CLOSE", stableObservationWindowMs, stableObservationSamples, stableObservationPassed);
+    }
     if (!evidence.available) return "logged_in";
+    return this.loginStatusFromDecision(decision);
+  }
+
+  private loginStatusFromDecision(decision: XiaohongshuLoginDecision): LoginStatus {
     if (decision === "logged_in") return "logged_in";
     if (decision === "login_required") return "expired";
     if (decision === "needs_user_action") return "needs_user_action";
     return "needs_user_action";
   }
 
-  private async emitLoginEvaluation(ctx: AccountContext, page: Page, evidence: XiaohongshuPageEvidence, decision: XiaohongshuLoginDecision, phase: XiaohongshuLoginEvaluation["phase"]): Promise<void> {
+  private async observeStableLogin(page: Page, initialEvidence: XiaohongshuPageEvidence): Promise<{ decision: XiaohongshuLoginDecision; evidence: XiaohongshuPageEvidence; windowMs: number; samples: number; passed: boolean }> {
+    const candidate = page as unknown as { waitForTimeout?: (timeout: number) => Promise<void> };
+    if (this.loginStabilityWindowMs === 0 || typeof candidate.waitForTimeout !== "function") {
+      return { decision: "logged_in", evidence: initialEvidence, windowMs: this.loginStabilityWindowMs, samples: 1, passed: true };
+    }
+    const startedAt = Date.now();
+    let samples = 1;
+    let latestEvidence = initialEvidence;
+    while (Date.now() - startedAt < this.loginStabilityWindowMs) {
+      await waitForProbe(page, Math.min(LOGIN_STABILITY_SAMPLE_INTERVAL_MS, this.loginStabilityWindowMs));
+      samples += 1;
+      const currentUrl = page.url();
+      if (this.isLoginPage(currentUrl)) return { decision: "login_required", evidence: emptyPageEvidence(page), windowMs: Date.now() - startedAt, samples, passed: false };
+      if (this.isVerificationUrl(currentUrl)) return { decision: "needs_user_action", evidence: emptyPageEvidence(page), windowMs: Date.now() - startedAt, samples, passed: false };
+      latestEvidence = await readXiaohongshuPageEvidence(page);
+      const decision = latestEvidence.available ? classifyXiaohongshuLoginEvidence(latestEvidence.login) : "unknown";
+      if (decision !== "logged_in") return { decision, evidence: latestEvidence, windowMs: Date.now() - startedAt, samples, passed: false };
+    }
+    return { decision: "logged_in", evidence: latestEvidence, windowMs: Date.now() - startedAt, samples, passed: true };
+  }
+
+  private async emitLoginEvaluation(ctx: AccountContext, page: Page, evidence: XiaohongshuPageEvidence, decision: XiaohongshuLoginDecision, phase: XiaohongshuLoginEvaluation["phase"], stableObservationWindowMs = 0, stableObservationSamples = 0, stableObservationPassed = false): Promise<void> {
     if (!this.onLoginEvaluation) return;
     let pageUrl = "";
     let pageTitle = "";
@@ -569,7 +667,27 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     }
     const login = evidence.login;
     const blockers = [login.visibleLoginForm, login.visibleQrLogin, login.visibleSmsVerification, login.visibleCaptcha, login.visibleSlider, login.visibleSecurityModal];
-    this.onLoginEvaluation({ phase, timestamp: new Date().toISOString(), platformKey: this.platformKey, accountId: ctx.accountId, pageIsClosed, pageUrl, pageTitle, creatorDomain: login.creatorHost, creatorHomePath: login.creatorHomePath, publishNoteVisible: login.publishNoteVisible, noteManagementVisible: login.noteManagementVisible, dataDashboardVisible: login.dataDashboardVisible, accountStatusVisible: login.accountStatusVisible, profileAreaVisible: login.profileAreaVisible, visibleLoginForm: login.visibleLoginForm, visibleQrLogin: login.visibleQrLogin, visibleSmsVerification: login.visibleSmsVerification, visibleCaptcha: login.visibleCaptcha, visibleSlider: login.visibleSlider, visibleSecurityModal: login.visibleSecurityModal, positiveSignalCount: new Set(login.positiveSignals).size, blockingSignalCount: blockers.filter(Boolean).length, loginClassification: decision });
+    this.onLoginEvaluation({ phase, timestamp: new Date().toISOString(), platformKey: this.platformKey, accountId: ctx.accountId, pageIsClosed, pageUrl, pageTitle, creatorDomain: login.creatorHost, creatorHomePath: login.creatorHomePath, publishNoteVisible: login.publishNoteVisible, noteManagementVisible: login.noteManagementVisible, dataDashboardVisible: login.dataDashboardVisible, accountStatusVisible: login.accountStatusVisible, profileAreaVisible: login.profileAreaVisible, visibleLoginForm: login.visibleLoginForm, visibleQrLogin: login.visibleQrLogin, visibleSmsVerification: login.visibleSmsVerification, visibleCaptcha: login.visibleCaptcha, visibleSlider: login.visibleSlider, visibleSecurityModal: login.visibleSecurityModal, positiveSignalCount: new Set(login.positiveSignals).size, blockingSignalCount: blockers.filter(Boolean).length, loginClassification: decision, stableObservationWindowMs, stableObservationSamples, stableObservationPassed });
+  }
+
+  private async emitAuthStateDiagnostic(ctx: AccountContext, phase: XiaohongshuAuthStateDiagnosticPhase, stableObservationWindowMs: number | null, stableObservationSamples: number | null, stableObservationPassed: boolean | null): Promise<void> {
+    if (!this.onAuthStateDiagnostic) return;
+    const session = this.activeBrowserSession(ctx);
+    if (!session) return;
+    let authState: XhsAuthStateMetadata | null = null;
+    let error: { name: string; message: string } | null = null;
+    try {
+      authState = await collectXhsAuthStateMetadata({ context: session.context, page: session.page, profilePath: session.profilePath, credentialFilePath: this.credentialFilePath });
+    } catch (caught) {
+      error = { name: caught instanceof Error ? caught.name : "AuthStateDiagnosticError", message: "auth state metadata collection failed" };
+    }
+    const sessionEvidence = await this.getBrowserSessionEvidence(ctx).catch(() => null);
+    if (!sessionEvidence) return;
+    try {
+      this.onAuthStateDiagnostic({ phase, timestamp: new Date().toISOString(), platformKey: this.platformKey, accountId: ctx.accountId, sessionKey: sessionEvidence.sessionKey, sessionIdHash: session.sessionIdHash, storageMode: session.storageMode, profilePath: session.profilePath, sessionEvidence, authState, stableObservationWindowMs, stableObservationSamples, stableObservationPassed, error });
+    } catch {
+      // Diagnostics are best-effort and must never alter persistence or close behavior.
+    }
   }
 
   private assertProfilePageCanBeRead(evidence: XiaohongshuPageEvidence): void {
