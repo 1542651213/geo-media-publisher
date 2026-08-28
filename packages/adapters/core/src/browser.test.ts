@@ -372,6 +372,127 @@ describe("BrowserSessionManager credential boundary", () => {
     }
   });
 
+  it("deduplicates concurrent XHS Context creation by platform and account", async () => {
+    let releaseLaunch: (() => void) | undefined;
+    const launchGate = new Promise<void>((resolve) => { releaseLaunch = resolve; });
+    const page = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank") };
+    const context = {
+      browser: vi.fn(() => browser),
+      setDefaultTimeout: vi.fn(),
+      newPage: vi.fn(async () => page),
+      pages: vi.fn(() => [page]),
+      close: vi.fn(async () => undefined)
+    } as unknown as BrowserContext;
+    const browser = {
+      newContext: vi.fn(async () => context),
+      close: vi.fn(async () => undefined),
+      isConnected: vi.fn(() => true)
+    } as unknown as Browser;
+    const launchPersistentContext = vi.fn(async () => {
+      await launchGate;
+      return context;
+    });
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), {
+      browserProfileRootDir: "C:\\temp\\browser-profiles",
+      persistentProfilePlatforms: ["xiaohongshu"],
+      platformPolicies: { xiaohongshu: { retainContextAfterPageClose: true, requireActiveContextForOperations: true } },
+      launchPersistentContext
+    } as never);
+    const identity = { platformKey: "xiaohongshu", accountId: "account-concurrent" };
+
+    const first = manager.open(identity, userAction);
+    const second = manager.open(identity, userAction);
+    releaseLaunch?.();
+    const sessions = await Promise.all([first, second]);
+
+    expect(sessions[0]).toBe(sessions[1]);
+    expect(launchPersistentContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps authenticated runtime state after Page close and clears it on Browser disconnect", async () => {
+    let disconnected: (() => void) | undefined;
+    let canonicalPageClosed = false;
+    const page = {
+      isClosed: vi.fn(() => canonicalPageClosed),
+      url: vi.fn(() => "about:blank"),
+      close: vi.fn(async () => { canonicalPageClosed = true; })
+    };
+    const context = {
+      setDefaultTimeout: vi.fn(),
+      newPage: vi.fn(async () => page),
+      pages: vi.fn(() => [page]),
+      close: vi.fn(async () => undefined)
+    } as unknown as BrowserContext;
+    const browser = {
+      newContext: vi.fn(async () => context),
+      close: vi.fn(async () => undefined),
+      isConnected: vi.fn(() => true),
+      on: vi.fn((event: string, listener: () => void) => {
+        if (event === "disconnected") disconnected = listener;
+      })
+    } as unknown as Browser;
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), {
+      launchBrowser: vi.fn(async () => browser),
+      platformPolicies: { xiaohongshu: { retainContextAfterPageClose: true, requireActiveContextForOperations: true } }
+    });
+    const identity = { platformKey: "xiaohongshu", accountId: "account-disconnect" };
+    const session = await manager.open(identity, userAction);
+    manager.setRuntimeAuthState(identity, "AUTHENTICATED", null);
+    await manager.closeOperationPage(identity, session.page);
+
+    expect(manager.getActiveSession(identity)).toBe(session);
+    expect(manager.getRuntimeAuthState(identity).state).toBe("AUTHENTICATED");
+    disconnected?.();
+    expect(manager.getActiveSession(identity)).toBeNull();
+    expect(manager.getRuntimeAuthState(identity).state).toBe("DISCONNECTED");
+  });
+
+  it("closes only owned contexts during shutdown and leaves different accounts isolated", async () => {
+    let pageAClosed = false;
+    const pageA = {
+      isClosed: vi.fn(() => pageAClosed),
+      url: vi.fn(() => "about:blank"),
+      close: vi.fn(async () => { pageAClosed = true; })
+    };
+    const pageB = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank") };
+    const contextA = {
+      setDefaultTimeout: vi.fn(),
+      newPage: vi.fn(async () => pageA),
+      pages: vi.fn(() => [pageA]),
+      close: vi.fn(async () => undefined)
+    } as unknown as BrowserContext;
+    const contextB = {
+      setDefaultTimeout: vi.fn(),
+      newPage: vi.fn(async () => pageB),
+      pages: vi.fn(() => [pageB]),
+      close: vi.fn(async () => undefined)
+    } as unknown as BrowserContext;
+    const browser = {
+      newContext: vi.fn().mockResolvedValueOnce(contextA).mockResolvedValueOnce(contextB),
+      isConnected: vi.fn(() => true),
+      close: vi.fn(async () => undefined)
+    } as unknown as Browser;
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), {
+      launchBrowser: vi.fn(async () => browser),
+      platformPolicies: { xiaohongshu: { retainContextAfterPageClose: true, requireActiveContextForOperations: true } }
+    });
+    const identityA = { platformKey: "xiaohongshu", accountId: "a" };
+    const identityB = { platformKey: "xiaohongshu", accountId: "b" };
+
+    const accountA = await manager.open(identityA, userAction);
+    const accountB = await manager.open(identityB, userAction);
+    manager.setRuntimeAuthState(identityA, "AUTHENTICATED", null);
+    manager.setRuntimeAuthState(identityB, "AUTHENTICATED", null);
+    await manager.closeOperationPage(identityA, accountA.page);
+
+    expect(manager.getActiveSession(identityB)).toBe(accountB);
+    await manager.closeAll();
+    expect(contextA.close).toHaveBeenCalledTimes(1);
+    expect(contextB.close).toHaveBeenCalledTimes(1);
+    expect(manager.getRuntimeAuthState(identityA).state).toBe("UNVERIFIED");
+    expect(manager.getRuntimeAuthState(identityB).state).toBe("UNVERIFIED");
+  });
+
   it("reuses the same account profile across independent manager instances without reseeding it", async () => {
     const root = await mkdtemp(join(tmpdir(), "publisher-browser-profile-restore-test-"));
     try {

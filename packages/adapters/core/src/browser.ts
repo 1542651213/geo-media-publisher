@@ -133,6 +133,7 @@ export type BrowserSessionLifecyclePhase =
   | "OPEN_STARTED"
   | "OPEN_COMPLETED"
   | "CLOSE_STARTED"
+  | "CONTEXT_DISCONNECTED"
   | "CONTEXT_CLOSE_COMPLETED"
   | "CLOSE_COMPLETED"
   | "CLOSE_FAILED";
@@ -195,18 +196,35 @@ export function browserSessionProfilePath(rootDir: string, identity: BrowserSess
 export class PlaywrightSessionManager {
   private readonly ownedSessions = new Set<BrowserSession>();
   private readonly activeSessions = new Map<string, BrowserSession>();
+  private readonly pendingOpenPromises = new Map<string, Promise<BrowserSession>>();
   private readonly pendingConnections = new Set<string>();
+  private readonly runtimeStates = new Map<string, BrowserSessionRuntimeState>();
   private readonly sessionIdentities = new WeakMap<BrowserSession, BrowserSessionIdentity>();
   private readonly operationPages = new WeakMap<BrowserSession, Set<Page>>();
+  private readonly disconnectListenerCleanups = new WeakMap<BrowserSession, () => void>();
+  private readonly explicitCloseSessions = new Set<BrowserSession>();
   readonly debugId = randomUUID();
 
   constructor(private readonly credentials: CredentialStore, private readonly options: BrowserSessionManagerOptions = {}) {}
 
   async open(identity: BrowserSessionIdentity, action: UserInitiatedAction, executionMode: BrowserExecutionMode = "VISIBLE"): Promise<BrowserSession> {
     assertExternalLaunchAllowed(action);
+    const key = browserSessionCredentialKey(identity);
     const existing = this.getActiveSession(identity);
     if (existing?.executionMode === executionMode) return existing;
     if (existing) await this.close(existing);
+    const pending = this.pendingOpenPromises.get(key);
+    if (pending) return pending;
+    const creation = this.openFresh(identity, executionMode);
+    this.pendingOpenPromises.set(key, creation);
+    try {
+      return await creation;
+    } finally {
+      if (this.pendingOpenPromises.get(key) === creation) this.pendingOpenPromises.delete(key);
+    }
+  }
+
+  private async openFresh(identity: BrowserSessionIdentity, executionMode: BrowserExecutionMode): Promise<BrowserSession> {
     const stored = this.credentials.get(browserSessionCredentialKey(identity));
     let storageState: StorageState | undefined;
     if (stored) {
@@ -240,6 +258,8 @@ export class PlaywrightSessionManager {
       this.ownedSessions.add(session);
       this.sessionIdentities.set(session, identity);
       this.activeSessions.set(browserSessionCredentialKey(identity), session);
+      this.observeBrowserDisconnect(identity, session);
+      this.updateRuntimeState(browserSessionCredentialKey(identity), "UNVERIFIED", session.contextDebugId ?? null, null);
       this.emitSessionLifecycle({ phase: "OPEN_COMPLETED", identity, session, browserConnected: this.browserConnected(session.browser) });
       return session;
     }
@@ -265,6 +285,8 @@ export class PlaywrightSessionManager {
     this.ownedSessions.add(session);
     this.sessionIdentities.set(session, identity);
     this.activeSessions.set(browserSessionCredentialKey(identity), session);
+    this.observeBrowserDisconnect(identity, session);
+    this.updateRuntimeState(browserSessionCredentialKey(identity), "UNVERIFIED", session.contextDebugId ?? null, null);
     this.emitSessionLifecycle({ phase: "OPEN_COMPLETED", identity, session, browserConnected: this.browserConnected(session.browser) });
     return session;
   }
@@ -300,8 +322,13 @@ export class PlaywrightSessionManager {
     const key = browserSessionCredentialKey(identity);
     const session = this.activeSessions.get(key);
     if (!session) return null;
-    if (this.isSessionClosed(session)) {
-      this.activeSessions.delete(key);
+    const liveness = this.getSessionLiveness(session);
+    if (liveness === "DISCONNECTED") {
+      this.handleBrowserDisconnected(identity, session);
+      return null;
+    }
+    if (liveness === "CLOSED") {
+      this.releaseSession(session, identity);
       return null;
     }
     return session;
@@ -318,9 +345,13 @@ export class PlaywrightSessionManager {
 
   async closeOperationPage(identity: BrowserSessionIdentity, page: Page): Promise<void> {
     const session = this.getActiveSession(identity);
-    if (!session || !this.operationPages.get(session)?.has(page) || !session.context.pages().includes(page)) throw new Error("Operation Page does not belong to the active session Context");
+    const ownedOperationPage = Boolean(session && this.operationPages.get(session)?.has(page));
+    const retainedCanonicalPage = Boolean(session && this.retainsContextAfterPageClose(identity) && session.page === page);
+    if (!session || (!ownedOperationPage && !retainedCanonicalPage) || !this.contextContainsPage(session.context, page)) {
+      throw new Error("Operation Page does not belong to the active session Context");
+    }
     await page.close();
-    this.operationPages.get(session)?.delete(page);
+    if (ownedOperationPage) this.operationPages.get(session)?.delete(page);
   }
 
   retainsContextAfterPageClose(identity: BrowserSessionIdentity): boolean {
@@ -348,6 +379,21 @@ export class PlaywrightSessionManager {
 
   clearConnectionPending(identity: BrowserSessionIdentity): void { this.pendingConnections.delete(browserSessionCredentialKey(identity)); }
 
+  setRuntimeAuthState(identity: BrowserSessionIdentity, state: BrowserRuntimeAuthState, reason: string | null): void {
+    const key = browserSessionCredentialKey(identity);
+    const session = this.activeSessions.get(key);
+    this.updateRuntimeState(key, state, session?.contextDebugId ?? null, reason);
+  }
+
+  getRuntimeAuthState(identity: BrowserSessionIdentity): BrowserSessionRuntimeState {
+    return this.runtimeStates.get(browserSessionCredentialKey(identity)) ?? {
+      state: "UNVERIFIED",
+      contextDebugId: null,
+      updatedAt: new Date(0).toISOString(),
+      reason: null
+    };
+  }
+
   async screenshot(page: Page, outputPath: string): Promise<string> {
     await mkdir(dirname(outputPath), { recursive: true });
     await page.screenshot({ path: outputPath, fullPage: true });
@@ -356,6 +402,10 @@ export class PlaywrightSessionManager {
 
   async close(session: BrowserSession): Promise<void> {
     const identity = this.sessionIdentities.get(session);
+    const key = identity ? browserSessionCredentialKey(identity) : null;
+    if (key) this.pendingOpenPromises.delete(key);
+    this.explicitCloseSessions.add(session);
+    this.detachBrowserDisconnectObserver(session);
     if (identity) this.emitSessionLifecycle({ phase: "CLOSE_STARTED", identity, session, browserConnected: this.browserConnected(session.browser) });
     let firstError: unknown;
     try { await session.context.close(); } catch (error) { firstError = error; }
@@ -363,17 +413,24 @@ export class PlaywrightSessionManager {
     if (session.storageMode !== "PERSISTENT_PROFILE") {
       try { await session.browser.close(); } catch (error) { firstError ??= error; }
     }
-    this.ownedSessions.delete(session);
-    this.sessionIdentities.delete(session);
-    for (const [key, active] of this.activeSessions) if (active === session) this.activeSessions.delete(key);
+    if (identity) this.updateRuntimeState(browserSessionCredentialKey(identity), "UNVERIFIED", session.contextDebugId ?? null, null);
+    this.releaseSession(session, identity);
     if (identity) this.emitSessionLifecycle({ phase: firstError ? "CLOSE_FAILED" : "CLOSE_COMPLETED", identity, session, browserConnected: this.browserConnected(session.browser) });
+    this.explicitCloseSessions.delete(session);
     if (firstError) throw firstError;
   }
 
   async closeAll(): Promise<void> {
+    const affectedKeys = new Set<string>([
+      ...this.activeSessions.keys(),
+      ...this.pendingConnections.values(),
+      ...this.pendingOpenPromises.keys()
+    ]);
     const sessions = [...this.ownedSessions];
     await Promise.allSettled(sessions.map((session) => this.close(session)));
+    for (const key of affectedKeys) this.updateRuntimeState(key, "UNVERIFIED", this.runtimeStates.get(key)?.contextDebugId ?? null, null);
     this.activeSessions.clear();
+    this.pendingOpenPromises.clear();
     this.pendingConnections.clear();
   }
 
@@ -452,15 +509,29 @@ export class PlaywrightSessionManager {
     return browserSessionProfilePath(rootDir, identity);
   }
 
-  private isSessionClosed(session: BrowserSession): boolean {
-    if (!session.page || typeof session.page !== "object") return false;
+  private getSessionLiveness(session: BrowserSession): "ACTIVE" | "CLOSED" | "DISCONNECTED" {
+    if (this.browserConnected(session.browser) === false) return "DISCONNECTED";
+    if (!session.page || typeof session.page !== "object") return "ACTIVE";
     const page = session.page as unknown as { isClosed?: () => boolean };
-    return typeof page.isClosed === "function" && page.isClosed();
+    if (typeof page.isClosed !== "function" || !page.isClosed()) return "ACTIVE";
+    const identity = this.sessionIdentities.get(session);
+    if (!identity || !this.policy(identity.platformKey).retainContextAfterPageClose) return "CLOSED";
+    try {
+      session.context.pages();
+      return "ACTIVE";
+    } catch {
+      return "DISCONNECTED";
+    }
   }
 
   private browserConnected(browser: Browser): boolean | null {
     const candidate = browser as unknown as { isConnected?: () => boolean };
-    return typeof candidate.isConnected === "function" ? candidate.isConnected() : null;
+    if (typeof candidate.isConnected !== "function") return null;
+    try {
+      return candidate.isConnected();
+    } catch {
+      return null;
+    }
   }
 
   private emitSessionLifecycle(input: { phase: BrowserSessionLifecyclePhase; identity: BrowserSessionIdentity; session?: BrowserSession; storageMode?: BrowserSessionStorageMode; profilePath?: string | null; browserChannel?: SystemBrowserChannel | null; contextDebugId?: string | null; pageDebugId?: string | null; browserConnected?: boolean | null }): void {
@@ -481,6 +552,72 @@ export class PlaywrightSessionManager {
       });
     } catch {
       // Diagnostics must never change the browser lifecycle result.
+    }
+  }
+
+  private contextContainsPage(context: BrowserContext, page: Page): boolean {
+    try {
+      return context.pages().includes(page);
+    } catch {
+      return false;
+    }
+  }
+
+  private updateRuntimeState(key: string, state: BrowserRuntimeAuthState, contextDebugId: string | null, reason: string | null): void {
+    this.runtimeStates.set(key, {
+      state,
+      contextDebugId,
+      updatedAt: new Date().toISOString(),
+      reason
+    });
+  }
+
+  private observeBrowserDisconnect(identity: BrowserSessionIdentity, session: BrowserSession): void {
+    const candidate = session.browser as unknown as {
+      on?: (event: string, listener: () => void) => void;
+      off?: (event: string, listener: () => void) => void;
+      removeListener?: (event: string, listener: () => void) => void;
+    };
+    if (typeof candidate.on !== "function") return;
+    const listener = (): void => {
+      if (this.explicitCloseSessions.has(session)) return;
+      this.handleBrowserDisconnected(identity, session);
+    };
+    candidate.on("disconnected", listener);
+    this.disconnectListenerCleanups.set(session, () => {
+      if (typeof candidate.off === "function") {
+        candidate.off("disconnected", listener);
+        return;
+      }
+      if (typeof candidate.removeListener === "function") candidate.removeListener("disconnected", listener);
+    });
+  }
+
+  private detachBrowserDisconnectObserver(session: BrowserSession): void {
+    this.disconnectListenerCleanups.get(session)?.();
+    this.disconnectListenerCleanups.delete(session);
+  }
+
+  private handleBrowserDisconnected(identity: BrowserSessionIdentity, session: BrowserSession): void {
+    const key = browserSessionCredentialKey(identity);
+    if (this.activeSessions.get(key) !== session && !this.ownedSessions.has(session)) return;
+    this.pendingOpenPromises.delete(key);
+    this.updateRuntimeState(key, "DISCONNECTED", session.contextDebugId ?? null, null);
+    this.releaseSession(session, identity);
+    this.emitSessionLifecycle({ phase: "CONTEXT_DISCONNECTED", identity, session, browserConnected: false });
+  }
+
+  private releaseSession(session: BrowserSession, identity?: BrowserSessionIdentity): void {
+    this.detachBrowserDisconnectObserver(session);
+    this.ownedSessions.delete(session);
+    this.sessionIdentities.delete(session);
+    this.operationPages.delete(session);
+    if (identity) {
+      this.clearActiveSession(identity, session);
+      return;
+    }
+    for (const [key, active] of this.activeSessions) {
+      if (active === session) this.activeSessions.delete(key);
     }
   }
 
