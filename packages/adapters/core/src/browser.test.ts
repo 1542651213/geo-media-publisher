@@ -18,6 +18,33 @@ class MemoryCredentialStore implements CredentialStore {
 const userAction: UserInitiatedAction = { userActionId: "11111111-1111-4111-8111-111111111111", triggerSource: "CONNECT_ACCOUNT" };
 
 describe("BrowserSessionManager credential boundary", () => {
+  it("closes an XHS operation Page without closing its canonical Context", async () => {
+    const firstPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), close: vi.fn(async () => undefined) };
+    const secondPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), close: vi.fn(async () => undefined) };
+    const context = {
+      setDefaultTimeout: vi.fn(),
+      newPage: vi.fn().mockResolvedValueOnce(firstPage).mockResolvedValueOnce(secondPage),
+      pages: vi.fn(() => [firstPage, secondPage]),
+      close: vi.fn(async () => undefined)
+    } as unknown as BrowserContext;
+    const browser = { newContext: vi.fn(async () => context), close: vi.fn(async () => undefined), isConnected: vi.fn(() => true) } as unknown as Browser;
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), {
+      launchBrowser: vi.fn(async () => browser),
+      platformPolicies: { xiaohongshu: { retainContextAfterPageClose: true, requireActiveContextForOperations: true } }
+    });
+    const identity = { platformKey: "xiaohongshu", accountId: "account-a" };
+
+    const session = await manager.open(identity, userAction);
+    const operation = await manager.openOperationPage(identity, userAction);
+    await manager.closeOperationPage(identity, operation.page);
+
+    expect(operation.session).toBe(session);
+    expect(operation.page).not.toBe(firstPage);
+    expect(operation.page.close).toHaveBeenCalledTimes(1);
+    expect(context.close).not.toHaveBeenCalled();
+    expect(manager.getActiveSession(identity)).toBe(session);
+  });
+
   it("saves and clears storage state through the credential store without launching a browser", async () => {
     const store = new MemoryCredentialStore();
     const manager = new BrowserSessionManager(store);

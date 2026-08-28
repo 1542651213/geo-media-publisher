@@ -109,6 +109,26 @@ export interface BrowserSession {
   pageDebugId?: string;
 }
 
+export type BrowserRuntimeAuthState = "UNVERIFIED" | "CHECKING" | "AUTHENTICATED" | "NEEDS_USER_ACTION" | "DISCONNECTED";
+
+export interface BrowserSessionPlatformPolicy {
+  retainContextAfterPageClose: boolean;
+  requireActiveContextForOperations: boolean;
+}
+
+export interface BrowserSessionOperationPage {
+  session: BrowserSession;
+  page: Page;
+  pageDebugId: string;
+}
+
+export interface BrowserSessionRuntimeState {
+  state: BrowserRuntimeAuthState;
+  contextDebugId: string | null;
+  updatedAt: string;
+  reason: string | null;
+}
+
 export type BrowserSessionLifecyclePhase =
   | "OPEN_STARTED"
   | "OPEN_COMPLETED"
@@ -143,6 +163,7 @@ export interface BrowserSessionManagerOptions {
   persistentProfileCredentialSnapshotPlatforms?: readonly string[];
   launchPersistentContext?: (userDataDir: string, options: { channel: SystemBrowserChannel; headless: boolean; storageState?: StorageState }) => Promise<BrowserContext>;
   onSessionLifecycle?: (event: BrowserSessionLifecycleEvent) => void;
+  platformPolicies?: Readonly<Record<string, Partial<BrowserSessionPlatformPolicy>>>;
 }
 
 export interface BrowserSessionIdentity {
@@ -285,6 +306,26 @@ export class PlaywrightSessionManager {
     return session;
   }
 
+  async openOperationPage(identity: BrowserSessionIdentity, action: UserInitiatedAction, executionMode: BrowserExecutionMode = "VISIBLE"): Promise<BrowserSessionOperationPage> {
+    const session = await this.open(identity, action, executionMode);
+    const page = await session.context.newPage();
+    return { session, page, pageDebugId: randomUUID() };
+  }
+
+  async closeOperationPage(identity: BrowserSessionIdentity, page: Page): Promise<void> {
+    const session = this.getActiveSession(identity);
+    if (!session || !session.context.pages().includes(page)) throw new Error("Operation Page does not belong to the active session Context");
+    await page.close();
+  }
+
+  retainsContextAfterPageClose(identity: BrowserSessionIdentity): boolean {
+    return this.policy(identity.platformKey).retainContextAfterPageClose;
+  }
+
+  requiresActiveContextForOperations(identity: BrowserSessionIdentity): boolean {
+    return this.policy(identity.platformKey).requireActiveContextForOperations;
+  }
+
   getActiveSessionKeys(): string[] { return [...this.activeSessions.keys()]; }
 
   setActiveSession(identity: BrowserSessionIdentity, session: BrowserSession): void {
@@ -335,6 +376,13 @@ export class PlaywrightSessionManager {
     if (!this.options.debugArtifactsDir) return null;
     const safe = (value: string): string => value.replace(/[^a-zA-Z0-9_-]/gu, "_");
     return join(this.options.debugArtifactsDir, safe(identity.platformKey), safe(identity.accountId), safe(fileName));
+  }
+
+  private policy(platformKey: string): BrowserSessionPlatformPolicy {
+    return {
+      retainContextAfterPageClose: this.options.platformPolicies?.[platformKey]?.retainContextAfterPageClose ?? false,
+      requireActiveContextForOperations: this.options.platformPolicies?.[platformKey]?.requireActiveContextForOperations ?? false
+    };
   }
 
   private async launchSystemBrowser(headless: boolean): Promise<{ browser: Browser; channel: SystemBrowserChannel }> {
