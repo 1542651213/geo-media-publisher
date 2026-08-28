@@ -45,6 +45,38 @@ describe("BrowserSessionManager credential boundary", () => {
     expect(manager.getActiveSession(identity)).toBe(session);
   });
 
+  it("rejects closing the canonical XHS session Page as an operation Page", async () => {
+    const canonicalPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), close: vi.fn(async () => undefined) };
+    const context = { setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => canonicalPage), pages: vi.fn(() => [canonicalPage]), close: vi.fn(async () => undefined) } as unknown as BrowserContext;
+    const browser = { newContext: vi.fn(async () => context), close: vi.fn(async () => undefined), isConnected: vi.fn(() => true) } as unknown as Browser;
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser: vi.fn(async () => browser) });
+    const identity = { platformKey: "xiaohongshu", accountId: "account-canonical" };
+    const session = await manager.open(identity, userAction);
+
+    await expect(manager.closeOperationPage(identity, session.page)).rejects.toThrow("Operation Page");
+    expect(canonicalPage.close).not.toHaveBeenCalled();
+    expect(context.close).not.toHaveBeenCalled();
+  });
+
+  it("rejects closing an XHS operation Page under a different account identity", async () => {
+    const canonicalPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), close: vi.fn(async () => undefined) };
+    const operationPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), close: vi.fn(async () => undefined) };
+    const context = {
+      setDefaultTimeout: vi.fn(),
+      newPage: vi.fn().mockResolvedValueOnce(canonicalPage).mockResolvedValueOnce(operationPage),
+      pages: vi.fn(() => [canonicalPage, operationPage]),
+      close: vi.fn(async () => undefined)
+    } as unknown as BrowserContext;
+    const browser = { newContext: vi.fn(async () => context), close: vi.fn(async () => undefined), isConnected: vi.fn(() => true) } as unknown as Browser;
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser: vi.fn(async () => browser) });
+    const identity = { platformKey: "xiaohongshu", accountId: "account-operation" };
+    const operation = await manager.openOperationPage(identity, userAction);
+
+    await expect(manager.closeOperationPage({ platformKey: "xiaohongshu", accountId: "account-other" }, operation.page)).rejects.toThrow("Operation Page");
+    expect(operation.page.close).not.toHaveBeenCalled();
+    expect(context.close).not.toHaveBeenCalled();
+  });
+
   it("saves and clears storage state through the credential store without launching a browser", async () => {
     const store = new MemoryCredentialStore();
     const manager = new BrowserSessionManager(store);

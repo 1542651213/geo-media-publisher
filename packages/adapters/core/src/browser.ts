@@ -197,6 +197,7 @@ export class PlaywrightSessionManager {
   private readonly activeSessions = new Map<string, BrowserSession>();
   private readonly pendingConnections = new Set<string>();
   private readonly sessionIdentities = new WeakMap<BrowserSession, BrowserSessionIdentity>();
+  private readonly operationPages = new WeakMap<BrowserSession, Set<Page>>();
   readonly debugId = randomUUID();
 
   constructor(private readonly credentials: CredentialStore, private readonly options: BrowserSessionManagerOptions = {}) {}
@@ -309,13 +310,17 @@ export class PlaywrightSessionManager {
   async openOperationPage(identity: BrowserSessionIdentity, action: UserInitiatedAction, executionMode: BrowserExecutionMode = "VISIBLE"): Promise<BrowserSessionOperationPage> {
     const session = await this.open(identity, action, executionMode);
     const page = await session.context.newPage();
+    const operationPages = this.operationPages.get(session) ?? new Set<Page>();
+    operationPages.add(page);
+    this.operationPages.set(session, operationPages);
     return { session, page, pageDebugId: randomUUID() };
   }
 
   async closeOperationPage(identity: BrowserSessionIdentity, page: Page): Promise<void> {
     const session = this.getActiveSession(identity);
-    if (!session || !session.context.pages().includes(page)) throw new Error("Operation Page does not belong to the active session Context");
+    if (!session || !this.operationPages.get(session)?.has(page) || !session.context.pages().includes(page)) throw new Error("Operation Page does not belong to the active session Context");
     await page.close();
+    this.operationPages.get(session)?.delete(page);
   }
 
   retainsContextAfterPageClose(identity: BrowserSessionIdentity): boolean {
