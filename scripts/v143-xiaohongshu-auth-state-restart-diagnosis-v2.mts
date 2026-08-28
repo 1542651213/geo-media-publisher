@@ -11,7 +11,7 @@ import { collectXhsProfileFileMetadata, type XiaohongshuBrowserAdapter } from "@
 import type { BrowserSessionScopeEvidence } from "@publisher/adapters-browser";
 import type { Logger } from "@publisher/logger";
 import { createRuntimeAdapterRegistry } from "../apps/desktop/src/main/adapter-registry";
-import { diffXhsAuthStateSnapshots, hasNoAuthValues, parseXhsAuthStateDiagnostics, type AuthStateDiagnosticSnapshot } from "./v143-xiaohongshu-auth-state-restart-diagnosis.helpers";
+import { diffXhsAuthStateSnapshots, hasNoAuthValues, parseXhsAuthStateDiagnostics, selectLatestOwnerDiagnostics, type AuthStateDiagnosticSnapshot } from "./v143-xiaohongshu-auth-state-restart-diagnosis.helpers";
 
 const ACCOUNT_ID = "54b390ac-d81e-440a-baeb-d00f9f346cc3";
 const PLATFORM_KEY = "xiaohongshu";
@@ -73,9 +73,8 @@ async function waitForOwnerDiagnostics(timeoutMs = 30_000): Promise<ReturnType<t
   const startedAt = Date.now();
   while (Date.now() - startedAt <= timeoutMs) {
     const diagnostics = readOwnerDiagnostics();
-    const live = diagnostics.find((diagnostic) => diagnostic.phase === "LIVE_LOGIN_BEFORE_CLOSE" && diagnostic.context.stableObservationPassed === true);
-    const beforeClose = diagnostics.find((diagnostic) => diagnostic.phase === "AUTH_STATE_BEFORE_CLOSE");
-    if (live && beforeClose) return [live, beforeClose];
+    const pair = selectLatestOwnerDiagnostics(diagnostics);
+    if (pair) return pair;
     await new Promise<void>((resolve) => setTimeout(resolve, 250));
   }
   throw new Error("OWNER_CONTROLLED_LOGIN_DIAGNOSTIC_NOT_FOUND");

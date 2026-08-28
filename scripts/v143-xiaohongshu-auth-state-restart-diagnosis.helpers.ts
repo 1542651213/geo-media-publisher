@@ -159,6 +159,18 @@ export function parseXhsAuthStateDiagnostics(logText: string, accountId: string,
   return diagnostics;
 }
 
+export function selectLatestOwnerDiagnostics(diagnostics: ParsedXhsLogDiagnostic[]): [ParsedXhsLogDiagnostic, ParsedXhsLogDiagnostic] | null {
+  for (let beforeIndex = diagnostics.length - 1; beforeIndex >= 0; beforeIndex -= 1) {
+    const beforeClose = diagnostics[beforeIndex];
+    if (beforeClose.phase !== "AUTH_STATE_BEFORE_CLOSE") continue;
+    for (let liveIndex = beforeIndex - 1; liveIndex >= 0; liveIndex -= 1) {
+      const live = diagnostics[liveIndex];
+      if (live.phase === "LIVE_LOGIN_BEFORE_CLOSE" && live.context.stableObservationPassed === true) return [live, beforeClose];
+    }
+  }
+  return null;
+}
+
 export function hasNoAuthValues(value: unknown): boolean {
   if (Array.isArray(value)) return value.every(hasNoAuthValues);
   if (!value || typeof value !== "object") return true;

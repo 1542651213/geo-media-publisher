@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffXhsAuthStateSnapshots, hasNoAuthValues, parseXhsAuthStateDiagnostics, type AuthStateDiagnosticSnapshot } from "./v143-xiaohongshu-auth-state-restart-diagnosis.helpers";
+import { diffXhsAuthStateSnapshots, hasNoAuthValues, parseXhsAuthStateDiagnostics, selectLatestOwnerDiagnostics, type AuthStateDiagnosticSnapshot } from "./v143-xiaohongshu-auth-state-restart-diagnosis.helpers";
 
 function state(overrides: Record<string, unknown> = {}): AuthStateDiagnosticSnapshot {
   return {
@@ -35,5 +35,18 @@ describe("Xiaohongshu auth-state restart diagnosis helpers", () => {
     expect(parsed).toHaveLength(1);
     expect(hasNoAuthValues(parsed[0])).toBe(true);
     expect(hasNoAuthValues({ value: "secret" })).toBe(false);
+  });
+
+  it("selects the latest coherent live-login and before-close pair", () => {
+    const parsed = parseXhsAuthStateDiagnostics([
+      JSON.stringify({ timestamp: "2026-08-28T00:00:00.000Z", code: "XHS_AUTH_STATE_DIAGNOSTIC", context: { phase: "LIVE_LOGIN_BEFORE_CLOSE", platformKey: "xiaohongshu", accountId: "a", profilePath: "C:/p", stableObservationPassed: true, marker: "old-live" } }),
+      JSON.stringify({ timestamp: "2026-08-28T00:00:01.000Z", code: "XHS_AUTH_STATE_DIAGNOSTIC", context: { phase: "AUTH_STATE_BEFORE_CLOSE", platformKey: "xiaohongshu", accountId: "a", profilePath: "C:/p", marker: "old-before" } }),
+      JSON.stringify({ timestamp: "2026-08-28T01:00:00.000Z", code: "XHS_AUTH_STATE_DIAGNOSTIC", context: { phase: "LIVE_LOGIN_BEFORE_CLOSE", platformKey: "xiaohongshu", accountId: "a", profilePath: "C:/p", stableObservationPassed: true, marker: "new-live" } }),
+      JSON.stringify({ timestamp: "2026-08-28T01:00:01.000Z", code: "XHS_AUTH_STATE_DIAGNOSTIC", context: { phase: "AUTH_STATE_BEFORE_CLOSE", platformKey: "xiaohongshu", accountId: "a", profilePath: "C:/p", marker: "new-before" } })
+    ].join("\n"), "a", "C:/p");
+
+    const pair = selectLatestOwnerDiagnostics(parsed);
+    expect(pair?.[0].context.marker).toBe("new-live");
+    expect(pair?.[1].context.marker).toBe("new-before");
   });
 });
