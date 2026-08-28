@@ -1,8 +1,10 @@
 import type { AccountContext, AccountProfile, LoginStatus, PublishArticleInput, ValidationResult } from "@publisher/domain";
+import { randomUUID } from "node:crypto";
 import type { AutomationPrepareResult, BrowserSession } from "@publisher/adapters-core";
 import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomationAdapterOptions, type BrowserPlatformDefinition, type BrowserSessionScopeEvidence } from "@publisher/adapters-browser";
 import type { Locator, Page } from "playwright-core";
-import { collectXhsAuthStateMetadata, type XhsAuthStateMetadata } from "./auth-state-diagnostics";
+import { collectXhsAuthStateMetadata, collectXhsPreNavigationAuthStateMetadata, createXhsDiagnosticFingerprintKey, type XhsAuthStateMetadata } from "./auth-state-diagnostics";
+import { XhsNavigationDiagnosticsTracker, type XhsNavigationClassification } from "./navigation-diagnostics";
 
 const XIAOHONGSHU_CREATOR_HOME = "https://creator.xiaohongshu.com/";
 const XIAOHONGSHU_IMAGE_POST_ENTRY_SELECTOR = 'a[href*="/publish/publish"]';
@@ -157,7 +159,32 @@ export interface XiaohongshuAuthStateDiagnostic {
   stableObservationWindowMs: number | null;
   stableObservationSamples: number | null;
   stableObservationPassed: boolean | null;
+  credentialSnapshotInjected: boolean;
   error: { name: string; message: string } | null;
+}
+
+export interface XiaohongshuRestoreNavigationDiagnostic {
+  platformKey: "xiaohongshu";
+  accountId: string;
+  sessionEvidence: BrowserSessionScopeEvidence;
+  preNavigation: XhsAuthStateMetadata;
+  afterNavigation: XhsAuthStateMetadata;
+  navigation: XhsNavigationClassification;
+  loginStatus: LoginStatus;
+  sameContextPageOwnership: boolean;
+  sameContextPage: XiaohongshuSameContextPageDiagnostic;
+}
+
+export interface XiaohongshuSameContextPageDiagnostic {
+  platformKey: "xiaohongshu";
+  accountId: string;
+  contextDebugId: string;
+  originalPageDebugId: string;
+  originalPageClosed: boolean;
+  newPageOwnedByContext: boolean;
+  pageCountBefore: number;
+  pageCountAfter: number;
+  newPageUrl: string;
 }
 
 export interface XiaohongshuBrowserAdapterOptions extends BrowserAutomationAdapterOptions {
@@ -423,6 +450,8 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
   private readonly onAuthStateDiagnostic?: (diagnostic: XiaohongshuAuthStateDiagnostic) => void;
   private readonly credentialFilePath: string | null;
   private readonly loginStabilityWindowMs: number;
+  /** One process-memory-only key for one adapter diagnostic lifetime. Never emitted. */
+  private readonly authStateFingerprintKey = createXhsDiagnosticFingerprintKey();
 
   constructor(options: XiaohongshuBrowserAdapterOptions = {}) {
     super(definition, options);
@@ -572,7 +601,68 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const session = this.activeBrowserSession(ctx);
     if (!session) return null;
     const page = await this.page(session);
-    return collectXhsAuthStateMetadata({ context: session.context, page, profilePath: session.profilePath, credentialFilePath: this.credentialFilePath });
+    return collectXhsAuthStateMetadata({ context: session.context, page, profilePath: session.profilePath, credentialFilePath: this.credentialFilePath, fingerprintKey: this.authStateFingerprintKey, browserChannel: session.browserChannel ?? null, headless: session.headless, storageMode: session.storageMode });
+  }
+
+  /** Opens the account-owned BrowserSession without navigating; diagnostic runner only. */
+  async openDiagnosticSession(ctx: AccountContext): Promise<{ session: BrowserSession; page: Page }> {
+    const session = this.diagnosticBrowserSession(ctx) ?? await this.getOrOpen(ctx);
+    if (!session) throw new XiaohongshuGateError("LOGIN_REQUIRED", "USER_ACTION_REQUIRED", "小红书没有 account-scoped BrowserSession");
+    return { session, page: await this.page(session) };
+  }
+
+  /** Rotates only the Page inside the existing account-owned Context for restart diagnosis. */
+  async openSameContextDiagnosticPage(ctx: AccountContext): Promise<XiaohongshuSameContextPageDiagnostic> {
+    const { session, page } = await this.openDiagnosticSession(ctx);
+    const before = session.context.pages().length;
+    const originalPageDebugId = session.pageDebugId ?? "unknown";
+    await page.close();
+    const newPage = await session.context.newPage();
+    const after = session.context.pages().length;
+    const newPageOwnedByContext = session.context.pages().includes(newPage);
+    await this.navigate(newPage, XIAOHONGSHU_CREATOR_HOME);
+    session.page = newPage;
+    session.pageDebugId = randomUUID();
+    const result: XiaohongshuSameContextPageDiagnostic = {
+      platformKey: "xiaohongshu",
+      accountId: ctx.accountId,
+      contextDebugId: session.contextDebugId ?? "unknown",
+      originalPageDebugId,
+      originalPageClosed: true,
+      newPageOwnedByContext,
+      pageCountBefore: before,
+      pageCountAfter: after,
+      newPageUrl: newPage.url()
+    };
+    return result;
+  }
+
+  /** One navigation-only restore probe. It never opens the publish editor or creates a publishing row. */
+  async runRestoreNavigationDiagnostic(ctx: AccountContext): Promise<XiaohongshuRestoreNavigationDiagnostic> {
+    const { session, page } = await this.openDiagnosticSession(ctx);
+    const tracker = new XhsNavigationDiagnosticsTracker();
+    let trackedPage = page;
+    try {
+      const preNavigation = await collectXhsPreNavigationAuthStateMetadata({ context: session.context, profilePath: session.profilePath, credentialFilePath: this.credentialFilePath, fingerprintKey: this.authStateFingerprintKey, browserChannel: session.browserChannel ?? null, headless: session.headless, storageMode: session.storageMode });
+      const pageCountBefore = session.context.pages().length;
+      const originalPageDebugId = session.pageDebugId ?? "unknown";
+      await page.close();
+      const newPage = await session.context.newPage();
+      const pageCountAfter = session.context.pages().length;
+      const newPageOwnedByContext = session.context.pages().includes(newPage);
+      session.page = newPage;
+      session.pageDebugId = randomUUID();
+      trackedPage = newPage;
+      tracker.attach(newPage);
+      await this.navigate(newPage, XIAOHONGSHU_CREATOR_HOME);
+      const loginStatus = await this.loginStatusForPage(ctx, newPage, "CHECK_LOGIN");
+      const afterNavigation = await collectXhsAuthStateMetadata({ context: session.context, page: newPage, profilePath: session.profilePath, credentialFilePath: this.credentialFilePath, fingerprintKey: this.authStateFingerprintKey, browserChannel: session.browserChannel ?? null, headless: session.headless, storageMode: session.storageMode });
+      const sessionEvidence = await this.getBrowserSessionEvidence(ctx);
+      if (!sessionEvidence) throw new XiaohongshuGateError("ACCOUNT_IDENTITY_UNVERIFIED", "USER_ACTION_REQUIRED", "恢复诊断期间 account-scoped Session evidence 丢失");
+      return { platformKey: "xiaohongshu", accountId: ctx.accountId, sessionEvidence, preNavigation, afterNavigation, navigation: tracker.classify(), loginStatus, sameContextPageOwnership: newPageOwnedByContext, sameContextPage: { platformKey: "xiaohongshu", accountId: ctx.accountId, contextDebugId: session.contextDebugId ?? "unknown", originalPageDebugId, originalPageClosed: true, newPageOwnedByContext, pageCountBefore, pageCountAfter, newPageUrl: newPage.url() } };
+    } finally {
+      tracker.detach(trackedPage);
+    }
   }
 
   protected override keepConnectionSessionOpenAfterCompletion(_ctx: AccountContext): boolean { return true; }
@@ -677,14 +767,14 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     let authState: XhsAuthStateMetadata | null = null;
     let error: { name: string; message: string } | null = null;
     try {
-      authState = await collectXhsAuthStateMetadata({ context: session.context, page: session.page, profilePath: session.profilePath, credentialFilePath: this.credentialFilePath });
+      authState = await collectXhsAuthStateMetadata({ context: session.context, page: session.page, profilePath: session.profilePath, credentialFilePath: this.credentialFilePath, fingerprintKey: this.authStateFingerprintKey, browserChannel: session.browserChannel ?? null, headless: session.headless, storageMode: session.storageMode });
     } catch (caught) {
       error = { name: caught instanceof Error ? caught.name : "AuthStateDiagnosticError", message: "auth state metadata collection failed" };
     }
     const sessionEvidence = await this.getBrowserSessionEvidence(ctx).catch(() => null);
     if (!sessionEvidence) return;
     try {
-      this.onAuthStateDiagnostic({ phase, timestamp: new Date().toISOString(), platformKey: this.platformKey, accountId: ctx.accountId, sessionKey: sessionEvidence.sessionKey, sessionIdHash: session.sessionIdHash, storageMode: session.storageMode, profilePath: session.profilePath, sessionEvidence, authState, stableObservationWindowMs, stableObservationSamples, stableObservationPassed, error });
+      this.onAuthStateDiagnostic({ phase, timestamp: new Date().toISOString(), platformKey: this.platformKey, accountId: ctx.accountId, sessionKey: sessionEvidence.sessionKey, sessionIdHash: session.sessionIdHash, storageMode: session.storageMode, profilePath: session.profilePath, sessionEvidence, authState, stableObservationWindowMs, stableObservationSamples, stableObservationPassed, credentialSnapshotInjected: session.credentialSnapshotInjected ?? false, error });
     } catch {
       // Diagnostics are best-effort and must never alter persistence or close behavior.
     }

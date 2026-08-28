@@ -102,6 +102,8 @@ export interface BrowserSession {
   storageMode: BrowserSessionStorageMode;
   profilePath: string | null;
   browserChannel?: SystemBrowserChannel;
+  /** True only when a legacy encrypted credential snapshot was passed to the browser launcher. */
+  credentialSnapshotInjected?: boolean;
   /** Process-memory-only identity used to prove Context/Page continuity. */
   contextDebugId?: string;
   pageDebugId?: string;
@@ -137,6 +139,8 @@ export interface BrowserSessionManagerOptions {
   browserProfileRootDir?: string;
   /** Only these platform keys may use persistent profiles. */
   persistentProfilePlatforms?: readonly string[];
+  /** Explicit opt-in for legacy snapshot seeding. Persistent profiles are canonical by default. */
+  persistentProfileCredentialSnapshotPlatforms?: readonly string[];
   launchPersistentContext?: (userDataDir: string, options: { channel: SystemBrowserChannel; headless: boolean; storageState?: StorageState }) => Promise<BrowserContext>;
   onSessionLifecycle?: (event: BrowserSessionLifecycleEvent) => void;
 }
@@ -192,7 +196,8 @@ export class PlaywrightSessionManager {
     const profileInitialized = persistentProfilePath ? await pathExists(join(persistentProfilePath, ".gmp-profile-initialized")) : false;
     if (persistentProfilePath) await mkdir(persistentProfilePath, { recursive: true });
     if (persistentProfilePath) {
-      const persistentLaunch = await this.launchPersistentBrowser(persistentProfilePath, headless, profileInitialized ? undefined : storageState);
+      const shouldInjectCredentialSnapshot = Boolean(!profileInitialized && storageState && this.options.persistentProfileCredentialSnapshotPlatforms?.includes(identity.platformKey));
+      const persistentLaunch = await this.launchPersistentBrowser(persistentProfilePath, headless, shouldInjectCredentialSnapshot ? storageState : undefined);
       const context = persistentLaunch.context;
       const browser = context.browser();
       if (!browser) {
@@ -208,7 +213,7 @@ export class PlaywrightSessionManager {
         throw new BrowserRuntimeError({ errorCode: "BROWSER_RUNTIME_LAUNCH_FAILED", module: "BrowserSessionManager", timestamp: new Date().toISOString(), attemptedChannels: [...SYSTEM_BROWSER_CHANNELS] });
       }
       await writeFile(join(persistentProfilePath, ".gmp-profile-initialized"), "v1\n", { flag: "a" });
-      const session = { browser, context, page, hasStoredSession: Boolean(storageState) || profileInitialized, sessionIdHash: browserSessionIdHash(identity), executionMode, headless, storageMode: "PERSISTENT_PROFILE" as const, profilePath: persistentProfilePath, browserChannel: persistentLaunch.channel, contextDebugId: randomUUID(), pageDebugId: randomUUID() };
+      const session = { browser, context, page, hasStoredSession: Boolean(storageState) || profileInitialized, sessionIdHash: browserSessionIdHash(identity), executionMode, headless, storageMode: "PERSISTENT_PROFILE" as const, profilePath: persistentProfilePath, browserChannel: persistentLaunch.channel, credentialSnapshotInjected: shouldInjectCredentialSnapshot, contextDebugId: randomUUID(), pageDebugId: randomUUID() };
       this.ownedSessions.add(session);
       this.sessionIdentities.set(session, identity);
       this.activeSessions.set(browserSessionCredentialKey(identity), session);
@@ -233,7 +238,7 @@ export class PlaywrightSessionManager {
       await browser.close().catch(() => undefined);
       throw new BrowserRuntimeError({ errorCode: "BROWSER_RUNTIME_LAUNCH_FAILED", module: "BrowserSessionManager", timestamp: new Date().toISOString(), attemptedChannels: [...SYSTEM_BROWSER_CHANNELS] });
     }
-    const session = { browser, context, page, hasStoredSession: Boolean(storageState), sessionIdHash: browserSessionIdHash(identity), executionMode, headless, storageMode: "EPHEMERAL_STORAGE_STATE" as const, profilePath: null, browserChannel: browserLaunch.channel, contextDebugId: randomUUID(), pageDebugId: randomUUID() };
+    const session = { browser, context, page, hasStoredSession: Boolean(storageState), sessionIdHash: browserSessionIdHash(identity), executionMode, headless, storageMode: "EPHEMERAL_STORAGE_STATE" as const, profilePath: null, browserChannel: browserLaunch.channel, credentialSnapshotInjected: Boolean(storageState), contextDebugId: randomUUID(), pageDebugId: randomUUID() };
     this.ownedSessions.add(session);
     this.sessionIdentities.set(session, identity);
     this.activeSessions.set(browserSessionCredentialKey(identity), session);

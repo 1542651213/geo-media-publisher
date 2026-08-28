@@ -305,6 +305,30 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(adapter.getCapabilities()).toMatchObject({ article: true, imagePost: true, video: false, maxImageCount: 18 });
   });
 
+  it("probes a new Page in the same account-owned Context without changing account identity", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    installSharedConnectionLifecycle(fixture);
+    const session = await fixture.open({ platformKey: "xiaohongshu", accountId: "account-a" });
+    let pages: Page[] = [fixture.page];
+    (fixture.page as unknown as { close: () => Promise<void> }).close = vi.fn(async () => { pages = []; });
+    const newPage = {
+      url: vi.fn(() => "https://creator.xiaohongshu.com/"),
+      goto: vi.fn(async () => undefined),
+      close: vi.fn(async () => { pages = pages.filter((page) => page !== newPage); }),
+      isClosed: vi.fn(() => false)
+    } as unknown as Page;
+    const ownedContext = session.context as unknown as { pages: () => Page[]; newPage: () => Promise<Page> };
+    ownedContext.pages = vi.fn(() => pages);
+    ownedContext.newPage = vi.fn(async () => { pages = [...pages, newPage]; return newPage; });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+
+    const result = await adapter.openSameContextDiagnosticPage(context("account-a"));
+
+    expect(result).toMatchObject({ platformKey: "xiaohongshu", accountId: "account-a", originalPageClosed: true, newPageOwnedByContext: true, pageCountBefore: 1, pageCountAfter: 1, newPageUrl: "https://creator.xiaohongshu.com/" });
+    expect(ownedContext.newPage).toHaveBeenCalledTimes(1);
+    expect(newPage.close).not.toHaveBeenCalled();
+  });
+
   it("recognizes a logged-in account and returns stable profile identity", async () => {
     const fixture = setupPage({ accountId: "account-a", profileHref: "https://www.xiaohongshu.com/user/profile/65abc123", accountName: "小红书账号 A" });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });

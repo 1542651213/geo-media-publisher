@@ -11,7 +11,7 @@ function state(overrides: Record<string, unknown> = {}): AuthStateDiagnosticSnap
       origins: ["https://creator.xiaohongshu.com"],
       cookies: [], sessionCookieNames: [], persistentCookieNames: [], cookieCountTotal: 0, cookieCountXiaohongshu: 0, sessionCookieCount: 0, persistentCookieCount: 0,
       localStorage: [], sessionStorage: [], indexedDB: [], serviceWorkers: [], profileFiles: [], credentialFile: { path: null, exists: false, size: null, modifiedAt: null },
-      runtime: { userAgent: "ua", language: "zh-CN", timezone: "Asia/Shanghai", viewport: { width: 1, height: 1, deviceScaleFactor: 1 } }, collectionWarnings: [], ...overrides
+      runtime: { userAgent: "ua", language: "zh-CN", timezone: "Asia/Shanghai", viewport: { width: 1, height: 1, deviceScaleFactor: 1 } }, runtimeManifest: { executablePath: null, browserVersion: null, chromiumVersion: null, playwrightVersion: "1.62.1", launchArgs: [], launchArgsAvailable: false, userAgent: "ua", language: "zh-CN", timezone: "Asia/Shanghai", viewport: { width: 1, height: 1, deviceScaleFactor: 1 }, proxyEnabled: null, browserChannel: "chrome", headless: false, profilePath: "C:/profile", storageMode: "PERSISTENT_PROFILE" }, collectionWarnings: [], ...overrides
     } as AuthStateDiagnosticSnapshot["authState"],
     profileFiles: []
   };
@@ -26,6 +26,7 @@ describe("Xiaohongshu auth-state restart diagnosis helpers", () => {
     expect(diff.sessionCookieNamesLost).toEqual(["sid"]);
     expect(diff.persistentCookieNamesLost).toEqual([]);
     expect(diff.sessionOnlyCookieLossCorrelated).toBe(true);
+    expect(diff.lostLocalStorageKeys).toEqual([]);
   });
 
   it("parses only the exact account/profile diagnostic events and rejects auth values", () => {

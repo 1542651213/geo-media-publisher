@@ -168,7 +168,7 @@ describe("BrowserSessionManager credential boundary", () => {
     expect(manager.getActiveSession(identity)).toBeNull();
   });
 
-  it("uses one deterministic persistent profile per platform account and seeds it only through the shared browser lifecycle", async () => {
+  it("uses one deterministic persistent profile per platform account and seeds it only when explicitly enabled", async () => {
     const root = await mkdtemp(join(tmpdir(), "publisher-browser-profile-test-"));
     try {
       const page = { url: vi.fn(() => "about:blank"), isClosed: vi.fn(() => false) };
@@ -192,6 +192,7 @@ describe("BrowserSessionManager credential boundary", () => {
       const manager = new BrowserSessionManager(store, {
         browserProfileRootDir: root,
         persistentProfilePlatforms: ["xiaohongshu"],
+        persistentProfileCredentialSnapshotPlatforms: ["xiaohongshu"],
         launchPersistentContext
       } as never);
 
@@ -204,6 +205,40 @@ describe("BrowserSessionManager credential boundary", () => {
       await manager.close(session);
       expect(context.close).toHaveBeenCalledTimes(1);
       expect(browser.close).toHaveBeenCalledTimes(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the canonical Xiaohongshu persistent profile free from credential snapshot reinjection", async () => {
+    const root = await mkdtemp(join(tmpdir(), "publisher-browser-profile-canonical-test-"));
+    try {
+      const page = { url: vi.fn(() => "about:blank"), isClosed: vi.fn(() => false) };
+      const context = {
+        browser: vi.fn(() => ({ close: vi.fn(async () => undefined) })),
+        setDefaultTimeout: vi.fn(),
+        newPage: vi.fn(async () => page),
+        pages: vi.fn(() => [page]),
+        close: vi.fn(async () => undefined)
+      } as unknown as BrowserContext;
+      const store = new MemoryCredentialStore();
+      const storedState = { cookies: [{ name: "legacy", value: "must-not-be-reinjected", domain: ".xiaohongshu.com", path: "/", expires: -1 }], origins: [] };
+      store.set("session:xiaohongshu:account-1", JSON.stringify(storedState));
+      const launchPersistentContext = vi.fn(async (_userDataDir: string, options: { storageState?: unknown }) => {
+        expect(options.storageState).toBeUndefined();
+        return context;
+      });
+      const manager = new BrowserSessionManager(store, {
+        browserProfileRootDir: root,
+        persistentProfilePlatforms: ["xiaohongshu"],
+        launchPersistentContext
+      } as never);
+
+      const session = await manager.open({ platformKey: "xiaohongshu", accountId: "account-1" }, userAction);
+
+      expect(launchPersistentContext).toHaveBeenCalledTimes(1);
+      expect(session).toMatchObject({ storageMode: "PERSISTENT_PROFILE", credentialSnapshotInjected: false });
+      await manager.close(session);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -243,7 +278,7 @@ describe("BrowserSessionManager credential boundary", () => {
         const context = { browser: vi.fn(() => browser), setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => page), pages: vi.fn(() => [page]), close: vi.fn(async () => undefined) } as unknown as BrowserContext;
         return context;
       });
-      const makeManager = () => new BrowserSessionManager(store, { browserProfileRootDir: root, persistentProfilePlatforms: ["xiaohongshu"], launchPersistentContext: launch } as never);
+      const makeManager = () => new BrowserSessionManager(store, { browserProfileRootDir: root, persistentProfilePlatforms: ["xiaohongshu"], persistentProfileCredentialSnapshotPlatforms: ["xiaohongshu"], launchPersistentContext: launch } as never);
 
       const firstManager = makeManager();
       const first = await firstManager.open({ platformKey: "xiaohongshu", accountId: "account-1" }, userAction);

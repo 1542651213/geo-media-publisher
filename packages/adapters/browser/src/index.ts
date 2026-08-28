@@ -82,6 +82,7 @@ export interface BrowserSessionScopeEvidence {
   profilePath: string | null;
   browserChannel: SystemBrowserChannel | null;
   headless: boolean;
+  credentialSnapshotInjected: boolean;
 }
 
 export class BrowserAutomationError extends PlatformAdapterError {
@@ -363,7 +364,8 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
       storageMode: session.storageMode,
       profilePath: session.profilePath,
       browserChannel: session.browserChannel ?? null,
-      headless: session.headless
+      headless: session.headless,
+      credentialSnapshotInjected: session.credentialSnapshotInjected ?? false
     };
   }
 
@@ -423,6 +425,11 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
 
   /** Diagnostic-only access for a platform adapter that needs to snapshot its own live session before close. */
   protected activeBrowserSession(ctx: AccountContext): BrowserSession | null {
+    return this.activeSession(this.identity(ctx));
+  }
+
+  /** Diagnostic-only access to the account-owned session without navigation. */
+  protected diagnosticBrowserSession(ctx: AccountContext): BrowserSession | null {
     return this.activeSession(this.identity(ctx));
   }
 

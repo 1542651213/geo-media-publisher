@@ -13,6 +13,14 @@ export type AuthStateDiagnosticDiff = {
   sessionCookieNamesAdded: string[];
   persistentCookieNamesLost: string[];
   persistentCookieNamesAdded: string[];
+  lostLocalStorageKeys: string[];
+  newLocalStorageKeys: string[];
+  lostSessionStorageKeys: string[];
+  newSessionStorageKeys: string[];
+  lostIndexedDbNames: string[];
+  newIndexedDbNames: string[];
+  lostServiceWorkerScopes: string[];
+  newServiceWorkerScopes: string[];
   localStorageChanged: boolean;
   sessionStorageChanged: boolean;
   indexedDBChanged: boolean;
@@ -60,6 +68,10 @@ function indexedDbEntries(state: XhsAuthStateMetadata | null): string[] {
   ])).sort();
 }
 
+function indexedDbNames(state: XhsAuthStateMetadata | null): string[] {
+  return (state?.indexedDB ?? []).flatMap((entry) => entry.databaseNames.map((name) => `${entry.origin}\u0000${name}`)).sort();
+}
+
 function serviceWorkerEntries(state: XhsAuthStateMetadata | null): string[] {
   return (state?.serviceWorkers ?? []).flatMap((entry) => entry.registrationScopes.map((scope) => `${entry.origin}\u0000${scope}`)).sort();
 }
@@ -75,7 +87,7 @@ function changedProfileFiles(before: XhsProfileFileMetadata[], after: XhsProfile
 }
 
 function runtimeSignature(state: XhsAuthStateMetadata | null): string {
-  return JSON.stringify(state?.runtime ?? null);
+  return JSON.stringify({ runtime: state?.runtime ?? null, runtimeManifest: state?.runtimeManifest ?? null });
 }
 
 function hasAuthStateSignal(state: XhsAuthStateMetadata | null): boolean {
@@ -91,15 +103,31 @@ export function diffXhsAuthStateSnapshots(before: AuthStateDiagnosticSnapshot, a
   const sessionCookieNamesAdded = listDifference(afterState?.sessionCookieNames ?? [], beforeState?.sessionCookieNames ?? []);
   const persistentCookieNamesLost = listDifference(beforeState?.persistentCookieNames ?? [], afterState?.persistentCookieNames ?? []);
   const persistentCookieNamesAdded = listDifference(afterState?.persistentCookieNames ?? [], beforeState?.persistentCookieNames ?? []);
+  const localStorageBefore = namedStorageEntries(beforeState, "localStorage");
+  const localStorageAfter = namedStorageEntries(afterState, "localStorage");
+  const sessionStorageBefore = namedStorageEntries(beforeState, "sessionStorage");
+  const sessionStorageAfter = namedStorageEntries(afterState, "sessionStorage");
+  const indexedDbBefore = indexedDbNames(beforeState);
+  const indexedDbAfter = indexedDbNames(afterState);
+  const serviceWorkersBefore = serviceWorkerEntries(beforeState);
+  const serviceWorkersAfter = serviceWorkerEntries(afterState);
   return {
     sessionCookieNamesLost,
     sessionCookieNamesAdded,
     persistentCookieNamesLost,
     persistentCookieNamesAdded,
-    localStorageChanged: JSON.stringify(namedStorageEntries(beforeState, "localStorage")) !== JSON.stringify(namedStorageEntries(afterState, "localStorage")),
-    sessionStorageChanged: JSON.stringify(namedStorageEntries(beforeState, "sessionStorage")) !== JSON.stringify(namedStorageEntries(afterState, "sessionStorage")),
+    lostLocalStorageKeys: listDifference(localStorageBefore, localStorageAfter),
+    newLocalStorageKeys: listDifference(localStorageAfter, localStorageBefore),
+    lostSessionStorageKeys: listDifference(sessionStorageBefore, sessionStorageAfter),
+    newSessionStorageKeys: listDifference(sessionStorageAfter, sessionStorageBefore),
+    lostIndexedDbNames: listDifference(indexedDbBefore, indexedDbAfter),
+    newIndexedDbNames: listDifference(indexedDbAfter, indexedDbBefore),
+    lostServiceWorkerScopes: listDifference(serviceWorkersBefore, serviceWorkersAfter),
+    newServiceWorkerScopes: listDifference(serviceWorkersAfter, serviceWorkersBefore),
+    localStorageChanged: JSON.stringify(localStorageBefore) !== JSON.stringify(localStorageAfter),
+    sessionStorageChanged: JSON.stringify(sessionStorageBefore) !== JSON.stringify(sessionStorageAfter),
     indexedDBChanged: JSON.stringify(indexedDbEntries(beforeState)) !== JSON.stringify(indexedDbEntries(afterState)),
-    serviceWorkersChanged: JSON.stringify(serviceWorkerEntries(beforeState)) !== JSON.stringify(serviceWorkerEntries(afterState)),
+    serviceWorkersChanged: JSON.stringify(serviceWorkersBefore) !== JSON.stringify(serviceWorkersAfter),
     profileFilesChanged: changedProfileFiles(beforeState?.profileFiles ?? [], afterState?.profileFiles ?? []),
     runtimeChanged: runtimeSignature(beforeState) !== runtimeSignature(afterState),
     browserChannelChanged: beforeEvidence?.browserChannel !== afterEvidence?.browserChannel,

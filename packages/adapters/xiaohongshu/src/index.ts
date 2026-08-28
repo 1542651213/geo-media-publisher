@@ -4,6 +4,7 @@ import { XiaohongshuBrowserAdapter } from "./browser";
 
 export * from "./browser";
 export * from "./auth-state-diagnostics";
+export * from "./navigation-diagnostics";
 
 export function mapXiaohongshuError(message: string, httpStatus?: number): ErrorCode { return mapManualError(message, httpStatus); }
 

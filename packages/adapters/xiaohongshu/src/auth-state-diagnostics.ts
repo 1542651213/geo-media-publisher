@@ -1,6 +1,15 @@
+import { createHmac, randomBytes } from "node:crypto";
 import { lstatSync } from "node:fs";
 import { join } from "node:path";
+import playwrightPackage from "playwright-core/package.json";
 import type { BrowserContext, Page } from "playwright-core";
+
+export type XhsAuthStateDiagnosticPhase = "PAGE" | "PRE_NAVIGATION";
+
+export interface XhsValueFingerprint {
+  key: string;
+  fingerprint: string;
+}
 
 export interface XhsCookieMetadata {
   name: string;
@@ -11,6 +20,7 @@ export interface XhsCookieMetadata {
   httpOnly: boolean;
   secure: boolean;
   sameSite: string | null;
+  valueFingerprint?: string;
 }
 
 export interface XhsProfileFileMetadata {
@@ -23,9 +33,33 @@ export interface XhsProfileFileMetadata {
 
 export interface XhsAuthStateDiagnosticInput {
   context: BrowserContext;
-  page: Page;
+  page?: Page;
   profilePath?: string | null;
   credentialFilePath?: string | null;
+  phase?: XhsAuthStateDiagnosticPhase;
+  /** Process-memory-only key. It must never be persisted or included in evidence. */
+  fingerprintKey?: Uint8Array;
+  browserChannel?: "chrome" | "msedge" | null;
+  headless?: boolean | null;
+  storageMode?: "EPHEMERAL_STORAGE_STATE" | "PERSISTENT_PROFILE" | null;
+}
+
+export interface XhsRuntimeManifest {
+  executablePath: string | null;
+  browserVersion: string | null;
+  chromiumVersion: string | null;
+  playwrightVersion: string | null;
+  launchArgs: string[];
+  launchArgsAvailable: boolean;
+  userAgent: string | null;
+  language: string | null;
+  timezone: string | null;
+  viewport: { width: number; height: number; deviceScaleFactor: number } | null;
+  proxyEnabled: boolean | null;
+  browserChannel: "chrome" | "msedge" | null;
+  headless: boolean | null;
+  profilePath: string | null;
+  storageMode: "EPHEMERAL_STORAGE_STATE" | "PERSISTENT_PROFILE" | null;
 }
 
 export interface XhsAuthStateMetadata {
@@ -39,8 +73,8 @@ export interface XhsAuthStateMetadata {
   cookieCountXiaohongshu: number;
   sessionCookieCount: number;
   persistentCookieCount: number;
-  localStorage: Array<{ origin: string; keyNames: string[]; keyCount: number }>;
-  sessionStorage: Array<{ origin: string; keyNames: string[]; keyCount: number }>;
+  localStorage: Array<{ origin: string; keyNames: string[]; keyCount: number; valueFingerprints?: XhsValueFingerprint[] }>;
+  sessionStorage: Array<{ origin: string; keyNames: string[]; keyCount: number; valueFingerprints?: XhsValueFingerprint[] }>;
   indexedDB: Array<{ origin: string; databaseNames: string[]; objectStoresByDatabase: Record<string, string[]> }>;
   serviceWorkers: Array<{ origin: string; registrationScopes: string[]; count: number }>;
   profileFiles: XhsProfileFileMetadata[];
@@ -51,12 +85,14 @@ export interface XhsAuthStateMetadata {
     timezone: string | null;
     viewport: { width: number; height: number; deviceScaleFactor: number } | null;
   };
+  runtimeManifest: XhsRuntimeManifest;
   collectionWarnings: string[];
 }
 
 interface PageAuthMetadata {
   origin: string;
   sessionStorageKeys: string[];
+  sessionStorageEntries?: Array<{ name: string; value: string }>;
   indexedDB: Array<{ databaseName: string; objectStoreNames: string[] }>;
   serviceWorkerScopes: string[];
   runtime: XhsAuthStateMetadata["runtime"];
@@ -79,6 +115,14 @@ const PROFILE_METADATA_PATHS = [
   "SingletonCookie",
   "SingletonSocket"
 ] as const;
+
+export function createXhsDiagnosticFingerprintKey(): Uint8Array {
+  return randomBytes(32);
+}
+
+export function fingerprintXhsDiagnosticValue(value: string, key: Uint8Array): string {
+  return createHmac("sha256", key).update(value, "utf8").digest("hex").slice(0, 32);
+}
 
 function isXiaohongshuDomain(domain: string): boolean {
   const normalized = domain.trim().toLowerCase().replace(/^\./u, "");
@@ -118,7 +162,8 @@ async function readPageAuthMetadata(page: Page): Promise<PageAuthMetadata | null
   try {
     return await page.evaluate(async () => {
       const origin = window.location.origin === "null" ? "" : window.location.origin;
-      const sessionStorageKeys = Object.keys(window.sessionStorage).sort();
+      const sessionStorageEntries = Object.keys(window.sessionStorage).sort().map((name) => ({ name, value: window.sessionStorage.getItem(name) ?? "" }));
+      const sessionStorageKeys = sessionStorageEntries.map((entry) => entry.name);
       const indexedDBMetadata: Array<{ databaseName: string; objectStoreNames: string[] }> = [];
       const databases = typeof indexedDB.databases === "function" ? await indexedDB.databases() : [];
       for (const database of databases) {
@@ -155,6 +200,7 @@ async function readPageAuthMetadata(page: Page): Promise<PageAuthMetadata | null
       return {
         origin,
         sessionStorageKeys,
+        sessionStorageEntries,
         indexedDB: indexedDBMetadata.sort((left, right) => left.databaseName.localeCompare(right.databaseName)),
         serviceWorkerScopes,
         runtime: {
@@ -172,18 +218,66 @@ async function readPageAuthMetadata(page: Page): Promise<PageAuthMetadata | null
   }
 }
 
-function mergeStorageEntries(entries: Array<{ origin: string; keyNames: string[] }>): Array<{ origin: string; keyNames: string[]; keyCount: number }> {
-  const merged = new Map<string, Set<string>>();
+function mergeStorageEntries(entries: Array<{ origin: string; keyNames: string[]; values?: Array<{ name: string; value: string }> }>, fingerprintKey?: Uint8Array): Array<{ origin: string; keyNames: string[]; keyCount: number; valueFingerprints?: XhsValueFingerprint[] }> {
+  const merged = new Map<string, { keys: Set<string>; values: Map<string, string> }>();
   for (const entry of entries) {
     if (!entry.origin) continue;
-    const keys = merged.get(entry.origin) ?? new Set<string>();
-    for (const key of entry.keyNames) keys.add(key);
-    merged.set(entry.origin, keys);
+    const current = merged.get(entry.origin) ?? { keys: new Set<string>(), values: new Map<string, string>() };
+    for (const key of entry.keyNames) current.keys.add(key);
+    if (fingerprintKey) for (const value of entry.values ?? []) current.values.set(value.name, fingerprintXhsDiagnosticValue(value.value, fingerprintKey));
+    merged.set(entry.origin, current);
   }
-  return [...merged.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([origin, keys]) => {
-    const keyNames = [...keys].sort();
-    return { origin, keyNames, keyCount: keyNames.length };
+  return [...merged.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([origin, current]) => {
+    const keyNames = [...current.keys].sort();
+    const valueFingerprints = [...current.values.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([key, fingerprint]) => ({ key, fingerprint }));
+    return { origin, keyNames, keyCount: keyNames.length, ...(fingerprintKey ? { valueFingerprints } : {}) };
   });
+}
+
+async function collectBrowserVersion(context: BrowserContext): Promise<string | null> {
+  try {
+    const browser = context.browser?.();
+    const version = browser?.version?.();
+    return typeof version === "string" ? version : null;
+  } catch {
+    return null;
+  }
+}
+
+async function collectBrowserLaunchMetadata(context: BrowserContext): Promise<{ browserVersion: string | null; executablePath: string | null; launchArgs: string[]; launchArgsAvailable: boolean }> {
+  try {
+    const browser = context.browser?.() as unknown as { version?: () => string; process?: () => { spawnfile?: string; spawnargs?: string[] } | null } | null;
+    const processInfo = browser?.process?.() ?? null;
+    const launchArgs = (processInfo?.spawnargs ?? []).map((argument) => {
+      if (/^--user-data-dir=/iu.test(argument)) return "--user-data-dir=[REDACTED_PATH]";
+      if (/^--(?:remote-debugging|proxy-server)=/iu.test(argument)) return argument.slice(0, argument.indexOf("=") + 1) + "[REDACTED]";
+      return argument;
+    });
+    const browserVersion = typeof browser?.version === "function" ? browser.version() : await collectBrowserVersion(context);
+    return { browserVersion: typeof browserVersion === "string" ? browserVersion : null, executablePath: typeof processInfo?.spawnfile === "string" ? processInfo.spawnfile : null, launchArgs, launchArgsAvailable: Boolean(processInfo?.spawnargs) };
+  } catch {
+    return { browserVersion: await collectBrowserVersion(context), executablePath: null, launchArgs: [], launchArgsAvailable: false };
+  }
+}
+
+function defaultRuntimeManifest(input: XhsAuthStateDiagnosticInput, runtime: XhsAuthStateMetadata["runtime"], launch: Awaited<ReturnType<typeof collectBrowserLaunchMetadata>>): XhsRuntimeManifest {
+  return {
+    executablePath: launch.executablePath,
+    browserVersion: launch.browserVersion,
+    chromiumVersion: process.versions.chrome ?? null,
+    playwrightVersion: typeof playwrightPackage.version === "string" ? playwrightPackage.version : null,
+    launchArgs: launch.launchArgs,
+    launchArgsAvailable: launch.launchArgsAvailable,
+    userAgent: runtime.userAgent,
+    language: runtime.language,
+    timezone: runtime.timezone,
+    viewport: runtime.viewport,
+    proxyEnabled: null,
+    browserChannel: input.browserChannel ?? null,
+    headless: input.headless ?? null,
+    profilePath: input.profilePath ?? null,
+    storageMode: input.storageMode ?? null
+  };
 }
 
 export async function collectXhsAuthStateMetadata(input: XhsAuthStateDiagnosticInput): Promise<XhsAuthStateMetadata> {
@@ -196,16 +290,18 @@ export async function collectXhsAuthStateMetadata(input: XhsAuthStateDiagnosticI
     isSessionCookie: cookie.expires <= 0,
     httpOnly: cookie.httpOnly,
     secure: cookie.secure,
-    sameSite: cookie.sameSite ?? null
+    sameSite: cookie.sameSite ?? null,
+    ...(input.fingerprintKey ? { valueFingerprint: fingerprintXhsDiagnosticValue(cookie.value, input.fingerprintKey) } : {})
   })).sort((left, right) => `${left.domain}\u0000${left.path}\u0000${left.name}`.localeCompare(`${right.domain}\u0000${right.path}\u0000${right.name}`));
   const sessionCookieNames = cookies.filter((cookie) => cookie.isSessionCookie).map((cookie) => cookie.name).sort();
   const persistentCookieNames = cookies.filter((cookie) => !cookie.isSessionCookie).map((cookie) => cookie.name).sort();
   const storageState = await input.context.storageState();
-  const localStorage = storageState.origins.map((origin) => ({ origin: origin.origin, keyNames: origin.localStorage.map((entry) => entry.name) }));
-  const pages = [...new Set([input.page, ...input.context.pages()])];
+  const localStorage = storageState.origins.map((origin) => ({ origin: origin.origin, keyNames: origin.localStorage.map((entry) => entry.name), values: origin.localStorage.map((entry) => ({ name: entry.name, value: entry.value })) }));
+  const pages = input.phase === "PRE_NAVIGATION" || !input.page ? [] : [...new Set([input.page, ...input.context.pages()])];
   const pageMetadata = (await Promise.all(pages.map((page) => readPageAuthMetadata(page)))).filter((metadata): metadata is PageAuthMetadata => metadata !== null);
   if (pageMetadata.length === 0) warnings.push("PAGE_METADATA_UNAVAILABLE");
-  const sessionStorage = mergeStorageEntries(pageMetadata.map((metadata) => ({ origin: metadata.origin, keyNames: metadata.sessionStorageKeys })));
+  if (input.phase === "PRE_NAVIGATION" || !input.page) warnings.push("SESSION_STORAGE_UNAVAILABLE_PRE_NAVIGATION");
+  const sessionStorage = mergeStorageEntries(pageMetadata.map((metadata) => ({ origin: metadata.origin, keyNames: metadata.sessionStorageKeys, values: metadata.sessionStorageEntries })), input.fingerprintKey);
   const indexedDbByOrigin = new Map<string, Map<string, string[]>>();
   const serviceWorkersByOrigin = new Map<string, Set<string>>();
   for (const metadata of pageMetadata) {
@@ -229,9 +325,10 @@ export async function collectXhsAuthStateMetadata(input: XhsAuthStateDiagnosticI
   });
   const origins = [...new Set([...storageState.origins.map((origin) => origin.origin), ...pageMetadata.map((metadata) => metadata.origin).filter(Boolean)])].sort();
   const runtime = pageMetadata[0]?.runtime ?? { userAgent: null, language: null, timezone: null, viewport: null };
+  const launch = await collectBrowserLaunchMetadata(input.context);
   return {
     capturedAt: new Date().toISOString(),
-    pageUrl: input.page.url(),
+    pageUrl: input.page?.url() ?? "about:blank",
     origins,
     cookies,
     sessionCookieNames,
@@ -240,13 +337,18 @@ export async function collectXhsAuthStateMetadata(input: XhsAuthStateDiagnosticI
     cookieCountXiaohongshu: cookies.filter((cookie) => isXiaohongshuDomain(cookie.domain)).length,
     sessionCookieCount: sessionCookieNames.length,
     persistentCookieCount: persistentCookieNames.length,
-    localStorage: mergeStorageEntries(localStorage),
+    localStorage: mergeStorageEntries(localStorage, input.fingerprintKey),
     sessionStorage,
     indexedDB,
     serviceWorkers,
     profileFiles: collectXhsProfileFileMetadata(input.profilePath),
     credentialFile: collectXhsCredentialFileMetadata(input.credentialFilePath),
     runtime,
+    runtimeManifest: defaultRuntimeManifest(input, runtime, launch),
     collectionWarnings: warnings
   };
+}
+
+export async function collectXhsPreNavigationAuthStateMetadata(input: Omit<XhsAuthStateDiagnosticInput, "page" | "phase">): Promise<XhsAuthStateMetadata> {
+  return collectXhsAuthStateMetadata({ ...input, page: undefined, phase: "PRE_NAVIGATION" });
 }
