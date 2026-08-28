@@ -185,7 +185,7 @@ export async function runXiaohongshuGateOnly(): Promise<JsonRecord> {
 
     const credentials = new SafeStorageCredentialStore(join(dataDirectory, "credentials.enc"), safeStorage);
     const logger = createFileLogger(join(dataDirectory, "logs", "app.log"));
-    const registry = createRuntimeAdapterRegistry(credentials, false, logger);
+    const registry = createRuntimeAdapterRegistry(credentials, false, logger, join(userDataPath, "browser-profiles"));
     const selected = registry.getForContent("xiaohongshu", "article");
     if (!isAutomationAdapter(selected)) throw new Error("XIAOHONGSHU_ARTICLE_ROUTE_NOT_BROWSER_AUTOMATION");
     adapter = selected;

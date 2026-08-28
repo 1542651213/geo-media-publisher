@@ -537,6 +537,10 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
   protected override keepConnectionPageForCompletion(_ctx: AccountContext): boolean { return true; }
 
   private async loginStatusForPage(ctx: AccountContext, page: Page, phase: XiaohongshuLoginEvaluation["phase"]): Promise<LoginStatus> {
+    // Creator performs client-side redirects after the initial DOM navigation.
+    // Give that redirect a bounded opportunity to settle before accepting a
+    // logged-in result; otherwise a home-page probe can race a later /login.
+    await waitForProbe(page);
     const pageUrl = page.url();
     if (this.isLoginPage(pageUrl)) return "expired";
     if (this.isVerificationUrl(pageUrl)) return "needs_user_action";

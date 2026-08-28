@@ -1,4 +1,6 @@
-import { basename, relative, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import type { Browser, BrowserContext } from "playwright-core";
 import type { CredentialStore } from "@publisher/security";
@@ -164,5 +166,98 @@ describe("BrowserSessionManager credential boundary", () => {
     expect(manager.isConnectionPending(identity)).toBe(false);
     await manager.close(first);
     expect(manager.getActiveSession(identity)).toBeNull();
+  });
+
+  it("uses one deterministic persistent profile per platform account and seeds it only through the shared browser lifecycle", async () => {
+    const root = await mkdtemp(join(tmpdir(), "publisher-browser-profile-test-"));
+    try {
+      const page = { url: vi.fn(() => "about:blank"), isClosed: vi.fn(() => false) };
+      const newContext = vi.fn();
+      const browser = { close: vi.fn(async () => undefined), newContext } as unknown as Browser;
+      const context = {
+        browser: vi.fn(() => browser),
+        setDefaultTimeout: vi.fn(),
+        newPage: vi.fn(async () => page),
+        pages: vi.fn(() => [page]),
+        close: vi.fn(async () => undefined)
+      } as unknown as BrowserContext;
+      const storedState = { cookies: [], origins: [] };
+      const store = new MemoryCredentialStore();
+      store.set("session:xiaohongshu:account-1", JSON.stringify(storedState));
+      const launchPersistentContext = vi.fn(async (userDataDir: string, options: { channel: "chrome" | "msedge"; headless: boolean; storageState?: unknown }) => {
+        expect(userDataDir).toBe(join(root, "xiaohongshu", "account-1"));
+        expect(options).toMatchObject({ channel: "chrome", headless: false, storageState: storedState });
+        return context;
+      });
+      const manager = new BrowserSessionManager(store, {
+        browserProfileRootDir: root,
+        persistentProfilePlatforms: ["xiaohongshu"],
+        launchPersistentContext
+      } as never);
+
+      const session = await manager.open({ platformKey: "xiaohongshu", accountId: "account-1" }, userAction);
+
+      expect(launchPersistentContext).toHaveBeenCalledTimes(1);
+      expect(session).toMatchObject({ storageMode: "PERSISTENT_PROFILE", profilePath: join(root, "xiaohongshu", "account-1") });
+      expect(session.browser).toBe(browser);
+      expect(newContext).not.toHaveBeenCalled();
+      await manager.close(session);
+      expect(context.close).toHaveBeenCalledTimes(1);
+      expect(browser.close).toHaveBeenCalledTimes(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes indexedDB together with cookies and origins for persistent profiles", async () => {
+    const root = await mkdtemp(join(tmpdir(), "publisher-browser-profile-save-test-"));
+    try {
+      const state = { cookies: [], origins: [] };
+      const context = { storageState: vi.fn(async () => state) } as unknown as BrowserContext;
+      const store = new MemoryCredentialStore();
+      const manager = new BrowserSessionManager(store, {
+        browserProfileRootDir: root,
+        persistentProfilePlatforms: ["xiaohongshu"]
+      } as never);
+
+      await manager.save({ platformKey: "xiaohongshu", accountId: "account-1" }, context);
+
+      expect(context.storageState).toHaveBeenCalledWith({ indexedDB: true });
+      expect(store.get("session:xiaohongshu:account-1")).toBe(JSON.stringify(state));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses the same account profile across independent manager instances without reseeding it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "publisher-browser-profile-restore-test-"));
+    try {
+      const state = { cookies: [], origins: [] };
+      const store = new MemoryCredentialStore();
+      store.set("session:xiaohongshu:account-1", JSON.stringify(state));
+      const calls: Array<{ userDataDir: string; storageState?: unknown }> = [];
+      const launch = vi.fn(async (userDataDir: string, options: { storageState?: unknown }) => {
+        calls.push({ userDataDir, storageState: options.storageState });
+        const page = { url: vi.fn(() => "about:blank"), isClosed: vi.fn(() => false) };
+        const browser = { close: vi.fn(async () => undefined) } as unknown as Browser;
+        const context = { browser: vi.fn(() => browser), setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => page), pages: vi.fn(() => [page]), close: vi.fn(async () => undefined) } as unknown as BrowserContext;
+        return context;
+      });
+      const makeManager = () => new BrowserSessionManager(store, { browserProfileRootDir: root, persistentProfilePlatforms: ["xiaohongshu"], launchPersistentContext: launch } as never);
+
+      const firstManager = makeManager();
+      const first = await firstManager.open({ platformKey: "xiaohongshu", accountId: "account-1" }, userAction);
+      await firstManager.close(first);
+      const secondManager = makeManager();
+      const second = await secondManager.open({ platformKey: "xiaohongshu", accountId: "account-1" }, userAction);
+
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.userDataDir).toBe(calls[1]?.userDataDir);
+      expect(calls[0]?.storageState).toEqual(state);
+      expect(calls[1]?.storageState).toBeUndefined();
+      await secondManager.close(second);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

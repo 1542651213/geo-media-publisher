@@ -299,6 +299,17 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     await expect(adapter.checkLogin(context("account-a"))).resolves.toBe("logged_in");
   });
 
+  it("fails closed when the owned Page redirects to login immediately after the first home check", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "数据看板"] });
+    let redirected = false;
+    (fixture.page as unknown as { waitForTimeout: (milliseconds: number) => Promise<void> }).waitForTimeout = vi.fn(async () => { redirected = true; });
+    vi.mocked(fixture.page.url).mockImplementation(() => redirected ? "https://creator.xiaohongshu.com/login" : "https://creator.xiaohongshu.com/new/home");
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+
+    await expect(adapter.checkLogin(context("account-a"))).resolves.toBe("expired");
+  });
+
   it("ignores hidden verification text on an otherwise logged-in creator home", async () => {
     const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", securityText: "验证码登录" });
     installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "账号状态正常"] });

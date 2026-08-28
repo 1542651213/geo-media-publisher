@@ -51,6 +51,8 @@ export interface AutomationAdapter extends PlatformAdapter {
     pageTitle: string;
     pageCount: number;
     ownerVisiblePage: boolean;
+    storageMode?: "EPHEMERAL_STORAGE_STATE" | "PERSISTENT_PROFILE";
+    profilePath?: string | null;
   } | null>;
   /** Returns process-memory-only adapter/runtime IDs for connection diagnostics. */
   getBrowserConnectionDebugIds?(): { adapterDebugId: string; browserSessionManagerDebugId: string };

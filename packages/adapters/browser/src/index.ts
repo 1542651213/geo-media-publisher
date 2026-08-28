@@ -12,7 +12,7 @@ import type {
   ValidationResult
 } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
-import { BrowserSessionManager, browserExecutionModeFromSettings, browserSessionCredentialKey, browserSessionIdHash, PlatformAdapterError, userInitiatedActionFromSettings, type BrowserExecutionMode, type BrowserRuntimeEvent, type BrowserSession } from "@publisher/adapters-core";
+import { BrowserSessionManager, browserExecutionModeFromSettings, browserSessionCredentialKey, browserSessionIdHash, PlatformAdapterError, userInitiatedActionFromSettings, type BrowserExecutionMode, type BrowserRuntimeEvent, type BrowserSession, type BrowserSessionStorageMode } from "@publisher/adapters-core";
 import type { CredentialStore } from "@publisher/security";
 import type { AutomationAdapter, AutomationPrepareResult } from "@publisher/adapters-core";
 
@@ -60,6 +60,8 @@ export interface BrowserConnectionDiagnostic {
   pageUrl: string | null;
   pageTitle: string | null;
   pageClosed: boolean | null;
+  storageMode: BrowserSessionStorageMode | null;
+  profilePath: string | null;
 }
 
 export interface BrowserSessionScopeEvidence {
@@ -76,6 +78,8 @@ export interface BrowserSessionScopeEvidence {
   contextDebugId: string;
   pageDebugId: string;
   pageClosed: boolean;
+  storageMode: BrowserSessionStorageMode;
+  profilePath: string | null;
 }
 
 export class BrowserAutomationError extends PlatformAdapterError {
@@ -353,7 +357,9 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
       browserSessionManagerDebugId: this.sessionManager.debugId,
       contextDebugId: session.contextDebugId ?? objectDebugId(session.context, "context"),
       pageDebugId: session.pageDebugId ?? objectDebugId(page, "page"),
-      pageClosed: this.isPageClosed(page)
+      pageClosed: this.isPageClosed(page),
+      storageMode: session.storageMode,
+      profilePath: session.profilePath
     };
   }
 
@@ -539,9 +545,13 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     let pageUrl: string | null = null;
     let pageTitle: string | null = null;
     let pageClosed: boolean | null = null;
+    let storageMode: BrowserSessionStorageMode | null = null;
+    let profilePath: string | null = null;
     try {
       if (session) {
         contextCount = 1;
+        storageMode = session.storageMode;
+        profilePath = session.profilePath;
         contextDebugId = session.contextDebugId ?? objectDebugId(session.context, "context");
         const pages = typeof session.context.pages === "function" ? session.context.pages() : [];
         pageCount = pages.length;
@@ -576,7 +586,9 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
         pageDebugId,
         pageUrl,
         pageTitle,
-        pageClosed
+        pageClosed,
+        storageMode,
+        profilePath
       });
     } catch {
       // Diagnostics must never change the login result.

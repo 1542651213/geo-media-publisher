@@ -23,13 +23,13 @@ import type { Logger } from "@publisher/logger";
 import type { BrowserConnectionDiagnostic } from "@publisher/adapters-browser";
 import type { XiaohongshuLoginEvaluation } from "@publisher/adapters-xiaohongshu/browser";
 
-export function createRuntimeAdapterRegistry(credentials: CredentialStore, includeTestPlatform: boolean, logger?: Logger): AdapterRegistry {
+export function createRuntimeAdapterRegistry(credentials: CredentialStore, includeTestPlatform: boolean, logger?: Logger, browserProfileRootDir?: string): AdapterRegistry {
   const registry = new AdapterRegistry();
   const onBrowserRuntimeEvent = (event: BrowserRuntimeEvent): void => {
     if (event.code === "BROWSER_RUNTIME_SELECTED") logger?.info("BROWSER_RUNTIME", event.code, "已选择系统浏览器运行时", event);
     else logger?.warn("BROWSER_RUNTIME", event.code, "未检测到可用系统浏览器", event);
   };
-  const browserSessionManager = new BrowserSessionManager(credentials, { onRuntimeEvent: onBrowserRuntimeEvent });
+  const browserSessionManager = new BrowserSessionManager(credentials, { onRuntimeEvent: onBrowserRuntimeEvent, browserProfileRootDir, persistentProfilePlatforms: ["xiaohongshu"] });
   const beginDiagnostics = new Map<string, BrowserConnectionDiagnostic>();
   const connectionDiagnosticKey = (diagnostic: BrowserConnectionDiagnostic): string => `${diagnostic.platformKey}:${diagnostic.accountId}`;
   const onXiaohongshuConnectionDiagnostic = (diagnostic: BrowserConnectionDiagnostic): void => {
