@@ -77,6 +77,25 @@ describe("BrowserSessionManager credential boundary", () => {
     expect(context.close).not.toHaveBeenCalled();
   });
 
+  it("rejects closing an XHS operation Page under a different platform identity", async () => {
+    const canonicalPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), close: vi.fn(async () => undefined) };
+    const operationPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), close: vi.fn(async () => undefined) };
+    const context = {
+      setDefaultTimeout: vi.fn(),
+      newPage: vi.fn().mockResolvedValueOnce(canonicalPage).mockResolvedValueOnce(operationPage),
+      pages: vi.fn(() => [canonicalPage, operationPage]),
+      close: vi.fn(async () => undefined)
+    } as unknown as BrowserContext;
+    const browser = { newContext: vi.fn(async () => context), close: vi.fn(async () => undefined), isConnected: vi.fn(() => true) } as unknown as Browser;
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser: vi.fn(async () => browser) });
+    const identity = { platformKey: "xiaohongshu", accountId: "account-platform-boundary" };
+    const operation = await manager.openOperationPage(identity, userAction);
+
+    await expect(manager.closeOperationPage({ platformKey: "other-platform", accountId: "account-other-platform" }, operation.page)).rejects.toThrow("Operation Page");
+    expect(operation.page.close).not.toHaveBeenCalled();
+    expect(context.close).not.toHaveBeenCalled();
+  });
+
   it("saves and clears storage state through the credential store without launching a browser", async () => {
     const store = new MemoryCredentialStore();
     const manager = new BrowserSessionManager(store);
