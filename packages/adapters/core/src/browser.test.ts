@@ -231,6 +231,7 @@ describe("BrowserSessionManager credential boundary", () => {
       const manager = new BrowserSessionManager(store, {
         browserProfileRootDir: root,
         persistentProfilePlatforms: ["xiaohongshu"],
+        persistentProfileCredentialSnapshotPlatforms: [],
         launchPersistentContext
       } as never);
 
@@ -238,6 +239,35 @@ describe("BrowserSessionManager credential boundary", () => {
 
       expect(launchPersistentContext).toHaveBeenCalledTimes(1);
       expect(session).toMatchObject({ storageMode: "PERSISTENT_PROFILE", credentialSnapshotInjected: false });
+      await manager.close(session);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves legacy snapshot seeding for persistent platforms without a platform policy override", async () => {
+    const root = await mkdtemp(join(tmpdir(), "publisher-browser-profile-legacy-default-test-"));
+    try {
+      const page = { url: vi.fn(() => "about:blank"), isClosed: vi.fn(() => false) };
+      const context = {
+        browser: vi.fn(() => ({ close: vi.fn(async () => undefined) })),
+        setDefaultTimeout: vi.fn(),
+        newPage: vi.fn(async () => page),
+        pages: vi.fn(() => [page]),
+        close: vi.fn(async () => undefined)
+      } as unknown as BrowserContext;
+      const store = new MemoryCredentialStore();
+      const storedState = { cookies: [], origins: [] };
+      store.set("session:legacy-platform:account-1", JSON.stringify(storedState));
+      const launchPersistentContext = vi.fn(async (_userDataDir: string, options: { storageState?: unknown }) => {
+        expect(options.storageState).toEqual(storedState);
+        return context;
+      });
+      const manager = new BrowserSessionManager(store, { browserProfileRootDir: root, persistentProfilePlatforms: ["legacy-platform"], launchPersistentContext } as never);
+
+      const session = await manager.open({ platformKey: "legacy-platform", accountId: "account-1" }, userAction);
+
+      expect(session.credentialSnapshotInjected).toBe(true);
       await manager.close(session);
     } finally {
       await rm(root, { recursive: true, force: true });

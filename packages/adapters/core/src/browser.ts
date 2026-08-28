@@ -196,7 +196,8 @@ export class PlaywrightSessionManager {
     const profileInitialized = persistentProfilePath ? await pathExists(join(persistentProfilePath, ".gmp-profile-initialized")) : false;
     if (persistentProfilePath) await mkdir(persistentProfilePath, { recursive: true });
     if (persistentProfilePath) {
-      const shouldInjectCredentialSnapshot = Boolean(!profileInitialized && storageState && this.options.persistentProfileCredentialSnapshotPlatforms?.includes(identity.platformKey));
+      const snapshotPlatforms = this.options.persistentProfileCredentialSnapshotPlatforms;
+      const shouldInjectCredentialSnapshot = Boolean(!profileInitialized && storageState && (snapshotPlatforms === undefined || snapshotPlatforms.includes(identity.platformKey)));
       const persistentLaunch = await this.launchPersistentBrowser(persistentProfilePath, headless, shouldInjectCredentialSnapshot ? storageState : undefined);
       const context = persistentLaunch.context;
       const browser = context.browser();
