@@ -203,6 +203,7 @@ export class PlaywrightSessionManager {
   private readonly operationPages = new WeakMap<BrowserSession, Set<Page>>();
   private readonly disconnectListenerCleanups = new WeakMap<BrowserSession, () => void>();
   private readonly explicitCloseSessions = new Set<BrowserSession>();
+  private closeAllGeneration = 0;
   readonly debugId = randomUUID();
 
   constructor(private readonly credentials: CredentialStore, private readonly options: BrowserSessionManagerOptions = {}) {}
@@ -215,7 +216,7 @@ export class PlaywrightSessionManager {
     if (existing) await this.close(existing);
     const pending = this.pendingOpenPromises.get(key);
     if (pending) return pending;
-    const creation = this.openFresh(identity, executionMode);
+    const creation = this.openFresh(identity, executionMode, this.closeAllGeneration);
     this.pendingOpenPromises.set(key, creation);
     try {
       return await creation;
@@ -224,7 +225,7 @@ export class PlaywrightSessionManager {
     }
   }
 
-  private async openFresh(identity: BrowserSessionIdentity, executionMode: BrowserExecutionMode): Promise<BrowserSession> {
+  private async openFresh(identity: BrowserSessionIdentity, executionMode: BrowserExecutionMode, closeAllGeneration: number): Promise<BrowserSession> {
     const stored = this.credentials.get(browserSessionCredentialKey(identity));
     let storageState: StorageState | undefined;
     if (stored) {
@@ -253,8 +254,12 @@ export class PlaywrightSessionManager {
         await context.close().catch(() => undefined);
         throw new BrowserRuntimeError({ errorCode: "BROWSER_RUNTIME_LAUNCH_FAILED", module: "BrowserSessionManager", timestamp: new Date().toISOString(), attemptedChannels: [...SYSTEM_BROWSER_CHANNELS] });
       }
-      await writeFile(join(persistentProfilePath, ".gmp-profile-initialized"), "v1\n", { flag: "a" });
       const session = { browser, context, page, hasStoredSession: Boolean(storageState) || profileInitialized, sessionIdHash: browserSessionIdHash(identity), executionMode, headless, storageMode: "PERSISTENT_PROFILE" as const, profilePath: persistentProfilePath, browserChannel: persistentLaunch.channel, credentialSnapshotInjected: shouldInjectCredentialSnapshot, contextDebugId: randomUUID(), pageDebugId: randomUUID() };
+      if (closeAllGeneration !== this.closeAllGeneration) {
+        await this.closeUnregisteredSession(session);
+        throw new Error("Browser session open was cancelled by closeAll");
+      }
+      await writeFile(join(persistentProfilePath, ".gmp-profile-initialized"), "v1\n", { flag: "a" });
       this.ownedSessions.add(session);
       this.sessionIdentities.set(session, identity);
       this.activeSessions.set(browserSessionCredentialKey(identity), session);
@@ -282,6 +287,10 @@ export class PlaywrightSessionManager {
       throw new BrowserRuntimeError({ errorCode: "BROWSER_RUNTIME_LAUNCH_FAILED", module: "BrowserSessionManager", timestamp: new Date().toISOString(), attemptedChannels: [...SYSTEM_BROWSER_CHANNELS] });
     }
     const session = { browser, context, page, hasStoredSession: Boolean(storageState), sessionIdHash: browserSessionIdHash(identity), executionMode, headless, storageMode: "EPHEMERAL_STORAGE_STATE" as const, profilePath: null, browserChannel: browserLaunch.channel, credentialSnapshotInjected: Boolean(storageState), contextDebugId: randomUUID(), pageDebugId: randomUUID() };
+    if (closeAllGeneration !== this.closeAllGeneration) {
+      await this.closeUnregisteredSession(session);
+      throw new Error("Browser session open was cancelled by closeAll");
+    }
     this.ownedSessions.add(session);
     this.sessionIdentities.set(session, identity);
     this.activeSessions.set(browserSessionCredentialKey(identity), session);
@@ -421,13 +430,15 @@ export class PlaywrightSessionManager {
   }
 
   async closeAll(): Promise<void> {
+    this.closeAllGeneration += 1;
     const affectedKeys = new Set<string>([
       ...this.activeSessions.keys(),
       ...this.pendingConnections.values(),
       ...this.pendingOpenPromises.keys()
     ]);
     const sessions = [...this.ownedSessions];
-    await Promise.allSettled(sessions.map((session) => this.close(session)));
+    const pendingOpens = [...this.pendingOpenPromises.values()];
+    await Promise.allSettled([...sessions.map((session) => this.close(session)), ...pendingOpens]);
     for (const key of affectedKeys) this.updateRuntimeState(key, "UNVERIFIED", this.runtimeStates.get(key)?.contextDebugId ?? null, null);
     this.activeSessions.clear();
     this.pendingOpenPromises.clear();
@@ -600,7 +611,10 @@ export class PlaywrightSessionManager {
 
   private handleBrowserDisconnected(identity: BrowserSessionIdentity, session: BrowserSession): void {
     const key = browserSessionCredentialKey(identity);
-    if (this.activeSessions.get(key) !== session && !this.ownedSessions.has(session)) return;
+    if (this.activeSessions.get(key) !== session) {
+      this.releaseSession(session);
+      return;
+    }
     this.pendingOpenPromises.delete(key);
     this.updateRuntimeState(key, "DISCONNECTED", session.contextDebugId ?? null, null);
     this.releaseSession(session, identity);
@@ -619,6 +633,11 @@ export class PlaywrightSessionManager {
     for (const [key, active] of this.activeSessions) {
       if (active === session) this.activeSessions.delete(key);
     }
+  }
+
+  private async closeUnregisteredSession(session: BrowserSession): Promise<void> {
+    await session.context.close().catch(() => undefined);
+    if (session.storageMode !== "PERSISTENT_PROFILE") await session.browser.close().catch(() => undefined);
   }
 
 }

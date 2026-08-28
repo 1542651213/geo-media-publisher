@@ -409,6 +409,46 @@ describe("BrowserSessionManager credential boundary", () => {
     expect(launchPersistentContext).toHaveBeenCalledTimes(1);
   });
 
+  it("does not re-register a session when closeAll races with a pending XHS open", async () => {
+    let releaseLaunch: (() => void) | undefined;
+    let pageClosed = false;
+    const launchGate = new Promise<void>((resolve) => { releaseLaunch = resolve; });
+    const page = {
+      isClosed: vi.fn(() => pageClosed),
+      url: vi.fn(() => "about:blank")
+    };
+    const context = {
+      browser: vi.fn(() => browser),
+      setDefaultTimeout: vi.fn(),
+      newPage: vi.fn(async () => page),
+      pages: vi.fn(() => [page]),
+      close: vi.fn(async () => { pageClosed = true; })
+    } as unknown as BrowserContext;
+    const browser = {
+      close: vi.fn(async () => undefined),
+      isConnected: vi.fn(() => !pageClosed)
+    } as unknown as Browser;
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), {
+      browserProfileRootDir: "C:\\temp\\browser-profiles",
+      persistentProfilePlatforms: ["xiaohongshu"],
+      platformPolicies: { xiaohongshu: { retainContextAfterPageClose: true, requireActiveContextForOperations: true } },
+      launchPersistentContext: vi.fn(async () => {
+        await launchGate;
+        return context;
+      })
+    } as never);
+    const identity = { platformKey: "xiaohongshu", accountId: "account-closeall-race" };
+
+    const opening = manager.open(identity, userAction);
+    const closing = manager.closeAll();
+    releaseLaunch?.();
+    await Promise.allSettled([opening, closing]);
+
+    expect(context.close).toHaveBeenCalledTimes(1);
+    expect(manager.getActiveSession(identity)).toBeNull();
+    expect(manager.getRuntimeAuthState(identity).state).toBe("UNVERIFIED");
+  });
+
   it("keeps authenticated runtime state after Page close and clears it on Browser disconnect", async () => {
     let disconnected: (() => void) | undefined;
     let canonicalPageClosed = false;
@@ -445,6 +485,54 @@ describe("BrowserSessionManager credential boundary", () => {
     disconnected?.();
     expect(manager.getActiveSession(identity)).toBeNull();
     expect(manager.getRuntimeAuthState(identity).state).toBe("DISCONNECTED");
+  });
+
+  it("ignores stale disconnect from an older same-key session after a newer session replaces it", async () => {
+    let staleDisconnected: (() => void) | undefined;
+    const oldPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank") };
+    const oldContext = {
+      setDefaultTimeout: vi.fn(),
+      newPage: vi.fn(async () => oldPage),
+      pages: vi.fn(() => [oldPage]),
+      close: vi.fn(async () => undefined)
+    } as unknown as BrowserContext;
+    const oldBrowser = {
+      newContext: vi.fn(async () => oldContext),
+      close: vi.fn(async () => undefined),
+      isConnected: vi.fn(() => true),
+      on: vi.fn((event: string, listener: () => void) => {
+        if (event === "disconnected") staleDisconnected = listener;
+      })
+    } as unknown as Browser;
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), {
+      launchBrowser: vi.fn(async () => oldBrowser),
+      platformPolicies: { xiaohongshu: { retainContextAfterPageClose: true, requireActiveContextForOperations: true } }
+    });
+    const identity = { platformKey: "xiaohongshu", accountId: "account-stale-disconnect" };
+    const olderSession = await manager.open(identity, userAction);
+    const newerSession = {
+      ...olderSession,
+      browser: { isConnected: vi.fn(() => true), close: vi.fn(async () => undefined) } as unknown as Browser,
+      context: {
+        setDefaultTimeout: vi.fn(),
+        newPage: vi.fn(async () => oldPage),
+        pages: vi.fn(() => [oldPage]),
+        close: vi.fn(async () => undefined)
+      } as unknown as BrowserContext,
+      contextDebugId: "newer-context-debug-id",
+      pageDebugId: "newer-page-debug-id"
+    };
+
+    manager.setActiveSession(identity, newerSession);
+    manager.setRuntimeAuthState(identity, "AUTHENTICATED", "newer session");
+    staleDisconnected?.();
+
+    expect(manager.getActiveSession(identity)).toBe(newerSession);
+    expect(manager.getRuntimeAuthState(identity)).toMatchObject({
+      state: "AUTHENTICATED",
+      contextDebugId: "newer-context-debug-id",
+      reason: "newer session"
+    });
   });
 
   it("closes only owned contexts during shutdown and leaves different accounts isolated", async () => {
