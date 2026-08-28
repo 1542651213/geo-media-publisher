@@ -8,6 +8,7 @@ import type {
   PublishStatusResult,
   ValidationResult
 } from "@publisher/domain";
+import type { BrowserSessionRuntimeState } from "./browser";
 import type { PlatformAdapter } from "./index";
 
 export interface AutomationPrepareResult {
@@ -37,6 +38,8 @@ export interface AutomationAdapter extends PlatformAdapter {
   releaseOperationSession?(ctx: AccountContext): Promise<void>;
   /** Releases the visible login-only session after account identity has been persisted. */
   releaseConnectionSession?(ctx: AccountContext): Promise<void>;
+  /** Releases only the visible connection Page while retaining the owned Context when supported. */
+  releaseConnectionPage?(ctx: AccountContext): Promise<void>;
   /** Persists a deferred visible login Session after same-Page identity readback. */
   persistConnectionSession?(ctx: AccountContext): Promise<void>;
   /** Rebinds a just-connected account-scoped Session to a uniquely restored archived account. */
@@ -67,6 +70,8 @@ export interface AutomationAdapter extends PlatformAdapter {
     contextDebugId: string | null;
     pageDebugId: string | null;
   };
+  /** Returns the manager-authored runtime auth state for the account-scoped browser session. */
+  getBrowserRuntimeState?(ctx: AccountContext): BrowserSessionRuntimeState;
   /** Releases only browser resources created and owned by this adapter. */
   closeOwnedSessions?(): Promise<void>;
   publishArticle(ctx: AccountContext, article: PublishArticleInput): Promise<PublishResult>;

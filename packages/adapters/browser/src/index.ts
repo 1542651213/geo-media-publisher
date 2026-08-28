@@ -12,7 +12,7 @@ import type {
   ValidationResult
 } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
-import { BrowserSessionManager, browserExecutionModeFromSettings, browserSessionCredentialKey, browserSessionIdHash, PlatformAdapterError, userInitiatedActionFromSettings, type BrowserExecutionMode, type BrowserRuntimeEvent, type BrowserSession, type BrowserSessionStorageMode, type SystemBrowserChannel } from "@publisher/adapters-core";
+import { BrowserSessionManager, browserExecutionModeFromSettings, browserSessionCredentialKey, browserSessionIdHash, PlatformAdapterError, userInitiatedActionFromSettings, type BrowserExecutionMode, type BrowserRuntimeEvent, type BrowserSession, type BrowserSessionRuntimeState, type BrowserSessionStorageMode, type SystemBrowserChannel } from "@publisher/adapters-core";
 import type { CredentialStore } from "@publisher/security";
 import type { AutomationAdapter, AutomationPrepareResult } from "@publisher/adapters-core";
 
@@ -319,7 +319,8 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
 
   async releaseConnectionSession(ctx: AccountContext): Promise<void> {
     const identity = this.identity(ctx);
-    try { await this.closeActive(identity); }
+    const session = await this.getOrOpen(ctx);
+    try { if (session) await this.closeActive(identity); }
     finally { this.finishConnection(identity); }
   }
 
@@ -381,6 +382,10 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     return { adapterDebugId: this.adapterDebugId, browserSessionManagerDebugId: this.sessionManager.debugId };
   }
 
+  getBrowserRuntimeState(ctx: AccountContext): BrowserSessionRuntimeState {
+    return this.runtimeAuthState(this.identity(ctx));
+  }
+
   getBrowserConnectionDebugState(ctx: AccountContext): {
     requestedAccountId: string;
     activeSessionKeys: string[];
@@ -408,9 +413,12 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
   protected sessionHash(ctx: AccountContext): string { return browserSessionIdHash(this.identity(ctx)); }
 
   protected async openBackendPage(ctx: AccountContext, url = this.definition.backendUrl): Promise<{ page: Awaited<ReturnType<BrowserSession["context"]["newPage"]>>; session: BrowserSession; backendUrl: string }> {
+    const identity = this.identity(ctx);
     const session = await this.getOrOpen(ctx);
     if (!session) throw new BrowserAutomationError("USER_ACTION_REQUIRED", `${this.definition.displayName}尚未连接账号，请先完成官方登录`);
-    const page = await this.page(session);
+    const page = this.requiresActiveContextForOperations(identity)
+      ? (await this.sessionManager.openOperationPage(identity, userInitiatedActionFromSettings(ctx.settings), session.executionMode)).page
+      : await this.page(session);
     await this.navigate(page, url);
     if (this.isLoginPage(page.url())) throw new BrowserAutomationError("LOGIN_EXPIRED", `${this.definition.displayName} Session 已过期，请重新登录`);
     return { page, session, backendUrl: page.url() };
@@ -438,6 +446,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     const identity = this.identity(ctx);
     const active = this.activeSession(identity);
     if (active?.executionMode === executionMode) return active;
+    if (this.requiresActiveContextForOperations(identity)) return null;
     if (active) await this.closeActive(identity);
     if (!this.sessionManager.hasStoredSession(identity)) return null;
     const session = await this.sessionManager.open(identity, userInitiatedActionFromSettings(ctx.settings), executionMode);
@@ -448,7 +457,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
   protected async page(session: BrowserSession) {
     const context = session.context as unknown as { pages?: () => Awaited<ReturnType<BrowserSession["context"]["pages"]>> } | undefined;
     const pages = typeof context?.pages === "function" ? context.pages() : undefined;
-    const page = session.page ?? pages?.[0];
+    const page = (!this.isPageClosed(session.page) ? session.page : undefined) ?? pages?.find((candidate) => !this.isPageClosed(candidate)) ?? pages?.[0];
     if (!page) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "BrowserSession/Page mismatch：当前 account-scoped Session 没有可验证的 owner Page");
     if (pages && !pages.includes(page)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "BrowserSession/Page mismatch：当前 owner Page 不属于 account-scoped BrowserContext");
     return page;
@@ -497,6 +506,14 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     const managed = manager.getActiveSession?.(identity) ?? null;
     const session = managed ?? this.fallbackActiveSessions.get(`${identity.platformKey}:${identity.accountId}`) ?? null;
     if (session && this.isPageClosed(session.page)) {
+      if (this.retainsContextAfterPageClose(identity)) {
+        try {
+          session.context.pages();
+          return session;
+        } catch {
+          // Fall through to clear the disconnected session.
+        }
+      }
       manager.clearActiveSession?.(identity);
       this.fallbackActiveSessions.delete(`${identity.platformKey}:${identity.accountId}`);
       return null;
@@ -550,6 +567,26 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     if (!page || typeof page !== "object") return false;
     const candidate = page as { isClosed?: () => boolean };
     return typeof candidate.isClosed === "function" && candidate.isClosed();
+  }
+
+  private requiresActiveContextForOperations(identity: { platformKey: string; accountId: string }): boolean {
+    const manager = this.sessionManager as unknown as { requiresActiveContextForOperations?: (value: { platformKey: string; accountId: string }) => boolean };
+    return Boolean(manager.requiresActiveContextForOperations?.(identity));
+  }
+
+  private retainsContextAfterPageClose(identity: { platformKey: string; accountId: string }): boolean {
+    const manager = this.sessionManager as unknown as { retainsContextAfterPageClose?: (value: { platformKey: string; accountId: string }) => boolean };
+    return Boolean(manager.retainsContextAfterPageClose?.(identity));
+  }
+
+  private runtimeAuthState(identity: { platformKey: string; accountId: string }): BrowserSessionRuntimeState {
+    const manager = this.sessionManager as unknown as { getRuntimeAuthState?: (value: { platformKey: string; accountId: string }) => BrowserSessionRuntimeState };
+    return manager.getRuntimeAuthState?.(identity) ?? {
+      state: "UNVERIFIED",
+      contextDebugId: null,
+      updatedAt: new Date(0).toISOString(),
+      reason: null
+    };
   }
 
   private async emitConnectionDiagnostic(phase: BrowserConnectionDiagnosticPhase, ctx: AccountContext, session: BrowserSession | null): Promise<void> {

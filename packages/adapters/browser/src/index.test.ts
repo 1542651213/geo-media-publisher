@@ -114,6 +114,22 @@ describe("BrowserAutomationAdapter login lifecycle", () => {
     expect(manager.close).toHaveBeenCalledTimes(1);
   });
 
+  it("does not cold-open a policy-enabled account for a normal backend operation", async () => {
+    const open = vi.fn(async () => { throw new Error("cold open must not run"); });
+    const manager = {
+      getActiveSession: vi.fn(() => null),
+      requiresActiveContextForOperations: vi.fn(() => true),
+      hasStoredSession: vi.fn(() => true),
+      open,
+      getRuntimeAuthState: vi.fn(() => ({ state: "UNVERIFIED", contextDebugId: null, updatedAt: new Date(0).toISOString(), reason: null }))
+    } as unknown as BrowserSessionManager;
+    const adapter = new BrowserAutomationAdapter({ ...definition, platformKey: "xiaohongshu" }, { sessionManager: manager });
+    const ctx = { ...context(), platformKey: "xiaohongshu" };
+
+    await expect(adapter.openBackend(ctx)).rejects.toMatchObject({ code: "USER_ACTION_REQUIRED" });
+    expect(open).not.toHaveBeenCalled();
+  });
+
   it("keeps a VISIBLE operation session open for user handling", async () => {
     const { adapter, manager } = fixture(false, true);
     const ctx: AccountContext = { ...context(), settings: { userActionId: "77777777-7777-4777-8777-777777777777", triggerSource: "OPEN_BACKEND", browserExecutionMode: "VISIBLE" } };
@@ -146,5 +162,12 @@ describe("BrowserAutomationAdapter login lifecycle", () => {
 
     expect(manager.open).toHaveBeenCalledTimes(1);
     expect(manager.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the legacy context-closing release for ordinary browser platforms", async () => {
+    const fixtureState = fixture(false, true);
+
+    await fixtureState.adapter.releaseConnectionSession(context());
+    expect(fixtureState.manager.close).toHaveBeenCalledTimes(1);
   });
 });
