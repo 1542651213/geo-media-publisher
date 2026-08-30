@@ -484,6 +484,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const opened = await this.sessionManager.openOperationPage(identity, userInitiatedActionFromSettings(ctx.settings), browserExecutionModeFromSettings(ctx.settings));
     this.sessionManager.setRuntimeAuthState(identity, "CHECKING", null);
     try {
+      await this.navigate(opened.page, XIAOHONGSHU_CREATOR_HOME);
       const status = await this.loginStatusForPage(ctx, opened.page, "CHECK_LOGIN");
       const state = status === "logged_in" ? "AUTHENTICATED" : status === "unknown" ? "UNVERIFIED" : "NEEDS_USER_ACTION";
       this.sessionManager.setRuntimeAuthState(identity, state, status === "logged_in" ? null : status);

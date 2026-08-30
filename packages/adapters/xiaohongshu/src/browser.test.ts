@@ -35,6 +35,7 @@ type FixtureOptions = {
   secondConfirmation?: boolean;
   loginPage?: boolean;
   pagePresentInContext?: boolean;
+  operationPageInitialUrl?: string;
 };
 
 interface Fixture {
@@ -46,6 +47,7 @@ interface Fixture {
   open: ReturnType<typeof vi.fn>;
   operationPageDebugIds: string[];
   operationContextDebugIds: string[];
+  operationPages: Page[];
   calls: string[];
 }
 
@@ -143,6 +145,7 @@ function setupPage(options: FixtureOptions = {}): Fixture {
   let setActivePageUrl: ((url: string) => void) | null = null;
   const operationPageDebugIds: string[] = [];
   const operationContextDebugIds: string[] = [];
+  const operationPages: Page[] = [];
   const submitClick = vi.fn(async () => { calls.push("final-submit-click"); });
   const inputSetFiles = vi.fn(async () => { imageUploaded = true; calls.push("image-set-input-files"); });
   const entryClick = vi.fn(async () => {
@@ -309,13 +312,14 @@ function setupPage(options: FixtureOptions = {}): Fixture {
       session,
       context,
       createOperationPage: () => {
-        const operationPage = createPage(creatorHomeUrl);
+        const operationPage = createPage(options.operationPageInitialUrl ?? creatorHomeUrl);
         contextPages = [...contextPages, operationPage];
+        operationPages.push(operationPage);
         return operationPage;
       }
     }
   } as unknown as BrowserSessionManager;
-  const fixture = { page, manager, submitClick, inputSetFiles, entryClick, open, operationPageDebugIds, operationContextDebugIds, calls };
+  const fixture = { page, manager, submitClick, inputSetFiles, entryClick, open, operationPageDebugIds, operationContextDebugIds, operationPages, calls };
   installSharedConnectionLifecycle(fixture);
   return fixture;
 }
@@ -683,6 +687,22 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
 
     await expect(adapter.checkLogin(context("account-a"))).resolves.toBe("needs_user_action");
     expect(fixture.manager.open).not.toHaveBeenCalled();
+  });
+
+  it("navigates a fresh same-context operation Page before checking login", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", operationPageInitialUrl: "about:blank" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "账号状态正常"] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    await adapter.completeConnection(ctx);
+    await adapter.persistConnectionSession(ctx);
+    await adapter.releaseConnectionPage?.(ctx);
+
+    await expect(adapter.checkLogin(ctx)).resolves.toBe("logged_in");
+    expect(fixture.operationPages).toHaveLength(1);
+    expect(fixture.operationPages[0].goto).toHaveBeenCalledWith("https://creator.xiaohongshu.com/", expect.objectContaining({ waitUntil: "domcontentloaded" }));
   });
 
   it("reads XHS profile on a temporary same-Context Page after login Page release", async () => {
