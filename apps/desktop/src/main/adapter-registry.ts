@@ -21,7 +21,7 @@ import { CnblogsOfficialApiAdapter } from "@publisher/adapters-cnblogs";
 import type { CredentialStore } from "@publisher/security";
 import type { Logger } from "@publisher/logger";
 import type { BrowserConnectionDiagnostic } from "@publisher/adapters-browser";
-import type { XiaohongshuAuthStateDiagnostic, XiaohongshuLoginEvaluation } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuAuthStateDiagnostic, XiaohongshuCanonicalPageOperationEvidence, XiaohongshuLoginEvaluation } from "@publisher/adapters-xiaohongshu/browser";
 
 export function createRuntimeAdapterRegistry(credentials: CredentialStore, includeTestPlatform: boolean, logger?: Logger, browserProfileRootDir?: string, credentialFilePath?: string): AdapterRegistry {
   const registry = new AdapterRegistry();
@@ -68,6 +68,10 @@ export function createRuntimeAdapterRegistry(credentials: CredentialStore, inclu
   const onXiaohongshuLoginEvaluation = (evaluation: XiaohongshuLoginEvaluation): void => {
     logger?.info("ACCOUNT", evaluation.phase, "小红书 installed-app 当前 Page 登录证据", { ...evaluation });
   };
+  const onXiaohongshuCanonicalPageOperation = (evidence: XiaohongshuCanonicalPageOperationEvidence): void => {
+    const code = evidence.phase === "STARTED" ? "XHS_CANONICAL_PAGE_OPERATION_STARTED" : "XHS_CANONICAL_PAGE_OPERATION_COMPLETED";
+    logger?.info("ACCOUNT", code, "小红书 canonical authenticated Page checkLogin 生命周期诊断", { ...evidence });
+  };
   const onXiaohongshuAuthStateDiagnostic = (diagnostic: XiaohongshuAuthStateDiagnostic): void => {
     logger?.info("ACCOUNT", "XHS_AUTH_STATE_DIAGNOSTIC", "小红书 auth state 重启诊断", diagnostic as unknown as Record<string, unknown>);
   };
@@ -95,6 +99,7 @@ export function createRuntimeAdapterRegistry(credentials: CredentialStore, inclu
     onBrowserRuntimeEvent,
     onConnectionDiagnostic: onXiaohongshuConnectionDiagnostic,
     onLoginEvaluation: onXiaohongshuLoginEvaluation,
+    onCanonicalPageOperation: onXiaohongshuCanonicalPageOperation,
     onAuthStateDiagnostic: onXiaohongshuAuthStateDiagnostic,
     credentialFilePath
   }));

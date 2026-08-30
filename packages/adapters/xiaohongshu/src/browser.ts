@@ -1,6 +1,6 @@
 import type { AccountContext, AccountProfile, LoginSession, LoginStatus, PublishArticleInput, ValidationResult } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
-import { type AutomationPrepareResult, type BrowserSession, type BrowserSessionRuntimeSnapshot } from "@publisher/adapters-core";
+import { type AutomationPrepareResult, type BrowserRuntimeAuthState, type BrowserSession, type BrowserSessionRuntimeSnapshot } from "@publisher/adapters-core";
 import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomationAdapterOptions, type BrowserPlatformDefinition, type BrowserSessionScopeEvidence } from "@publisher/adapters-browser";
 import type { Locator, Page } from "playwright-core";
 import { collectXhsAuthStateMetadata, collectXhsPreNavigationAuthStateMetadata, createXhsDiagnosticFingerprintKey, type XhsAuthStateMetadata } from "./auth-state-diagnostics";
@@ -116,6 +116,7 @@ export type XiaohongshuLoginDecision = "logged_in" | "needs_user_action" | "logi
 
 export interface XiaohongshuLoginEvaluation {
   phase: "CHECK_LOGIN" | "COMPLETE_LOGIN_CHECK";
+  operationId?: string;
   timestamp: string;
   platformKey: string;
   accountId: string;
@@ -141,6 +142,32 @@ export interface XiaohongshuLoginEvaluation {
   stableObservationWindowMs: number;
   stableObservationSamples: number;
   stableObservationPassed: boolean;
+}
+
+export type XiaohongshuCanonicalPageOperationPhase = "STARTED" | "COMPLETED";
+
+export interface XiaohongshuCanonicalPageOperationEvidence {
+  phase: XiaohongshuCanonicalPageOperationPhase;
+  timestamp: string;
+  operationId: string;
+  platformKey: "xiaohongshu";
+  accountId: string;
+  action: "CHECK_LOGIN";
+  contextDebugId: string;
+  pageDebugId: string;
+  pageRole: "CANONICAL_AUTHENTICATED";
+  pageSource: "EXISTING_CANONICAL_PAGE";
+  createdNewPage: false;
+  pageContextMatchesSession: boolean;
+  browserConnected: boolean;
+  pageClosed: boolean;
+  runtimeAuthState: BrowserRuntimeAuthState;
+  activeOperation: string | null;
+  mutexLocked: boolean;
+  operationInProgress: boolean;
+  sanitizedUrl: string;
+  finalStatus?: LoginStatus;
+  sanitizedFinalUrl?: string;
 }
 
 export type XiaohongshuAuthStateDiagnosticPhase = "LIVE_LOGIN_BEFORE_CLOSE" | "AUTH_STATE_BEFORE_CLOSE";
@@ -190,6 +217,7 @@ export interface XiaohongshuSameContextPageDiagnostic {
 export interface XiaohongshuBrowserAdapterOptions extends BrowserAutomationAdapterOptions {
   onLoginEvaluation?: (evaluation: XiaohongshuLoginEvaluation) => void;
   onAuthStateDiagnostic?: (diagnostic: XiaohongshuAuthStateDiagnostic) => void;
+  onCanonicalPageOperation?: (evidence: XiaohongshuCanonicalPageOperationEvidence) => void;
   credentialFilePath?: string;
   loginStabilityWindowMs?: number;
 }
@@ -286,6 +314,15 @@ function emptyPageEvidence(page: XhsDocument): XiaohongshuPageEvidence {
     login: { available: false, url, creatorHost: false, creatorHomePath: false, explicitLoginUrl: /\/login(?:[/?#]|$)|\/signin(?:[/?#]|$)|passport|auth/iu.test(url), verificationUrl: /captcha|security[-_/]?check|sms[-_/]?verify|qr[-_/]?login|risk[-_/]?control/iu.test(url), publishNoteVisible: false, noteManagementVisible: false, dataDashboardVisible: false, accountStatusVisible: false, profileAreaVisible: false, visibleLoginForm: false, visibleQrLogin: false, visibleSmsVerification: false, visibleCaptcha: false, visibleSlider: false, visibleSecurityModal: false, positiveSignals: [], blockingSignals: [] },
     identity: { externalAccountId: null, externalAccountIdCandidates: [], displayName: null, profileUrl: null }
   };
+}
+
+function sanitizePageUrl(page: Page): string {
+  try {
+    const parsed = new URL(page.url());
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return "about:blank";
+  }
 }
 
 async function readXiaohongshuPageEvidence(page: Page): Promise<XiaohongshuPageEvidence> {
@@ -474,9 +511,11 @@ export class AccountOperationMutex {
 export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
   private readonly onLoginEvaluation?: (evaluation: XiaohongshuLoginEvaluation) => void;
   private readonly onAuthStateDiagnostic?: (diagnostic: XiaohongshuAuthStateDiagnostic) => void;
+  private readonly onCanonicalPageOperation?: (evidence: XiaohongshuCanonicalPageOperationEvidence) => void;
   private readonly credentialFilePath: string | null;
   private readonly loginStabilityWindowMs: number;
   private readonly accountOperationMutex = new AccountOperationMutex();
+  private readonly completedCheckLoginOperationIds = new Map<string, string[]>();
   /** Replaced at the start of each login/restore diagnostic run; never emitted or persisted. */
   private authStateFingerprintKey: Uint8Array | null = null;
 
@@ -484,6 +523,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     super(definition, options);
     this.onLoginEvaluation = options.onLoginEvaluation;
     this.onAuthStateDiagnostic = options.onAuthStateDiagnostic;
+    this.onCanonicalPageOperation = options.onCanonicalPageOperation;
     this.credentialFilePath = options.credentialFilePath ?? null;
     this.loginStabilityWindowMs = Math.max(0, options.loginStabilityWindowMs ?? DEFAULT_LOGIN_STABILITY_WINDOW_MS);
   }
@@ -509,12 +549,33 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         this.sessionManager.setRuntimeAuthState(identity, "NEEDS_USER_ACTION", "ACTIVE_CANONICAL_PAGE_REQUIRED");
         return "needs_user_action";
       }
+      const operationId = randomUUID();
       this.sessionManager.setRuntimeAuthState(identity, "CHECKING", null);
-      const status = await this.loginStatusForPage(ctx, canonical.page, "CHECK_LOGIN");
-      const state = status === "logged_in" ? "AUTHENTICATED" : status === "unknown" ? "UNVERIFIED" : "NEEDS_USER_ACTION";
-      this.sessionManager.setRuntimeAuthState(identity, state, status === "logged_in" ? null : status);
-      return status;
+      const pageContextMatchesSession = this.pageContextMatchesSession(canonical.session, canonical.page);
+      this.emitCanonicalPageOperation(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "STARTED", pageContextMatchesSession);
+      try {
+        if (!pageContextMatchesSession) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "BrowserSession/Page mismatch：小红书 checkLogin canonical Page 不属于当前 Context");
+        const status = await this.loginStatusForPage(ctx, canonical.page, "CHECK_LOGIN", operationId);
+        const state = status === "logged_in" ? "AUTHENTICATED" : status === "unknown" ? "UNVERIFIED" : "NEEDS_USER_ACTION";
+        this.sessionManager.setRuntimeAuthState(identity, state, status === "logged_in" ? null : status);
+        this.emitCanonicalPageOperation(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "COMPLETED", true, status);
+        return status;
+      } catch (error) {
+        this.emitCanonicalPageOperation(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "COMPLETED", pageContextMatchesSession, "unknown");
+        throw error;
+      } finally {
+        this.recordCompletedCheckLoginOperation(identity.accountId, operationId);
+      }
     }, "checkLogin");
+  }
+
+  /** Diagnostic correlation for the main-process CONNECTION_TEST log; it never changes checkLogin behavior. */
+  consumeCompletedCheckLoginOperationId(accountId: string): string | null {
+    const key = `${this.platformKey}:${accountId}`;
+    const queue = this.completedCheckLoginOperationIds.get(key);
+    const operationId = queue?.shift() ?? null;
+    if (queue && queue.length === 0) this.completedCheckLoginOperationIds.delete(key);
+    return operationId;
   }
 
   override async openBackend(ctx: AccountContext) {
@@ -742,18 +803,18 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
 
   protected override keepConnectionPageForCompletion(_ctx: AccountContext): boolean { return true; }
 
-  private async loginStatusForPage(ctx: AccountContext, page: Page, phase: XiaohongshuLoginEvaluation["phase"]): Promise<LoginStatus> {
+  private async loginStatusForPage(ctx: AccountContext, page: Page, phase: XiaohongshuLoginEvaluation["phase"], operationId?: string): Promise<LoginStatus> {
     // Creator performs client-side redirects after the initial DOM navigation.
     // Give that redirect a bounded opportunity to settle before accepting a
     // logged-in result; otherwise a home-page probe can race a later /login.
     await waitForProbe(page);
     const pageUrl = page.url();
     if (this.isLoginPage(pageUrl)) {
-      await this.emitLoginEvaluation(ctx, page, emptyPageEvidence(page), "login_required", phase);
+      await this.emitLoginEvaluation(ctx, page, emptyPageEvidence(page), "login_required", phase, 0, 0, false, operationId);
       return "expired";
     }
     if (this.isVerificationUrl(pageUrl)) {
-      await this.emitLoginEvaluation(ctx, page, emptyPageEvidence(page), "needs_user_action", phase);
+      await this.emitLoginEvaluation(ctx, page, emptyPageEvidence(page), "needs_user_action", phase, 0, 0, false, operationId);
       return "needs_user_action";
     }
     const evidence = await readXiaohongshuPageEvidence(page);
@@ -772,14 +833,14 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       stableObservationSamples = stable.samples;
       stableObservationPassed = stable.passed;
       if (stable.evidence !== evidence) {
-        await this.emitLoginEvaluation(ctx, page, stable.evidence, decision, phase, stableObservationWindowMs, stableObservationSamples, stableObservationPassed);
+        await this.emitLoginEvaluation(ctx, page, stable.evidence, decision, phase, stableObservationWindowMs, stableObservationSamples, stableObservationPassed, operationId);
         if (decision === "logged_in" && phase === "COMPLETE_LOGIN_CHECK" && this.isConnectionPending(ctx)) {
           await this.emitAuthStateDiagnostic(ctx, "LIVE_LOGIN_BEFORE_CLOSE", stableObservationWindowMs, stableObservationSamples, stableObservationPassed);
         }
         return this.loginStatusFromDecision(decision);
       }
     }
-    await this.emitLoginEvaluation(ctx, page, evidence, decision, phase, stableObservationWindowMs, stableObservationSamples, stableObservationPassed);
+    await this.emitLoginEvaluation(ctx, page, evidence, decision, phase, stableObservationWindowMs, stableObservationSamples, stableObservationPassed, operationId);
     if (decision === "logged_in" && phase === "COMPLETE_LOGIN_CHECK" && this.isConnectionPending(ctx)) {
       await this.emitAuthStateDiagnostic(ctx, "LIVE_LOGIN_BEFORE_CLOSE", stableObservationWindowMs, stableObservationSamples, stableObservationPassed);
     }
@@ -815,7 +876,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     return { decision: "logged_in", evidence: latestEvidence, windowMs: Date.now() - startedAt, samples, passed: true };
   }
 
-  private async emitLoginEvaluation(ctx: AccountContext, page: Page, evidence: XiaohongshuPageEvidence, decision: XiaohongshuLoginDecision, phase: XiaohongshuLoginEvaluation["phase"], stableObservationWindowMs = 0, stableObservationSamples = 0, stableObservationPassed = false): Promise<void> {
+  private async emitLoginEvaluation(ctx: AccountContext, page: Page, evidence: XiaohongshuPageEvidence, decision: XiaohongshuLoginDecision, phase: XiaohongshuLoginEvaluation["phase"], stableObservationWindowMs = 0, stableObservationSamples = 0, stableObservationPassed = false, operationId?: string): Promise<void> {
     if (!this.onLoginEvaluation) return;
     let pageUrl = "";
     let pageTitle = "";
@@ -830,7 +891,65 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     }
     const login = evidence.login;
     const blockers = [login.visibleLoginForm, login.visibleQrLogin, login.visibleSmsVerification, login.visibleCaptcha, login.visibleSlider, login.visibleSecurityModal];
-    this.onLoginEvaluation({ phase, timestamp: new Date().toISOString(), platformKey: this.platformKey, accountId: ctx.accountId, pageIsClosed, pageUrl, pageTitle, creatorDomain: login.creatorHost, creatorHomePath: login.creatorHomePath, publishNoteVisible: login.publishNoteVisible, noteManagementVisible: login.noteManagementVisible, dataDashboardVisible: login.dataDashboardVisible, accountStatusVisible: login.accountStatusVisible, profileAreaVisible: login.profileAreaVisible, visibleLoginForm: login.visibleLoginForm, visibleQrLogin: login.visibleQrLogin, visibleSmsVerification: login.visibleSmsVerification, visibleCaptcha: login.visibleCaptcha, visibleSlider: login.visibleSlider, visibleSecurityModal: login.visibleSecurityModal, positiveSignalCount: new Set(login.positiveSignals).size, blockingSignalCount: blockers.filter(Boolean).length, loginClassification: decision, stableObservationWindowMs, stableObservationSamples, stableObservationPassed });
+    this.onLoginEvaluation({ phase, ...(operationId ? { operationId } : {}), timestamp: new Date().toISOString(), platformKey: this.platformKey, accountId: ctx.accountId, pageIsClosed, pageUrl, pageTitle, creatorDomain: login.creatorHost, creatorHomePath: login.creatorHomePath, publishNoteVisible: login.publishNoteVisible, noteManagementVisible: login.noteManagementVisible, dataDashboardVisible: login.dataDashboardVisible, accountStatusVisible: login.accountStatusVisible, profileAreaVisible: login.profileAreaVisible, visibleLoginForm: login.visibleLoginForm, visibleQrLogin: login.visibleQrLogin, visibleSmsVerification: login.visibleSmsVerification, visibleCaptcha: login.visibleCaptcha, visibleSlider: login.visibleSlider, visibleSecurityModal: login.visibleSecurityModal, positiveSignalCount: new Set(login.positiveSignals).size, blockingSignalCount: blockers.filter(Boolean).length, loginClassification: decision, stableObservationWindowMs, stableObservationSamples, stableObservationPassed });
+  }
+
+  private emitCanonicalPageOperation(ctx: AccountContext, session: BrowserSession, page: Page, pageDebugId: string, operationId: string, phase: XiaohongshuCanonicalPageOperationPhase, pageContextMatchesSession: boolean, finalStatus?: LoginStatus): void {
+    if (!this.onCanonicalPageOperation) return;
+    const key = `${this.platformKey}:${ctx.accountId}`;
+    const mutex = this.accountOperationMutex.getState(key);
+    const pageClosed = this.isCanonicalPageClosed(page);
+    const evidence: XiaohongshuCanonicalPageOperationEvidence = {
+      phase,
+      timestamp: new Date().toISOString(),
+      operationId,
+      platformKey: "xiaohongshu",
+      accountId: ctx.accountId,
+      action: "CHECK_LOGIN",
+      contextDebugId: session.contextDebugId ?? "unknown-context",
+      pageDebugId,
+      pageRole: "CANONICAL_AUTHENTICATED",
+      pageSource: "EXISTING_CANONICAL_PAGE",
+      createdNewPage: false,
+      pageContextMatchesSession,
+      browserConnected: this.isBrowserConnected(session),
+      pageClosed,
+      runtimeAuthState: this.getBrowserRuntimeState(ctx).state,
+      activeOperation: mutex.activeOperation,
+      mutexLocked: mutex.mutexLocked,
+      operationInProgress: mutex.operationInProgress,
+      sanitizedUrl: sanitizePageUrl(page),
+      ...(finalStatus === undefined ? {} : { finalStatus, sanitizedFinalUrl: sanitizePageUrl(page) })
+    };
+    try { this.onCanonicalPageOperation(evidence); }
+    catch { /* diagnostics must never change the authentication result */ }
+  }
+
+  private recordCompletedCheckLoginOperation(accountId: string, operationId: string): void {
+    if (!this.onCanonicalPageOperation) return;
+    const key = `${this.platformKey}:${accountId}`;
+    const queue = this.completedCheckLoginOperationIds.get(key) ?? [];
+    queue.push(operationId);
+    this.completedCheckLoginOperationIds.set(key, queue);
+  }
+
+  private pageContextMatchesSession(session: BrowserSession, page: Page): boolean {
+    try { return page.context() === session.context; }
+    catch { return false; }
+  }
+
+  private isBrowserConnected(session: BrowserSession): boolean {
+    try {
+      const browser = session.browser as unknown as { isConnected?: () => boolean };
+      return typeof browser.isConnected === "function" && browser.isConnected();
+    } catch {
+      return false;
+    }
+  }
+
+  private isCanonicalPageClosed(page: Page): boolean {
+    try { return page.isClosed(); }
+    catch { return true; }
   }
 
   private async emitAuthStateDiagnostic(ctx: AccountContext, phase: XiaohongshuAuthStateDiagnosticPhase, stableObservationWindowMs: number | null, stableObservationSamples: number | null, stableObservationPassed: boolean | null): Promise<void> {

@@ -286,6 +286,7 @@ function setupPage(options: FixtureOptions = {}): Fixture {
   };
   pageContextRef.value = context as unknown as BrowserSession["context"];
   const session = {
+    browser: { isConnected: vi.fn(() => true) },
     page,
     executionMode: "VISIBLE",
     headless: false,
@@ -838,6 +839,62 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(fixture.page.goto).toHaveBeenCalledTimes(1);
   });
 
+  it("emits the actual canonical Page identity for each XHS checkLogin operation", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "账号状态正常"] });
+    const operations: Array<Record<string, unknown>> = [];
+    const evaluations: Array<Record<string, unknown>> = [];
+    const adapter = new XiaohongshuBrowserAdapter({
+      sessionManager: fixture.manager,
+      loginStabilityWindowMs: 0,
+      onCanonicalPageOperation: (event: Record<string, unknown>) => operations.push(event),
+      onLoginEvaluation: (evaluation: Record<string, unknown>) => evaluations.push(evaluation)
+    } as never);
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    await expect(adapter.checkLogin(ctx)).resolves.toBe("logged_in");
+
+    expect(operations).toHaveLength(2);
+    expect(operations[0]).toMatchObject({
+      phase: "STARTED",
+      platformKey: "xiaohongshu",
+      accountId: "account-a",
+      action: "CHECK_LOGIN",
+      contextDebugId: "context-debug-id",
+      pageDebugId: "canonical-page-debug-id",
+      pageRole: "CANONICAL_AUTHENTICATED",
+      pageSource: "EXISTING_CANONICAL_PAGE",
+      createdNewPage: false,
+      pageContextMatchesSession: true,
+      browserConnected: true,
+      pageClosed: false,
+      mutexLocked: true,
+      operationInProgress: true
+    });
+    expect(operations[1]).toMatchObject({
+      phase: "COMPLETED",
+      finalStatus: "logged_in",
+      contextDebugId: "context-debug-id",
+      pageDebugId: "canonical-page-debug-id",
+      pageRole: "CANONICAL_AUTHENTICATED",
+      pageSource: "EXISTING_CANONICAL_PAGE",
+      createdNewPage: false,
+      pageContextMatchesSession: true,
+      browserConnected: true,
+      pageClosed: false,
+      sanitizedFinalUrl: "https://creator.xiaohongshu.com/new/home"
+    });
+    expect(operations[0]?.operationId).toEqual(operations[1]?.operationId);
+    expect(operations[0]?.operationId).toEqual(expect.any(String));
+    expect(evaluations).toHaveLength(1);
+    expect(evaluations[0]?.operationId).toBe(operations[0]?.operationId);
+    expect(adapter.consumeCompletedCheckLoginOperationId("account-a")).toBe(operations[0]?.operationId);
+    expect(adapter.consumeCompletedCheckLoginOperationId("account-a")).toBeNull();
+    expect(fixture.page.close).not.toHaveBeenCalled();
+    expect(fixture.manager.openOperationPage).not.toHaveBeenCalled();
+  });
+
   it("reads XHS profile on the canonical Page after login Page release", async () => {
     const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
@@ -1046,11 +1103,14 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     const sessions = new Map<string, BrowserSession>();
     const pageFor = (accountId: string): Page => {
       let currentUrl = accountId === "account-a" ? "https://creator.xiaohongshu.com/login" : "https://creator.xiaohongshu.com/";
+      const ownerContextRef: { value?: BrowserSession["context"] } = {};
       const page = {
         goto: vi.fn(async (url: string) => { if (accountId !== "account-a") currentUrl = url; }),
         url: vi.fn(() => currentUrl),
-        locator: vi.fn(() => locator({ innerText: vi.fn(async () => "小红书账号") }))
+        locator: vi.fn(() => locator({ innerText: vi.fn(async () => "小红书账号") })),
+        context: vi.fn(() => ownerContextRef.value as BrowserSession["context"])
       } as unknown as Page;
+      ownerContextRef.value = { pages: () => [page] } as unknown as BrowserSession["context"];
       pages.set(accountId, page);
       return page;
     };
@@ -1058,7 +1118,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
       hasStoredSession: vi.fn((identity: { accountId: string }) => identity.accountId !== "missing-account"),
       open: vi.fn(async (identity: { accountId: string }) => {
         const page = pageFor(identity.accountId);
-        const session = { page, context: { pages: () => [page] }, executionMode: "VISIBLE", headless: false, hasStoredSession: true, sessionIdHash: `session-${identity.accountId}` } as unknown as BrowserSession;
+        const session = { page, context: page.context(), executionMode: "VISIBLE", headless: false, hasStoredSession: true, sessionIdHash: `session-${identity.accountId}`, browser: { isConnected: () => true } } as unknown as BrowserSession;
         sessions.set(identity.accountId, session);
         urls.set(identity.accountId, page.url());
         return session;

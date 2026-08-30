@@ -715,8 +715,15 @@ export function registerIpc(deps: IpcDependencies): void {
     const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);
     const action = createUserAction("CHECK_LOGIN");
     const adapter = registry.getForConnection(input.platformKey);
+    const consumeCheckLoginOperationId = (): string | null => {
+      if (input.platformKey !== "xiaohongshu") return null;
+      const diagnosticAdapter = adapter as unknown as { consumeCompletedCheckLoginOperationId?: (accountId: string) => string | null };
+      return diagnosticAdapter.consumeCompletedCheckLoginOperationId?.(input.accountId) ?? null;
+    };
+    let operationId: string | null = null;
     try {
       const status = await adapter.checkLogin(accountContext(input.accountId, input.platformKey, action));
+      operationId = consumeCheckLoginOperationId();
       if (status === "logged_in" && isAutomationAdapter(adapter)) {
         await syncBrowserAccount(adapter, input.accountId, input.platformKey, action);
       }
@@ -729,10 +736,11 @@ export function registerIpc(deps: IpcDependencies): void {
       if (status === "logged_in") repository.upsertAccountAuthorization({ accountId: input.accountId, platformKey: input.platformKey, authorizationType: adapter.manifest.authStrategy, status: authorization?.status === "Partial" ? "Partial" : "Authorized", scopes: authorization?.scopes ?? [], expiresAt: authorization?.expiresAt, providerAccountId: authorization?.providerAccountId, providerAccountName: authorization?.providerAccountName });
       if (status === "logged_out") repository.upsertAccountAuthorization({ accountId: input.accountId, platformKey: input.platformKey, authorizationType: adapter.manifest.authStrategy, status: "NotAuthorized" });
       if (status === "expired") repository.upsertAccountAuthorization({ accountId: input.accountId, platformKey: input.platformKey, authorizationType: adapter.manifest.authStrategy, status: "Revoked", scopes: authorization?.scopes ?? [] });
-      logger.info("ACCOUNT", "CONNECTION_TEST", "平台连接测试完成；未修改平台生命周期", { accountId: input.accountId, platformKey: input.platformKey, loginStatus: status });
+      logger.info("ACCOUNT", "CONNECTION_TEST", "平台连接测试完成；未修改平台生命周期", { accountId: input.accountId, platformKey: input.platformKey, loginStatus: status, operationId });
       return { loginStatus: status };
     } catch (error) {
-      logger.warn("ACCOUNT", "CONNECTION_TEST_FAILED", "平台连接测试失败；未修改平台生命周期", { accountId: input.accountId, platformKey: input.platformKey, errorType: error instanceof Error ? error.name : "UnknownError" });
+      operationId ??= consumeCheckLoginOperationId();
+      logger.warn("ACCOUNT", "CONNECTION_TEST_FAILED", "平台连接测试失败；未修改平台生命周期", { accountId: input.accountId, platformKey: input.platformKey, errorType: error instanceof Error ? error.name : "UnknownError", operationId });
       throw error;
     }
   });
