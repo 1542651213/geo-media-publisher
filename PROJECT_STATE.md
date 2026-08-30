@@ -1,5 +1,56 @@
 # Project State
 
+## Task 9 — Xiaohongshu owner-controlled live same-context verification — BLOCKED - 2026-08-30
+
+本轮仅针对 `platformKey=xiaohongshu`、`accountId=54b390ac-d81e-440a-baeb-d00f9f346cc3` 执行 Owner login 后的 live 生命周期观察；未修改源码，未重新执行 Task 1–8，也未进入 Task 9 的 Check 1/2 之后步骤。
+
+### Owner login and release evidence
+
+| Item | Result |
+| --- | --- |
+| Profile | `C:\Users\Administrator\AppData\Roaming\codex-media-publisher\browser-profiles\xiaohongshu\54b390ac-d81e-440a-baeb-d00f9f346cc3` |
+| `ACCOUNT_SESSION_RETAINED_AFTER_LOGIN` | `YES` |
+| `LOGIN_PAGE_CLOSE_PRESERVES_CONTEXT` | `PASS_AT_RELEASE` |
+| `LOGIN_CONTEXT_ID` | `34e507c7-27f9-44b7-9e8a-1a95185fba10` |
+| `LOGIN_PAGE_ID` | `2e0390ac-0812-4d73-a11d-824db8194027` |
+| Login classification | `logged_in`; stable observation passed; no login form, QR, CAPTCHA, slider, SMS, or security modal |
+| Release evidence | `contextCount=1`, `pageCount=1`, `pageClosed=true`, `sessionRetainedAfterPageClose=true` |
+
+### Live blocker and stopped boundary
+
+After the successful login-page release, the installed app logged `XHS_BROWSER_SESSION_CONTEXT_DISCONNECTED` at `2026-08-30T02:16:00.839Z` for the same canonical context, with `browserConnected=false`. No relogin, cold restore, Context recreation, or retry was attempted after this blocker.
+
+| Check | Result |
+| --- | --- |
+| `CHECK_LOGIN_SAME_CONTEXT_1` | `BLOCKED` — Context disconnected before the check could be run |
+| `CHECK_CONTEXT_ID_1` / `CHECK_PAGE_ID_1` | `NOT_OBSERVED` |
+| `CHECK_LOGIN_SAME_CONTEXT_2` | `NOT_RUN` |
+| `CHECK_CONTEXT_ID_2` / `CHECK_PAGE_ID_2` | `NOT_RUN` |
+| `ACCOUNT_SESSION_REUSED` | `BLOCKED` |
+| `CANONICAL_CONTEXT_SINGLETON` | `BLOCKED` |
+| `CONCURRENT_CONTEXT_CREATION_GUARD` | `NOT_PROVEN_LIVE` |
+| `SIBLING_CONTEXT_ISOLATION` | `NOT_RUN` |
+| `ACCOUNT_STATUS_LIVE_SYNC` | `BLOCKED` |
+| `COLD_RESTORE_LIMITATION_DOCUMENTED` | `YES` |
+| `XIAOHONGSHU_RUNTIME_SESSION_READY` | `NO` |
+| `READY_FOR_REAL_SELF_TEST` | `NO` |
+
+### Task 9 side-effect evidence
+
+Readonly production SQLite observations were `publish_jobs=15 / submission_intents=12 / publish_records=9` after the stopped flow, matching the Task 8 final baseline. A separate Task 9 pre-owner-action snapshot was not captured, so strict Task 9 before/after equality is not claimed; no Job, SubmissionIntent, PublishRecord, final submit, PRE-SUBMIT, SELF_TEST, or real `preparePublish` was executed.
+
+```text
+PRE_SUBMIT_GATE       = NOT_RUN
+SELF_TEST             = NOT_RUN
+REAL_PREPARE_PUBLISH  = NOT_CALLED
+FINAL_SUBMIT_COUNT    = 0
+JOB_CREATED           = NO
+INTENT_CREATED       = NO
+PUBLISH_RECORD_CREATED = NO
+```
+
+Task 9 stopped at the Context disconnect blocker. Check 1 and Check 2 must not be represented as successful, and no further live action was started.
+
 ## Task 8 — Xiaohongshu long-lived browser session full verification and installed deployment — PASS / LIVE NOT_VERIFIED - 2026-08-30
 
 Task 8 完成；本轮没有执行 Task 9。Task 1–7 的实现未重做、未回滚。完整测试中的 `preparePublish` 调用均审计为 isolated Vitest/unit/integration fixture：使用 fake Page/Browser/Adapter 或临时数据库，不使用 production `publisher.db`、owner credential/profile 或真实平台；因此允许执行 full suite。测试 fixture 修正已单独提交为 `5d59921`，不包含生产行为改动。
