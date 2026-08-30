@@ -1,6 +1,6 @@
 import type { AccountContext, AccountProfile, LoginSession, LoginStatus, PublishArticleInput, ValidationResult } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
-import type { AutomationPrepareResult, BrowserSession } from "@publisher/adapters-core";
+import { browserExecutionModeFromSettings, userInitiatedActionFromSettings, type AutomationPrepareResult, type BrowserSession } from "@publisher/adapters-core";
 import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomationAdapterOptions, type BrowserPlatformDefinition, type BrowserSessionScopeEvidence } from "@publisher/adapters-browser";
 import type { Locator, Page } from "playwright-core";
 import { collectXhsAuthStateMetadata, collectXhsPreNavigationAuthStateMetadata, createXhsDiagnosticFingerprintKey, type XhsAuthStateMetadata } from "./auth-state-diagnostics";
@@ -475,36 +475,53 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
   }
 
   override async checkLogin(ctx: AccountContext): Promise<LoginStatus> {
-    const active = await this.activeBackendPage(ctx);
-    if (active) return this.loginStatusForPage(ctx, active.page, "CHECK_LOGIN");
-    if (!this.sessionManager.hasStoredSession({ platformKey: this.platformKey, accountId: ctx.accountId })) return "needs_user_action";
-    const status = await super.checkLogin(ctx);
-    if (status !== "logged_in") return status;
-    const checked = await this.activeBackendPage(ctx);
-    return checked ? this.loginStatusForPage(ctx, checked.page, "CHECK_LOGIN") : status;
+    const identity = { platformKey: this.platformKey, accountId: ctx.accountId };
+    const active = this.activeBrowserSession(ctx);
+    if (!active) {
+      this.sessionManager.setRuntimeAuthState(identity, "NEEDS_USER_ACTION", "ACTIVE_CONTEXT_REQUIRED");
+      return "needs_user_action";
+    }
+    const opened = await this.sessionManager.openOperationPage(identity, userInitiatedActionFromSettings(ctx.settings), browserExecutionModeFromSettings(ctx.settings));
+    this.sessionManager.setRuntimeAuthState(identity, "CHECKING", null);
+    try {
+      const status = await this.loginStatusForPage(ctx, opened.page, "CHECK_LOGIN");
+      const state = status === "logged_in" ? "AUTHENTICATED" : status === "unknown" ? "UNVERIFIED" : "NEEDS_USER_ACTION";
+      this.sessionManager.setRuntimeAuthState(identity, state, status === "logged_in" ? null : status);
+      return status;
+    } finally {
+      await this.sessionManager.closeOperationPage(identity, opened.page);
+    }
   }
 
   async getAccountProfile(ctx: AccountContext): Promise<AccountProfile> {
-    const active = await this.activeBackendPage(ctx);
+    const identityKey = { platformKey: this.platformKey, accountId: ctx.accountId };
+    const active = this.activeBrowserSession(ctx);
     let opened: { page: Page; session: BrowserSession };
-    if (active) opened = active;
-    else {
-      if (!this.sessionManager.hasStoredSession({ platformKey: this.platformKey, accountId: ctx.accountId })) throw new XiaohongshuGateError("LOGIN_REQUIRED", "USER_ACTION_REQUIRED", "小红书账号没有已保存的浏览器 Session，请先完成登录");
-      try {
-        opened = await this.openBackendPage(ctx, XIAOHONGSHU_CREATOR_HOME);
-      } catch (error) {
-        if (error instanceof BrowserAutomationError && error.code === "LOGIN_EXPIRED") throw new XiaohongshuGateError("LOGIN_REQUIRED", "USER_ACTION_REQUIRED", "小红书浏览器 Session 已过期，请重新登录");
-        throw error;
+    let temporaryPage = false;
+    if (active && this.isConnectionPending(ctx)) {
+      opened = { page: await this.page(active), session: active };
+    } else {
+      if (!active) {
+        if (!this.sessionManager.hasStoredSession(identityKey)) throw new XiaohongshuGateError("LOGIN_REQUIRED", "USER_ACTION_REQUIRED", "小红书账号没有已保存的浏览器 Session，请先完成登录");
+        throw new XiaohongshuGateError("LOGIN_REQUIRED", "USER_ACTION_REQUIRED", "小红书没有当前 live BrowserSession，请由账号所有者重新连接并完成验证");
       }
+      const executionMode = browserExecutionModeFromSettings(ctx.settings);
+      if (active.executionMode !== executionMode) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书当前 live BrowserSession 的运行模式与本次操作不一致，请重新连接账号");
+      opened = await this.sessionManager.openOperationPage(identityKey, userInitiatedActionFromSettings(ctx.settings), executionMode);
+      temporaryPage = true;
     }
-    const evidence = await readXiaohongshuPageEvidence(opened.page);
-    this.assertProfilePageCanBeRead(evidence);
-    const identity = await this.inspectAccountIdentity(opened.page, evidence);
-    return {
-      ...(identity.externalAccountId ? { accountId: identity.externalAccountId } : {}),
-      ...(identity.displayName ? { accountName: identity.displayName } : {}),
-      authorizationStatus: "Authorized"
-    };
+    try {
+      const evidence = await readXiaohongshuPageEvidence(opened.page);
+      this.assertProfilePageCanBeRead(evidence);
+      const identity = await this.inspectAccountIdentity(opened.page, evidence);
+      return {
+        ...(identity.externalAccountId ? { accountId: identity.externalAccountId } : {}),
+        ...(identity.displayName ? { accountName: identity.displayName } : {}),
+        authorizationStatus: "Authorized"
+      };
+    } finally {
+      if (temporaryPage) await this.sessionManager.closeOperationPage(identityKey, opened.page);
+    }
   }
 
   override async preparePublish(ctx: AccountContext, article: PublishArticleInput): Promise<AutomationPrepareResult> {

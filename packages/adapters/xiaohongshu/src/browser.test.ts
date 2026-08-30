@@ -44,6 +44,8 @@ interface Fixture {
   inputSetFiles: ReturnType<typeof vi.fn>;
   entryClick: ReturnType<typeof vi.fn>;
   open: ReturnType<typeof vi.fn>;
+  operationPageDebugIds: string[];
+  operationContextDebugIds: string[];
   calls: string[];
 }
 
@@ -81,7 +83,10 @@ function installSharedConnectionLifecycle(fixture: Fixture): void {
     const pages = operationPages.get(key) ?? new Set<Page>();
     pages.add(page);
     operationPages.set(key, pages);
-    return { session, page, pageDebugId: `operation-page-${pages.size}` };
+    const pageDebugId = `operation-page-${fixture.operationPageDebugIds.length + 1}`;
+    fixture.operationPageDebugIds.push(pageDebugId);
+    fixture.operationContextDebugIds.push(session.contextDebugId ?? "unknown-context");
+    return { session, page, pageDebugId };
   });
   manager.closeOperationPage = vi.fn(async (identity: { platformKey: string; accountId: string }, page: Page) => {
     const key = identityKey(identity);
@@ -133,6 +138,8 @@ function setupPage(options: FixtureOptions = {}): Fixture {
   let bodyValue = "";
   let imageUploaded = false;
   let contextPages: Page[] = [];
+  const operationPageDebugIds: string[] = [];
+  const operationContextDebugIds: string[] = [];
   const submitClick = vi.fn(async () => { calls.push("final-submit-click"); });
   const inputSetFiles = vi.fn(async () => { imageUploaded = true; calls.push("image-set-input-files"); });
   const entryClick = vi.fn(async () => { currentUrl = "https://creator.xiaohongshu.com/publish/publish"; calls.push("image-post-entry-click"); });
@@ -297,7 +304,7 @@ function setupPage(options: FixtureOptions = {}): Fixture {
       }
     }
   } as unknown as BrowserSessionManager;
-  const fixture = { page, manager, submitClick, inputSetFiles, entryClick, open, calls };
+  const fixture = { page, manager, submitClick, inputSetFiles, entryClick, open, operationPageDebugIds, operationContextDebugIds, calls };
   installSharedConnectionLifecycle(fixture);
   return fixture;
 }
@@ -614,6 +621,71 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
       sessionRetainedAfterPageClose: true
     });
     expect(diagnostics.flatMap((diagnostic) => Object.keys(diagnostic))).not.toContain("storageState");
+  });
+
+  it("runs repeated XHS checkLogin calls on one Context and closes each operation Page", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "账号状态正常"] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    await adapter.completeConnection(ctx);
+    await adapter.getAccountProfile(ctx);
+    await adapter.persistConnectionSession(ctx);
+    await adapter.releaseConnectionPage?.(ctx);
+    const first = await adapter.checkLogin(ctx);
+    const second = await adapter.checkLogin(ctx);
+
+    expect(first).toBe("logged_in");
+    expect(second).toBe("logged_in");
+    expect(fixture.operationPageDebugIds).toHaveLength(2);
+    expect(fixture.operationContextDebugIds[0]).toBe(fixture.operationContextDebugIds[1]);
+    expect(fixture.operationPageDebugIds[0]).not.toBe(fixture.operationPageDebugIds[1]);
+    expect(fixture.manager.open).toHaveBeenCalledTimes(1);
+    expect(fixture.manager.closeOperationPage).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not cold-open XHS checkLogin from stored credentials", async () => {
+    const fixture = setupPage();
+    vi.mocked(fixture.manager.hasStoredSession).mockReturnValue(true);
+    vi.mocked(fixture.manager.getActiveSession).mockReturnValue(null);
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+
+    await expect(adapter.checkLogin(context("account-a"))).resolves.toBe("needs_user_action");
+    expect(fixture.manager.open).not.toHaveBeenCalled();
+  });
+
+  it("reads XHS profile on a temporary same-Context Page after login Page release", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    await adapter.completeConnection(ctx);
+    await adapter.persistConnectionSession(ctx);
+    await adapter.releaseConnectionPage?.(ctx);
+    const profile = await adapter.getAccountProfile(ctx);
+
+    expect(profile).toMatchObject({ accountId: "65abc123", accountName: "XHS owner" });
+    expect(fixture.operationPageDebugIds).toHaveLength(1);
+    expect(fixture.manager.closeOperationPage).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens XHS backend on a new same-Context Page and leaves it open for the owner", async () => {
+    const fixture = setupPage();
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    await adapter.completeConnection(ctx);
+    await adapter.persistConnectionSession(ctx);
+    await adapter.releaseConnectionPage?.(ctx);
+    const result = await adapter.openBackend(ctx);
+
+    expect(result).toMatchObject({ opened: true, backendUrl: "https://creator.xiaohongshu.com/" });
+    expect(fixture.operationPageDebugIds).toHaveLength(1);
+    expect(fixture.manager.closeOperationPage).toHaveBeenCalledTimes(1);
   });
 
   it("only releases the login-only browser after identity persistence is complete", async () => {
