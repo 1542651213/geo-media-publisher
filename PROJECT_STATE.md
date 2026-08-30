@@ -1,5 +1,85 @@
 # Project State
 
+## Task 8 — Xiaohongshu long-lived browser session full verification and installed deployment — PASS / LIVE NOT_VERIFIED - 2026-08-30
+
+Task 8 完成；本轮没有执行 Task 9。Task 1–7 的实现未重做、未回滚。完整测试中的 `preparePublish` 调用均审计为 isolated Vitest/unit/integration fixture：使用 fake Page/Browser/Adapter 或临时数据库，不使用 production `publisher.db`、owner credential/profile 或真实平台；因此允许执行 full suite。测试 fixture 修正已单独提交为 `5d59921`，不包含生产行为改动。
+
+### Task 8 implementation commits
+
+| Task | Commit |
+| --- | --- |
+| Task 1 | `f123ec7` |
+| Task 2 | `5e5bb18`；follow-up fixes `1aa43ff`, `469c98f`, `cc208a5`, `ac32a56` |
+| Task 3 | `898c92b` |
+| Task 4 | `21591bd` |
+| Task 5 | `628cbac` |
+| Regression Fix | `c8ee20a` |
+| Task 6 | `f1b1faf` |
+| Task 7 | `96d011b` |
+| Task 8 test-fixture correction | `5d59921` |
+
+### Verification evidence
+
+| Check | Result |
+| --- | --- |
+| `FULL_TEST_SAFETY_AUDIT` | `PASS` |
+| `PREPARE_PUBLISH_TEST_CLASSIFICATION` | `SAFE_TEST_ONLY` |
+| Focused tests | `PASS` — 7 files / 115 passed / 0 failed / 0 skipped |
+| Full tests | `PASS` — 77 files / 502 passed / 0 failed |
+| `TYPECHECK` | `PASS` |
+| `LINT` | `PASS` |
+| `BUILD` | `PASS` |
+| `REAL_PREPARE_PUBLISH` | `NOT_CALLED` — only safe test doubles/isolated test adapters executed |
+| `PRE_SUBMIT_GATE` | `NOT_RUN` |
+| `SELF_TEST` | `NOT_RUN` |
+| `FINAL_SUBMIT_COUNT` | `0` |
+
+### Installed deployment evidence
+
+Source build was packaged to `C:\GMP116ZhihuL5\Geo Media Publisher.staging-xhs-long-lived-session-20260830-100559\win-unpacked` using Electron-target native dependencies. The existing installed process was not running at replacement time; only the exact installed executable path was targeted. The application was then started from the installed path without clicking any UI.
+
+| Item | Evidence |
+| --- | --- |
+| `INSTALLED_DEPLOYMENT` | `PASS` |
+| Installed executable | `C:\GMP116ZhihuL5\Geo Media Publisher\Geo Media Publisher.exe` |
+| `OLD_APP_ASAR_SHA256` | `E744084D064565A180B45378E0914438252059F4C93EEC043AB6D79A9F0CE3CA` |
+| `NEW_APP_ASAR_SHA256` | `F0DC0DA966B6C98019B643C84C28137514424BFBCEC27063DFAFBEF46B6C402E` |
+| `INSTALLED_APP_ASAR_SHA256` | `F0DC0DA966B6C98019B643C84C28137514424BFBCEC27063DFAFBEF46B6C402E` |
+| `APP_ASAR_HASH_MATCH` | `YES` |
+| `NATIVE_ABI` | Electron `37.10.3`, module ABI `136`; installed `better_sqlite3.node` loaded successfully |
+| `PROCESS_RESPONDING` | `YES`; main PID `10192`; window title `矩阵发布工作台` |
+| Production data path | `C:\Users\Administrator\AppData\Roaming\codex-media-publisher\production-data` — not copied or replaced |
+| XHS account-scoped profile | `C:\Users\Administrator\AppData\Roaming\codex-media-publisher\browser-profiles\xiaohongshu\54b390ac-d81e-440a-baeb-d00f9f346cc3` — not copied or replaced |
+| Credential file | `production-data\credentials.enc` remained outside the installed payload and was not read/copied |
+
+### Production DB side-effect evidence
+
+All reads used a readonly SQLite connection. Counts before full tests, after full tests, and after installed deployment are identical:
+
+```text
+TASK8_DB_BEFORE        = publish_jobs 15 / submission_intents 12 / publish_records 9
+TASK8_DB_AFTER_TESTS   = publish_jobs 15 / submission_intents 12 / publish_records 9
+TASK8_DB_FINAL         = publish_jobs 15 / submission_intents 12 / publish_records 9
+PUBLISH_DOMAIN_UNCHANGED = YES
+JOB_CREATED            = NO
+INTENT_CREATED         = NO
+PUBLISH_RECORD_CREATED = NO
+```
+
+No real platform prepare, image upload, title/body operation, PRE-SUBMIT, SELF_TEST, final CTA, Job, SubmissionIntent, or PublishRecord was executed in Task 8.
+
+### Rollback and owner boundary
+
+`ROLLBACK_PATH = C:\GMP116ZhihuL5\Geo Media Publisher.pre-xhs-long-lived-session-20260830-100746`. This new directory contains the deployment-before executable, app.asar, PLATFORMS catalog, and native payload; historical rollback directories were preserved. `Task 9 = NOT_EXECUTED`. Live Xiaohongshu Context reuse and owner-controlled login/security verification remain unverified.
+
+```text
+XIAOHONGSHU_RUNTIME_SESSION_READY = NOT_VERIFIED
+READY_FOR_REAL_SELF_TEST          = NO
+OWNER_ACTION_REQUIRED             = YES_FOR_TASK_9
+```
+
+Task 8 documentation was recorded after all evidence was obtained. The final documentation commit is the commit containing this section.
+
 ## V1.4.3 Account Disconnect Archive Lifecycle — CODE PASS / INSTALLED PASS / GATE NOT_RUN / REAL PUBLISH NOT_RUN - 2026-08-28
 
 本轮将账号“断开”收口为“移除活动账号容器”：精确清理目标 `platformKey + accountId` 的 BrowserSession 和 Credential，设置 `logged_out`，写入 `archived_at`，并让该 row 从活动账号中心消失；不物理删除 account，不破坏历史 Job、SubmissionIntent 或 PublishRecord 引用。本轮没有断开生产小红书账号 1，没有执行小红书 gate，没有创建 SELF_TEST，没有点击最终发布。
