@@ -1,0 +1,326 @@
+export type EvidenceLogEvent = {
+  timestamp: string;
+  level?: string;
+  module?: string;
+  code: string;
+  message?: string;
+  context: Record<string, unknown>;
+};
+
+export type PublishDomainCounts = {
+  publishJobs: number;
+  submissionIntents: number;
+  publishRecords: number;
+};
+
+export type EvidenceTimelineEntry = {
+  timestamp: string;
+  code: string;
+  context: Record<string, unknown>;
+};
+
+export type EvidenceEntryStep = {
+  timestamp: string;
+  stepName: string | null;
+  success: boolean | null;
+  selectorSignal: string | null;
+  sanitizedUrlBefore: string | null;
+  sanitizedUrlAfter: string | null;
+  navigationTrigger: string | null;
+};
+
+export type Task10AEvidenceSummary = {
+  platformKey: string;
+  accountId: string;
+  evidenceAmbiguous: "YES" | "NO";
+  gateOperationId: string | null;
+  contextDebugId: string | null;
+  pageDebugId: string | null;
+  loginContextId: string | null;
+  canonicalPageId: string | null;
+  preGateHeartbeat: Record<string, unknown> | null;
+  postGateHeartbeat: Record<string, unknown> | null;
+  gatePageRole: string | null;
+  gatePageSource: string | null;
+  gateCreatedNewPage: boolean | null;
+  gateContextMatch: boolean | null;
+  inspectionStarted: boolean;
+  navigationHelperInvocationStarted: boolean;
+  editorEntryStarted: boolean;
+  timeline: EvidenceTimelineEntry[];
+  entrySteps: EvidenceEntryStep[];
+  failureCode: string | null;
+  failureStage: string | null;
+  missingSignal: string | null;
+  gateResult: string;
+  editorEntryFailureCode: string | null;
+  editorEntryFailureStage: string | null;
+  editorEntryMissingSignal: string | null;
+  editorEntryStartUrl: string | null;
+  editorEntryFinalUrl: string | null;
+  editorReached: boolean | null;
+  authStillValid: boolean | null;
+  contentType: string | null;
+  contentTypeReady: boolean | null;
+  titleEditorDetected: boolean | null;
+  bodyEditorDetected: boolean | null;
+  imageUploadControlDetected: boolean | null;
+  publishSettingsAreaDetected: boolean | null;
+  finalSubmitControlDetected: boolean | null;
+  securityVerificationPresent: boolean | null;
+  loginPagePresent: boolean | null;
+  needsUserAction: boolean | null;
+  postGateSnapshot: Record<string, unknown> | null;
+  publishDomainCounts: PublishDomainCounts;
+  sideEffectSummary: {
+    preparePublishCalled: "NO" | "YES";
+    contentMutationCount: number;
+    uploadCount: number;
+    finalSubmitCount: number;
+  };
+};
+
+export type AnalyzeTask10AEvidenceInput = {
+  logText: string;
+  platformKey: string;
+  accountId: string;
+  operationId?: string;
+  from?: string;
+  to?: string;
+  publishDomainCounts?: PublishDomainCounts;
+};
+
+const GATE_START_CODES = new Set(["PRE_SUBMIT_GATE_INSPECTION_STARTED", "XHS_CANONICAL_PAGE_OPERATION_STARTED"]);
+const HEARTBEAT_CODE = "CANONICAL_SESSION_HEARTBEAT";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function booleanValue(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function contextPageId(context: Record<string, unknown>): string | null {
+  return stringValue(context.pageDebugId) ?? stringValue(context.canonicalPageDebugId);
+}
+
+function timestampValue(event: EvidenceLogEvent): number {
+  const parsed = Date.parse(event.timestamp);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function inTimeWindow(event: EvidenceLogEvent, from?: string, to?: string): boolean {
+  const time = timestampValue(event);
+  if (from) {
+    const lower = Date.parse(from);
+    if (Number.isFinite(lower) && time < lower) return false;
+  }
+  if (to) {
+    const upper = Date.parse(to);
+    if (Number.isFinite(upper) && time > upper) return false;
+  }
+  return true;
+}
+
+export function parseTask10AEvidenceLog(logText: string): EvidenceLogEvent[] {
+  const events: EvidenceLogEvent[] = [];
+  for (const line of logText.split(/\r?\n/u)) {
+    if (!line.trim()) continue;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (!isRecord(parsed) || typeof parsed.code !== "string" || typeof parsed.timestamp !== "string" || !isRecord(parsed.context)) continue;
+      events.push({
+        timestamp: parsed.timestamp,
+        ...(typeof parsed.level === "string" ? { level: parsed.level } : {}),
+        ...(typeof parsed.module === "string" ? { module: parsed.module } : {}),
+        code: parsed.code,
+        ...(typeof parsed.message === "string" ? { message: parsed.message } : {}),
+        context: parsed.context
+      });
+    } catch {
+      // A concurrently written or manually truncated line is ignored.
+    }
+  }
+  return events.sort((left, right) => timestampValue(left) - timestampValue(right));
+}
+
+function emptySummary(input: AnalyzeTask10AEvidenceInput, gateResult: string): Task10AEvidenceSummary {
+  return {
+    platformKey: input.platformKey,
+    accountId: input.accountId,
+    evidenceAmbiguous: gateResult === "AMBIGUOUS" ? "YES" : "NO",
+    gateOperationId: null,
+    contextDebugId: null,
+    pageDebugId: null,
+    loginContextId: null,
+    canonicalPageId: null,
+    preGateHeartbeat: null,
+    postGateHeartbeat: null,
+    gatePageRole: null,
+    gatePageSource: null,
+    gateCreatedNewPage: null,
+    gateContextMatch: null,
+    inspectionStarted: false,
+    navigationHelperInvocationStarted: false,
+    editorEntryStarted: false,
+    timeline: [],
+    entrySteps: [],
+    failureCode: null,
+    failureStage: null,
+    missingSignal: null,
+    gateResult,
+    editorEntryFailureCode: null,
+    editorEntryFailureStage: null,
+    editorEntryMissingSignal: null,
+    editorEntryStartUrl: null,
+    editorEntryFinalUrl: null,
+    editorReached: null,
+    authStillValid: null,
+    contentType: null,
+    contentTypeReady: null,
+    titleEditorDetected: null,
+    bodyEditorDetected: null,
+    imageUploadControlDetected: null,
+    publishSettingsAreaDetected: null,
+    finalSubmitControlDetected: null,
+    securityVerificationPresent: null,
+    loginPagePresent: null,
+    needsUserAction: null,
+    postGateSnapshot: null,
+    publishDomainCounts: input.publishDomainCounts ?? { publishJobs: 0, submissionIntents: 0, publishRecords: 0 },
+    sideEffectSummary: { preparePublishCalled: "NO", contentMutationCount: 0, uploadCount: 0, finalSubmitCount: 0 }
+  };
+}
+
+function operationIdFor(event: EvidenceLogEvent): string | null {
+  return stringValue(event.context.operationId);
+}
+
+function isGateStart(event: EvidenceLogEvent): boolean {
+  if (!GATE_START_CODES.has(event.code)) return false;
+  if (event.code === "PRE_SUBMIT_GATE_INSPECTION_STARTED") return true;
+  return event.context.action === "PRE_SUBMIT_GATE";
+}
+
+function findHeartbeat(events: EvidenceLogEvent[], phase: string, boundary: number, direction: "before" | "after", operationId: string): EvidenceLogEvent | null {
+  const candidates = events.filter((event) => event.code === HEARTBEAT_CODE && event.context.phase === phase && (direction === "before" ? timestampValue(event) <= boundary : timestampValue(event) >= boundary));
+  const operationScoped = candidates.filter((event) => event.context.operationId === operationId);
+  const matches = operationScoped.length > 0 ? operationScoped : candidates.filter((event) => !event.context.operationId);
+  matches.sort((left, right) => direction === "before" ? timestampValue(right) - timestampValue(left) : timestampValue(left) - timestampValue(right));
+  return matches[0] ?? null;
+}
+
+function countOccurrences(events: EvidenceLogEvent[], patterns: RegExp[]): number {
+  return events.reduce((count, event) => {
+    const haystack = `${event.code} ${event.message ?? ""}`;
+    return count + (patterns.some((pattern) => pattern.test(haystack)) ? 1 : 0);
+  }, 0);
+}
+
+export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task10AEvidenceSummary {
+  const parsed = parseTask10AEvidenceLog(input.logText);
+  const scoped = parsed.filter((event) => event.context.platformKey === input.platformKey && event.context.accountId === input.accountId && inTimeWindow(event, input.from, input.to));
+  const operationGroups = new Map<string, EvidenceLogEvent[]>();
+  for (const event of scoped) {
+    const operationId = operationIdFor(event);
+    if (!operationId) continue;
+    const group = operationGroups.get(operationId) ?? [];
+    group.push(event);
+    operationGroups.set(operationId, group);
+  }
+  let candidates = [...operationGroups.entries()]
+    .map(([operationId, events]) => ({ operationId, events: events.sort((left, right) => timestampValue(left) - timestampValue(right)), start: events.find(isGateStart) }))
+    .filter((candidate): candidate is { operationId: string; events: EvidenceLogEvent[]; start: EvidenceLogEvent } => Boolean(candidate.start));
+  if (input.operationId) candidates = candidates.filter((candidate) => candidate.operationId === input.operationId);
+  if (candidates.length === 0) return emptySummary(input, "NOT_FOUND");
+
+  candidates.sort((left, right) => timestampValue(right.start) - timestampValue(left.start));
+  if (candidates.length > 1 && timestampValue(candidates[0]!.start) === timestampValue(candidates[1]!.start)) return emptySummary(input, "AMBIGUOUS");
+  const selected = candidates[0]!;
+  const gateEvents = selected.events;
+  const startTime = timestampValue(selected.start);
+  const completion = [...gateEvents].reverse().find((event) => event.code === "XHS_CANONICAL_PAGE_OPERATION_COMPLETED" || event.code === "EDITOR_NAVIGATION_FAILED");
+  const endTime = completion ? timestampValue(completion) : startTime;
+  const preHeartbeat = findHeartbeat(scoped, "PRE_SUBMIT_GATE_PRECHECK", startTime, "before", selected.operationId);
+  const postHeartbeat = completion ? findHeartbeat(scoped, "POST_SUBMIT_GATE", endTime, "after", selected.operationId) : null;
+  const inspection = gateEvents.find((event) => event.code === "PRE_SUBMIT_GATE_INSPECTION_STARTED") ?? gateEvents.find((event) => event.code === "XHS_CANONICAL_PAGE_OPERATION_STARTED");
+  const finalContext = completion?.context ?? gateEvents[gateEvents.length - 1]?.context ?? {};
+  const gateResult = completion ? (stringValue(finalContext.finalStatus) ?? "COMPLETED") : "INCOMPLETE";
+  const steps = gateEvents.filter((event) => event.code === "EDITOR_ENTRY_STEP").map((event) => ({
+    timestamp: event.timestamp,
+    stepName: stringValue(event.context.stepName),
+    success: booleanValue(event.context.success),
+    selectorSignal: stringValue(event.context.selectorSignal),
+    sanitizedUrlBefore: stringValue(event.context.sanitizedUrlBefore),
+    sanitizedUrlAfter: stringValue(event.context.sanitizedUrlAfter),
+    navigationTrigger: stringValue(event.context.navigationTrigger)
+  }));
+  const failureEvent = [...gateEvents].reverse().find((event) => stringValue(event.context.failureCode) || event.code === "EDITOR_NAVIGATION_FAILED");
+  const failureContext = failureEvent?.context ?? finalContext;
+  const failureCode = stringValue(failureContext.failureCode);
+  const failureStage = stringValue(failureContext.failureStage);
+  const missingSignal = stringValue(failureContext.missingSignal);
+  const startStep = gateEvents.find((event) => event.code === "EDITOR_ENTRY_STARTED");
+  const result: Task10AEvidenceSummary = {
+    ...emptySummary(input, gateResult),
+    evidenceAmbiguous: "NO",
+    gateOperationId: selected.operationId,
+    contextDebugId: stringValue(inspection?.context.contextDebugId) ?? stringValue(preHeartbeat?.context.contextDebugId),
+    pageDebugId: contextPageId(inspection?.context ?? {}) ?? contextPageId(preHeartbeat?.context ?? {}),
+    loginContextId: stringValue(preHeartbeat?.context.contextDebugId),
+    canonicalPageId: stringValue(preHeartbeat?.context.canonicalPageDebugId) ?? contextPageId(preHeartbeat?.context ?? {}),
+    preGateHeartbeat: preHeartbeat?.context ?? null,
+    postGateHeartbeat: postHeartbeat?.context ?? null,
+    gatePageRole: stringValue(inspection?.context.pageRole),
+    gatePageSource: stringValue(inspection?.context.pageSource),
+    gateCreatedNewPage: booleanValue(inspection?.context.createdNewPage),
+    gateContextMatch: booleanValue(inspection?.context.pageContextMatchesSession),
+    inspectionStarted: gateEvents.some((event) => event.code === "PRE_SUBMIT_GATE_INSPECTION_STARTED"),
+    navigationHelperInvocationStarted: gateEvents.some((event) => event.code === "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED"),
+    editorEntryStarted: gateEvents.some((event) => event.code === "EDITOR_ENTRY_STARTED"),
+    timeline: [
+      ...(preHeartbeat ? [{ timestamp: preHeartbeat.timestamp, code: preHeartbeat.code, context: preHeartbeat.context }] : []),
+      ...gateEvents.map((event) => ({ timestamp: event.timestamp, code: event.code, context: event.context })),
+      ...(postHeartbeat ? [{ timestamp: postHeartbeat.timestamp, code: postHeartbeat.code, context: postHeartbeat.context }] : [])
+    ],
+    entrySteps: steps,
+    failureCode,
+    failureStage,
+    missingSignal,
+    editorEntryFailureCode: failureCode,
+    editorEntryFailureStage: failureStage,
+    editorEntryMissingSignal: missingSignal,
+    editorEntryStartUrl: stringValue(startStep?.context.startUrl) ?? stringValue(inspection?.context.startUrl),
+    editorEntryFinalUrl: stringValue(finalContext.sanitizedFinalUrl) ?? stringValue(finalContext.sanitizedUrlAfter),
+    editorReached: booleanValue(finalContext.editorReached),
+    authStillValid: booleanValue(finalContext.authStillValid),
+    contentType: stringValue(finalContext.contentType),
+    contentTypeReady: booleanValue(finalContext.contentTypeReady),
+    titleEditorDetected: booleanValue(finalContext.titleEditorDetected),
+    bodyEditorDetected: booleanValue(finalContext.bodyEditorDetected),
+    imageUploadControlDetected: booleanValue(finalContext.imageUploadControlDetected),
+    publishSettingsAreaDetected: booleanValue(finalContext.publishSettingsAreaDetected),
+    finalSubmitControlDetected: booleanValue(finalContext.finalSubmitControlDetected),
+    securityVerificationPresent: booleanValue(finalContext.securityVerificationPresent),
+    loginPagePresent: booleanValue(finalContext.loginPagePresent),
+    needsUserAction: booleanValue(finalContext.needsUserAction),
+    postGateSnapshot: postHeartbeat?.context ?? null,
+    sideEffectSummary: {
+      preparePublishCalled: countOccurrences(gateEvents, [/preparePublish/iu]) > 0 ? "YES" : "NO",
+      contentMutationCount: countOccurrences(gateEvents, [/setInputFiles|\.fill|\.type|insertText|keyboard/iu]),
+      uploadCount: countOccurrences(gateEvents, [/upload/iu]),
+      finalSubmitCount: countOccurrences(gateEvents, [/final.?submit|submit.?click|publish.?click/iu])
+    }
+  };
+  // Keep the result tied to the selected lifecycle even when the final event is a non-terminal diagnostic.
+  if (!completion && !result.failureCode) {
+    result.gateResult = "INCOMPLETE";
+    result.needsUserAction = null;
+  }
+  return result;
+}
