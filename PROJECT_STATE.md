@@ -1,5 +1,90 @@
 # Project State
 
+## Task 10D hardening / Task 10A evidence readiness — IMPLEMENTATION PASS / DEPLOYMENT BLOCKED - 2026-08-30
+
+本轮严格限定在 `platformKey=xiaohongshu`、`accountId=54b390ac-d81e-440a-baeb-d00f9f346cc3` 的离线源码、fixture、只读日志分析和 staging package。没有 Owner login、XHS checkLogin、live PRE-SUBMIT Gate、SELF_TEST、真实 `preparePublish`、标题/正文/图片 mutation、草稿/保存、final submit 或真实发布；没有创建 Job、SubmissionIntent 或 PublishRecord。
+
+### Readiness status
+
+| Item | Result |
+| --- | --- |
+| Task 9C | `PASS`; single canonical Context/Page、session reuse、live status sync 已由既有证据验证，本轮未重新打开该架构问题 |
+| XIAOHONGSHU single canonical session | `LIVE VERIFIED`（既有 Task 9C evidence） |
+| Task 10B | `PASS` |
+| Task 10C | `PASS` |
+| Task 10D implementation | `PASS` |
+| Task 10D deployment | `BLOCKED_ACTIVE_XHS_PROFILE_SESSION` |
+| Task 10A live Gate | `NOT_RUN`; remains pending Owner-controlled retry |
+| `TASK_10A_RETRY_READY` | `NO` because Task 10D was not deployed |
+| `XIAOHONGSHU_RUNTIME_SESSION_READY` | `NOT_VERIFIED_AFTER_RESTART` |
+| `READY_FOR_REAL_SELF_TEST` | `NO` |
+
+### Task 10D review and diagnostics
+
+The verified Gate call chain is:
+
+```text
+Renderer button
+→ V11Workspace.inspectPublishEditor
+→ runPreSubmitGateWithHeartbeats
+→ preload accounts.inspectPublishEditor
+→ IPC accounts:pre-submit-gate
+→ adapter.inspectPublishEditor
+→ accountOperationMutex.run
+→ inspectPublishEditorOnCanonicalPage
+→ assertProfilePageCanBeRead
+→ navigateToImagePostEditor
+```
+
+`inspectPublishEditorOnCanonicalPage` now creates the operation correlation ID before canonical lookup and records structured failures for unavailable/closed/disconnected/foreign Context cases. Browser/page lifecycle early returns emit both inspection-start and navigation-failed diagnostics; ownership and lifecycle failures are not silently converted to a generic `needs_user_action` result. `assertProfilePageCanBeRead` remains fail-closed: Creator host plus at least two unique positive signals are required, login/security blockers have priority, and unreadable page evidence no longer silently proceeds through the Gate.
+
+`AUTHENTICATED_PAGE_SIGNAL_SOURCES` are: sanitized Creator URL classification, visible Creator DOM positive signals (`发布笔记`, `笔记管理`, `数据看板`, platform title, account-status text), and visible account identity markers derived from stable profile URLs/account fields/nickname areas. The classifier uses an `AND` strategy for Creator host plus two unique positive signals, with login/security blocker priority; URL alone is never accepted. Account isolation continues to rely on account-scoped Session/Context ownership and real `Page.context()` matching, including foreign-context and account A/B regression coverage.
+
+`navigateToImagePostEditor` now covers already-reached `/publish/publish`, Creator root and `/new/home`, direct image entry, generic publish-menu plus content-type selection, missing/click-failed entries, route timeout, route-not-reached, login redirect, security verification, and final `UNKNOWN_UI_STATE` fallback. All entry steps retain operationId, platformKey, accountId and sanitized URL transition data.
+
+`PRE_NAVIGATION_EARLY_RETURN_PATHS` are: canonical lookup exception; no active canonical Page; Page/Context ownership mismatch; disconnected BrowserSession; closed canonical Page; and authentication evidence rejection. Each path now leaves correlated structured diagnostics; the editor helper is not invoked on any of them.
+
+### Task 10A evidence analyzer
+
+Added [scripts/v143-xiaohongshu-task10a-evidence.mts](C:/Users/Administrator/Desktop/codex_media_publisher_starter/scripts/v143-xiaohongshu-task10a-evidence.mts) and its pure parser at `scripts/v143-xiaohongshu-task10a-evidence.helpers.ts`. It reads JSONL `app.log` plus a production SQLite database through a readonly URI, correlates the latest Gate by `platformKey + accountId + operationId + timestamp`, reports `EVIDENCE_AMBIGUOUS=YES` when selection is not unique, and writes `output/v143-xiaohongshu-task10a-latest-evidence.json`. It does not import or invoke IPC, Browser, Page, Gate, checkLogin, or preparePublish. Current readonly analysis found the historical latest operation `71c65ac2-5ff1-43a0-bc64-a4729dd97671` with `gateResult=needs_user_action`; no live run was started.
+
+### Verification
+
+| Check | Result |
+| --- | --- |
+| Focused XHS/Core/Gate/heartbeat/analyzer tests | `7 files / 134 passed` |
+| Full tests | `83 files / 568 passed` |
+| Typecheck | `PASS` |
+| Lint | `PASS` |
+| Build | `PASS` |
+| Staging packaged diagnostics | `PASS` |
+| Staging app.asar | `release-task10d-hardening-20260830-final/win-unpacked/resources/app.asar` |
+| Staging app.asar SHA256 | `A660B2AFF79F0FF4F8D0AF4732AEC6D0C67A8A345D7E070C7F0D7640944C4B7D` |
+
+The staging `app.asar` contains `PRE_SUBMIT_GATE_INSPECTION_STARTED`, `EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED`, `EDITOR_ENTRY_STARTED`, `EDITOR_ENTRY_STEP`, `AUTHENTICATED_PAGE_SIGNAL_NOT_FOUND`, `failureCode`, `failureStage`, `missingSignal`, and the real Gate call-chain symbols. It was built for Electron `37.10.3` / native ABI `136` and was not copied over the installed app.
+
+### Production safety and deployment boundary
+
+```text
+LONG_TASK_DB_BEFORE       = publish_jobs 15 / submission_intents 12 / publish_records 9
+LONG_TASK_DB_AFTER_TESTS  = publish_jobs 15 / submission_intents 12 / publish_records 9
+LONG_TASK_DB_FINAL        = publish_jobs 15 / submission_intents 12 / publish_records 9
+PUBLISH_DOMAIN_UNCHANGED  = YES
+FINAL_SUBMIT_COUNT        = 0
+JOB_CREATED               = NO
+INTENT_CREATED            = NO
+PUBLISH_RECORD_CREATED    = NO
+LIVE_PRE_SUBMIT_GATE      = NOT_RUN
+SELF_TEST                 = NOT_RUN
+REAL_PREPARE_PUBLISH      = NOT_CALLED
+```
+
+Final readonly process inspection: installed main PID `28636`; target XHS profile Chrome process count `9`; profile `lockfile` remains present. Deployment was therefore not attempted. No process was killed, no Owner browser session was closed, no profile/credential was cleared, and no rollback directory was created for this blocked deployment.
+
+Code commits: `67600f1` (`test: harden xiaohongshu editor gate diagnostics`) and `eda0637` (`feat: add xiaohongshu task10a evidence analyzer`). Existing Sohu, Toutiao, release, historical output, and other unrelated dirty/untracked changes were not staged or reverted.
+
+Owner next step: tomorrow close the installed app / XHS BrowserSession normally; then deploy the staging build, restart the installed app, perform one Owner-controlled login if needed, wait for heartbeat, and click “检查图文编辑器” once. Do not run self-test or real publish until the new evidence analyzer returns an attributable Gate result.
+
 ## Task 9A — Xiaohongshu canonical Context disconnect root cause — FIXED / DEPLOYED - 2026-08-30
 
 本轮没有重新执行 Owner login，没有访问真实小红书页面，没有执行 cold restore、PRE-SUBMIT、SELF_TEST、真实 `preparePublish` 或任何发布动作。目标账号范围仍为 `platformKey=xiaohongshu`、`accountId=54b390ac-d81e-440a-baeb-d00f9f346cc3`，profile 为 `C:\Users\Administrator\AppData\Roaming\codex-media-publisher\browser-profiles\xiaohongshu\54b390ac-d81e-440a-baeb-d00f9f346cc3`。
