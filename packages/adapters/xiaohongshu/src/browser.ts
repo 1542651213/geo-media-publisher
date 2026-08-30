@@ -1,6 +1,6 @@
 import type { AccountContext, AccountProfile, LoginSession, LoginStatus, PublishArticleInput, ValidationResult } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
-import { type AutomationPrepareResult, type BrowserRuntimeAuthState, type BrowserSession, type BrowserSessionRuntimeSnapshot, type PreSubmitGateResult, type PreSubmitGateStatus } from "@publisher/adapters-core";
+import { type AutomationPrepareResult, type BrowserRuntimeAuthState, type BrowserSession, type BrowserSessionRuntimeSnapshot, type PreSubmitGateFailureCode, type PreSubmitGateFailureStage, type PreSubmitGateResult, type PreSubmitGateStatus } from "@publisher/adapters-core";
 import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomationAdapterOptions, type BrowserPlatformDefinition, type BrowserSessionScopeEvidence } from "@publisher/adapters-browser";
 import type { Locator, Page } from "playwright-core";
 import { collectXhsAuthStateMetadata, collectXhsPreNavigationAuthStateMetadata, createXhsDiagnosticFingerprintKey, type XhsAuthStateMetadata } from "./auth-state-diagnostics";
@@ -168,6 +168,32 @@ export interface XiaohongshuCanonicalPageOperationEvidence {
   sanitizedUrl: string;
   finalStatus?: LoginStatus | PreSubmitGateStatus;
   sanitizedFinalUrl?: string;
+  failureCode?: PreSubmitGateFailureCode;
+  failureStage?: PreSubmitGateFailureStage;
+  missingSignal?: string | null;
+}
+
+export type XiaohongshuEditorEntryStepName =
+  | "CREATOR_HOME_READY"
+  | "PUBLISH_ENTRY_FOUND"
+  | "PUBLISH_ENTRY_CLICKED"
+  | "EDITOR_ROUTE_REACHED";
+
+export interface XiaohongshuEditorEntryDiagnostic {
+  code: "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP";
+  timestamp: string;
+  operationId: string;
+  platformKey: "xiaohongshu";
+  accountId: string;
+  startUrl?: string;
+  entryMethod?: "CLICK_NAVIGATION";
+  expectedTarget?: string;
+  stepName?: XiaohongshuEditorEntryStepName;
+  success?: boolean;
+  sanitizedUrlBefore?: string;
+  sanitizedUrlAfter?: string;
+  selectorSignal?: string;
+  elapsedMs?: number;
 }
 
 export type XiaohongshuAuthStateDiagnosticPhase = "LIVE_LOGIN_BEFORE_CLOSE" | "AUTH_STATE_BEFORE_CLOSE";
@@ -218,6 +244,7 @@ export interface XiaohongshuBrowserAdapterOptions extends BrowserAutomationAdapt
   onLoginEvaluation?: (evaluation: XiaohongshuLoginEvaluation) => void;
   onAuthStateDiagnostic?: (diagnostic: XiaohongshuAuthStateDiagnostic) => void;
   onCanonicalPageOperation?: (evidence: XiaohongshuCanonicalPageOperationEvidence) => void;
+  onEditorEntryDiagnostic?: (diagnostic: XiaohongshuEditorEntryDiagnostic) => void;
   credentialFilePath?: string;
   loginStabilityWindowMs?: number;
 }
@@ -232,15 +259,26 @@ export function classifyXiaohongshuLoginEvidence(evidence: XiaohongshuLoginEvide
 
 export class XiaohongshuGateError extends BrowserAutomationError {
   readonly gateCode: XiaohongshuGateCode;
+  readonly failureCode?: PreSubmitGateFailureCode;
+  readonly failureStage?: PreSubmitGateFailureStage;
+  readonly missingSignal?: string;
 
-  constructor(code: XiaohongshuGateCode, adapterCode: ConstructorParameters<typeof BrowserAutomationError>[0], message: string) {
+  constructor(code: XiaohongshuGateCode, adapterCode: ConstructorParameters<typeof BrowserAutomationError>[0], message: string, failure?: { failureCode: PreSubmitGateFailureCode; failureStage: PreSubmitGateFailureStage; missingSignal?: string }) {
     super(adapterCode, `${code}: ${message}`);
     this.name = "XiaohongshuGateError";
     this.gateCode = code;
+    this.failureCode = failure?.failureCode;
+    this.failureStage = failure?.failureStage;
+    this.missingSignal = failure?.missingSignal;
   }
 }
 
 type XhsDocument = Page | { locator: (selector: string) => Locator; url: () => string };
+
+interface XiaohongshuEditorEntryResult {
+  editorReached: boolean;
+  sanitizedUrl: string;
+}
 
 function emptyPreSubmitGateResult(status: PreSubmitGateStatus): PreSubmitGateResult {
   return {
@@ -532,6 +570,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
   private readonly onLoginEvaluation?: (evaluation: XiaohongshuLoginEvaluation) => void;
   private readonly onAuthStateDiagnostic?: (diagnostic: XiaohongshuAuthStateDiagnostic) => void;
   private readonly onCanonicalPageOperation?: (evidence: XiaohongshuCanonicalPageOperationEvidence) => void;
+  private readonly onEditorEntryDiagnostic?: (diagnostic: XiaohongshuEditorEntryDiagnostic) => void;
   private readonly credentialFilePath: string | null;
   private readonly loginStabilityWindowMs: number;
   private readonly accountOperationMutex = new AccountOperationMutex();
@@ -544,6 +583,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     this.onLoginEvaluation = options.onLoginEvaluation;
     this.onAuthStateDiagnostic = options.onAuthStateDiagnostic;
     this.onCanonicalPageOperation = options.onCanonicalPageOperation;
+    this.onEditorEntryDiagnostic = options.onEditorEntryDiagnostic;
     this.credentialFilePath = options.credentialFilePath ?? null;
     this.loginStabilityWindowMs = Math.max(0, options.loginStabilityWindowMs ?? DEFAULT_LOGIN_STABILITY_WINDOW_MS);
   }
@@ -623,7 +663,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     }
 
     const complete = (result: PreSubmitGateResult): PreSubmitGateResult => {
-      this.emitCanonicalPageOperation(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "COMPLETED", true, result.status, "PRE_SUBMIT_GATE");
+      this.emitCanonicalPageOperation(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "COMPLETED", true, result.status, "PRE_SUBMIT_GATE", result);
       return result;
     };
 
@@ -636,9 +676,9 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       const homeEvidence = await readXiaohongshuPageEvidence(canonical.page);
       this.assertProfilePageCanBeRead(homeEvidence);
 
-      await this.navigateToImagePostEditor(canonical.page);
+      const editorEntry = await this.navigateToImagePostEditor(canonical.page, operationId, ctx.accountId);
       const finalUrl = sanitizePageUrl(canonical.page);
-      const editorReached = /\/publish\/publish(?:[/?#]|$)/iu.test(canonical.page.url());
+      const editorReached = editorEntry.editorReached;
       const finalEvidence = await readXiaohongshuPageEvidence(canonical.page);
       const loginPagePresent = this.isLoginPage(canonical.page.url()) || finalEvidence.login.explicitLoginUrl;
       const securityVerificationPresent = this.isVerificationUrl(canonical.page.url())
@@ -649,10 +689,10 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         || finalEvidence.login.visibleSlider
         || finalEvidence.login.visibleSecurityModal;
       if (loginPagePresent) {
-        return complete({ ...emptyPreSubmitGateResult("auth_expired"), authStillValid: false, loginPagePresent: true, sanitizedUrl: finalUrl });
+        return complete({ ...emptyPreSubmitGateResult("auth_expired"), authStillValid: false, loginPagePresent: true, sanitizedUrl: finalUrl, failureCode: "AUTH_REDIRECTED_TO_LOGIN", failureStage: "AUTHENTICATION", missingSignal: "login-url" });
       }
       if (securityVerificationPresent) {
-        return complete({ ...emptyPreSubmitGateResult("security_verification_required"), authStillValid: true, securityVerificationPresent: true, sanitizedUrl: finalUrl });
+        return complete({ ...emptyPreSubmitGateResult("security_verification_required"), authStillValid: true, securityVerificationPresent: true, sanitizedUrl: finalUrl, failureCode: "SECURITY_VERIFICATION_REQUIRED", failureStage: "AUTHENTICATION", missingSignal: "security-verification-signal" });
       }
 
       const titleEditorDetected = await this.hasUniqueEditor(canonical.page, "title");
@@ -691,6 +731,8 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       result.loginPagePresent = result.status === "auth_expired";
       result.securityVerificationPresent = result.status === "security_verification_required";
       result.sanitizedUrl = sanitizePageUrl(canonical.page);
+      const failure = this.failureDetailsForError(error);
+      if (failure) Object.assign(result, failure);
       return complete(result);
     }
   }
@@ -734,7 +776,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const gates: string[] = ["account_identity"];
     const identity = await this.inspectAccountIdentity(page, evidence);
 
-    await this.navigateToImagePostEditor(page);
+    await this.navigateToImagePostEditor(page, undefined, ctx.accountId);
     gates.push("login", "image_post_entry");
     const imageEvidence = await this.uploadImages(page, article.images ?? []);
     gates.push("image_upload");
@@ -1005,7 +1047,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     this.onLoginEvaluation({ phase, ...(operationId ? { operationId } : {}), timestamp: new Date().toISOString(), platformKey: this.platformKey, accountId: ctx.accountId, pageIsClosed, pageUrl, pageTitle, creatorDomain: login.creatorHost, creatorHomePath: login.creatorHomePath, publishNoteVisible: login.publishNoteVisible, noteManagementVisible: login.noteManagementVisible, dataDashboardVisible: login.dataDashboardVisible, accountStatusVisible: login.accountStatusVisible, profileAreaVisible: login.profileAreaVisible, visibleLoginForm: login.visibleLoginForm, visibleQrLogin: login.visibleQrLogin, visibleSmsVerification: login.visibleSmsVerification, visibleCaptcha: login.visibleCaptcha, visibleSlider: login.visibleSlider, visibleSecurityModal: login.visibleSecurityModal, positiveSignalCount: new Set(login.positiveSignals).size, blockingSignalCount: blockers.filter(Boolean).length, loginClassification: decision, stableObservationWindowMs, stableObservationSamples, stableObservationPassed });
   }
 
-  private emitCanonicalPageOperation(ctx: AccountContext, session: BrowserSession, page: Page, pageDebugId: string, operationId: string, phase: XiaohongshuCanonicalPageOperationPhase, pageContextMatchesSession: boolean, finalStatus?: LoginStatus | PreSubmitGateStatus, action: "CHECK_LOGIN" | "PRE_SUBMIT_GATE" = "CHECK_LOGIN"): void {
+  private emitCanonicalPageOperation(ctx: AccountContext, session: BrowserSession, page: Page, pageDebugId: string, operationId: string, phase: XiaohongshuCanonicalPageOperationPhase, pageContextMatchesSession: boolean, finalStatus?: LoginStatus | PreSubmitGateStatus, action: "CHECK_LOGIN" | "PRE_SUBMIT_GATE" = "CHECK_LOGIN", result?: Pick<PreSubmitGateResult, "failureCode" | "failureStage" | "missingSignal">): void {
     if (!this.onCanonicalPageOperation) return;
     const key = `${this.platformKey}:${ctx.accountId}`;
     const mutex = this.accountOperationMutex.getState(key);
@@ -1030,7 +1072,10 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       mutexLocked: mutex.mutexLocked,
       operationInProgress: mutex.operationInProgress,
       sanitizedUrl: sanitizePageUrl(page),
-      ...(finalStatus === undefined ? {} : { finalStatus, sanitizedFinalUrl: sanitizePageUrl(page) })
+      ...(finalStatus === undefined ? {} : { finalStatus, sanitizedFinalUrl: sanitizePageUrl(page) }),
+      ...(result?.failureCode ? { failureCode: result.failureCode } : {}),
+      ...(result?.failureStage ? { failureStage: result.failureStage } : {}),
+      ...(result?.missingSignal === undefined ? {} : { missingSignal: result.missingSignal })
     };
     try { this.onCanonicalPageOperation(evidence); }
     catch { /* diagnostics must never change the authentication result */ }
@@ -1141,6 +1186,11 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
   }
 
   private preSubmitGateStatusForError(error: unknown): PreSubmitGateStatus {
+    const failure = this.failureDetailsForError(error);
+    if (failure.failureCode === "AUTH_REDIRECTED_TO_LOGIN") return "auth_expired";
+    if (failure.failureCode === "SECURITY_VERIFICATION_REQUIRED") return "security_verification_required";
+    if (failure.failureCode === "PUBLISH_ENTRY_NOT_FOUND" || failure.failureCode === "CONTENT_TYPE_ENTRY_NOT_FOUND" || failure.failureCode === "EDITOR_SELECTOR_DRIFT") return "editor_not_found";
+    if (failure.failureCode !== "UNKNOWN_UI_STATE") return "needs_user_action";
     if (error instanceof XiaohongshuGateError) {
       if (error.gateCode === "LOGIN_REQUIRED") return "auth_expired";
       if (error.gateCode === "SECURITY_VERIFICATION_REQUIRED") return "security_verification_required";
@@ -1150,10 +1200,82 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     return "needs_user_action";
   }
 
-  private async navigateToImagePostEditor(page: Page): Promise<void> {
-    const entry = await this.discoverImagePostEntry(page);
-    await entry.click();
-    await waitForProbe(page);
+  private failureDetailsForError(error: unknown): Pick<PreSubmitGateResult, "failureCode" | "failureStage" | "missingSignal"> {
+    if (error instanceof XiaohongshuGateError && error.failureCode && error.failureStage) {
+      return { failureCode: error.failureCode, failureStage: error.failureStage, missingSignal: error.missingSignal ?? null };
+    }
+    if (error instanceof XiaohongshuGateError) {
+      if (error.gateCode === "LOGIN_REQUIRED") return { failureCode: "AUTH_REDIRECTED_TO_LOGIN", failureStage: "AUTHENTICATION", missingSignal: "login-url" };
+      if (error.gateCode === "SECURITY_VERIFICATION_REQUIRED") return { failureCode: "SECURITY_VERIFICATION_REQUIRED", failureStage: "AUTHENTICATION", missingSignal: "security-verification-signal" };
+      if (error.gateCode === "IMAGE_POST_ENTRY_NOT_VERIFIED") return { failureCode: "PUBLISH_ENTRY_NOT_FOUND", failureStage: "PUBLISH_ENTRY_DISCOVERY", missingSignal: XIAOHONGSHU_IMAGE_POST_ENTRY_SELECTOR };
+    }
+    if (error instanceof BrowserAutomationError && error.code === "LOGIN_EXPIRED") return { failureCode: "AUTH_REDIRECTED_TO_LOGIN", failureStage: "AUTHENTICATION", missingSignal: "login-url" };
+    return { failureCode: "UNKNOWN_UI_STATE", failureStage: "EDITOR_NAVIGATION", missingSignal: null };
+  }
+
+  private emitEditorEntryDiagnostic(diagnostic: XiaohongshuEditorEntryDiagnostic): void {
+    try { this.onEditorEntryDiagnostic?.(diagnostic); }
+    catch { /* diagnostics must never change editor navigation behavior */ }
+  }
+
+  private emitEditorEntryStep(page: Page, operationId: string, accountId: string, startedAt: number, stepName: XiaohongshuEditorEntryStepName, success: boolean, selectorSignal: string, sanitizedUrlBefore = sanitizePageUrl(page), sanitizedUrlAfter = sanitizePageUrl(page)): void {
+    this.emitEditorEntryDiagnostic({ code: "EDITOR_ENTRY_STEP", timestamp: new Date().toISOString(), operationId, platformKey: "xiaohongshu", accountId, stepName, success, sanitizedUrlBefore, sanitizedUrlAfter, selectorSignal, elapsedMs: Math.max(0, Date.now() - startedAt) });
+  }
+
+  private async navigateToImagePostEditor(page: Page, operationId = randomUUID(), accountId = "unknown-account"): Promise<XiaohongshuEditorEntryResult> {
+    const startedAt = Date.now();
+    const startUrl = sanitizePageUrl(page);
+    this.emitEditorEntryDiagnostic({ code: "EDITOR_ENTRY_STARTED", timestamp: new Date().toISOString(), operationId, platformKey: "xiaohongshu", accountId, startUrl, entryMethod: "CLICK_NAVIGATION", expectedTarget: "https://creator.xiaohongshu.com/publish/publish" });
+
+    const homeReady = /^https:\/\/creator\.xiaohongshu\.com\/(?:new\/home)?$/iu.test(page.url()) && !this.isLoginPage(page.url()) && !this.isVerificationUrl(page.url());
+    this.emitEditorEntryStep(page, operationId, accountId, startedAt, "CREATOR_HOME_READY", homeReady, "creator.xiaohongshu.com:home");
+    if (!homeReady) {
+      const failure = this.isLoginPage(page.url())
+        ? { failureCode: "AUTH_REDIRECTED_TO_LOGIN" as const, failureStage: "AUTHENTICATION" as const, missingSignal: "login-url" }
+        : this.isVerificationUrl(page.url())
+          ? { failureCode: "SECURITY_VERIFICATION_REQUIRED" as const, failureStage: "AUTHENTICATION" as const, missingSignal: "security-verification-url" }
+          : { failureCode: "EDITOR_ROUTE_NOT_REACHED" as const, failureStage: "CREATOR_HOME" as const, missingSignal: "creator-home" };
+      throw new XiaohongshuGateError(failure.failureCode === "AUTH_REDIRECTED_TO_LOGIN" ? "LOGIN_REQUIRED" : failure.failureCode === "SECURITY_VERIFICATION_REQUIRED" ? "SECURITY_VERIFICATION_REQUIRED" : "IMAGE_POST_ENTRY_NOT_VERIFIED", "USER_ACTION_REQUIRED", "小红书 Creator 首页未处于可用的编辑器入口状态", failure);
+    }
+
+    let entry: { locator: Locator; selectorSignal: string };
+    try {
+      entry = await this.discoverImagePostEntry(page);
+      this.emitEditorEntryStep(page, operationId, accountId, startedAt, "PUBLISH_ENTRY_FOUND", true, entry.selectorSignal);
+    } catch (error) {
+      const failure = this.failureDetailsForError(error);
+      this.emitEditorEntryStep(page, operationId, accountId, startedAt, "PUBLISH_ENTRY_FOUND", false, failure.missingSignal ?? XIAOHONGSHU_IMAGE_POST_ENTRY_SELECTOR);
+      throw error;
+    }
+
+    const publishEntryUrlBeforeClick = sanitizePageUrl(page);
+    try {
+      await entry.locator.click();
+      this.emitEditorEntryStep(page, operationId, accountId, startedAt, "PUBLISH_ENTRY_CLICKED", true, entry.selectorSignal, publishEntryUrlBeforeClick, sanitizePageUrl(page));
+    } catch (error) {
+      this.emitEditorEntryStep(page, operationId, accountId, startedAt, "PUBLISH_ENTRY_CLICKED", false, entry.selectorSignal, publishEntryUrlBeforeClick, sanitizePageUrl(page));
+      throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", `图文发布入口点击失败：${error instanceof Error ? error.message : String(error)}`, { failureCode: "PUBLISH_ENTRY_CLICK_FAILED", failureStage: "PUBLISH_ENTRY_CLICK", missingSignal: entry.selectorSignal });
+    }
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const currentUrl = page.url();
+      if (this.isLoginPage(currentUrl)) {
+        this.emitEditorEntryStep(page, operationId, accountId, startedAt, "EDITOR_ROUTE_REACHED", false, "login-url");
+        throw new XiaohongshuGateError("LOGIN_REQUIRED", "USER_ACTION_REQUIRED", "图文入口导航后被重定向到登录页", { failureCode: "AUTH_REDIRECTED_TO_LOGIN", failureStage: "AUTHENTICATION", missingSignal: "login-url" });
+      }
+      if (this.isVerificationUrl(currentUrl)) {
+        this.emitEditorEntryStep(page, operationId, accountId, startedAt, "EDITOR_ROUTE_REACHED", false, "security-verification-url");
+        throw new XiaohongshuGateError("SECURITY_VERIFICATION_REQUIRED", "USER_ACTION_REQUIRED", "图文入口导航后出现安全验证页；未尝试绕过", { failureCode: "SECURITY_VERIFICATION_REQUIRED", failureStage: "AUTHENTICATION", missingSignal: "security-verification-url" });
+      }
+      if (/\/publish\/publish(?:[/?#]|$)/iu.test(currentUrl)) {
+        this.emitEditorEntryStep(page, operationId, accountId, startedAt, "EDITOR_ROUTE_REACHED", true, "url:/publish/publish");
+        return { editorReached: true, sanitizedUrl: sanitizePageUrl(page) };
+      }
+      await waitForProbe(page);
+    }
+
+    this.emitEditorEntryStep(page, operationId, accountId, startedAt, "EDITOR_ROUTE_REACHED", false, "url:/publish/publish");
+    throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "图文入口点击后未到达 /publish/publish 编辑器路由", { failureCode: "EDITOR_ROUTE_NOT_REACHED", failureStage: "EDITOR_ROUTE", missingSignal: "url:/publish/publish" });
   }
 
   private async hasUniqueEditor(page: Page, field: "title" | "body"): Promise<boolean> {
@@ -1170,13 +1292,13 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     return await locatorCount(input) === 1 && await isVisible(input) && await isEnabled(input);
   }
 
-  private async discoverImagePostEntry(page: Page): Promise<Locator> {
+  private async discoverImagePostEntry(page: Page): Promise<{ locator: Locator; selectorSignal: string }> {
     const imageEntry = page.locator(XIAOHONGSHU_IMAGE_POST_ENTRY_SELECTOR);
     const imageCount = await locatorCount(imageEntry);
-    if (imageCount === 1 && await isVisible(imageEntry) && await isEnabled(imageEntry)) return imageEntry;
+    if (imageCount === 1 && await isVisible(imageEntry) && await isEnabled(imageEntry)) return { locator: imageEntry, selectorSignal: XIAOHONGSHU_IMAGE_POST_ENTRY_SELECTOR };
     const videoEntry = page.locator(XIAOHONGSHU_VIDEO_POST_ENTRY_SELECTOR);
     const videoCount = await locatorCount(videoEntry);
-    if (videoCount > 0) throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "页面只发现视频入口，未发现唯一可用的图文发布入口");
+    if (videoCount > 0) throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "页面只发现视频入口，未发现唯一可用的图文发布入口", { failureCode: "PUBLISH_ENTRY_NOT_FOUND", failureStage: "PUBLISH_ENTRY_DISCOVERY", missingSignal: XIAOHONGSHU_IMAGE_POST_ENTRY_SELECTOR });
     const generic = page.locator('button, [role="button"], a');
     const genericMatches: Locator[] = [];
     for (let index = 0; index < await locatorCount(generic); index += 1) {
@@ -1185,8 +1307,8 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       const label = normalizeXiaohongshuEditorText((await innerText(candidate)) || (await attribute(candidate, "aria-label")) || (await attribute(candidate, "title")));
       if (XIAOHONGSHU_IMAGE_POST_PATTERN.test(label) && !XIAOHONGSHU_VIDEO_PATTERN.test(label)) genericMatches.push(candidate);
     }
-    if (genericMatches.length === 1) return genericMatches[0];
-    throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", `图文入口未通过唯一、可见、启用校验；matches=${imageCount}`);
+    if (genericMatches.length === 1) return { locator: genericMatches[0], selectorSignal: "semantic:IMAGE_TEXT_PUBLISH_ENTRY" };
+    throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", `图文入口未通过唯一、可见、启用校验；matches=${imageCount}`, { failureCode: "PUBLISH_ENTRY_NOT_FOUND", failureStage: "PUBLISH_ENTRY_DISCOVERY", missingSignal: XIAOHONGSHU_IMAGE_POST_ENTRY_SELECTOR });
   }
 
   private async uploadImages(page: Page, images: string[]): Promise<Record<string, unknown>> {

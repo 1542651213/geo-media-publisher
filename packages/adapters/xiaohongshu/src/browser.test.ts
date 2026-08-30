@@ -36,6 +36,7 @@ type FixtureOptions = {
   loginPage?: boolean;
   pagePresentInContext?: boolean;
   operationPageInitialUrl?: string;
+  entryNavigationEnabled?: boolean;
 };
 
 interface Fixture {
@@ -151,8 +152,10 @@ function setupPage(options: FixtureOptions = {}): Fixture {
   const inputSetFiles = vi.fn(async () => { imageUploaded = true; calls.push("image-set-input-files"); });
   const entryClick = vi.fn(async () => {
     const publishUrl = "https://creator.xiaohongshu.com/publish/publish";
-    setActivePageUrl?.(publishUrl);
-    currentUrl = publishUrl;
+    if (options.entryNavigationEnabled !== false) {
+      setActivePageUrl?.(publishUrl);
+      currentUrl = publishUrl;
+    }
     calls.push("image-post-entry-click");
   });
 
@@ -1097,9 +1100,11 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     installSharedConnectionLifecycle(fixture);
     installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "数据看板", "创作服务平台"] });
     const operations: Array<Record<string, unknown>> = [];
+    const entryDiagnostics: Array<Record<string, unknown>> = [];
     const adapter = new XiaohongshuBrowserAdapter({
       sessionManager: fixture.manager,
-      onCanonicalPageOperation: (evidence: Record<string, unknown>) => operations.push(evidence)
+      onCanonicalPageOperation: (evidence: Record<string, unknown>) => operations.push(evidence),
+      onEditorEntryDiagnostic: (diagnostic: Record<string, unknown>) => entryDiagnostics.push(diagnostic)
     } as never);
     const preparePublish = vi.spyOn(adapter, "preparePublish");
     const ctx = context("account-a");
@@ -1133,6 +1138,63 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(operations[0]).toMatchObject({ phase: "STARTED", action: "PRE_SUBMIT_GATE", pageRole: "CANONICAL_AUTHENTICATED", pageSource: "EXISTING_CANONICAL_PAGE", createdNewPage: false, pageContextMatchesSession: true });
     expect(operations[1]).toMatchObject({ phase: "COMPLETED", action: "PRE_SUBMIT_GATE", pageClosed: false, browserConnected: true, finalStatus: "ready" });
     expect(operations[0]?.operationId).toBe(operations[1]?.operationId);
+    expect(entryDiagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "EDITOR_ENTRY_STARTED", operationId: operations[0]?.operationId, entryMethod: "CLICK_NAVIGATION" }),
+      expect.objectContaining({ code: "EDITOR_ENTRY_STEP", stepName: "CREATOR_HOME_READY", success: true }),
+      expect.objectContaining({ code: "EDITOR_ENTRY_STEP", stepName: "PUBLISH_ENTRY_FOUND", success: true }),
+      expect.objectContaining({ code: "EDITOR_ENTRY_STEP", stepName: "PUBLISH_ENTRY_CLICKED", success: true }),
+      expect.objectContaining({ code: "EDITOR_ENTRY_STEP", stepName: "EDITOR_ROUTE_REACHED", success: true, selectorSignal: "url:/publish/publish" })
+    ]));
+  });
+
+  it("classifies a missing publish entry and emits editor-entry diagnostics", async () => {
+    const fixture = setupPage({ entryCount: 0 });
+    const diagnostics: Array<Record<string, unknown>> = [];
+    const adapter = new XiaohongshuBrowserAdapter({
+      sessionManager: fixture.manager,
+      onEditorEntryDiagnostic: (diagnostic: Record<string, unknown>) => diagnostics.push(diagnostic)
+    } as never);
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    const result = await adapter.inspectPublishEditor(ctx);
+
+    expect(result).toMatchObject({
+      status: "editor_not_found",
+      failureCode: "PUBLISH_ENTRY_NOT_FOUND",
+      failureStage: "PUBLISH_ENTRY_DISCOVERY",
+      missingSignal: expect.stringContaining("/publish/publish")
+    });
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "EDITOR_ENTRY_STARTED", operationId: expect.any(String) }),
+      expect.objectContaining({ code: "EDITOR_ENTRY_STEP", stepName: "PUBLISH_ENTRY_FOUND", success: false })
+    ]));
+    expect(fixture.entryClick).not.toHaveBeenCalled();
+  });
+
+  it("classifies a click that does not reach the editor route", async () => {
+    const fixture = setupPage({ entryNavigationEnabled: false });
+    const diagnostics: Array<Record<string, unknown>> = [];
+    const adapter = new XiaohongshuBrowserAdapter({
+      sessionManager: fixture.manager,
+      onEditorEntryDiagnostic: (diagnostic: Record<string, unknown>) => diagnostics.push(diagnostic)
+    } as never);
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    const result = await adapter.inspectPublishEditor(ctx);
+
+    expect(result).toMatchObject({
+      status: "needs_user_action",
+      failureCode: "EDITOR_ROUTE_NOT_REACHED",
+      failureStage: "EDITOR_ROUTE",
+      missingSignal: "url:/publish/publish"
+    });
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "EDITOR_ENTRY_STEP", stepName: "PUBLISH_ENTRY_CLICKED", success: true }),
+      expect.objectContaining({ code: "EDITOR_ENTRY_STEP", stepName: "EDITOR_ROUTE_REACHED", success: false })
+    ]));
+    expect(fixture.entryClick).toHaveBeenCalledTimes(1);
   });
 
   it("returns auth-expired without entering the editor when the canonical Page is on login", async () => {

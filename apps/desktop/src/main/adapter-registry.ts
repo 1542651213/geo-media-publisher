@@ -21,7 +21,7 @@ import { CnblogsOfficialApiAdapter } from "@publisher/adapters-cnblogs";
 import type { CredentialStore } from "@publisher/security";
 import type { Logger } from "@publisher/logger";
 import type { BrowserConnectionDiagnostic } from "@publisher/adapters-browser";
-import type { XiaohongshuAuthStateDiagnostic, XiaohongshuCanonicalPageOperationEvidence, XiaohongshuLoginEvaluation } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuAuthStateDiagnostic, XiaohongshuCanonicalPageOperationEvidence, XiaohongshuEditorEntryDiagnostic, XiaohongshuLoginEvaluation } from "@publisher/adapters-xiaohongshu/browser";
 
 export function createRuntimeAdapterRegistry(credentials: CredentialStore, includeTestPlatform: boolean, logger?: Logger, browserProfileRootDir?: string, credentialFilePath?: string): AdapterRegistry {
   const registry = new AdapterRegistry();
@@ -72,6 +72,9 @@ export function createRuntimeAdapterRegistry(credentials: CredentialStore, inclu
     const code = evidence.phase === "STARTED" ? "XHS_CANONICAL_PAGE_OPERATION_STARTED" : "XHS_CANONICAL_PAGE_OPERATION_COMPLETED";
     logger?.info("ACCOUNT", code, "小红书 canonical authenticated Page checkLogin 生命周期诊断", { ...evidence });
   };
+  const onXiaohongshuEditorEntryDiagnostic = (diagnostic: XiaohongshuEditorEntryDiagnostic): void => {
+    logger?.info("ACCOUNT", diagnostic.code, "小红书 side-effect-free editor entry 诊断", { ...diagnostic });
+  };
   const onXiaohongshuAuthStateDiagnostic = (diagnostic: XiaohongshuAuthStateDiagnostic): void => {
     logger?.info("ACCOUNT", "XHS_AUTH_STATE_DIAGNOSTIC", "小红书 auth state 重启诊断", diagnostic as unknown as Record<string, unknown>);
   };
@@ -100,6 +103,7 @@ export function createRuntimeAdapterRegistry(credentials: CredentialStore, inclu
     onConnectionDiagnostic: onXiaohongshuConnectionDiagnostic,
     onLoginEvaluation: onXiaohongshuLoginEvaluation,
     onCanonicalPageOperation: onXiaohongshuCanonicalPageOperation,
+    onEditorEntryDiagnostic: onXiaohongshuEditorEntryDiagnostic,
     onAuthStateDiagnostic: onXiaohongshuAuthStateDiagnostic,
     credentialFilePath
   }));

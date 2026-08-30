@@ -25,6 +25,28 @@ export interface AutomationPrepareResult {
 
 export type PreSubmitGateStatus = "ready" | "needs_user_action" | "auth_expired" | "editor_not_found" | "security_verification_required";
 
+export type PreSubmitGateFailureCode =
+  | "PUBLISH_ENTRY_NOT_FOUND"
+  | "PUBLISH_ENTRY_CLICK_FAILED"
+  | "CONTENT_TYPE_ENTRY_NOT_FOUND"
+  | "CONTENT_TYPE_SELECTION_FAILED"
+  | "EDITOR_NAVIGATION_TIMEOUT"
+  | "EDITOR_ROUTE_NOT_REACHED"
+  | "EDITOR_SELECTOR_DRIFT"
+  | "AUTH_REDIRECTED_TO_LOGIN"
+  | "SECURITY_VERIFICATION_REQUIRED"
+  | "UNKNOWN_UI_STATE";
+
+export type PreSubmitGateFailureStage =
+  | "AUTHENTICATION"
+  | "CREATOR_HOME"
+  | "PUBLISH_ENTRY_DISCOVERY"
+  | "PUBLISH_ENTRY_CLICK"
+  | "CONTENT_TYPE_SELECTION"
+  | "EDITOR_NAVIGATION"
+  | "EDITOR_ROUTE"
+  | "EDITOR_DISCOVERY";
+
 /** Read-only editor readiness evidence. It deliberately contains no Page/Locator or content values. */
 export interface PreSubmitGateResult {
   status: PreSubmitGateStatus;
@@ -42,6 +64,9 @@ export interface PreSubmitGateResult {
   needsUserAction: boolean;
   sanitizedUrl: string | null;
   editorEntrySideEffectRisk?: "NONE_OBSERVED" | "UNKNOWN";
+  failureCode?: PreSubmitGateFailureCode;
+  failureStage?: PreSubmitGateFailureStage;
+  missingSignal?: string | null;
 }
 
 export interface AutomationAdapter extends PlatformAdapter {
