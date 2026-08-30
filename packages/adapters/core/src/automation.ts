@@ -23,6 +23,27 @@ export interface AutomationPrepareResult {
   response: Record<string, unknown>;
 }
 
+export type PreSubmitGateStatus = "ready" | "needs_user_action" | "auth_expired" | "editor_not_found" | "security_verification_required";
+
+/** Read-only editor readiness evidence. It deliberately contains no Page/Locator or content values. */
+export interface PreSubmitGateResult {
+  status: PreSubmitGateStatus;
+  editorReached: boolean;
+  authStillValid: boolean;
+  contentType: string | null;
+  contentTypeReady: boolean;
+  titleEditorDetected: boolean;
+  bodyEditorDetected: boolean;
+  imageUploadControlDetected: boolean;
+  publishSettingsAreaDetected: boolean;
+  finalSubmitControlDetected: boolean;
+  securityVerificationPresent: boolean;
+  loginPagePresent: boolean;
+  needsUserAction: boolean;
+  sanitizedUrl: string | null;
+  editorEntrySideEffectRisk?: "NONE_OBSERVED" | "UNKNOWN";
+}
+
 export interface AutomationAdapter extends PlatformAdapter {
   readonly automationType: PlatformCapability;
   connectAccount(ctx: AccountContext): Promise<LoginSession>;
@@ -31,6 +52,8 @@ export interface AutomationAdapter extends PlatformAdapter {
   cancelConnection?(ctx: AccountContext): Promise<void>;
   checkSession(ctx: AccountContext): Promise<LoginStatus>;
   openBackend(ctx: AccountContext): Promise<{ opened: boolean; backendUrl: string; sessionIdHash: string }>;
+  /** Optional side-effect-free editor discovery. This must never call preparePublish or mutate content. */
+  inspectPublishEditor?(ctx: AccountContext): Promise<PreSubmitGateResult>;
   preparePublish(ctx: AccountContext, article: PublishArticleInput): Promise<AutomationPrepareResult>;
   verifyPublish(ctx: AccountContext, externalId?: string): Promise<PublishStatusResult>;
   logout(ctx: AccountContext): Promise<void>;

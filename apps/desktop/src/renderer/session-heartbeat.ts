@@ -75,7 +75,17 @@ export function createSessionHeartbeatController(api: SessionHeartbeatApi, sched
     }
   };
 
-  return { startPostLogin, runCheckLogin };
+  const runPreSubmitGate = async <T>(accountId: string, platformKey: string, gate: () => Promise<T>): Promise<T> => {
+    const generation = loginGenerations.get(identityKey(accountId, platformKey)) ?? 0;
+    await safeHeartbeat(accountId, platformKey, "PRE_SUBMIT_GATE_PRECHECK", generation);
+    try {
+      return await gate();
+    } finally {
+      await safeHeartbeat(accountId, platformKey, "POST_SUBMIT_GATE", generation);
+    }
+  };
+
+  return { startPostLogin, runCheckLogin, runPreSubmitGate };
 }
 
 const rendererSessionHeartbeatController = createSessionHeartbeatController({
@@ -84,3 +94,4 @@ const rendererSessionHeartbeatController = createSessionHeartbeatController({
 
 export const beginPostLoginHeartbeat = (accountId: string, platformKey: string): number => rendererSessionHeartbeatController.startPostLogin(accountId, platformKey);
 export const runCheckLoginWithHeartbeats = <T>(accountId: string, platformKey: string, checkLogin: () => Promise<T>): Promise<T> => rendererSessionHeartbeatController.runCheckLogin(accountId, platformKey, checkLogin);
+export const runPreSubmitGateWithHeartbeats = <T>(accountId: string, platformKey: string, gate: () => Promise<T>): Promise<T> => rendererSessionHeartbeatController.runPreSubmitGate(accountId, platformKey, gate);

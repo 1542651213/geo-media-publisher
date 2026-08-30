@@ -1090,6 +1090,95 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     await expect(ambiguousAdapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "FINAL_SUBMIT_CONTROL_NOT_FOUND", message: expect.stringContaining("FINAL_SUBMIT_CONTROL_NOT_VERIFIED") });
   });
 
+  it("inspects the image-text editor on the canonical Page without content mutation", async () => {
+    const fixture = setupPage({
+      settings: [{ label: "公开范围", required: false, value: "公开" }]
+    });
+    installSharedConnectionLifecycle(fixture);
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "数据看板", "创作服务平台"] });
+    const operations: Array<Record<string, unknown>> = [];
+    const adapter = new XiaohongshuBrowserAdapter({
+      sessionManager: fixture.manager,
+      onCanonicalPageOperation: (evidence: Record<string, unknown>) => operations.push(evidence)
+    } as never);
+    const preparePublish = vi.spyOn(adapter, "preparePublish");
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    const result = await (adapter as unknown as { inspectPublishEditor: (context: AccountContext) => Promise<Record<string, unknown>> }).inspectPublishEditor(ctx);
+
+    expect(result).toMatchObject({
+      status: "ready",
+      editorReached: true,
+      authStillValid: true,
+      contentType: "IMAGE_TEXT",
+      contentTypeReady: true,
+      titleEditorDetected: true,
+      bodyEditorDetected: true,
+      imageUploadControlDetected: true,
+      publishSettingsAreaDetected: true,
+      finalSubmitControlDetected: true,
+      securityVerificationPresent: false,
+      loginPagePresent: false,
+      needsUserAction: false,
+      sanitizedUrl: "https://creator.xiaohongshu.com/publish/publish"
+    });
+    expect(preparePublish).not.toHaveBeenCalled();
+    expect(fixture.inputSetFiles).not.toHaveBeenCalled();
+    expect(fixture.submitClick).not.toHaveBeenCalled();
+    expect(fixture.manager.openOperationPage).not.toHaveBeenCalled();
+    expect(fixture.calls).not.toContain("title-fill");
+    expect(fixture.calls).not.toContain("body-fill");
+    expect(operations).toHaveLength(2);
+    expect(operations[0]).toMatchObject({ phase: "STARTED", action: "PRE_SUBMIT_GATE", pageRole: "CANONICAL_AUTHENTICATED", pageSource: "EXISTING_CANONICAL_PAGE", createdNewPage: false, pageContextMatchesSession: true });
+    expect(operations[1]).toMatchObject({ phase: "COMPLETED", action: "PRE_SUBMIT_GATE", pageClosed: false, browserConnected: true, finalStatus: "ready" });
+    expect(operations[0]?.operationId).toBe(operations[1]?.operationId);
+  });
+
+  it("returns auth-expired without entering the editor when the canonical Page is on login", async () => {
+    const fixture = setupPage({ loginPage: true });
+    installSharedConnectionLifecycle(fixture);
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    const result = await (adapter as unknown as { inspectPublishEditor: (context: AccountContext) => Promise<Record<string, unknown>> }).inspectPublishEditor(ctx);
+
+    expect(result).toMatchObject({ status: "auth_expired", authStillValid: false, loginPagePresent: true, needsUserAction: true });
+    expect(fixture.entryClick).not.toHaveBeenCalled();
+    expect(fixture.manager.openOperationPage).not.toHaveBeenCalled();
+  });
+
+  it("returns security-verification-required without navigating into the editor", async () => {
+    const fixture = setupPage();
+    installSharedConnectionLifecycle(fixture);
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], blockingSignals: ["visible_security_modal"] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    const result = await (adapter as unknown as { inspectPublishEditor: (context: AccountContext) => Promise<Record<string, unknown>> }).inspectPublishEditor(ctx);
+
+    expect(result).toMatchObject({ status: "security_verification_required", authStillValid: false, securityVerificationPresent: true, needsUserAction: true });
+    expect(fixture.entryClick).not.toHaveBeenCalled();
+    expect(fixture.inputSetFiles).not.toHaveBeenCalled();
+  });
+
+  it("fails the side-effect-free editor gate closed when the canonical Page is unavailable", async () => {
+    const fixture = setupPage();
+    installSharedConnectionLifecycle(fixture);
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    await fixture.page.close();
+    const result = await (adapter as unknown as { inspectPublishEditor: (context: AccountContext) => Promise<Record<string, unknown>> }).inspectPublishEditor(ctx);
+
+    expect(result).toMatchObject({ status: "needs_user_action", editorReached: false, authStillValid: false, needsUserAction: true });
+    expect(fixture.entryClick).not.toHaveBeenCalled();
+    expect(fixture.inputSetFiles).not.toHaveBeenCalled();
+  });
+
   it("normalizes only permitted editor differences and requires equality", () => {
     expect(normalizeXiaohongshuEditorText("  A\r\nB\u200b  ")).toBe("A\nB");
     expect(normalizeXiaohongshuEditorText("A B")).not.toBe(normalizeXiaohongshuEditorText("A B extra"));

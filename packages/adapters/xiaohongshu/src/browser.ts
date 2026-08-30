@@ -1,6 +1,6 @@
 import type { AccountContext, AccountProfile, LoginSession, LoginStatus, PublishArticleInput, ValidationResult } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
-import { type AutomationPrepareResult, type BrowserRuntimeAuthState, type BrowserSession, type BrowserSessionRuntimeSnapshot } from "@publisher/adapters-core";
+import { type AutomationPrepareResult, type BrowserRuntimeAuthState, type BrowserSession, type BrowserSessionRuntimeSnapshot, type PreSubmitGateResult, type PreSubmitGateStatus } from "@publisher/adapters-core";
 import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomationAdapterOptions, type BrowserPlatformDefinition, type BrowserSessionScopeEvidence } from "@publisher/adapters-browser";
 import type { Locator, Page } from "playwright-core";
 import { collectXhsAuthStateMetadata, collectXhsPreNavigationAuthStateMetadata, createXhsDiagnosticFingerprintKey, type XhsAuthStateMetadata } from "./auth-state-diagnostics";
@@ -152,7 +152,7 @@ export interface XiaohongshuCanonicalPageOperationEvidence {
   operationId: string;
   platformKey: "xiaohongshu";
   accountId: string;
-  action: "CHECK_LOGIN";
+  action: "CHECK_LOGIN" | "PRE_SUBMIT_GATE";
   contextDebugId: string;
   pageDebugId: string;
   pageRole: "CANONICAL_AUTHENTICATED";
@@ -166,7 +166,7 @@ export interface XiaohongshuCanonicalPageOperationEvidence {
   mutexLocked: boolean;
   operationInProgress: boolean;
   sanitizedUrl: string;
-  finalStatus?: LoginStatus;
+  finalStatus?: LoginStatus | PreSubmitGateStatus;
   sanitizedFinalUrl?: string;
 }
 
@@ -241,6 +241,26 @@ export class XiaohongshuGateError extends BrowserAutomationError {
 }
 
 type XhsDocument = Page | { locator: (selector: string) => Locator; url: () => string };
+
+function emptyPreSubmitGateResult(status: PreSubmitGateStatus): PreSubmitGateResult {
+  return {
+    status,
+    editorReached: false,
+    authStillValid: false,
+    contentType: null,
+    contentTypeReady: false,
+    titleEditorDetected: false,
+    bodyEditorDetected: false,
+    imageUploadControlDetected: false,
+    publishSettingsAreaDetected: false,
+    finalSubmitControlDetected: false,
+    securityVerificationPresent: false,
+    loginPagePresent: false,
+    needsUserAction: status !== "ready",
+    sanitizedUrl: null,
+    editorEntrySideEffectRisk: "NONE_OBSERVED"
+  };
+}
 
 function locatorCount(locator: Locator): Promise<number> {
   const candidate = locator as unknown as { count?: () => Promise<number> };
@@ -582,6 +602,99 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, () => super.openBackend(ctx), "openBackend");
   }
 
+  /**
+   * Read-only editor readiness check. This deliberately has no article input and
+   * never enters the content mutation path used by preparePublish.
+   */
+  async inspectPublishEditor(ctx: AccountContext): Promise<PreSubmitGateResult> {
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, () => this.inspectPublishEditorOnCanonicalPage(ctx), "preSubmitGate");
+  }
+
+  private async inspectPublishEditorOnCanonicalPage(ctx: AccountContext): Promise<PreSubmitGateResult> {
+    const canonical = await this.activeCanonicalPage(ctx);
+    if (!canonical) return emptyPreSubmitGateResult("needs_user_action");
+
+    const operationId = randomUUID();
+    const pageContextMatchesSession = this.pageContextMatchesSession(canonical.session, canonical.page);
+    this.emitCanonicalPageOperation(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "STARTED", pageContextMatchesSession, undefined, "PRE_SUBMIT_GATE");
+    if (!pageContextMatchesSession) {
+      this.emitCanonicalPageOperation(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "COMPLETED", false, "needs_user_action", "PRE_SUBMIT_GATE");
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "BrowserSession/Page mismatch：小红书 PRE_SUBMIT_GATE canonical Page 不属于当前 Context");
+    }
+
+    const complete = (result: PreSubmitGateResult): PreSubmitGateResult => {
+      this.emitCanonicalPageOperation(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "COMPLETED", true, result.status, "PRE_SUBMIT_GATE");
+      return result;
+    };
+
+    try {
+      if (!this.isBrowserConnected(canonical.session) || this.isCanonicalPageClosed(canonical.page)) {
+        return complete(emptyPreSubmitGateResult("needs_user_action"));
+      }
+
+      await this.navigate(canonical.page, XIAOHONGSHU_CREATOR_HOME);
+      const homeEvidence = await readXiaohongshuPageEvidence(canonical.page);
+      this.assertProfilePageCanBeRead(homeEvidence);
+
+      await this.navigateToImagePostEditor(canonical.page);
+      const finalUrl = sanitizePageUrl(canonical.page);
+      const editorReached = /\/publish\/publish(?:[/?#]|$)/iu.test(canonical.page.url());
+      const finalEvidence = await readXiaohongshuPageEvidence(canonical.page);
+      const loginPagePresent = this.isLoginPage(canonical.page.url()) || finalEvidence.login.explicitLoginUrl;
+      const securityVerificationPresent = this.isVerificationUrl(canonical.page.url())
+        || finalEvidence.login.verificationUrl
+        || finalEvidence.login.visibleQrLogin
+        || finalEvidence.login.visibleSmsVerification
+        || finalEvidence.login.visibleCaptcha
+        || finalEvidence.login.visibleSlider
+        || finalEvidence.login.visibleSecurityModal;
+      if (loginPagePresent) {
+        return complete({ ...emptyPreSubmitGateResult("auth_expired"), authStillValid: false, loginPagePresent: true, sanitizedUrl: finalUrl });
+      }
+      if (securityVerificationPresent) {
+        return complete({ ...emptyPreSubmitGateResult("security_verification_required"), authStillValid: true, securityVerificationPresent: true, sanitizedUrl: finalUrl });
+      }
+
+      const titleEditorDetected = await this.hasUniqueEditor(canonical.page, "title");
+      const bodyEditorDetected = await this.hasUniqueEditor(canonical.page, "body");
+      const imageUploadControlDetected = await this.hasImageUploadControl(canonical.page);
+      const publishSettings = await this.inspectPublishSettings(canonical.page);
+      const publishSettingsAreaDetected = publishSettings.length > 0;
+      let finalSubmitControlDetected = false;
+      try {
+        finalSubmitControlDetected = (await this.inspectFinalSubmitControl(canonical.page)).verified;
+      } catch {
+        finalSubmitControlDetected = false;
+      }
+      const ready = editorReached && titleEditorDetected && bodyEditorDetected && imageUploadControlDetected && publishSettingsAreaDetected && finalSubmitControlDetected;
+      return complete({
+        status: ready ? "ready" : "editor_not_found",
+        editorReached,
+        authStillValid: true,
+        contentType: editorReached ? "IMAGE_TEXT" : null,
+        contentTypeReady: editorReached,
+        titleEditorDetected,
+        bodyEditorDetected,
+        imageUploadControlDetected,
+        publishSettingsAreaDetected,
+        finalSubmitControlDetected,
+        securityVerificationPresent: false,
+        loginPagePresent: false,
+        needsUserAction: !ready,
+        sanitizedUrl: finalUrl,
+        editorEntrySideEffectRisk: "NONE_OBSERVED"
+      });
+    } catch (error) {
+      if (error instanceof BrowserAutomationError && /Page mismatch/iu.test(error.message)) throw error;
+      const result = emptyPreSubmitGateResult(this.preSubmitGateStatusForError(error));
+      result.authStillValid = result.status !== "auth_expired" && result.status !== "security_verification_required";
+      result.loginPagePresent = result.status === "auth_expired";
+      result.securityVerificationPresent = result.status === "security_verification_required";
+      result.sanitizedUrl = sanitizePageUrl(canonical.page);
+      return complete(result);
+    }
+  }
+
   override getBrowserRuntimeSnapshot(ctx: AccountContext): BrowserSessionRuntimeSnapshot {
     const key = `${this.platformKey}:${ctx.accountId}`;
     return { ...super.getBrowserRuntimeSnapshot(ctx), ...this.accountOperationMutex.getState(key) };
@@ -621,10 +734,8 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const gates: string[] = ["account_identity"];
     const identity = await this.inspectAccountIdentity(page, evidence);
 
-    const entry = await this.discoverImagePostEntry(page);
-    await entry.click();
+    await this.navigateToImagePostEditor(page);
     gates.push("login", "image_post_entry");
-    await waitForProbe(page);
     const imageEvidence = await this.uploadImages(page, article.images ?? []);
     gates.push("image_upload");
 
@@ -894,7 +1005,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     this.onLoginEvaluation({ phase, ...(operationId ? { operationId } : {}), timestamp: new Date().toISOString(), platformKey: this.platformKey, accountId: ctx.accountId, pageIsClosed, pageUrl, pageTitle, creatorDomain: login.creatorHost, creatorHomePath: login.creatorHomePath, publishNoteVisible: login.publishNoteVisible, noteManagementVisible: login.noteManagementVisible, dataDashboardVisible: login.dataDashboardVisible, accountStatusVisible: login.accountStatusVisible, profileAreaVisible: login.profileAreaVisible, visibleLoginForm: login.visibleLoginForm, visibleQrLogin: login.visibleQrLogin, visibleSmsVerification: login.visibleSmsVerification, visibleCaptcha: login.visibleCaptcha, visibleSlider: login.visibleSlider, visibleSecurityModal: login.visibleSecurityModal, positiveSignalCount: new Set(login.positiveSignals).size, blockingSignalCount: blockers.filter(Boolean).length, loginClassification: decision, stableObservationWindowMs, stableObservationSamples, stableObservationPassed });
   }
 
-  private emitCanonicalPageOperation(ctx: AccountContext, session: BrowserSession, page: Page, pageDebugId: string, operationId: string, phase: XiaohongshuCanonicalPageOperationPhase, pageContextMatchesSession: boolean, finalStatus?: LoginStatus): void {
+  private emitCanonicalPageOperation(ctx: AccountContext, session: BrowserSession, page: Page, pageDebugId: string, operationId: string, phase: XiaohongshuCanonicalPageOperationPhase, pageContextMatchesSession: boolean, finalStatus?: LoginStatus | PreSubmitGateStatus, action: "CHECK_LOGIN" | "PRE_SUBMIT_GATE" = "CHECK_LOGIN"): void {
     if (!this.onCanonicalPageOperation) return;
     const key = `${this.platformKey}:${ctx.accountId}`;
     const mutex = this.accountOperationMutex.getState(key);
@@ -905,7 +1016,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       operationId,
       platformKey: "xiaohongshu",
       accountId: ctx.accountId,
-      action: "CHECK_LOGIN",
+      action,
       contextDebugId: session.contextDebugId ?? "unknown-context",
       pageDebugId,
       pageRole: "CANONICAL_AUTHENTICATED",
@@ -1027,6 +1138,36 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const distinctNames = [...new Set(nicknameCandidates)];
     if (distinctNames.length === 1) return { externalAccountId: null, displayName: distinctNames[0], profileUrl: null };
     throw new XiaohongshuGateError("ACCOUNT_IDENTITY_UNVERIFIED", "USER_ACTION_REQUIRED", "未从真实页面可靠取得小红书账号身份；未猜测平台账号 ID");
+  }
+
+  private preSubmitGateStatusForError(error: unknown): PreSubmitGateStatus {
+    if (error instanceof XiaohongshuGateError) {
+      if (error.gateCode === "LOGIN_REQUIRED") return "auth_expired";
+      if (error.gateCode === "SECURITY_VERIFICATION_REQUIRED") return "security_verification_required";
+      if (error.gateCode === "IMAGE_POST_ENTRY_NOT_VERIFIED" || error.gateCode === "CONTENT_TITLE_NOT_VERIFIED" || error.gateCode === "CONTENT_BODY_NOT_VERIFIED" || error.gateCode === "IMAGE_UPLOAD_NOT_VERIFIED" || error.gateCode === "FINAL_SUBMIT_CONTROL_NOT_VERIFIED" || error.gateCode === "REQUIRED_FIELDS_NOT_VERIFIED") return "editor_not_found";
+    }
+    if (error instanceof BrowserAutomationError && error.code === "LOGIN_EXPIRED") return "auth_expired";
+    return "needs_user_action";
+  }
+
+  private async navigateToImagePostEditor(page: Page): Promise<void> {
+    const entry = await this.discoverImagePostEntry(page);
+    await entry.click();
+    await waitForProbe(page);
+  }
+
+  private async hasUniqueEditor(page: Page, field: "title" | "body"): Promise<boolean> {
+    try {
+      await this.discoverUniqueEditor(page, field);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async hasImageUploadControl(page: Page): Promise<boolean> {
+    const input = page.locator(XIAOHONGSHU_FILE_SELECTOR);
+    return await locatorCount(input) === 1 && await isVisible(input) && await isEnabled(input);
   }
 
   private async discoverImagePostEntry(page: Page): Promise<Locator> {

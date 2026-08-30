@@ -87,6 +87,15 @@ describe("automatic canonical session heartbeat wiring", () => {
     expect(sessionHeartbeat).toHaveBeenCalledTimes(2);
   });
 
+  it("records pre/post gate heartbeats while executing the gate exactly once", async () => {
+    const { sessionHeartbeat, controller } = makeHarness();
+    const gate = vi.fn(async () => ({ status: "ready" as const }));
+
+    await expect(controller.runPreSubmitGate("account-a", "xiaohongshu", gate)).resolves.toEqual({ status: "ready" });
+    expect(gate).toHaveBeenCalledTimes(1);
+    expect(sessionHeartbeat.mock.calls.map(([, , input]) => input.phase)).toEqual(["PRE_SUBMIT_GATE_PRECHECK", "POST_SUBMIT_GATE"]);
+  });
+
   it("wires both account-center login and check-login actions to the controller", () => {
     const app = readFileSync(new URL("../apps/desktop/src/renderer/App.tsx", import.meta.url), "utf8");
     const workspace = readFileSync(new URL("../apps/desktop/src/renderer/V11Workspace.tsx", import.meta.url), "utf8");
@@ -95,5 +104,7 @@ describe("automatic canonical session heartbeat wiring", () => {
     expect(app).toContain("runCheckLoginWithHeartbeats(account.id, account.platformKey");
     expect(workspace).toContain("beginPostLoginHeartbeat(pendingLogin.accountId, pendingLogin.platformKey)");
     expect(workspace).toContain("runCheckLoginWithHeartbeats(row.account.id, row.account.platformKey");
+    expect(workspace).toContain("runPreSubmitGateWithHeartbeats(row.account.id, row.account.platformKey");
+    expect(workspace).toContain("accounts.inspectPublishEditor(row.account.id, row.account.platformKey)");
   });
 });
