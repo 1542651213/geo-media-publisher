@@ -1,5 +1,68 @@
 # Project State
 
+## Task 9A — Xiaohongshu canonical Context disconnect root cause — FIXED / DEPLOYED - 2026-08-30
+
+本轮没有重新执行 Owner login，没有访问真实小红书页面，没有执行 cold restore、PRE-SUBMIT、SELF_TEST、真实 `preparePublish` 或任何发布动作。目标账号范围仍为 `platformKey=xiaohongshu`、`accountId=54b390ac-d81e-440a-baeb-d00f9f346cc3`，profile 为 `C:\Users\Administrator\AppData\Roaming\codex-media-publisher\browser-profiles\xiaohongshu\54b390ac-d81e-440a-baeb-d00f9f346cc3`。
+
+本轮生产实现与测试提交为 `878d182`；Task 1–7 的既有提交不变，完整列表见下方 Task 8 implementation commits 表。
+
+### Root-cause evidence
+
+本地临时 profile、`about:blank`、Chrome channel、headed `launchPersistentContext` 对照实验确认了 CASE B：关闭唯一 Page 后没有任何 app-level `context.close()` / `browser.close()`，等待 8 秒后 Browser disconnected 且 Context Page 数为 0；保留第二个 Page 时，关闭 Page A 后等待 8 秒 Browser 仍 connected，Page B 仍在 Context 中。证据文件为 `output/v143-xiaohongshu-last-page-close-smoke.json` 及汇总 `output/v143-xiaohongshu-task-9a-root-cause.json`。
+
+| Item | Result |
+| --- | --- |
+| `LAST_PAGE_CLOSE_CAUSES_BROWSER_EXIT` | `YES` |
+| `SECOND_PAGE_PREVENTS_BROWSER_EXIT` | `YES` |
+| `EXPLICIT_CONTEXT_CLOSE_CALL_FOUND` | `NO` on the target login-page release path; explicit close callers exist for logout/remove/shutdown/replacement/error cleanup and are listed in the evidence JSON |
+| `DISCONNECT_TRIGGER_CALLER` | Headed Chromium exits when the last persistent-context Page is closed; Playwright emits Browser disconnected |
+
+### Lifecycle fix
+
+在 retained-context policy 下，XHS authenticated canonical Page 现在作为 account-owned session Page 保留；login release 不再关闭最后一个 Page。checkLogin 继续创建独立 operation Page，operation Page 关闭不会关闭 Context；只有显式 logout、account removal、app shutdown、execution-mode replacement 或 cleanup 才关闭 account-owned session。没有新增空白 keeper Page、轮询或平台网络请求；保留的是已有 authenticated Page。
+
+Core lifecycle diagnostics now record explicit close reason/caller and disconnect classification, including `explicitCloseInProgress`, `lastExplicitCloseReason`, `activePageCountBeforeDisconnect`, and `browserConnectedBeforeEvent`. No unsupported Playwright Browser process API was invented.
+
+### Task 9A verification and deployment
+
+| Check | Result |
+| --- | --- |
+| Focused tests | `PASS` — 7 files / 116 passed / 0 failed / 0 skipped |
+| Full tests | `PASS` — 77 files / 503 passed / 0 failed / 0 skipped |
+| Typecheck | `PASS` |
+| Lint | `PASS` |
+| Build | `PASS` |
+| Installed deployment | `PASS` |
+| Installed process | `Responding=true`, window `矩阵发布工作台` |
+| Native ABI | Electron `37.10.3` / module ABI `136`; staging/installed native binary hash matched |
+| `app.asar` hash | staging and installed `BB2EDCDBE7CE9ECDFD50422262119BBFCA978A2365064C000BDF1144CD1C620C` |
+| Rollback | `C:\GMP116ZhihuL5\Geo Media Publisher.pre-xhs-context-disconnect-fix-20260830-104700` |
+
+The deployment was performed only after closing the previous installed process normally with `Alt+F4`. Production data, credentials, and the account-scoped XHS profile were outside the copied installed payload and were not copied or modified.
+
+### Production DB and safety boundary
+
+All DB reads used readonly SQLite connections. Counts remained unchanged through tests and deployment:
+
+```text
+TASK9A_DB_BEFORE       = publish_jobs 15 / submission_intents 12 / publish_records 9
+TASK9A_DB_AFTER_TESTS  = publish_jobs 15 / submission_intents 12 / publish_records 9
+TASK9A_DB_FINAL        = publish_jobs 15 / submission_intents 12 / publish_records 9
+PUBLISH_DOMAIN_UNCHANGED = YES
+```
+
+```text
+PRE_SUBMIT_GATE        = NOT_RUN
+SELF_TEST              = NOT_RUN
+REAL_PREPARE_PUBLISH   = NOT_CALLED
+FINAL_SUBMIT_COUNT     = 0
+JOB_CREATED            = NO
+INTENT_CREATED         = NO
+PUBLISH_RECORD_CREATED = NO
+```
+
+Task 9 retry was not started. The live same-context Check 1/2 remains Owner-controlled and pending; `XIAOHONGSHU_RUNTIME_SESSION_READY = NOT_VERIFIED`, `READY_FOR_REAL_SELF_TEST = NO`, and `TASK9_RETRY_READY = NO` until a later explicit Owner-controlled retry.
+
 ## Task 9 — Xiaohongshu owner-controlled live same-context verification — BLOCKED - 2026-08-30
 
 本轮仅针对 `platformKey=xiaohongshu`、`accountId=54b390ac-d81e-440a-baeb-d00f9f346cc3` 执行 Owner login 后的 live 生命周期观察；未修改源码，未重新执行 Task 1–8，也未进入 Task 9 的 Check 1/2 之后步骤。
