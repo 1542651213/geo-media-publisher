@@ -9,8 +9,8 @@ describe("canonical session runtime introspection", () => {
 
     expect(ipc).toContain('register("accounts:session-heartbeat"');
     expect(ipc).toContain("getBrowserRuntimeSnapshot");
-    expect(preload).toContain('sessionHeartbeat: (accountId, platformKey) => invoke("accounts:session-heartbeat"');
-    expect(sharedApi).toContain("sessionHeartbeat(accountId: string, platformKey: string)");
+    expect(preload).toContain('sessionHeartbeat: (accountId, platformKey, input) => invoke("accounts:session-heartbeat"');
+    expect(sharedApi).toContain("sessionHeartbeat(accountId: string, platformKey: string, input?: BrowserSessionHeartbeatInput)");
   });
 
   it("keeps the heartbeat read-only and free of browser navigation or publish calls", () => {

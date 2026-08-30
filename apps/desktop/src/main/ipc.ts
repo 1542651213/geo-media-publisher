@@ -490,14 +490,14 @@ export function registerIpc(deps: IpcDependencies): void {
   register("platforms:open", async (_event, payload) => { const input = z.object({ platformKey: idSchema }).parse(payload); const platform = repository.listPlatforms().find((item) => item.platformKey === input.platformKey); if (!platform?.officialWebsite) throw new Error("平台没有可打开的官方入口"); createUserAction("OPEN_BACKEND"); await shell.openExternal(platform.officialWebsite); return { opened: true }; });
   register("accounts:list", () => { recordRuntimeHeartbeat(logger, "accounts:list"); return repository.listAccounts(); });
   register("accounts:session-heartbeat", (_event, payload) => {
-    const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);
+    const input = z.object({ accountId: idSchema, platformKey: idSchema, phase: z.enum(["POST_LOGIN_IMMEDIATE", "POST_LOGIN_SURVIVAL", "PRE_CHECK_LOGIN", "POST_CHECK_LOGIN", "MANUAL"]).optional(), heartbeatSequence: z.string().min(1).max(200).optional(), loginGeneration: z.number().int().min(0).optional() }).parse(payload);
     const account = repository.listAccounts().find((item) => item.id === input.accountId && item.platformKey === input.platformKey);
     if (!account) throw new Error("账号与平台不匹配");
     const adapter = registry.tryGetForConnection(input.platformKey);
     if (!adapter || !isAutomationAdapter(adapter) || !adapter.getBrowserRuntimeSnapshot) throw new Error("该平台没有可读取的 BrowserSession runtime snapshot");
     recordRuntimeHeartbeat(logger, "accounts:session-heartbeat");
     const snapshot = adapter.getBrowserRuntimeSnapshot(accountContext(account.id, account.platformKey));
-    logger.info("ACCOUNT", "CANONICAL_SESSION_HEARTBEAT", "只读读取 account-scoped BrowserSession live objects", snapshot as unknown as Record<string, unknown>);
+    logger.info("ACCOUNT", "CANONICAL_SESSION_HEARTBEAT", "只读读取 account-scoped BrowserSession live objects", { phase: input.phase ?? "MANUAL", heartbeatSequence: input.heartbeatSequence ?? randomUUID(), loginGeneration: input.loginGeneration ?? null, ...snapshot });
     return snapshot;
   });
   const readCredentialStatus = (accountId: string, platformKey: string): { configured: boolean; expired: boolean; fields: Array<CredentialField & { configured: boolean }> } => {

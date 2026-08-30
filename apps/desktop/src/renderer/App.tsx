@@ -17,6 +17,7 @@ import { disconnectFeedbackMessage } from "./platform-connection-ui";
 import { ImageLibraryPage } from "./ImageLibraryPage";
 import { PlatformSelfTestCenter } from "./PlatformSelfTestCenter";
 import { EnterpriseProfileManager } from "./EnterpriseProfileManager";
+import { beginPostLoginHeartbeat, runCheckLoginWithHeartbeats } from "./session-heartbeat";
 import { V11AccountsCenter, V11AdvancedSettings, V11ArticleLibrary, V11ContentProduction, V11Dashboard, V11ImageLibrary, V11Preferences, V11PublishCenter, V11Statistics } from "./V11Workspace";
 import { normalNavigation, type V11NavigationTarget } from "./v11-ui-model";
 
@@ -266,6 +267,7 @@ function AccountsCenterPage({ refresh }: { refresh: () => void }): JSX.Element {
     if (!callbackUrl) return;
     try {
       await window.publisherAPI.accounts.completeLogin(account.id, account.platformKey, callbackUrl);
+      beginPostLoginHeartbeat(account.id, account.platformKey);
       setCallbackUrls((current) => ({ ...current, [account.id]: "" }));
       setMessages((current) => ({ ...current, [account.id]: "OAuth 授权已安全完成" }));
       load();
@@ -273,7 +275,7 @@ function AccountsCenterPage({ refresh }: { refresh: () => void }): JSX.Element {
   };
   const testConnection = async (account: Account): Promise<void> => {
     try {
-      await window.publisherAPI.accounts.checkLogin(account.id, account.platformKey);
+      await runCheckLoginWithHeartbeats(account.id, account.platformKey, () => window.publisherAPI.accounts.checkLogin(account.id, account.platformKey));
       setMessages((current) => ({ ...current, [account.id]: "连接测试完成；未改变平台生命周期" }));
       load();
     } catch (error) { setMessages((current) => ({ ...current, [account.id]: error instanceof Error ? error.message : "连接测试失败；未改变平台生命周期" })); }
@@ -336,13 +338,14 @@ function AccountsPageV02({ refresh }: { refresh: () => void }): JSX.Element {
     if (!callbackUrl) return;
     try {
       await window.publisherAPI.accounts.completeLogin(account.id, account.platformKey, callbackUrl);
+      beginPostLoginHeartbeat(account.id, account.platformKey);
       setCallbackUrls((current) => ({ ...current, [account.id]: "" }));
       setMessages((current) => ({ ...current, [account.id]: "OAuth 授权已安全完成" }));
       load();
     } catch (error) { setMessages((current) => ({ ...current, [account.id]: error instanceof Error ? error.message : "OAuth 回调处理失败" })); }
   };
   const checkLogin = async (account: Account): Promise<void> => {
-    try { await window.publisherAPI.accounts.checkLogin(account.id, account.platformKey); load(); }
+    try { await runCheckLoginWithHeartbeats(account.id, account.platformKey, () => window.publisherAPI.accounts.checkLogin(account.id, account.platformKey)); load(); }
     catch (error) { setMessages((current) => ({ ...current, [account.id]: error instanceof Error ? error.message : "登录检查失败" })); }
   };
   return <><PageTitle eyebrow="账号管理" title="全部账号" description="凭据按 Adapter manifest 渲染并由主进程安全存储；页面只回显配置状态。验证码和安全验证只允许用户在平台正常流程中完成。" /><div className="inline-create panel"><select value={platformKey} onChange={(event) => setPlatformKey(event.target.value)}>{platforms.map((platform) => <option value={platform.platformKey} key={platform.platformKey}>{platform.displayName}</option>)}</select><input placeholder="新增账号名称" value={name} onChange={(event) => setName(event.target.value)} /><button className="primary-button" onClick={() => void create()}>添加账号</button></div><section className="account-grid">{accounts.map((account) => {
