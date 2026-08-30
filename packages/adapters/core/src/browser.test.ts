@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import type { Browser, BrowserContext } from "playwright-core";
 import type { CredentialStore } from "@publisher/security";
-import { BrowserRuntimeError, BrowserSessionManager, ExternalLaunchBlockedError, browserExecutionModeFromSettings, type BrowserSessionLifecycleEvent, type UserInitiatedAction } from "./index";
+import { BrowserRuntimeError, BrowserSessionManager, BrowserSessionPageOwnershipError, ExternalLaunchBlockedError, browserExecutionModeFromSettings, type BrowserSessionLifecycleEvent, type BrowserSessionOperationPageLifecycleEvent, type UserInitiatedAction } from "./index";
 
 class MemoryCredentialStore implements CredentialStore {
   private readonly values = new Map<string, string>();
@@ -19,8 +19,8 @@ const userAction: UserInitiatedAction = { userActionId: "11111111-1111-4111-8111
 
 describe("BrowserSessionManager credential boundary", () => {
   it("closes an XHS operation Page without closing its canonical Context", async () => {
-    const firstPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), close: vi.fn(async () => undefined) };
-    const secondPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), close: vi.fn(async () => undefined) };
+    const firstPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), close: vi.fn(async () => undefined), context: vi.fn(() => context) };
+    const secondPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), close: vi.fn(async () => undefined), context: vi.fn(() => context) };
     const context = {
       setDefaultTimeout: vi.fn(),
       newPage: vi.fn().mockResolvedValueOnce(firstPage).mockResolvedValueOnce(secondPage),
@@ -43,6 +43,50 @@ describe("BrowserSessionManager credential boundary", () => {
     expect(operation.page.close).toHaveBeenCalledTimes(1);
     expect(context.close).not.toHaveBeenCalled();
     expect(manager.getActiveSession(identity)).toBe(session);
+  });
+
+  it("enforces Page-to-Context identity and emits operation Page lifecycle evidence", async () => {
+    const lifecycle: BrowserSessionOperationPageLifecycleEvent[] = [];
+    const canonicalPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "https://creator.xiaohongshu.com/"), close: vi.fn(async () => undefined), context: vi.fn(() => context) };
+    const operationPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "https://creator.xiaohongshu.com/"), close: vi.fn(async () => undefined), context: vi.fn(() => context) };
+    const context = {
+      setDefaultTimeout: vi.fn(),
+      newPage: vi.fn(async () => operationPage),
+      pages: vi.fn(() => [canonicalPage, operationPage]),
+      close: vi.fn(async () => undefined)
+    } as unknown as BrowserContext;
+    const browser = { newContext: vi.fn(async () => context), close: vi.fn(async () => undefined), isConnected: vi.fn(() => true) } as unknown as Browser;
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), {
+      launchBrowser: vi.fn(async () => browser),
+      onOperationPageLifecycle: (event) => lifecycle.push(event)
+    });
+    const identity = { platformKey: "xiaohongshu", accountId: "operation-evidence" };
+
+    const opened = await manager.openOperationPage(identity, userAction);
+    await manager.closeOperationPage(identity, opened.page);
+
+    expect(lifecycle).toHaveLength(3);
+    expect(lifecycle[0]).toMatchObject({ phase: "OPERATION_PAGE_OPENED", platformKey: "xiaohongshu", accountId: "operation-evidence", contextDebugId: expect.any(String), pageDebugId: opened.pageDebugId, pageCountBefore: 2, pageCountAfter: 2, browserConnected: true, contextMatch: true });
+    expect(lifecycle[1]).toMatchObject({ phase: "OPERATION_PAGE_CLOSE_STARTED", contextDebugId: lifecycle[0]?.contextDebugId, pageDebugId: opened.pageDebugId });
+    expect(lifecycle[2]).toMatchObject({ phase: "OPERATION_PAGE_CLOSE_COMPLETED", contextDebugId: lifecycle[0]?.contextDebugId, pageDebugId: opened.pageDebugId, remainingPageCount: 2, browserConnected: true });
+    expect(JSON.stringify(lifecycle)).not.toMatch(/cookie|token|authorization|storage/iu);
+  });
+
+  it("rejects an operation Page returned by a foreign BrowserContext", async () => {
+    const foreignContext = {} as BrowserContext;
+    const canonicalPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), context: vi.fn(() => ownerContext) };
+    const foreignPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), context: vi.fn(() => foreignContext) };
+    const ownerContext = {
+      setDefaultTimeout: vi.fn(),
+      newPage: vi.fn(async () => foreignPage),
+      pages: vi.fn(() => [canonicalPage, foreignPage]),
+      close: vi.fn(async () => undefined)
+    } as unknown as BrowserContext;
+    const browser = { newContext: vi.fn(async () => ownerContext), close: vi.fn(async () => undefined), isConnected: vi.fn(() => true) } as unknown as Browser;
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser: vi.fn(async () => browser) });
+
+    await expect(manager.openOperationPage({ platformKey: "xiaohongshu", accountId: "foreign-page" }, userAction)).rejects.toBeInstanceOf(BrowserSessionPageOwnershipError);
+    expect(foreignPage.context).toHaveBeenCalled();
   });
 
   it("rejects closing the canonical XHS session Page as an operation Page", async () => {

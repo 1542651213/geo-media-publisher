@@ -14,6 +14,7 @@ export const EXTERNAL_LAUNCH_TRIGGER_SOURCES = [
   "APP_STARTUP",
   "CONNECT_ACCOUNT",
   "OPEN_BACKEND",
+  "CHECK_LOGIN",
   "START_PUBLISH",
   "RUN_SELF_TEST",
   "CONTINUE_PENDING_ACTION"
@@ -122,6 +123,50 @@ export interface BrowserSessionOperationPage {
   pageDebugId: string;
 }
 
+export class BrowserSessionPageOwnershipError extends Error {
+  readonly code = "BROWSER_SESSION_PAGE_OWNERSHIP" as const;
+
+  constructor(message = "BrowserSession/Page lifecycle ownership invariant failed") {
+    super(message);
+    this.name = "BrowserSessionPageOwnershipError";
+  }
+}
+
+export interface BrowserSessionCanonicalPage {
+  session: BrowserSession;
+  page: Page;
+  pageDebugId: string;
+}
+
+export interface BrowserSessionOperationPageLifecycleEvent {
+  phase: "OPERATION_PAGE_OPENED" | "OPERATION_PAGE_CLOSE_STARTED" | "OPERATION_PAGE_CLOSE_COMPLETED";
+  timestamp: string;
+  platformKey: string;
+  accountId: string;
+  action: UserInitiatedAction | null;
+  contextDebugId: string | null;
+  pageDebugId: string | null;
+  pageCountBefore: number | null;
+  pageCountAfter: number | null;
+  remainingPageCount: number | null;
+  browserConnected: boolean | null;
+  sanitizedUrl: string | null;
+  contextMatch: boolean | null;
+}
+
+/** Runtime object-identity check. Test doubles may omit Page.context(), but a real Playwright Page always exposes it. */
+export function assertBrowserSessionPageOwnership(session: BrowserSession, page: Page): void {
+  const candidate = page as unknown as { context?: () => BrowserContext };
+  if (typeof candidate.context !== "function") return;
+  let pageContext: BrowserContext;
+  try {
+    pageContext = candidate.context();
+  } catch {
+    throw new BrowserSessionPageOwnershipError("BrowserSession/Page lifecycle ownership invariant failed: Page context is unavailable");
+  }
+  if (pageContext !== session.context) throw new BrowserSessionPageOwnershipError("BrowserSession/Page lifecycle ownership invariant failed: Page belongs to a foreign BrowserContext");
+}
+
 export const BROWSER_SESSION_CLOSE_REASONS = [
   "ACCOUNT_REMOVE",
   "EXPLICIT_LOGOUT",
@@ -194,6 +239,7 @@ export interface BrowserSessionManagerOptions {
   launchPersistentContext?: (userDataDir: string, options: { channel: SystemBrowserChannel; headless: boolean; storageState?: StorageState }) => Promise<BrowserContext>;
   writeProfileInitializedMarker?: (markerPath: string) => Promise<void>;
   onSessionLifecycle?: (event: BrowserSessionLifecycleEvent) => void;
+  onOperationPageLifecycle?: (event: BrowserSessionOperationPageLifecycleEvent) => void;
   platformPolicies?: Readonly<Record<string, Partial<BrowserSessionPlatformPolicy>>>;
 }
 
@@ -231,6 +277,7 @@ export class PlaywrightSessionManager {
   private readonly runtimeStates = new Map<string, BrowserSessionRuntimeState>();
   private readonly sessionIdentities = new WeakMap<BrowserSession, BrowserSessionIdentity>();
   private readonly operationPages = new WeakMap<BrowserSession, Set<Page>>();
+  private readonly operationPageDebugIds = new WeakMap<Page, string>();
   private readonly disconnectListenerCleanups = new WeakMap<BrowserSession, () => void>();
   private readonly explicitCloseSessions = new Set<BrowserSession>();
   private readonly lastExplicitCloseInfo = new WeakMap<BrowserSession, BrowserSessionCloseInfo>();
@@ -384,11 +431,17 @@ export class PlaywrightSessionManager {
 
   async openOperationPage(identity: BrowserSessionIdentity, action: UserInitiatedAction, executionMode: BrowserExecutionMode = "VISIBLE"): Promise<BrowserSessionOperationPage> {
     const session = await this.open(identity, action, executionMode);
+    const pageCountBefore = this.safePageCount(session.context);
     const page = await session.context.newPage();
+    const pageDebugId = randomUUID();
+    const contextMatch = this.pageContextMatches(session, page);
+    this.emitOperationPageLifecycle({ phase: "OPERATION_PAGE_OPENED", identity, action, session, page, pageDebugId, pageCountBefore, pageCountAfter: this.safePageCount(session.context), contextMatch });
+    if (!contextMatch) throw new BrowserSessionPageOwnershipError();
     const operationPages = this.operationPages.get(session) ?? new Set<Page>();
     operationPages.add(page);
     this.operationPages.set(session, operationPages);
-    return { session, page, pageDebugId: randomUUID() };
+    this.operationPageDebugIds.set(page, pageDebugId);
+    return { session, page, pageDebugId };
   }
 
   async closeOperationPage(identity: BrowserSessionIdentity, page: Page): Promise<void> {
@@ -398,8 +451,21 @@ export class PlaywrightSessionManager {
     if (!session || (!ownedOperationPage && !retainedCanonicalPage) || !this.contextContainsPage(session.context, page)) {
       throw new Error("Operation Page does not belong to the active session Context");
     }
+    assertBrowserSessionPageOwnership(session, page);
+    const pageDebugId = this.operationPageDebugIds.get(page) ?? (retainedCanonicalPage ? session.pageDebugId ?? null : null);
+    this.emitOperationPageLifecycle({ phase: "OPERATION_PAGE_CLOSE_STARTED", identity, action: null, session, page, pageDebugId, pageCountBefore: this.safePageCount(session.context), pageCountAfter: null, contextMatch: true });
     await page.close();
     if (ownedOperationPage) this.operationPages.get(session)?.delete(page);
+    this.operationPageDebugIds.delete(page);
+    this.emitOperationPageLifecycle({ phase: "OPERATION_PAGE_CLOSE_COMPLETED", identity, action: null, session, page, pageDebugId, pageCountBefore: null, pageCountAfter: this.safePageCount(session.context), contextMatch: true });
+  }
+
+  getCanonicalPage(identity: BrowserSessionIdentity): BrowserSessionCanonicalPage | null {
+    const session = this.getActiveSession(identity);
+    if (!session || this.isPageClosed(session.page)) return null;
+    assertBrowserSessionPageOwnership(session, session.page);
+    if (!this.contextContainsPage(session.context, session.page)) throw new BrowserSessionPageOwnershipError("BrowserSession/Page lifecycle ownership invariant failed: canonical Page is not in its Context");
+    return { session, page: session.page, pageDebugId: session.pageDebugId ?? "unknown-page" };
   }
 
   retainsContextAfterPageClose(identity: BrowserSessionIdentity): boolean {
@@ -625,6 +691,52 @@ export class PlaywrightSessionManager {
       return context.pages().includes(page);
     } catch {
       return false;
+    }
+  }
+
+  private pageContextMatches(session: BrowserSession, page: Page): boolean {
+    try {
+      assertBrowserSessionPageOwnership(session, page);
+      return true;
+    } catch (error) {
+      if (error instanceof BrowserSessionPageOwnershipError) return false;
+      throw error;
+    }
+  }
+
+  private isPageClosed(page: Page): boolean {
+    const candidate = page as unknown as { isClosed?: () => boolean };
+    try { return typeof candidate.isClosed === "function" && candidate.isClosed(); } catch { return true; }
+  }
+
+  private emitOperationPageLifecycle(input: { phase: BrowserSessionOperationPageLifecycleEvent["phase"]; identity: BrowserSessionIdentity; action: UserInitiatedAction | null; session: BrowserSession; page: Page; pageDebugId: string | null; pageCountBefore: number | null; pageCountAfter: number | null; contextMatch: boolean | null }): void {
+    if (!this.options.onOperationPageLifecycle) return;
+    let sanitizedUrl: string | null = null;
+    try {
+      const raw = input.page.url();
+      const parsed = new URL(raw);
+      sanitizedUrl = `${parsed.origin}${parsed.pathname}`;
+    } catch {
+      sanitizedUrl = null;
+    }
+    try {
+      this.options.onOperationPageLifecycle({
+        phase: input.phase,
+        timestamp: new Date().toISOString(),
+        platformKey: input.identity.platformKey,
+        accountId: input.identity.accountId,
+        action: input.action,
+        contextDebugId: input.session.contextDebugId ?? null,
+        pageDebugId: input.pageDebugId,
+        pageCountBefore: input.pageCountBefore,
+        pageCountAfter: input.pageCountAfter,
+        remainingPageCount: input.phase === "OPERATION_PAGE_CLOSE_COMPLETED" ? input.pageCountAfter : null,
+        browserConnected: this.browserConnected(input.session.browser),
+        sanitizedUrl,
+        contextMatch: input.contextMatch
+      });
+    } catch {
+      // Diagnostics must never change the browser lifecycle result.
     }
   }
 

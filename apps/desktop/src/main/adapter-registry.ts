@@ -1,4 +1,4 @@
-import { AdapterRegistry, BrowserSessionManager, type BrowserRuntimeEvent, type BrowserSessionLifecycleEvent } from "@publisher/adapters-core";
+import { AdapterRegistry, BrowserSessionManager, type BrowserRuntimeEvent, type BrowserSessionLifecycleEvent, type BrowserSessionOperationPageLifecycleEvent } from "@publisher/adapters-core";
 import { BaijiahaoBrowserAdapter } from "@publisher/adapters-baijiahao/browser";
 import { BilibiliBrowserAdapter } from "@publisher/adapters-bilibili/browser";
 import { DouyinOfficialAdapter } from "@publisher/adapters-douyin";
@@ -33,9 +33,14 @@ export function createRuntimeAdapterRegistry(credentials: CredentialStore, inclu
     if (event.platformKey !== "xiaohongshu") return;
     logger?.info("ACCOUNT", `XHS_BROWSER_SESSION_${event.phase}`, "小红书 BrowserSession 生命周期诊断", event as unknown as Record<string, unknown>);
   };
+  const onOperationPageLifecycle = (event: BrowserSessionOperationPageLifecycleEvent): void => {
+    if (event.platformKey !== "xiaohongshu") return;
+    logger?.info("ACCOUNT", event.phase, "小红书 operation Page 生命周期诊断", event as unknown as Record<string, unknown>);
+  };
   const browserSessionManager = new BrowserSessionManager(credentials, {
     onRuntimeEvent: onBrowserRuntimeEvent,
     onSessionLifecycle: onBrowserSessionLifecycle,
+    onOperationPageLifecycle,
     browserProfileRootDir,
     persistentProfilePlatforms: ["xiaohongshu"],
     persistentProfileCredentialSnapshotPlatforms: [],

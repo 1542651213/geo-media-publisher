@@ -12,7 +12,7 @@ import type {
   ValidationResult
 } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
-import { BrowserSessionManager, browserExecutionModeFromSettings, browserSessionCredentialKey, browserSessionIdHash, PlatformAdapterError, userInitiatedActionFromSettings, type BrowserExecutionMode, type BrowserRuntimeEvent, type BrowserSession, type BrowserSessionCloseInfo, type BrowserSessionRuntimeState, type BrowserSessionStorageMode, type SystemBrowserChannel } from "@publisher/adapters-core";
+import { assertBrowserSessionPageOwnership, BrowserSessionManager, browserExecutionModeFromSettings, browserSessionCredentialKey, browserSessionIdHash, PlatformAdapterError, userInitiatedActionFromSettings, type BrowserExecutionMode, type BrowserRuntimeEvent, type BrowserSession, type BrowserSessionCanonicalPage, type BrowserSessionCloseInfo, type BrowserSessionRuntimeState, type BrowserSessionStorageMode, type SystemBrowserChannel } from "@publisher/adapters-core";
 import type { CredentialStore } from "@publisher/security";
 import type { AutomationAdapter, AutomationPrepareResult } from "@publisher/adapters-core";
 
@@ -41,7 +41,7 @@ export interface BrowserAutomationAdapterOptions {
   onConnectionDiagnostic?: (diagnostic: BrowserConnectionDiagnostic) => void;
 }
 
-export type BrowserConnectionDiagnosticPhase = "BEGIN_LOGIN_PAGE" | "COMPLETE_LOGIN_PAGE" | "LOGIN_PAGE_RELEASED";
+export type BrowserConnectionDiagnosticPhase = "BEGIN_LOGIN_PAGE" | "COMPLETE_LOGIN_PAGE" | "LOGIN_PAGE_RELEASED" | "CANONICAL_AUTHENTICATED_PAGE_PROMOTED";
 export type BrowserConnectionPageReleaseMode = "CLOSED" | "RETAINED_ACCOUNT_PAGE";
 
 export interface BrowserConnectionDiagnostic {
@@ -435,6 +435,25 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     return { page: await this.page(session), session };
   }
 
+  /** Returns only the account-owned canonical Page; it never cold-opens or rotates a Page. */
+  protected async activeCanonicalPage(ctx: AccountContext): Promise<BrowserSessionCanonicalPage | null> {
+    const identity = this.identity(ctx);
+    const session = this.activeSession(identity);
+    if (!session || session.executionMode !== browserExecutionModeFromSettings(ctx.settings)) return null;
+    const manager = this.sessionManager as unknown as { getCanonicalPage?: (value: { platformKey: string; accountId: string }) => BrowserSessionCanonicalPage | null };
+    const canonical = manager.getCanonicalPage?.(identity);
+    if (canonical) {
+      if (canonical.session !== session) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "BrowserSession/Page mismatch：canonical Page 不属于当前 account-scoped Session");
+      return canonical;
+    }
+    if (this.isPageClosed(session.page)) return null;
+    const page = session.page;
+    const pages = typeof session.context.pages === "function" ? session.context.pages() : [];
+    if (!pages.includes(page)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", `BrowserSession/Page mismatch：accountId=${ctx.accountId} 的 canonical Page 不属于当前 Context`);
+    assertBrowserSessionPageOwnership(session, page);
+    return { session, page, pageDebugId: session.pageDebugId ?? "unknown-page" };
+  }
+
   /** Diagnostic-only access for a platform adapter that needs to snapshot its own live session before close. */
   protected activeBrowserSession(ctx: AccountContext): BrowserSession | null {
     return this.activeSession(this.identity(ctx));
@@ -468,6 +487,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     const page = (!this.isPageClosed(session.page) ? session.page : undefined) ?? pages?.find((candidate) => !this.isPageClosed(candidate)) ?? pages?.[0];
     if (!page) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "BrowserSession/Page mismatch：当前 account-scoped Session 没有可验证的 owner Page");
     if (pages && !pages.includes(page)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "BrowserSession/Page mismatch：当前 owner Page 不属于 account-scoped BrowserContext");
+    assertBrowserSessionPageOwnership(session, page);
     return page;
   }
 

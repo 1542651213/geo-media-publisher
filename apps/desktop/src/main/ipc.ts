@@ -701,7 +701,7 @@ export function registerIpc(deps: IpcDependencies): void {
   });
   register("accounts:check-login", async (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);
-    const action = createUserAction("RUN_SELF_TEST");
+    const action = createUserAction("CHECK_LOGIN");
     const adapter = registry.getForConnection(input.platformKey);
     try {
       const status = await adapter.checkLogin(accountContext(input.accountId, input.platformKey, action));

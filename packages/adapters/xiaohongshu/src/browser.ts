@@ -1,6 +1,6 @@
 import type { AccountContext, AccountProfile, LoginSession, LoginStatus, PublishArticleInput, ValidationResult } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
-import { browserExecutionModeFromSettings, userInitiatedActionFromSettings, type AutomationPrepareResult, type BrowserSession } from "@publisher/adapters-core";
+import { type AutomationPrepareResult, type BrowserSession } from "@publisher/adapters-core";
 import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomationAdapterOptions, type BrowserPlatformDefinition, type BrowserSessionScopeEvidence } from "@publisher/adapters-browser";
 import type { Locator, Page } from "playwright-core";
 import { collectXhsAuthStateMetadata, collectXhsPreNavigationAuthStateMetadata, createXhsDiagnosticFingerprintKey, type XhsAuthStateMetadata } from "./auth-state-diagnostics";
@@ -445,11 +445,30 @@ export function classifyXiaohongshuPublishSettings(settings: Array<{ label: stri
   return settings.every((setting) => setting.label.trim().length > 0 && typeof setting.required === "boolean") ? "KNOWN" : "UNKNOWN";
 }
 
+export class AccountOperationMutex {
+  private readonly tails = new Map<string, Promise<void>>();
+
+  async run<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.tails.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    this.tails.set(key, current);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.tails.get(key) === current) this.tails.delete(key);
+    }
+  }
+}
+
 export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
   private readonly onLoginEvaluation?: (evaluation: XiaohongshuLoginEvaluation) => void;
   private readonly onAuthStateDiagnostic?: (diagnostic: XiaohongshuAuthStateDiagnostic) => void;
   private readonly credentialFilePath: string | null;
   private readonly loginStabilityWindowMs: number;
+  private readonly accountOperationMutex = new AccountOperationMutex();
   /** Replaced at the start of each login/restore diagnostic run; never emitted or persisted. */
   private authStateFingerprintKey: Uint8Array | null = null;
 
@@ -476,42 +495,32 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
 
   override async checkLogin(ctx: AccountContext): Promise<LoginStatus> {
     const identity = { platformKey: this.platformKey, accountId: ctx.accountId };
-    const active = this.activeBrowserSession(ctx);
-    if (!active) {
-      this.sessionManager.setRuntimeAuthState(identity, "NEEDS_USER_ACTION", "ACTIVE_CONTEXT_REQUIRED");
-      return "needs_user_action";
-    }
-    const opened = await this.sessionManager.openOperationPage(identity, userInitiatedActionFromSettings(ctx.settings), browserExecutionModeFromSettings(ctx.settings));
-    this.sessionManager.setRuntimeAuthState(identity, "CHECKING", null);
-    try {
-      await this.navigate(opened.page, XIAOHONGSHU_CREATOR_HOME);
-      const status = await this.loginStatusForPage(ctx, opened.page, "CHECK_LOGIN");
+    return this.accountOperationMutex.run(`${identity.platformKey}:${identity.accountId}`, async () => {
+      const canonical = await this.activeCanonicalPage(ctx);
+      if (!canonical) {
+        this.sessionManager.setRuntimeAuthState(identity, "NEEDS_USER_ACTION", "ACTIVE_CANONICAL_PAGE_REQUIRED");
+        return "needs_user_action";
+      }
+      this.sessionManager.setRuntimeAuthState(identity, "CHECKING", null);
+      const status = await this.loginStatusForPage(ctx, canonical.page, "CHECK_LOGIN");
       const state = status === "logged_in" ? "AUTHENTICATED" : status === "unknown" ? "UNVERIFIED" : "NEEDS_USER_ACTION";
       this.sessionManager.setRuntimeAuthState(identity, state, status === "logged_in" ? null : status);
       return status;
-    } finally {
-      await this.sessionManager.closeOperationPage(identity, opened.page);
-    }
+    });
+  }
+
+  override async openBackend(ctx: AccountContext) {
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, () => super.openBackend(ctx));
   }
 
   async getAccountProfile(ctx: AccountContext): Promise<AccountProfile> {
     const identityKey = { platformKey: this.platformKey, accountId: ctx.accountId };
-    const active = this.activeBrowserSession(ctx);
-    let opened: { page: Page; session: BrowserSession };
-    let temporaryPage = false;
-    if (active && this.isConnectionPending(ctx)) {
-      opened = { page: await this.page(active), session: active };
-    } else {
-      if (!active) {
+    return this.accountOperationMutex.run(`${identityKey.platformKey}:${identityKey.accountId}`, async () => {
+      const opened = await this.activeCanonicalPage(ctx);
+      if (!opened) {
         if (!this.sessionManager.hasStoredSession(identityKey)) throw new XiaohongshuGateError("LOGIN_REQUIRED", "USER_ACTION_REQUIRED", "小红书账号没有已保存的浏览器 Session，请先完成登录");
         throw new XiaohongshuGateError("LOGIN_REQUIRED", "USER_ACTION_REQUIRED", "小红书没有当前 live BrowserSession，请由账号所有者重新连接并完成验证");
       }
-      const executionMode = browserExecutionModeFromSettings(ctx.settings);
-      if (active.executionMode !== executionMode) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书当前 live BrowserSession 的运行模式与本次操作不一致，请重新连接账号");
-      opened = await this.sessionManager.openOperationPage(identityKey, userInitiatedActionFromSettings(ctx.settings), executionMode);
-      temporaryPage = true;
-    }
-    try {
       const evidence = await readXiaohongshuPageEvidence(opened.page);
       this.assertProfilePageCanBeRead(evidence);
       const identity = await this.inspectAccountIdentity(opened.page, evidence);
@@ -520,12 +529,14 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         ...(identity.displayName ? { accountName: identity.displayName } : {}),
         authorizationStatus: "Authorized"
       };
-    } finally {
-      if (temporaryPage) await this.sessionManager.closeOperationPage(identityKey, opened.page);
-    }
+    });
   }
 
   override async preparePublish(ctx: AccountContext, article: PublishArticleInput): Promise<AutomationPrepareResult> {
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, () => this.preparePublishOnCanonicalPage(ctx, article));
+  }
+
+  private async preparePublishOnCanonicalPage(ctx: AccountContext, article: PublishArticleInput): Promise<AutomationPrepareResult> {
     const validation = await this.validateArticle(article);
     if (!validation.valid) throw new BrowserAutomationError("CONTENT_REJECTED", validation.errors.join("；"));
 
@@ -607,6 +618,14 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     };
   }
 
+  protected override async openBackendPage(ctx: AccountContext, url = XIAOHONGSHU_CREATOR_HOME): Promise<{ page: Page; session: BrowserSession; backendUrl: string }> {
+    const opened = await this.activeCanonicalPage(ctx);
+    if (!opened) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书当前没有可复用的 canonical authenticated Page，请先完成登录");
+    await this.navigate(opened.page, url);
+    if (this.isLoginPage(opened.page.url())) throw new BrowserAutomationError("LOGIN_EXPIRED", "小红书 Session 已过期，请重新登录");
+    return { page: opened.page, session: opened.session, backendUrl: opened.page.url() };
+  }
+
   protected override async inspectConnectionPage(ctx: AccountContext, page: Page): Promise<LoginStatus> {
     return this.loginStatusForPage(ctx, page, "COMPLETE_LOGIN_CHECK");
   }
@@ -618,6 +637,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     this.sessionManager.setRuntimeAuthState({ platformKey: this.platformKey, accountId: ctx.accountId }, "AUTHENTICATED", null);
     await this.emitAuthStateDiagnostic(ctx, "AUTH_STATE_BEFORE_CLOSE", null, null, null);
     this.markConnectionComplete({ platformKey: this.platformKey, accountId: ctx.accountId });
+    await this.emitConnectionDiagnostic("CANONICAL_AUTHENTICATED_PAGE_PROMOTED", ctx, this.activeBrowserSession(ctx), true, "RETAINED_ACCOUNT_PAGE");
   }
 
   async releaseConnectionPage(ctx: AccountContext): Promise<void> {
