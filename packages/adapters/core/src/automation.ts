@@ -26,6 +26,7 @@ export interface AutomationPrepareResult {
 export type PreSubmitGateStatus = "ready" | "needs_user_action" | "auth_expired" | "editor_not_found" | "security_verification_required";
 
 export type PreSubmitGateFailureCode =
+  | "AUTHENTICATED_PAGE_SIGNAL_NOT_FOUND"
   | "PUBLISH_ENTRY_NOT_FOUND"
   | "PUBLISH_ENTRY_CLICK_FAILED"
   | "CONTENT_TYPE_ENTRY_NOT_FOUND"

@@ -1139,6 +1139,8 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(operations[1]).toMatchObject({ phase: "COMPLETED", action: "PRE_SUBMIT_GATE", pageClosed: false, browserConnected: true, finalStatus: "ready" });
     expect(operations[0]?.operationId).toBe(operations[1]?.operationId);
     expect(entryDiagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "PRE_SUBMIT_GATE_INSPECTION_STARTED", operationId: operations[0]?.operationId, startUrl: "https://creator.xiaohongshu.com/" }),
+      expect.objectContaining({ code: "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED", operationId: operations[0]?.operationId, helper: "navigateToImagePostEditor" }),
       expect.objectContaining({ code: "EDITOR_ENTRY_STARTED", operationId: operations[0]?.operationId, entryMethod: "CLICK_NAVIGATION" }),
       expect.objectContaining({ code: "EDITOR_ENTRY_STEP", stepName: "CREATOR_HOME_READY", success: true }),
       expect.objectContaining({ code: "EDITOR_ENTRY_STEP", stepName: "PUBLISH_ENTRY_FOUND", success: true }),
@@ -1195,6 +1197,41 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
       expect.objectContaining({ code: "EDITOR_ENTRY_STEP", stepName: "EDITOR_ROUTE_REACHED", success: false })
     ]));
     expect(fixture.entryClick).toHaveBeenCalledTimes(1);
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "EDITOR_NAVIGATION_FAILED", operationId: expect.any(String), failureCode: "EDITOR_ROUTE_NOT_REACHED", failureStage: "EDITOR_ROUTE", missingSignal: "url:/publish/publish" })
+    ]));
+  });
+
+  it("emits inspection and navigation execution markers before preserving an early gate failure", async () => {
+    const fixture = setupPage();
+    installPageEvidence(fixture, { positiveSignals: [] });
+    const diagnostics: Array<Record<string, unknown>> = [];
+    const operations: Array<Record<string, unknown>> = [];
+    const adapter = new XiaohongshuBrowserAdapter({
+      sessionManager: fixture.manager,
+      onEditorEntryDiagnostic: (diagnostic: Record<string, unknown>) => diagnostics.push(diagnostic),
+      onCanonicalPageOperation: (operation: Record<string, unknown>) => operations.push(operation)
+    } as never);
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    const result = await adapter.inspectPublishEditor(ctx);
+
+    expect(result).toMatchObject({
+      status: "needs_user_action",
+      failureCode: "AUTHENTICATED_PAGE_SIGNAL_NOT_FOUND",
+      failureStage: "AUTHENTICATION",
+      missingSignal: "creator-authenticated-positive-signal"
+    });
+    const operationId = operations[0]?.operationId;
+    expect(operationId).toEqual(expect.any(String));
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "PRE_SUBMIT_GATE_INSPECTION_STARTED", operationId, contextDebugId: "context-debug-id", pageDebugId: "canonical-page-debug-id", startUrl: "https://creator.xiaohongshu.com/" }),
+      expect.objectContaining({ code: "EDITOR_NAVIGATION_FAILED", operationId, failureCode: "AUTHENTICATED_PAGE_SIGNAL_NOT_FOUND", failureStage: "AUTHENTICATION", missingSignal: "creator-authenticated-positive-signal", sanitizedUrlBefore: "https://creator.xiaohongshu.com/", sanitizedUrlAfter: "https://creator.xiaohongshu.com/" })
+    ]));
+    expect(diagnostics.filter((diagnostic) => diagnostic.code === "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED")).toHaveLength(0);
+    expect(diagnostics.filter((diagnostic) => diagnostic.code === "EDITOR_ENTRY_STARTED")).toHaveLength(0);
+    expect(operations[1]).toMatchObject({ operationId, failureCode: "AUTHENTICATED_PAGE_SIGNAL_NOT_FOUND", failureStage: "AUTHENTICATION", missingSignal: "creator-authenticated-positive-signal" });
   });
 
   it("returns auth-expired without entering the editor when the canonical Page is on login", async () => {
