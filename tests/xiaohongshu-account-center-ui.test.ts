@@ -41,6 +41,14 @@ describe("BrowserAutomation account creation semantics", () => {
     expect(isOnlineAccount({ ...historical.account, accountStatus: historical.accountStatus, runtimeAuthState: historical.runtimeAuthState })).toBe(false);
   });
 
+  it("does not report persisted logged_in as live XHS authentication without a Context", () => {
+    const historical = row("account-1", "Unverified", { runtimeAuthState: "UNVERIFIED" });
+
+    expect(historical.account.loginStatus).toBe("logged_in");
+    expect(historical.accountStatus).toBe("Unverified");
+    expect(historical.runtimeAuthState).toBe("UNVERIFIED");
+  });
+
   it("counts an XHS account online only after the canonical Context is authenticated", () => {
     const live = row("account-1", "Connected", { runtimeAuthState: "AUTHENTICATED" });
 

@@ -445,6 +445,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   it("recognizes a logged-in account and returns stable profile identity", async () => {
     const fixture = setupPage({ accountId: "account-a", profileHref: "https://www.xiaohongshu.com/user/profile/65abc123", accountName: "小红书账号 A" });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context("account-a"));
     await expect(adapter.checkLogin(context("account-a"))).resolves.toBe("logged_in");
     await expect(adapter.getAccountProfile(context("account-a"))).resolves.toMatchObject({ accountId: "65abc123", accountName: "小红书账号 A" });
     expect(fixture.open).toHaveBeenCalledWith({ platformKey: "xiaohongshu", accountId: "account-a" }, expect.anything(), "VISIBLE");
@@ -455,10 +456,11 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "数据看板", "创作服务平台"] });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
 
+    await adapter.connectAccount(context("account-a"));
     await expect(adapter.checkLogin(context("account-a"))).resolves.toBe("logged_in");
   });
 
-  it("fails closed when the owned Page redirects to login immediately after the first home check", async () => {
+  it("fails closed without a canonical Context instead of cold-checking a page that may redirect", async () => {
     const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
     installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "数据看板"] });
     let redirected = false;
@@ -466,7 +468,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     vi.mocked(fixture.page.url).mockImplementation(() => redirected ? "https://creator.xiaohongshu.com/login" : "https://creator.xiaohongshu.com/new/home");
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
 
-    await expect(adapter.checkLogin(context("account-a"))).resolves.toBe("expired");
+    await expect(adapter.checkLogin(context("account-a"))).resolves.toBe("needs_user_action");
   });
 
   it("ignores hidden verification text on an otherwise logged-in creator home", async () => {
@@ -474,6 +476,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "账号状态正常"] });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
 
+    await adapter.connectAccount(context("account-a"));
     await expect(adapter.checkLogin(context("account-a"))).resolves.toBe("logged_in");
   });
 
@@ -499,6 +502,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "账号状态正常"], displayName: "苏州别墅光伏", externalAccountId: "960803317" });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
 
+    await adapter.connectAccount(context("account-a"));
     await expect(adapter.getAccountProfile(context("account-a"))).resolves.toMatchObject({ accountName: "苏州别墅光伏", accountId: "960803317" });
   });
 
@@ -744,15 +748,16 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   it("records a nickname when the page exposes no stable external account ID", async () => {
     const fixture = setupPage({ profileHref: null, accountName: "仅昵称" });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context("account-a"));
     const profile = await adapter.getAccountProfile(context("account-a"));
     expect(profile).toMatchObject({ accountName: "仅昵称" });
     expect(profile).not.toHaveProperty("accountId");
   });
 
-  it("fails closed when the session is on a login page", async () => {
+  it("does not cold-check a stored session whose page is on a login page", async () => {
     const fixture = setupPage({ loginPage: true });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
-    await expect(adapter.checkLogin(context())).resolves.toBe("expired");
+    await expect(adapter.checkLogin(context())).resolves.toBe("needs_user_action");
   });
 
   it("reports LOGIN_REQUIRED when no stored account session exists", async () => {
@@ -861,6 +866,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   it("routes every account to its own session and never falls back after account A fails", async () => {
     const urls = new Map<string, string>();
     const pages = new Map<string, Page>();
+    const sessions = new Map<string, BrowserSession>();
     const pageFor = (accountId: string): Page => {
       let currentUrl = accountId === "account-a" ? "https://creator.xiaohongshu.com/login" : "https://creator.xiaohongshu.com/";
       const page = {
@@ -875,9 +881,19 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
       hasStoredSession: vi.fn((identity: { accountId: string }) => identity.accountId !== "missing-account"),
       open: vi.fn(async (identity: { accountId: string }) => {
         const page = pageFor(identity.accountId);
+        const session = { page, context: { pages: () => [page] }, executionMode: "VISIBLE", headless: false, hasStoredSession: true, sessionIdHash: `session-${identity.accountId}` } as unknown as BrowserSession;
+        sessions.set(identity.accountId, session);
         urls.set(identity.accountId, page.url());
-        return { page, context: { pages: () => [page] }, executionMode: "VISIBLE", headless: false, hasStoredSession: true, sessionIdHash: `session-${identity.accountId}` } as unknown as BrowserSession;
+        return session;
       }),
+      getActiveSession: vi.fn((identity: { accountId: string }) => sessions.get(identity.accountId) ?? null),
+      openOperationPage: vi.fn(async (identity: { accountId: string }) => {
+        const session = sessions.get(identity.accountId);
+        if (!session) throw new Error("active session missing");
+        return { session, page: session.page, pageDebugId: `operation-${identity.accountId}` };
+      }),
+      closeOperationPage: vi.fn(async () => undefined),
+      setRuntimeAuthState: vi.fn(),
       close: vi.fn(async () => undefined),
       save: vi.fn(async () => undefined),
       clear: vi.fn(),
@@ -885,6 +901,8 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     } as unknown as BrowserSessionManager;
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: manager });
 
+    await manager.open({ platformKey: "xiaohongshu", accountId: "account-a" }, { userActionId: "11111111-1111-4111-8111-111111111111", triggerSource: "CONNECT_ACCOUNT" }, "VISIBLE");
+    await manager.open({ platformKey: "xiaohongshu", accountId: "account-b" }, { userActionId: "11111111-1111-4111-8111-111111111111", triggerSource: "CONNECT_ACCOUNT" }, "VISIBLE");
     await expect(adapter.checkLogin(context("account-a"))).resolves.toBe("expired");
     await expect(adapter.checkLogin(context("account-b"))).resolves.toBe("logged_in");
     await expect(adapter.openBackend(context("missing-account"))).rejects.toMatchObject({ code: "USER_ACTION_REQUIRED" });
