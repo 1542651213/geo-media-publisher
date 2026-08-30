@@ -17,7 +17,7 @@ function platform(overrides: Partial<Platform> = {}): Platform {
 function row(overrides: Partial<AccountManagementRow> = {}): AccountManagementRow {
   return {
     account: { id: "account-1", platformKey: "zhihu", name: "知乎账号", accountAlias: "知乎账号", accountName: null, groupId: null, loginStatus: "logged_out", enabled: true, allowAutoPublish: false, minimumIntervalSeconds: 0, publishMode: "manual", todayPublishCount: 0, lastPublishAt: null, lastLoginCheck: null, pausedReason: null, failedCount: 0 },
-    platform: platform(), credentialStatus: { configured: false, expired: false, fields: [] }, lastDryRunAt: null, accountStatus: "NotConnected", authorizationStatus: "Unknown", authorizationScopes: [], authorizationExpiresAt: null, providerAccountId: null, providerAccountName: null, publishVerification: "NotTested", connectionStage: "NotConfigured", ...overrides
+    platform: platform(), credentialStatus: { configured: false, expired: false, fields: [] }, lastDryRunAt: null, accountStatus: "NotConnected", authorizationStatus: "Unknown", authorizationScopes: [], authorizationExpiresAt: null, providerAccountId: null, providerAccountName: null, publishVerification: "NotTested", connectionStage: "NotConfigured", runtimeAuthState: null, ...overrides
   };
 }
 

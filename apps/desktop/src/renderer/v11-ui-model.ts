@@ -89,18 +89,24 @@ export const publishStatusTone = (status: PublishJob["status"]): string => {
   return label === "已发布" ? "success" : label === "需要处理" ? "warning" : label === "发布中" ? "purple" : "muted";
 };
 
+export type AccountRuntimeView = Pick<Account, "enabled" | "loginStatus" | "platformKey"> & { accountStatus?: string; runtimeAuthState?: string | null };
+
 export const accountStatusLabel = (account: Pick<Account, "loginStatus"> & { accountStatus?: string }): string => {
+  if (account.accountStatus === "Unverified") return "待验证";
   if (account.loginStatus === "logged_in" || account.accountStatus === "Connected") return "已登录";
   if (account.loginStatus === "needs_user_action" || account.accountStatus === "Connecting") return "需要完成验证";
   if (account.loginStatus === "expired" || account.accountStatus === "Expired" || account.accountStatus === "NeedsLogin") return "需要重新登录";
   return "未登录";
 };
 
-export const isOnlineAccount = (account: Pick<Account, "enabled" | "loginStatus"> & { accountStatus?: string }): boolean =>
-  account.enabled && (account.loginStatus === "logged_in" || account.accountStatus === "Connected");
+export const isOnlineAccount = (account: AccountRuntimeView): boolean =>
+  account.enabled
+  && (account.platformKey !== "xiaohongshu" || account.runtimeAuthState === "AUTHENTICATED")
+  && (account.loginStatus === "logged_in" || account.accountStatus === "Connected");
 
-export const connectedAccountsForPlatform = (accounts: Account[], platformKey: string): Account[] =>
-  accounts.filter((account) => account.enabled && account.loginStatus === "logged_in" && account.platformKey === platformKey);
+export function connectedAccountsForPlatform<T extends AccountRuntimeView>(accounts: T[], platformKey: string): T[] {
+  return accounts.filter((account) => account.platformKey === platformKey && isOnlineAccount(account));
+}
 
 export type AccountConnectionIntent = "connect" | "add" | "relogin";
 

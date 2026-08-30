@@ -10,7 +10,7 @@ import { AIProviderError, DeepSeekErrorMapper, DeepSeekProvider, FallbackAIProvi
 import { MockImageProvider, OpenAICompatibleImageProvider, persistGeneratedImage, type ImageProvider } from "@publisher/image";
 import { exportLogBundle } from "@publisher/logger";
 import { CredentialDecryptError, type CredentialStatus, type CredentialStore } from "@publisher/security";
-import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STUDIO_PLATFORM_KEYS, EXCEL_ADVANCED_ARTICLE_HEADERS, EXCEL_SIMPLE_ARTICLE_HEADERS, PROMOTION_STRENGTHS, SEARCH_INTENTS, checkGeneratedArticleQuality, selectRelevantBrandFacts, type AccountContext, type AccountProfile, type AIUsage, type CredentialField, type ContentStudioPlatformKey, type ExcelImportPreview, type ImageAsset } from "@publisher/domain";
+import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STUDIO_PLATFORM_KEYS, EXCEL_ADVANCED_ARTICLE_HEADERS, EXCEL_SIMPLE_ARTICLE_HEADERS, PROMOTION_STRENGTHS, SEARCH_INTENTS, checkGeneratedArticleQuality, selectRelevantBrandFacts, type AccountContext, type AccountProfile, type AccountStatus, type AIUsage, type CredentialField, type ContentStudioPlatformKey, type ExcelImportPreview, type ImageAsset } from "@publisher/domain";
 import { BrowserRuntimeError, assertExternalLaunchAllowed, browserSessionCredentialKey, browserSessionIdHash, isAutomationAdapter, type AdapterRegistry, type AutomationAdapter, type ExternalLaunchTriggerSource, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
 import type { PublisherService, PersistentScheduler } from "@publisher/publisher";
@@ -508,12 +508,25 @@ export function registerIpc(deps: IpcDependencies): void {
     return repository.listAccounts().map((account) => {
       const registeredAdapter = registry.tryGetForConnection(account.platformKey);
       const browserConnecting = registeredAdapter ? isAutomationAdapter(registeredAdapter) && registeredAdapter.isConnectionPending(accountContext(account.id, account.platformKey)) : false;
+      const runtimeAuthState = account.platformKey === "xiaohongshu" && registeredAdapter && isAutomationAdapter(registeredAdapter)
+        ? registeredAdapter.getBrowserRuntimeState?.(accountContext(account.id, account.platformKey))?.state ?? null
+        : null;
+      const accountStatus: AccountStatus = account.platformKey === "xiaohongshu"
+        ? runtimeAuthState === "AUTHENTICATED" ? "Connected"
+          : runtimeAuthState === "CHECKING" ? "Connecting"
+            : runtimeAuthState === "NEEDS_USER_ACTION" || runtimeAuthState === "DISCONNECTED" ? "NeedsLogin"
+              : account.loginStatus === "logged_in" ? "Unverified"
+                : account.loginStatus === "expired" ? "Expired"
+                  : account.loginStatus === "needs_user_action" ? (browserConnecting || oauthSessions.isPending(account.id, account.platformKey)) ? "Connecting" : "NeedsLogin"
+                    : account.loginStatus === "unknown" ? "Error" : "NotConnected"
+        : account.loginStatus === "logged_in" ? "Connected" : account.loginStatus === "expired" ? "Expired" : account.loginStatus === "needs_user_action" ? (browserConnecting || oauthSessions.isPending(account.id, account.platformKey)) ? "Connecting" : "NeedsLogin" : account.loginStatus === "unknown" ? "Error" : "NotConnected";
       return {
       account,
       platform: platforms.find((item) => item.platformKey === account.platformKey) ?? null,
       credentialStatus: readCredentialStatus(account.id, account.platformKey),
       lastDryRunAt: lastDryRunAt.get(`${account.id}:${account.platformKey}`) ?? null,
-      accountStatus: account.loginStatus === "logged_in" ? "Connected" : account.loginStatus === "expired" ? "Expired" : account.loginStatus === "needs_user_action" ? (browserConnecting || oauthSessions.isPending(account.id, account.platformKey)) ? "Connecting" : "NeedsLogin" : account.loginStatus === "unknown" ? "Error" : "NotConnected",
+      accountStatus,
+      runtimeAuthState,
       authorizationStatus: repository.getAccountAuthorization(account.id, account.platformKey)?.status ?? (account.loginStatus === "logged_in" ? "Authorized" : "Unknown"),
       authorizationScopes: repository.getAccountAuthorization(account.id, account.platformKey)?.scopes ?? [],
       authorizationExpiresAt: repository.getAccountAuthorization(account.id, account.platformKey)?.expiresAt ?? null,
@@ -529,7 +542,7 @@ export function registerIpc(deps: IpcDependencies): void {
         const accountRecords = records.filter((record) => record.accountId === account.id && record.platformKey === account.platformKey && record.success);
         if (accountRecords.some((record) => !record.dryRun && record.status === "Published" && Boolean(record.publishedExternalId && record.publishedUrl))) return "PublishPassed" as const;
         if (accountRecords.some((record) => record.dryRun || record.status === "DryRun")) return "PublishReady" as const;
-        if (account.loginStatus === "logged_in") return "ConnectionPassed" as const;
+        if (accountStatus === "Connected") return "ConnectionPassed" as const;
         if (["expired", "needs_user_action"].includes(account.loginStatus)) return "NeedsAttention" as const;
         return readCredentialStatus(account.id, account.platformKey).configured ? "CredentialConfigured" as const : "NotConfigured" as const;
       })()
@@ -619,8 +632,9 @@ export function registerIpc(deps: IpcDependencies): void {
       const account = await syncBrowserAccount(adapter, effectiveAccountId, input.platformKey, action, profile);
       if (archivedAccount) repository.markPlatformAccountDisconnected(input.accountId, input.platformKey, adapter.manifest.authStrategy);
       const sessionEvidence = await adapter.getBrowserSessionEvidence?.(effectiveContext);
-      await adapter.releaseConnectionSession?.(effectiveContext);
-      logger.info("ACCOUNT", "LOGIN_SUCCEEDED", "平台登录成功，Session 已安全保存，身份已回写，登录专用浏览器已关闭", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, sessionEvidence: sessionEvidence ?? null });
+      if (adapter.releaseConnectionPage) await adapter.releaseConnectionPage(effectiveContext);
+      else await adapter.releaseConnectionSession?.(effectiveContext);
+      logger.info("ACCOUNT", "LOGIN_SUCCEEDED", "平台登录成功，Session 已安全保存，身份已回写，登录资源已释放", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, sessionEvidence: sessionEvidence ?? null });
       const result = browserAccountConnectionResult(account);
       logger.info("ACCOUNT", "COMPLETE_LOGIN_RESPONSE", "主进程完成登录结果", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, status, reason: null, errorCode: null, resultContract: { configured: result.configured, accountStatus: result.accountStatus, authorizationStatus: result.authorizationStatus } });
       return result;

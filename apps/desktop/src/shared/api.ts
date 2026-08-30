@@ -130,6 +130,7 @@ export interface AccountManagementRow {
   providerAccountName: string | null;
   publishVerification: PublishVerificationStatus;
   connectionStage: "NotConfigured" | "CredentialConfigured" | "ConnectionPassed" | "PublishReady" | "PublishPassed" | "NeedsAttention";
+  runtimeAuthState: "UNVERIFIED" | "CHECKING" | "AUTHENTICATED" | "NEEDS_USER_ACTION" | "DISCONNECTED" | null;
 }
 
 export type AccountDisconnectOutcome = "DISCONNECTED" | "ALREADY_DISCONNECTED";

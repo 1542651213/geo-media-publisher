@@ -31,7 +31,7 @@ export function platformConnectionKind(platform: Platform): PlatformConnectionKi
 
 export function platformConnectionActions(platform: Platform, row: AccountManagementRow | null): PlatformConnectionAction[] {
   const kind = platformConnectionKind(platform);
-  if (kind === "browser" && (row?.accountStatus === "Expired" || row?.accountStatus === "NeedsLogin")) return [{ kind: "relogin", label: "重新登录" }, { kind: "add-account", label: "+ 添加账号" }];
+  if (kind === "browser" && (row?.accountStatus === "Expired" || row?.accountStatus === "NeedsLogin" || row?.accountStatus === "Unverified")) return [{ kind: "relogin", label: "重新登录" }, { kind: "add-account", label: "+ 添加账号" }];
   if (kind === "blocked") return [{ kind: "reason", label: "查看原因" }];
   if (kind === "not_implemented") return [{ kind: "unsupported", label: "暂未支持" }];
   if (kind === "manual") return [{ kind: "instructions", label: "查看接入说明" }];
@@ -49,6 +49,7 @@ export function accountStatusLabel(row: AccountManagementRow | null): string {
   if (row.accountStatus === "Connected") return "已连接";
   if (row.accountStatus === "Connecting") return "连接中";
   if (row.accountStatus === "NeedsLogin") return "需要登录";
+  if (row.accountStatus === "Unverified") return "待验证";
   if (row.accountStatus === "Expired") return "已过期";
   return "暂不可用";
 }

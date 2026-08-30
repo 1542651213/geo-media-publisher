@@ -1,31 +1,76 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import type { AccountManagementRow } from "../apps/desktop/src/shared/api";
-import { accountConnectionTarget, platformHasConnectedAccount } from "../apps/desktop/src/renderer/v11-ui-model";
-import { disconnectFeedbackMessage, platformAccountStatusLabel, platformAuthorizationStatusLabel } from "../apps/desktop/src/renderer/platform-connection-ui";
+import { accountConnectionTarget, isOnlineAccount, platformHasConnectedAccount } from "../apps/desktop/src/renderer/v11-ui-model";
+import { accountStatusLabel, disconnectFeedbackMessage, platformAccountStatusLabel, platformAuthorizationStatusLabel, platformConnectionActions } from "../apps/desktop/src/renderer/platform-connection-ui";
 import { classifyBrowserLoginResult } from "../apps/desktop/src/renderer/V11Workspace";
 
-function row(id: string, accountStatus: AccountManagementRow["accountStatus"]): AccountManagementRow {
-  return {
+type RuntimeRow = AccountManagementRow & { runtimeAuthState?: "UNVERIFIED" | "CHECKING" | "AUTHENTICATED" | "NEEDS_USER_ACTION" | "DISCONNECTED" | null };
+
+function row(id: string, accountStatus: AccountManagementRow["accountStatus"] | "Unverified", overrides: Partial<RuntimeRow> = {}): RuntimeRow {
+  const result: RuntimeRow = {
     account: { id, platformKey: "xiaohongshu", name: id, accountAlias: id, accountName: null, groupId: null, loginStatus: accountStatus === "Connected" ? "logged_in" : "logged_out", enabled: true, allowAutoPublish: false, minimumIntervalSeconds: 0, publishMode: "manual", todayPublishCount: 0, lastPublishAt: null, lastLoginCheck: null, pausedReason: null, failedCount: 0 },
     platform: null,
     credentialStatus: { configured: false, expired: false, fields: [] },
     lastDryRunAt: null,
-    accountStatus,
+    accountStatus: accountStatus as AccountManagementRow["accountStatus"],
     authorizationStatus: "Unknown",
     authorizationScopes: [],
     authorizationExpiresAt: null,
     providerAccountId: null,
     providerAccountName: null,
     publishVerification: "NotTested",
-    connectionStage: "NotConfigured"
+    connectionStage: "NotConfigured",
+    runtimeAuthState: null,
+    ...overrides
   };
+  result.account.loginStatus = "logged_in";
+  return result;
 }
 
 describe("BrowserAutomation account creation semantics", () => {
   it("maps the main-process Connected contract to renderer success", () => {
     expect(classifyBrowserLoginResult({ accountStatus: "Connected" })).toBe("SUCCESS");
     expect(classifyBrowserLoginResult({ accountStatus: "NeedsLogin" })).toBe("NEEDS_USER_ACTION");
+  });
+
+  it("labels a historical XHS login as unverified and excludes it from online accounts", () => {
+    const historical = row("account-1", "Unverified", { runtimeAuthState: "UNVERIFIED" });
+
+    expect(accountStatusLabel(historical)).toBe("待验证");
+    expect(isOnlineAccount({ ...historical.account, accountStatus: historical.accountStatus, runtimeAuthState: historical.runtimeAuthState })).toBe(false);
+  });
+
+  it("counts an XHS account online only after the canonical Context is authenticated", () => {
+    const live = row("account-1", "Connected", { runtimeAuthState: "AUTHENTICATED" });
+
+    expect(accountStatusLabel(live)).toBe("已连接");
+    expect(isOnlineAccount({ ...live.account, accountStatus: live.accountStatus, runtimeAuthState: live.runtimeAuthState })).toBe(true);
+  });
+
+  it("keeps XHS verification and relogin actions available for historical rows", () => {
+    const xhs = { platformKey: "xiaohongshu", displayName: "小红书", verificationStatus: "WaitingForUser", integrationMode: "BrowserAutomation", transport: "browser" } as never;
+    const historical = row("account-1", "Unverified", { platform: xhs });
+
+    expect(platformConnectionActions(xhs, historical).map((item) => item.label)).toEqual(["重新登录", "+ 添加账号"]);
+  });
+
+  it("releases only the connection Page when the adapter supports page-only cleanup", () => {
+    const source = readFileSync("apps/desktop/src/main/ipc.ts", "utf8");
+    const start = source.indexOf('register("accounts:complete-login"');
+    const end = source.indexOf('register("accounts:refresh-login"', start);
+    const completionBlock = source.slice(start, end);
+
+    expect(completionBlock).toContain("releaseConnectionPage");
+    expect(completionBlock).toContain("releaseConnectionSession");
+  });
+
+  it("derives XHS account overview status from runtime authentication state", () => {
+    const source = readFileSync("apps/desktop/src/main/ipc.ts", "utf8");
+
+    expect(source).toContain("getBrowserRuntimeState");
+    expect(source).toContain('runtimeAuthState === "AUTHENTICATED" ? "Connected"');
+    expect(source).toContain('account.loginStatus === "logged_in" ? "Unverified"');
   });
 
   it("uses the exact pending account for browser login completion", () => {
