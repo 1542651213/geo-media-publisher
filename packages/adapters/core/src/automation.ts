@@ -27,6 +27,9 @@ export type PreSubmitGateStatus = "ready" | "needs_user_action" | "auth_expired"
 
 export type PreSubmitGateFailureCode =
   | "AUTHENTICATED_PAGE_SIGNAL_NOT_FOUND"
+  | "CANONICAL_PAGE_UNAVAILABLE"
+  | "CANONICAL_PAGE_OWNERSHIP_FAILURE"
+  | "BROWSER_SESSION_DISCONNECTED"
   | "PUBLISH_ENTRY_NOT_FOUND"
   | "PUBLISH_ENTRY_CLICK_FAILED"
   | "CONTENT_TYPE_ENTRY_NOT_FOUND"
@@ -40,6 +43,7 @@ export type PreSubmitGateFailureCode =
 
 export type PreSubmitGateFailureStage =
   | "AUTHENTICATION"
+  | "SESSION_PAGE_LIFECYCLE"
   | "CREATOR_HOME"
   | "PUBLISH_ENTRY_DISCOVERY"
   | "PUBLISH_ENTRY_CLICK"
