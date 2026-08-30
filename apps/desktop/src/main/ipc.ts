@@ -488,7 +488,7 @@ export function registerIpc(deps: IpcDependencies): void {
 
   register("platforms:list", () => listPlatformViews());
   register("platforms:open", async (_event, payload) => { const input = z.object({ platformKey: idSchema }).parse(payload); const platform = repository.listPlatforms().find((item) => item.platformKey === input.platformKey); if (!platform?.officialWebsite) throw new Error("平台没有可打开的官方入口"); createUserAction("OPEN_BACKEND"); await shell.openExternal(platform.officialWebsite); return { opened: true }; });
-  register("accounts:list", () => repository.listAccounts());
+  register("accounts:list", () => { recordRuntimeHeartbeat(logger, "accounts:list"); return repository.listAccounts(); });
   const readCredentialStatus = (accountId: string, platformKey: string): { configured: boolean; expired: boolean; fields: Array<CredentialField & { configured: boolean }> } => {
     const account = repository.listAccounts().find((item) => item.id === accountId);
     if (!account || account.platformKey !== platformKey) throw new Error("账号与平台不匹配");

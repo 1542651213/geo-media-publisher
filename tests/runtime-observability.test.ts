@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "@publisher/logger";
 import { recordAppStartup, recordRuntimeHeartbeat } from "../apps/desktop/src/main/runtime-observability";
@@ -35,5 +36,11 @@ describe("runtime observability", () => {
     expect(logger.info).toHaveBeenCalledWith("APP", "RUNTIME_HEARTBEAT", expect.any(String), {
       action: "dashboard:get"
     });
+  });
+
+  it("hooks the heartbeat to the default read-only accounts list route", () => {
+    const source = readFileSync(new URL("../apps/desktop/src/main/ipc.ts", import.meta.url), "utf8");
+
+    expect(source).toMatch(/register\("accounts:list", \(\) => \{ recordRuntimeHeartbeat\(logger, "accounts:list"\);/u);
   });
 });
