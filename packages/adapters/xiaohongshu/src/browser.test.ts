@@ -606,7 +606,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(fixture.manager.getRuntimeAuthState?.({ platformKey: "xiaohongshu", accountId: "account-a" })).toMatchObject({ state: "AUTHENTICATED" });
   });
 
-  it("releases only the XHS login Page after persistence and retains the canonical Context", async () => {
+  it("releases login operation ownership while retaining the canonical XHS Page and Context", async () => {
     const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
     installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
     vi.mocked(fixture.manager.hasStoredSession).mockReturnValue(false);
@@ -619,7 +619,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     await adapter.persistConnectionSession(ctx);
     await adapter.releaseConnectionPage?.(ctx);
 
-    expect((fixture.page as unknown as { close: ReturnType<typeof vi.fn> }).close).toHaveBeenCalledTimes(1);
+    expect((fixture.page as unknown as { close: ReturnType<typeof vi.fn> }).close).not.toHaveBeenCalled();
     expect(fixture.manager.close).not.toHaveBeenCalled();
     expect(fixture.manager.getActiveSession?.({ platformKey: "xiaohongshu", accountId: "account-a" })).toBeDefined();
   });
@@ -645,8 +645,9 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
       phase: "LOGIN_PAGE_RELEASED",
       platformKey: "xiaohongshu",
       accountId: "account-a",
-      pageClosed: true,
-      sessionRetainedAfterPageClose: true
+      pageClosed: false,
+      sessionRetainedAfterPageClose: null,
+      pageReleaseMode: "RETAINED_ACCOUNT_PAGE"
     });
     expect(diagnostics.flatMap((diagnostic) => Object.keys(diagnostic))).not.toContain("storageState");
   });
@@ -671,7 +672,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(fixture.operationContextDebugIds[0]).toBe(fixture.operationContextDebugIds[1]);
     expect(fixture.operationPageDebugIds[0]).not.toBe(fixture.operationPageDebugIds[1]);
     expect(fixture.manager.open).toHaveBeenCalledTimes(1);
-    expect(fixture.manager.closeOperationPage).toHaveBeenCalledTimes(3);
+    expect(fixture.manager.closeOperationPage).toHaveBeenCalledTimes(2);
   });
 
   it("does not cold-open XHS checkLogin from stored credentials", async () => {
@@ -697,7 +698,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
 
     expect(profile).toMatchObject({ accountId: "65abc123", accountName: "XHS owner" });
     expect(fixture.operationPageDebugIds).toHaveLength(1);
-    expect(fixture.manager.closeOperationPage).toHaveBeenCalledTimes(2);
+    expect(fixture.manager.closeOperationPage).toHaveBeenCalledTimes(1);
   });
 
   it("opens XHS backend on a new same-Context Page and leaves it open for the owner", async () => {
@@ -713,7 +714,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
 
     expect(result).toMatchObject({ opened: true, backendUrl: "https://creator.xiaohongshu.com/" });
     expect(fixture.operationPageDebugIds).toHaveLength(1);
-    expect(fixture.manager.closeOperationPage).toHaveBeenCalledTimes(1);
+    expect(fixture.manager.closeOperationPage).toHaveBeenCalledTimes(0);
   });
 
   it("only releases the login-only browser after identity persistence is complete", async () => {

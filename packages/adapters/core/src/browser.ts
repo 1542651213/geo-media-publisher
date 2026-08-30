@@ -122,6 +122,28 @@ export interface BrowserSessionOperationPage {
   pageDebugId: string;
 }
 
+export const BROWSER_SESSION_CLOSE_REASONS = [
+  "ACCOUNT_REMOVE",
+  "EXPLICIT_LOGOUT",
+  "APP_SHUTDOWN",
+  "CONTEXT_CRASH_CLEANUP",
+  "LEGACY_RELEASE",
+  "EXECUTION_MODE_REPLACEMENT",
+  "EXPLICIT_RECONNECT",
+  "CONNECTION_CANCEL",
+  "BACKGROUND_OPERATION_RELEASE",
+  "CONNECTION_RELEASE",
+  "PERSISTENCE_FAILURE",
+  "OPEN_FAILURE_CLEANUP",
+  "TEST_CLEANUP"
+] as const;
+export type BrowserSessionCloseReason = (typeof BROWSER_SESSION_CLOSE_REASONS)[number];
+
+export interface BrowserSessionCloseInfo {
+  reason: BrowserSessionCloseReason;
+  callerOperation: string;
+}
+
 export interface BrowserSessionRuntimeState {
   state: BrowserRuntimeAuthState;
   contextDebugId: string | null;
@@ -148,7 +170,14 @@ export interface BrowserSessionLifecycleEvent {
   browserChannel: SystemBrowserChannel | null;
   contextDebugId: string | null;
   pageDebugId: string | null;
+  pageCount: number | null;
   browserConnected: boolean | null;
+  closeReason: BrowserSessionCloseReason | null;
+  callerOperation: string | null;
+  explicitCloseInProgress: boolean;
+  lastExplicitCloseReason: BrowserSessionCloseReason | null;
+  activePageCountBeforeDisconnect: number | null;
+  browserConnectedBeforeEvent: boolean | null;
 }
 
 export interface BrowserSessionManagerOptions {
@@ -204,6 +233,8 @@ export class PlaywrightSessionManager {
   private readonly operationPages = new WeakMap<BrowserSession, Set<Page>>();
   private readonly disconnectListenerCleanups = new WeakMap<BrowserSession, () => void>();
   private readonly explicitCloseSessions = new Set<BrowserSession>();
+  private readonly lastExplicitCloseInfo = new WeakMap<BrowserSession, BrowserSessionCloseInfo>();
+  private readonly lastKnownBrowserConnected = new WeakMap<BrowserSession, boolean>();
   private closeAllGeneration = 0;
   readonly debugId = randomUUID();
 
@@ -214,7 +245,7 @@ export class PlaywrightSessionManager {
     const key = browserSessionCredentialKey(identity);
     const existing = this.getActiveSession(identity);
     if (existing?.executionMode === executionMode) return existing;
-    if (existing) await this.close(existing);
+    if (existing) await this.close(existing, { reason: "EXECUTION_MODE_REPLACEMENT", callerOperation: "PlaywrightSessionManager.open" });
     const pending = this.pendingOpenPromises.get(key);
     if (pending) return pending;
     const creation = this.openFresh(identity, executionMode, this.closeAllGeneration);
@@ -244,7 +275,13 @@ export class PlaywrightSessionManager {
       const context = persistentLaunch.context;
       const browser = context.browser();
       if (!browser) {
-        await context.close().catch(() => undefined);
+        await this.closeUnregisteredResources(identity, context, null, {
+          storageMode: "PERSISTENT_PROFILE",
+          profilePath: persistentProfilePath,
+          browserChannel: persistentLaunch.channel,
+          contextDebugId: null,
+          pageDebugId: null
+        }, { reason: "OPEN_FAILURE_CLEANUP", callerOperation: "PlaywrightSessionManager.openFresh" });
         throw new BrowserRuntimeError({ errorCode: "BROWSER_RUNTIME_LAUNCH_FAILED", module: "BrowserSessionManager", timestamp: new Date().toISOString(), attemptedChannels: [...SYSTEM_BROWSER_CHANNELS] });
       }
       context.setDefaultTimeout(this.options.timeoutMs ?? 30_000);
@@ -252,12 +289,18 @@ export class PlaywrightSessionManager {
       try {
         page = await context.newPage();
       } catch {
-        await context.close().catch(() => undefined);
+        await this.closeUnregisteredResources(identity, context, browser, {
+          storageMode: "PERSISTENT_PROFILE",
+          profilePath: persistentProfilePath,
+          browserChannel: persistentLaunch.channel,
+          contextDebugId: null,
+          pageDebugId: null
+        }, { reason: "OPEN_FAILURE_CLEANUP", callerOperation: "PlaywrightSessionManager.openFresh" });
         throw new BrowserRuntimeError({ errorCode: "BROWSER_RUNTIME_LAUNCH_FAILED", module: "BrowserSessionManager", timestamp: new Date().toISOString(), attemptedChannels: [...SYSTEM_BROWSER_CHANNELS] });
       }
       const session = { browser, context, page, hasStoredSession: Boolean(storageState) || profileInitialized, sessionIdHash: browserSessionIdHash(identity), executionMode, headless, storageMode: "PERSISTENT_PROFILE" as const, profilePath: persistentProfilePath, browserChannel: persistentLaunch.channel, credentialSnapshotInjected: shouldInjectCredentialSnapshot, contextDebugId: randomUUID(), pageDebugId: randomUUID() };
       if (closeAllGeneration !== this.closeAllGeneration) {
-        await this.closeUnregisteredSession(session);
+        await this.closeUnregisteredSession(identity, session, { reason: "APP_SHUTDOWN", callerOperation: "PlaywrightSessionManager.closeAll" });
         throw new Error("Browser session open was cancelled by closeAll");
       }
       await this.writeProfileInitializedMarker(join(persistentProfilePath, ".gmp-profile-initialized"));
@@ -269,7 +312,13 @@ export class PlaywrightSessionManager {
     try {
       context = await browser.newContext(storageState ? { storageState } : {});
     } catch {
-      await browser.close().catch(() => undefined);
+      await this.closeUnregisteredResources(identity, null, browser, {
+        storageMode: "EPHEMERAL_STORAGE_STATE",
+        profilePath: null,
+        browserChannel: browserLaunch.channel,
+        contextDebugId: null,
+        pageDebugId: null
+      }, { reason: "OPEN_FAILURE_CLEANUP", callerOperation: "PlaywrightSessionManager.openFresh" });
       throw new BrowserRuntimeError({ errorCode: "BROWSER_RUNTIME_LAUNCH_FAILED", module: "BrowserSessionManager", timestamp: new Date().toISOString(), attemptedChannels: [...SYSTEM_BROWSER_CHANNELS] });
     }
     context.setDefaultTimeout(this.options.timeoutMs ?? 30_000);
@@ -277,8 +326,13 @@ export class PlaywrightSessionManager {
     try {
       page = await context.newPage();
     } catch {
-      await context.close().catch(() => undefined);
-      await browser.close().catch(() => undefined);
+      await this.closeUnregisteredResources(identity, context, browser, {
+        storageMode: "EPHEMERAL_STORAGE_STATE",
+        profilePath: null,
+        browserChannel: browserLaunch.channel,
+        contextDebugId: null,
+        pageDebugId: null
+      }, { reason: "OPEN_FAILURE_CLEANUP", callerOperation: "PlaywrightSessionManager.openFresh" });
       throw new BrowserRuntimeError({ errorCode: "BROWSER_RUNTIME_LAUNCH_FAILED", module: "BrowserSessionManager", timestamp: new Date().toISOString(), attemptedChannels: [...SYSTEM_BROWSER_CHANNELS] });
     }
     const session = { browser, context, page, hasStoredSession: Boolean(storageState), sessionIdHash: browserSessionIdHash(identity), executionMode, headless, storageMode: "EPHEMERAL_STORAGE_STATE" as const, profilePath: null, browserChannel: browserLaunch.channel, credentialSnapshotInjected: Boolean(storageState), contextDebugId: randomUUID(), pageDebugId: randomUUID() };
@@ -394,27 +448,28 @@ export class PlaywrightSessionManager {
     return outputPath;
   }
 
-  async close(session: BrowserSession): Promise<void> {
+  async close(session: BrowserSession, closeInfo: BrowserSessionCloseInfo = { reason: "LEGACY_RELEASE", callerOperation: "PlaywrightSessionManager.close" }): Promise<void> {
     const identity = this.sessionIdentities.get(session);
     const key = identity ? browserSessionCredentialKey(identity) : null;
     if (key) this.pendingOpenPromises.delete(key);
     this.explicitCloseSessions.add(session);
+    this.lastExplicitCloseInfo.set(session, closeInfo);
     this.detachBrowserDisconnectObserver(session);
-    if (identity) this.emitSessionLifecycle({ phase: "CLOSE_STARTED", identity, session, browserConnected: this.browserConnected(session.browser) });
+    if (identity) this.emitSessionLifecycle({ phase: "CLOSE_STARTED", identity, session, browserConnected: this.browserConnected(session.browser), closeInfo });
     let firstError: unknown;
     try { await session.context.close(); } catch (error) { firstError = error; }
-    if (!firstError && identity) this.emitSessionLifecycle({ phase: "CONTEXT_CLOSE_COMPLETED", identity, session, browserConnected: this.browserConnected(session.browser) });
+    if (!firstError && identity) this.emitSessionLifecycle({ phase: "CONTEXT_CLOSE_COMPLETED", identity, session, browserConnected: this.browserConnected(session.browser), closeInfo });
     if (session.storageMode !== "PERSISTENT_PROFILE") {
       try { await session.browser.close(); } catch (error) { firstError ??= error; }
     }
     if (identity) this.updateRuntimeState(browserSessionCredentialKey(identity), "UNVERIFIED", session.contextDebugId ?? null, null);
     this.releaseSession(session, identity);
-    if (identity) this.emitSessionLifecycle({ phase: firstError ? "CLOSE_FAILED" : "CLOSE_COMPLETED", identity, session, browserConnected: this.browserConnected(session.browser) });
+    if (identity) this.emitSessionLifecycle({ phase: firstError ? "CLOSE_FAILED" : "CLOSE_COMPLETED", identity, session, browserConnected: this.browserConnected(session.browser), closeInfo });
     this.explicitCloseSessions.delete(session);
     if (firstError) throw firstError;
   }
 
-  async closeAll(): Promise<void> {
+  async closeAll(closeInfo: BrowserSessionCloseInfo = { reason: "APP_SHUTDOWN", callerOperation: "PlaywrightSessionManager.closeAll" }): Promise<void> {
     this.closeAllGeneration += 1;
     const affectedKeys = new Set<string>([
       ...this.activeSessions.keys(),
@@ -423,7 +478,7 @@ export class PlaywrightSessionManager {
     ]);
     const sessions = [...this.ownedSessions];
     const pendingOpens = [...this.pendingOpenPromises.values()];
-    await Promise.allSettled([...sessions.map((session) => this.close(session)), ...pendingOpens]);
+    await Promise.allSettled([...sessions.map((session) => this.close(session, closeInfo)), ...pendingOpens]);
     for (const key of affectedKeys) this.updateRuntimeState(key, "UNVERIFIED", this.runtimeStates.get(key)?.contextDebugId ?? null, null);
     this.activeSessions.clear();
     this.pendingOpenPromises.clear();
@@ -530,9 +585,16 @@ export class PlaywrightSessionManager {
     }
   }
 
-  private emitSessionLifecycle(input: { phase: BrowserSessionLifecyclePhase; identity: BrowserSessionIdentity; session?: BrowserSession; storageMode?: BrowserSessionStorageMode; profilePath?: string | null; browserChannel?: SystemBrowserChannel | null; contextDebugId?: string | null; pageDebugId?: string | null; browserConnected?: boolean | null }): void {
-    if (!this.options.onSessionLifecycle) return;
+  private emitSessionLifecycle(input: { phase: BrowserSessionLifecyclePhase; identity: BrowserSessionIdentity; session?: BrowserSession; storageMode?: BrowserSessionStorageMode; profilePath?: string | null; browserChannel?: SystemBrowserChannel | null; contextDebugId?: string | null; pageDebugId?: string | null; pageCount?: number | null; browserConnected?: boolean | null; closeInfo?: BrowserSessionCloseInfo }): void {
     const session = input.session;
+    const browserConnected = input.browserConnected ?? (session ? this.browserConnected(session.browser) : null);
+    const browserConnectedBeforeEvent = input.phase === "CONTEXT_DISCONNECTED" && session ? this.lastKnownBrowserConnected.get(session) ?? null : null;
+    const pageCount = input.pageCount ?? (session ? this.safePageCount(session.context) : null);
+    const activePageCountBeforeDisconnect = input.phase === "CONTEXT_DISCONNECTED" ? pageCount : null;
+    const explicitCloseInProgress = input.phase === "CONTEXT_DISCONNECTED" ? Boolean(session && this.explicitCloseSessions.has(session)) : Boolean(input.closeInfo);
+    const lastExplicitCloseReason = session ? this.lastExplicitCloseInfo.get(session)?.reason ?? null : input.closeInfo?.reason ?? null;
+    if (session && browserConnected !== null) this.lastKnownBrowserConnected.set(session, browserConnected);
+    if (!this.options.onSessionLifecycle) return;
     try {
       this.options.onSessionLifecycle({
         phase: input.phase,
@@ -544,7 +606,14 @@ export class PlaywrightSessionManager {
         browserChannel: input.browserChannel ?? session?.browserChannel ?? null,
         contextDebugId: input.contextDebugId ?? session?.contextDebugId ?? null,
         pageDebugId: input.pageDebugId ?? session?.pageDebugId ?? null,
-        browserConnected: input.browserConnected ?? (session ? this.browserConnected(session.browser) : null)
+        pageCount,
+        browserConnected,
+        closeReason: input.closeInfo?.reason ?? null,
+        callerOperation: input.closeInfo?.callerOperation ?? null,
+        explicitCloseInProgress,
+        lastExplicitCloseReason,
+        activePageCountBeforeDisconnect,
+        browserConnectedBeforeEvent
       });
     } catch {
       // Diagnostics must never change the browser lifecycle result.
@@ -576,6 +645,7 @@ export class PlaywrightSessionManager {
     };
     if (typeof candidate.on !== "function") return;
     const listener = (): void => {
+      this.emitSessionLifecycle({ phase: "CONTEXT_DISCONNECTED", identity, session, browserConnected: false });
       if (this.explicitCloseSessions.has(session)) return;
       this.handleBrowserDisconnected(identity, session);
     };
@@ -603,7 +673,10 @@ export class PlaywrightSessionManager {
     this.pendingOpenPromises.delete(key);
     this.updateRuntimeState(key, "DISCONNECTED", session.contextDebugId ?? null, null);
     this.releaseSession(session, identity);
-    this.emitSessionLifecycle({ phase: "CONTEXT_DISCONNECTED", identity, session, browserConnected: false });
+  }
+
+  private safePageCount(context: BrowserContext): number | null {
+    try { return context.pages().length; } catch { return null; }
   }
 
   private releaseSession(session: BrowserSession, identity?: BrowserSessionIdentity): void {
@@ -620,14 +693,40 @@ export class PlaywrightSessionManager {
     }
   }
 
-  private async closeUnregisteredSession(session: BrowserSession): Promise<void> {
-    await session.context.close().catch(() => undefined);
-    if (session.storageMode !== "PERSISTENT_PROFILE") await session.browser.close().catch(() => undefined);
+  private async closeUnregisteredSession(identity: BrowserSessionIdentity, session: BrowserSession, closeInfo: BrowserSessionCloseInfo): Promise<void> {
+    await this.closeUnregisteredResources(identity, session.context, session.browser, {
+      storageMode: session.storageMode,
+      profilePath: session.profilePath,
+      browserChannel: session.browserChannel ?? null,
+      contextDebugId: session.contextDebugId ?? null,
+      pageDebugId: session.pageDebugId ?? null
+    }, closeInfo);
+  }
+
+  private async closeUnregisteredResources(
+    identity: BrowserSessionIdentity,
+    context: BrowserContext | null,
+    browser: Browser | null,
+    metadata: { storageMode: BrowserSessionStorageMode; profilePath: string | null; browserChannel: SystemBrowserChannel | null; contextDebugId: string | null; pageDebugId: string | null },
+    closeInfo: BrowserSessionCloseInfo
+  ): Promise<void> {
+    const pageCount = context ? this.safePageCount(context) : null;
+    const browserConnected = browser ? this.browserConnected(browser) : null;
+    this.emitSessionLifecycle({ phase: "CLOSE_STARTED", identity, ...metadata, pageCount, browserConnected, closeInfo });
+    let firstError: unknown;
+    if (context) {
+      try { await context.close(); } catch (error) { firstError = error; }
+      if (!firstError) this.emitSessionLifecycle({ phase: "CONTEXT_CLOSE_COMPLETED", identity, ...metadata, pageCount: this.safePageCount(context), browserConnected: browser ? this.browserConnected(browser) : null, closeInfo });
+    }
+    if (browser && metadata.storageMode !== "PERSISTENT_PROFILE") {
+      try { await browser.close(); } catch (error) { firstError ??= error; }
+    }
+    this.emitSessionLifecycle({ phase: firstError ? "CLOSE_FAILED" : "CLOSE_COMPLETED", identity, ...metadata, pageCount: context ? this.safePageCount(context) : null, browserConnected: browser ? this.browserConnected(browser) : null, closeInfo });
   }
 
   private async registerOpenSession(identity: BrowserSessionIdentity, session: BrowserSession, closeAllGeneration: number): Promise<BrowserSession> {
     if (closeAllGeneration !== this.closeAllGeneration) {
-      await this.closeUnregisteredSession(session);
+      await this.closeUnregisteredSession(identity, session, { reason: "APP_SHUTDOWN", callerOperation: "PlaywrightSessionManager.closeAll" });
       throw new Error("Browser session open was cancelled by closeAll");
     }
     this.ownedSessions.add(session);

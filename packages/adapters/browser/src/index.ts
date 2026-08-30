@@ -12,7 +12,7 @@ import type {
   ValidationResult
 } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
-import { BrowserSessionManager, browserExecutionModeFromSettings, browserSessionCredentialKey, browserSessionIdHash, PlatformAdapterError, userInitiatedActionFromSettings, type BrowserExecutionMode, type BrowserRuntimeEvent, type BrowserSession, type BrowserSessionRuntimeState, type BrowserSessionStorageMode, type SystemBrowserChannel } from "@publisher/adapters-core";
+import { BrowserSessionManager, browserExecutionModeFromSettings, browserSessionCredentialKey, browserSessionIdHash, PlatformAdapterError, userInitiatedActionFromSettings, type BrowserExecutionMode, type BrowserRuntimeEvent, type BrowserSession, type BrowserSessionCloseInfo, type BrowserSessionRuntimeState, type BrowserSessionStorageMode, type SystemBrowserChannel } from "@publisher/adapters-core";
 import type { CredentialStore } from "@publisher/security";
 import type { AutomationAdapter, AutomationPrepareResult } from "@publisher/adapters-core";
 
@@ -42,6 +42,7 @@ export interface BrowserAutomationAdapterOptions {
 }
 
 export type BrowserConnectionDiagnosticPhase = "BEGIN_LOGIN_PAGE" | "COMPLETE_LOGIN_PAGE" | "LOGIN_PAGE_RELEASED";
+export type BrowserConnectionPageReleaseMode = "CLOSED" | "RETAINED_ACCOUNT_PAGE";
 
 export interface BrowserConnectionDiagnostic {
   phase: BrowserConnectionDiagnosticPhase;
@@ -61,6 +62,7 @@ export interface BrowserConnectionDiagnostic {
   pageTitle: string | null;
   pageClosed: boolean | null;
   sessionRetainedAfterPageClose: boolean | null;
+  pageReleaseMode: BrowserConnectionPageReleaseMode | null;
   storageMode: BrowserSessionStorageMode | null;
   profilePath: string | null;
 }
@@ -153,7 +155,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
 
   async connectAccount(ctx: AccountContext): Promise<LoginSession> {
     const identity = this.identity(ctx);
-    await this.closeActive(identity);
+    await this.closeActive(identity, { reason: "EXPLICIT_RECONNECT", callerOperation: "BrowserAutomationAdapter.connectAccount" });
     const session = await this.sessionManager.open(identity, userInitiatedActionFromSettings(ctx.settings), "VISIBLE");
     this.rememberActiveSession(identity, session);
     this.markConnectionPending(identity);
@@ -182,19 +184,19 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     if (this.deferConnectionPersistence(ctx)) return "logged_in";
     try { await this.saveConnectionSession(ctx); }
     catch (error) {
-      try { await this.closeActive(identity); } catch { /* preserve the save failure */ }
+      try { await this.closeActive(identity, { reason: "PERSISTENCE_FAILURE", callerOperation: "BrowserAutomationAdapter.completeConnection" }); } catch { /* preserve the save failure */ }
       this.finishConnection(identity);
       throw error;
     }
     this.finishConnection(identity);
     if (!this.keepConnectionSessionOpenAfterCompletion(ctx)) {
-      try { await this.closeActive(identity); } catch { /* the Session is already persisted */ }
+      try { await this.closeActive(identity, { reason: "LEGACY_RELEASE", callerOperation: "BrowserAutomationAdapter.completeConnection" }); } catch { /* the Session is already persisted */ }
     }
     return "logged_in";
   }
 
   async cancelConnection(ctx: AccountContext): Promise<void> {
-    try { await this.closeActive(this.identity(ctx)); }
+    try { await this.closeActive(this.identity(ctx), { reason: "CONNECTION_CANCEL", callerOperation: "BrowserAutomationAdapter.cancelConnection" }); }
     finally { this.finishConnection(this.identity(ctx)); }
   }
 
@@ -235,7 +237,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
       return "unknown";
     } finally {
       if (!ownsActiveSession && executionMode === "BACKGROUND") {
-        await this.closeActive(identity).catch(() => undefined);
+        await this.closeActive(identity, { reason: "BACKGROUND_OPERATION_RELEASE", callerOperation: "BrowserAutomationAdapter.checkSession" }).catch(() => undefined);
       }
     }
   }
@@ -270,7 +272,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
       if (ctx.settings.dryRun === true) return { success: true, dryRun: true, prepared: true, response: { ...prepared.response, browserSessionIdHash: prepared.sessionIdHash, backendUrl: prepared.backendUrl, verificationStatus: "WaitingUser" } };
       throw new BrowserAutomationError("USER_ACTION_REQUIRED", `${this.definition.displayName}首阶段只生成任务并打开后台；最终发布必须由用户在官方页面确认`);
     } finally {
-      if (browserExecutionModeFromSettings(ctx.settings) === "BACKGROUND") await this.closeActive(this.identity(ctx)).catch(() => undefined);
+      if (browserExecutionModeFromSettings(ctx.settings) === "BACKGROUND") await this.closeActive(this.identity(ctx), { reason: "BACKGROUND_OPERATION_RELEASE", callerOperation: "BrowserAutomationAdapter.publishArticle" }).catch(() => undefined);
     }
   }
 
@@ -296,7 +298,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
       }
       throw new BrowserAutomationError("USER_ACTION_REQUIRED", `${this.definition.displayName}视频最终提交需要用户在官方页面确认`);
     } finally {
-      if (browserExecutionModeFromSettings(ctx.settings) === "BACKGROUND") await this.closeActive(this.identity(ctx)).catch(() => undefined);
+      if (browserExecutionModeFromSettings(ctx.settings) === "BACKGROUND") await this.closeActive(this.identity(ctx), { reason: "BACKGROUND_OPERATION_RELEASE", callerOperation: "BrowserAutomationAdapter.publishVideo" }).catch(() => undefined);
     }
   }
 
@@ -308,7 +310,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
 
   async logout(ctx: AccountContext): Promise<void> {
     const identity = this.identity(ctx);
-    try { await this.closeActive(this.identity(ctx)); }
+    try { await this.closeActive(this.identity(ctx), { reason: "EXPLICIT_LOGOUT", callerOperation: "BrowserAutomationAdapter.logout" }); }
     finally {
       this.finishConnection(identity);
       this.sessionManager.clear(identity);
@@ -316,13 +318,13 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
   }
 
   async releaseOperationSession(ctx: AccountContext): Promise<void> {
-    if (browserExecutionModeFromSettings(ctx.settings) === "BACKGROUND") await this.closeActive(this.identity(ctx));
+    if (browserExecutionModeFromSettings(ctx.settings) === "BACKGROUND") await this.closeActive(this.identity(ctx), { reason: "BACKGROUND_OPERATION_RELEASE", callerOperation: "BrowserAutomationAdapter.releaseOperationSession" });
   }
 
   async releaseConnectionSession(ctx: AccountContext): Promise<void> {
     const identity = this.identity(ctx);
     const session = await this.getOrOpen(ctx);
-    try { if (session) await this.closeActive(identity); }
+    try { if (session) await this.closeActive(identity, { reason: "CONNECTION_RELEASE", callerOperation: "BrowserAutomationAdapter.releaseConnectionSession" }); }
     finally { this.finishConnection(identity); }
   }
 
@@ -373,7 +375,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
   }
 
   async closeOwnedSessions(): Promise<void> {
-    try { await this.sessionManager.closeAll(); }
+    try { await this.sessionManager.closeAll({ reason: "APP_SHUTDOWN", callerOperation: "BrowserAutomationAdapter.closeOwnedSessions" }); }
     finally {
       this.fallbackActiveSessions.clear();
       this.fallbackPendingConnections.clear();
@@ -453,7 +455,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     const active = this.activeSession(identity);
     if (active?.executionMode === executionMode) return active;
     if (this.requiresActiveContextForOperations(identity) && !diagnosticColdOpenAllowed) return null;
-    if (active) await this.closeActive(identity);
+    if (active) await this.closeActive(identity, { reason: "EXECUTION_MODE_REPLACEMENT", callerOperation: "BrowserAutomationAdapter.getOrOpen" });
     if (!this.sessionManager.hasStoredSession(identity)) return null;
     const session = await this.sessionManager.open(identity, userInitiatedActionFromSettings(ctx.settings), executionMode);
     this.rememberActiveSession(identity, session);
@@ -558,10 +560,10 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     this.fallbackPendingConnections.delete(`${identity.platformKey}:${identity.accountId}`);
   }
 
-  private async closeActive(identity: { platformKey: string; accountId: string }): Promise<void> {
+  private async closeActive(identity: { platformKey: string; accountId: string }, closeInfo?: BrowserSessionCloseInfo): Promise<void> {
     const key = `${identity.platformKey}:${identity.accountId}`;
     const active = this.activeSession(identity);
-    try { if (active) await this.sessionManager.close(active); }
+    try { if (active) await this.sessionManager.close(active, closeInfo); }
     finally {
       const manager = this.sessionManager as unknown as { clearActiveSession?: (value: { platformKey: string; accountId: string }, value2?: BrowserSession) => void };
       manager.clearActiveSession?.(identity, active ?? undefined);
@@ -608,7 +610,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     return allowed;
   }
 
-  protected async emitConnectionDiagnostic(phase: BrowserConnectionDiagnosticPhase, ctx: AccountContext, session: BrowserSession | null, sessionRetainedAfterPageClose: boolean | null = null): Promise<void> {
+  protected async emitConnectionDiagnostic(phase: BrowserConnectionDiagnosticPhase, ctx: AccountContext, session: BrowserSession | null, sessionRetainedAfterPageClose: boolean | null = null, pageReleaseMode: BrowserConnectionPageReleaseMode | null = null): Promise<void> {
     if (!this.onConnectionDiagnostic) return;
     let contextCount = 0;
     let pageCount = 0;
@@ -660,6 +662,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
         pageTitle,
         pageClosed,
         sessionRetainedAfterPageClose,
+        pageReleaseMode,
         storageMode,
         profilePath
       });

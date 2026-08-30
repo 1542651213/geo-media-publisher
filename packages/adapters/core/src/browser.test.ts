@@ -539,6 +539,55 @@ describe("BrowserSessionManager credential boundary", () => {
     expect(manager.getRuntimeAuthState(identity).state).toBe("DISCONNECTED");
   });
 
+  it("records explicit close causality and disconnect classification", async () => {
+    let browserConnected = true;
+    let disconnected: (() => void) | undefined;
+    const page = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), close: vi.fn(async () => undefined) };
+    const context = {
+      setDefaultTimeout: vi.fn(),
+      newPage: vi.fn(async () => page),
+      pages: vi.fn(() => [page]),
+      close: vi.fn(async () => { browserConnected = false; })
+    } as unknown as BrowserContext;
+    const browser = {
+      newContext: vi.fn(async () => context),
+      close: vi.fn(async () => undefined),
+      isConnected: vi.fn(() => browserConnected),
+      on: vi.fn((event: string, listener: () => void) => { if (event === "disconnected") disconnected = listener; })
+    } as unknown as Browser;
+    const events: BrowserSessionLifecycleEvent[] = [];
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), {
+      launchBrowser: vi.fn(async () => browser),
+      onSessionLifecycle: (event: BrowserSessionLifecycleEvent) => events.push(event),
+      platformPolicies: { xiaohongshu: { retainContextAfterPageClose: true, requireActiveContextForOperations: true } }
+    });
+    const identity = { platformKey: "xiaohongshu", accountId: "account-close-causality" };
+    await manager.open(identity, userAction);
+
+    browserConnected = false;
+    disconnected?.();
+
+    expect(events.at(-1)).toMatchObject({
+      phase: "CONTEXT_DISCONNECTED",
+      explicitCloseInProgress: false,
+      lastExplicitCloseReason: null,
+      activePageCountBeforeDisconnect: 1,
+      browserConnectedBeforeEvent: true
+    });
+
+    browserConnected = true;
+    const replacement = await manager.open(identity, userAction);
+    await manager.close(replacement, { reason: "APP_SHUTDOWN", callerOperation: "test.appShutdown" });
+
+    expect(events.find((event) => event.phase === "CLOSE_STARTED")).toMatchObject({
+      closeReason: "APP_SHUTDOWN",
+      callerOperation: "test.appShutdown",
+      pageCount: 1,
+      explicitCloseInProgress: true,
+      lastExplicitCloseReason: "APP_SHUTDOWN"
+    });
+  });
+
   it("ignores stale disconnect from an older same-key session after a newer session replaces it", async () => {
     let staleDisconnected: (() => void) | undefined;
     const oldPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank") };
