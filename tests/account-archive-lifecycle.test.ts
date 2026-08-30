@@ -138,7 +138,7 @@ describe("account disconnect archive lifecycle", () => {
   it("rebinds only the exact account-scoped stored Session during a safe restore", () => {
     const credentials = new MemoryCredentialStore();
     const manager = new BrowserSessionManager(credentials);
-    const session = { sessionIdHash: "session-a" } as BrowserSession;
+    const session = { sessionIdHash: "session-a", browser: { isConnected: () => true } } as BrowserSession;
     const source = { platformKey: "xiaohongshu", accountId: "account-a" };
     const target = { platformKey: "xiaohongshu", accountId: "account-restored" };
     manager.setActiveSession(source, session);

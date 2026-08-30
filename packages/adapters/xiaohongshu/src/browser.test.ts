@@ -80,6 +80,8 @@ function installSharedConnectionLifecycle(fixture: Fixture): void {
     const session = active.get(key) ?? managerState.session;
     active.set(key, session);
     const page = managerState.createOperationPage();
+    const canonicalEvaluate = (session.page as unknown as { evaluate?: unknown }).evaluate;
+    if (typeof canonicalEvaluate === "function") (page as unknown as { evaluate: unknown }).evaluate = canonicalEvaluate;
     const pages = operationPages.get(key) ?? new Set<Page>();
     pages.add(page);
     operationPages.set(key, pages);
@@ -138,11 +140,17 @@ function setupPage(options: FixtureOptions = {}): Fixture {
   let bodyValue = "";
   let imageUploaded = false;
   let contextPages: Page[] = [];
+  let setActivePageUrl: ((url: string) => void) | null = null;
   const operationPageDebugIds: string[] = [];
   const operationContextDebugIds: string[] = [];
   const submitClick = vi.fn(async () => { calls.push("final-submit-click"); });
   const inputSetFiles = vi.fn(async () => { imageUploaded = true; calls.push("image-set-input-files"); });
-  const entryClick = vi.fn(async () => { currentUrl = "https://creator.xiaohongshu.com/publish/publish"; calls.push("image-post-entry-click"); });
+  const entryClick = vi.fn(async () => {
+    const publishUrl = "https://creator.xiaohongshu.com/publish/publish";
+    setActivePageUrl?.(publishUrl);
+    currentUrl = publishUrl;
+    calls.push("image-post-entry-click");
+  });
 
   const profile = locator({
     count: vi.fn(async () => options.profileHref === null ? 0 : 1),
@@ -243,7 +251,10 @@ function setupPage(options: FixtureOptions = {}): Fixture {
         if (selector === "a[href]") return profile;
         if (selector.includes("nickname") || selector.includes("账号")) return nickname;
         if (selector.includes("/publish/video") || selector.includes("视频")) return videoEntry;
-        if (selector.includes("/publish/publish") || selector.includes("图文") || selector.includes("笔记")) return entry;
+        if (selector.includes("/publish/publish") || selector.includes("图文") || selector.includes("笔记")) {
+          setActivePageUrl = (url: string) => { pageUrl = url; currentUrl = url; };
+          return entry;
+        }
         if (selector.includes("input[type=\"file\"]") || selector.includes("input[type='file']")) return fileInput;
         if (selector.includes("preview") || selector.includes("upload-result") || selector.includes("note-image")) return preview;
         if (selector.includes("loading") || selector.includes("progress") || selector.includes("上传中")) return loading;
@@ -780,6 +791,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   it("runs the image-post gate in order and never clicks final submit", async () => {
     const fixture = setupPage({ settings: [{ label: "公开范围", required: false, value: "公开" }] });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context());
     const result = await adapter.preparePublish(context(), article);
     expect(result).toMatchObject({ prepared: true, requiresUserAction: true, titleFilled: true, bodyFilled: true, response: { imagePostEntry: "verified", imageUploaded: true, titleReadback: true, bodyReadback: true, requiredFieldsStatus: "KNOWN", publishSettingsStatus: "KNOWN", finalSubmitClickCount: 0 } });
     expect(fixture.calls.indexOf("image-post-entry-click")).toBeLessThan(fixture.calls.indexOf("image-set-input-files"));
@@ -791,6 +803,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   it("rejects a video-only entry instead of navigating to it", async () => {
     const fixture = setupPage({ entryCount: 0, videoEntryCount: 1 });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context());
     await expect(adapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "CONTENT_REJECTED", message: expect.stringContaining("IMAGE_POST_ENTRY_NOT_VERIFIED") });
     expect(fixture.entryClick).not.toHaveBeenCalled();
   });
@@ -798,6 +811,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   it("fails when the image preview never proves upload completion", async () => {
     const fixture = setupPage({ imagePreviewCount: 0 });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context());
     await expect(adapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "UPLOAD_FAILED", message: expect.stringContaining("IMAGE_UPLOAD_NOT_VERIFIED") });
     expect(fixture.submitClick).not.toHaveBeenCalled();
   });
@@ -805,34 +819,40 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   it("blocks an upload that remains in a visible loading state", async () => {
     const fixture = setupPage({ imageLoading: true });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context());
     await expect(adapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "UPLOAD_FAILED", message: expect.stringContaining("IMAGE_UPLOAD_NOT_VERIFIED") });
   });
 
   it("stops when the real page reports an image upload failure", async () => {
     const fixture = setupPage({ imageFailed: true });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context());
     await expect(adapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "UPLOAD_FAILED", message: expect.stringContaining("IMAGE_UPLOAD_NOT_VERIFIED") });
   });
 
   it("fails closed for ambiguous title candidates and strict title readback mismatch", async () => {
     const ambiguous = setupPage({ titleCount: 2 });
     const ambiguousAdapter = new XiaohongshuBrowserAdapter({ sessionManager: ambiguous.manager });
+    await ambiguousAdapter.connectAccount(context());
     await expect(ambiguousAdapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "CONTENT_REJECTED", message: expect.stringContaining("CONTENT_TITLE_NOT_VERIFIED") });
 
     const mismatch = setupPage({ titleReadback: "other title" });
     const mismatchAdapter = new XiaohongshuBrowserAdapter({ sessionManager: mismatch.manager });
+    await mismatchAdapter.connectAccount(context());
     await expect(mismatchAdapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "CONTENT_REJECTED", message: expect.stringContaining("CONTENT_TITLE_NOT_VERIFIED") });
   });
 
   it("uses strict body readback and rejects mismatch without substring acceptance", async () => {
     const mismatch = setupPage({ bodyReadback: `${article.body} 额外内容` });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: mismatch.manager });
+    await adapter.connectAccount(context());
     await expect(adapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "CONTENT_REJECTED", message: expect.stringContaining("CONTENT_BODY_NOT_VERIFIED") });
   });
 
   it("reports missing required fields and classifies publish settings", async () => {
     const fixture = setupPage({ requiredEmpty: true, settings: [{ label: "公开范围", required: true, value: "" }, { label: "允许下载", required: false, value: "false" }] });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context());
     await expect(adapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "REQUIRED_FIELD_MISSING" });
   });
 
@@ -840,6 +860,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     const fixture = setupPage({ securityText: "请完成安全验证" });
     installPageEvidence(fixture, { blockingSignals: ["visible_security_modal"] });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context());
     await expect(adapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "USER_ACTION_REQUIRED", message: expect.stringContaining("SECURITY_VERIFICATION_REQUIRED") });
     expect(fixture.entryClick).not.toHaveBeenCalled();
   });
@@ -847,12 +868,14 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   it("requires a unique enabled final-submit control and records second confirmation without clicking", async () => {
     const fixture = setupPage({ secondConfirmation: true });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context());
     const result = await adapter.preparePublish(context(), article);
     expect(result.response).toMatchObject({ finalSubmitControl: { verified: true, visible: true, enabled: true, unique: true, secondConfirmation: "present" }, finalSubmitClickCount: 0 });
     expect(fixture.submitClick).not.toHaveBeenCalled();
 
     const ambiguous = setupPage({ submitCount: 2 });
     const ambiguousAdapter = new XiaohongshuBrowserAdapter({ sessionManager: ambiguous.manager });
+    await ambiguousAdapter.connectAccount(context());
     await expect(ambiguousAdapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "FINAL_SUBMIT_CONTROL_NOT_FOUND", message: expect.stringContaining("FINAL_SUBMIT_CONTROL_NOT_VERIFIED") });
   });
 
