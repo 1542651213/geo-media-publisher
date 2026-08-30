@@ -9,6 +9,7 @@ import { registerIpc } from "./ipc";
 import { createRuntimeAdapterRegistry } from "./adapter-registry";
 import { runDeepSeekBenchmarkMode } from "./deepseek-benchmark-mode";
 import { createProcessDiagnostics } from "./process-diagnostics";
+import { recordAppStartup } from "./runtime-observability";
 
 app.setName("codex-media-publisher");
 const processDiagnostics = createProcessDiagnostics(join(app.getPath("userData"), "production-data", "logs", "main-process-diagnostics.log"));
@@ -38,6 +39,7 @@ async function createWindow(): Promise<void> {
   else database.repository.seedPlatformCatalog(csvPath);
   const appLogPath = join(dataDirectory, "logs", "app.log");
   const logger = createFileLogger(appLogPath);
+  recordAppStartup(logger, { pid: process.pid, packaged: app.isPackaged, userDataPath: app.getPath("userData"), productionDataPath: dataDirectory, appLogPath });
   const credentials = new SafeStorageCredentialStore(join(dataDirectory, "credentials.enc"), safeStorage);
   const registry = createRuntimeAdapterRegistry(credentials, isDevelopment, logger, join(app.getPath("userData"), "browser-profiles"), join(dataDirectory, "credentials.enc"));
   ownedBrowserSessionClosers.add(async () => {

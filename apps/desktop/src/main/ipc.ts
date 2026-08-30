@@ -24,6 +24,7 @@ import { buildExcelImportErrorReportCsv, readExcelArticleFile } from "./excel-im
 import { PlatformSelfTestService } from "./platform-self-test";
 import type { ProcessDiagnostics } from "./process-diagnostics";
 import { addAccountConnectionModes, browserAccountConnectionResult, browserAccountDisconnectResult } from "./account-connection";
+import { recordRuntimeHeartbeat } from "./runtime-observability";
 
 const idSchema = z.string().min(1);
 function safeErrorCode(error: unknown): string {
@@ -140,7 +141,7 @@ export function registerIpc(deps: IpcDependencies): void {
     const validation = await adapter.validateVideo({ title: asset.title, description: asset.description, tags: asset.tags, videoPath: asset.localPath, ...(asset.coverPath ? { coverPath: asset.coverPath } : {}) });
     return { asset, validation };
   };
-  register("dashboard:get", () => repository.dashboardStats());
+  register("dashboard:get", () => { recordRuntimeHeartbeat(logger, "dashboard:get"); return repository.dashboardStats(); });
   register("video-assets:list", (_event, payload) => repository.listVideoAssets(z.object({ brandId: z.string().optional() }).optional().parse(payload)?.brandId));
   register("video-assets:pick-video", async () => {
     const result = await dialog.showOpenDialog({ properties: ["openFile"], filters: [{ name: "视频文件", extensions: ["mp4", "mov", "m4v"] }] });
