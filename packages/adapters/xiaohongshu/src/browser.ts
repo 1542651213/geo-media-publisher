@@ -614,6 +614,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
 
   async persistConnectionSession(ctx: AccountContext): Promise<void> {
     await this.saveConnectionSession(ctx);
+    this.sessionManager.setRuntimeAuthState({ platformKey: this.platformKey, accountId: ctx.accountId }, "AUTHENTICATED", null);
     await this.emitAuthStateDiagnostic(ctx, "AUTH_STATE_BEFORE_CLOSE", null, null, null);
     this.markConnectionComplete({ platformKey: this.platformKey, accountId: ctx.accountId });
   }

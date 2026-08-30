@@ -578,6 +578,19 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(fixture.manager.close).toHaveBeenCalledTimes(1);
   });
 
+  it("marks the retained Context authenticated after connection persistence", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    await expect(adapter.completeConnection(ctx)).resolves.toBe("logged_in");
+    await adapter.persistConnectionSession(ctx);
+
+    expect(fixture.manager.getRuntimeAuthState?.({ platformKey: "xiaohongshu", accountId: "account-a" })).toMatchObject({ state: "AUTHENTICATED" });
+  });
+
   it("releases only the XHS login Page after persistence and retains the canonical Context", async () => {
     const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
     installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
