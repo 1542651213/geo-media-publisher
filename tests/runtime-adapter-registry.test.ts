@@ -60,6 +60,22 @@ describe("runtime AdapterRegistry", () => {
     expect(completeAdapter.getBrowserConnectionDebugIds().browserSessionManagerDebugId).toBe(beginAdapter.getBrowserConnectionDebugIds().browserSessionManagerDebugId);
   });
 
+  it("registers the retained-context policy only for Xiaohongshu", () => {
+    const registry = createRuntimeAdapterRegistry(new MemoryCredentialStore(), false);
+    const xhsManager = (registry.getForConnection("xiaohongshu") as unknown as {
+      sessionManager: {
+        retainsContextAfterPageClose: (identity: { platformKey: string; accountId: string }) => boolean;
+        requiresActiveContextForOperations: (identity: { platformKey: string; accountId: string }) => boolean;
+      };
+    }).sessionManager;
+    const sohuManager = (registry.getForConnection("sohu_media") as unknown as { sessionManager: typeof xhsManager }).sessionManager;
+
+    expect(xhsManager.retainsContextAfterPageClose({ platformKey: "xiaohongshu", accountId: "account-a" })).toBe(true);
+    expect(xhsManager.requiresActiveContextForOperations({ platformKey: "xiaohongshu", accountId: "account-a" })).toBe(true);
+    expect(sohuManager.retainsContextAfterPageClose({ platformKey: "sohu_media", accountId: "account-a" })).toBe(false);
+    expect(sohuManager.requiresActiveContextForOperations({ platformKey: "sohu_media", accountId: "account-a" })).toBe(false);
+  });
+
   it("keeps ordinary Xiaohongshu separate from the historical merchant/private catalog rows", () => {
     const csvRows = readFileSync(join(process.cwd(), "PLATFORMS.csv"), "utf8").split(/\r?\n/u).slice(1).filter(Boolean).map((line) => line.split(","));
     const byKey = new Map(csvRows.map((row) => [row[0]?.replace(/^\uFEFF/u, ""), row]));

@@ -41,7 +41,7 @@ export interface BrowserAutomationAdapterOptions {
   onConnectionDiagnostic?: (diagnostic: BrowserConnectionDiagnostic) => void;
 }
 
-export type BrowserConnectionDiagnosticPhase = "BEGIN_LOGIN_PAGE" | "COMPLETE_LOGIN_PAGE";
+export type BrowserConnectionDiagnosticPhase = "BEGIN_LOGIN_PAGE" | "COMPLETE_LOGIN_PAGE" | "LOGIN_PAGE_RELEASED";
 
 export interface BrowserConnectionDiagnostic {
   phase: BrowserConnectionDiagnosticPhase;
@@ -60,6 +60,7 @@ export interface BrowserConnectionDiagnostic {
   pageUrl: string | null;
   pageTitle: string | null;
   pageClosed: boolean | null;
+  sessionRetainedAfterPageClose: boolean | null;
   storageMode: BrowserSessionStorageMode | null;
   profilePath: string | null;
 }
@@ -607,7 +608,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     return allowed;
   }
 
-  private async emitConnectionDiagnostic(phase: BrowserConnectionDiagnosticPhase, ctx: AccountContext, session: BrowserSession | null): Promise<void> {
+  protected async emitConnectionDiagnostic(phase: BrowserConnectionDiagnosticPhase, ctx: AccountContext, session: BrowserSession | null, sessionRetainedAfterPageClose: boolean | null = null): Promise<void> {
     if (!this.onConnectionDiagnostic) return;
     let contextCount = 0;
     let pageCount = 0;
@@ -658,6 +659,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
         pageUrl,
         pageTitle,
         pageClosed,
+        sessionRetainedAfterPageClose,
         storageMode,
         profilePath
       });

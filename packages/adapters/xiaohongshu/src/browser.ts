@@ -601,6 +601,16 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     this.markConnectionComplete({ platformKey: this.platformKey, accountId: ctx.accountId });
   }
 
+  async releaseConnectionPage(ctx: AccountContext): Promise<void> {
+    const identity = { platformKey: this.platformKey, accountId: ctx.accountId };
+    const session = this.activeBrowserSession(ctx);
+    if (!session) throw new BrowserAutomationError("USER_ACTION_REQUIRED", `ACTIVE_LOGIN_SESSION_NOT_FOUND: accountId=${ctx.accountId} 的可见登录 Session 已丢失，请重新开始连接`);
+    await this.sessionManager.closeOperationPage(identity, session.page);
+    const retained = this.activeBrowserSession(ctx) === session;
+    this.markConnectionComplete(identity);
+    await this.emitConnectionDiagnostic("LOGIN_PAGE_RELEASED", ctx, session, retained);
+  }
+
   /** Diagnostic-only snapshot of the already-open account-scoped session. It never navigates or mutates the page. */
   async collectAuthStateMetadata(ctx: AccountContext): Promise<XhsAuthStateMetadata | null> {
     const session = this.activeBrowserSession(ctx);

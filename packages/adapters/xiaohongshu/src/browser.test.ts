@@ -48,15 +48,62 @@ interface Fixture {
 }
 
 function installSharedConnectionLifecycle(fixture: Fixture): void {
+  const managerState = (fixture.manager as unknown as {
+    __fixtureState?: {
+      session: BrowserSession;
+      context: { pages: () => Page[] };
+      createOperationPage: () => Page;
+    };
+  }).__fixtureState;
+  if (!managerState) throw new Error("fixture state is missing");
   const active = new Map<string, BrowserSession>();
   const pending = new Set<string>();
+  const runtimeStates = new Map<string, { state: "UNVERIFIED" | "CHECKING" | "AUTHENTICATED" | "NEEDS_USER_ACTION" | "DISCONNECTED"; contextDebugId: string | null; updatedAt: string; reason: string | null }>();
+  const operationPages = new Map<string, Set<Page>>();
   const manager = fixture.manager as unknown as Record<string, unknown>;
-  manager.getActiveSession = vi.fn((identity: { platformKey: string; accountId: string }) => active.get(`${identity.platformKey}:${identity.accountId}`) ?? null);
+  const identityKey = (identity: { platformKey: string; accountId: string }): string => `${identity.platformKey}:${identity.accountId}`;
+  manager.getActiveSession = vi.fn((identity: { platformKey: string; accountId: string }) => active.get(identityKey(identity)) ?? null);
   manager.setActiveSession = vi.fn((identity: { platformKey: string; accountId: string }, session: BrowserSession) => { active.set(`${identity.platformKey}:${identity.accountId}`, session); });
-  manager.clearActiveSession = vi.fn((identity: { platformKey: string; accountId: string }) => { active.delete(`${identity.platformKey}:${identity.accountId}`); });
-  manager.markConnectionPending = vi.fn((identity: { platformKey: string; accountId: string }) => { pending.add(`${identity.platformKey}:${identity.accountId}`); });
-  manager.isConnectionPending = vi.fn((identity: { platformKey: string; accountId: string }) => pending.has(`${identity.platformKey}:${identity.accountId}`));
-  manager.clearConnectionPending = vi.fn((identity: { platformKey: string; accountId: string }) => { pending.delete(`${identity.platformKey}:${identity.accountId}`); });
+  manager.clearActiveSession = vi.fn((identity: { platformKey: string; accountId: string }, session?: BrowserSession) => {
+    const key = identityKey(identity);
+    if (!session || active.get(key) === session) active.delete(key);
+  });
+  manager.markConnectionPending = vi.fn((identity: { platformKey: string; accountId: string }) => { pending.add(identityKey(identity)); });
+  manager.isConnectionPending = vi.fn((identity: { platformKey: string; accountId: string }) => pending.has(identityKey(identity)));
+  manager.clearConnectionPending = vi.fn((identity: { platformKey: string; accountId: string }) => { pending.delete(identityKey(identity)); });
+  manager.requiresActiveContextForOperations = vi.fn((identity: { platformKey: string; accountId: string }) => identity.platformKey === "xiaohongshu");
+  manager.retainsContextAfterPageClose = vi.fn((identity: { platformKey: string; accountId: string }) => identity.platformKey === "xiaohongshu");
+  manager.openOperationPage = vi.fn(async (identity: { platformKey: string; accountId: string }) => {
+    const key = identityKey(identity);
+    const session = active.get(key) ?? managerState.session;
+    active.set(key, session);
+    const page = managerState.createOperationPage();
+    const pages = operationPages.get(key) ?? new Set<Page>();
+    pages.add(page);
+    operationPages.set(key, pages);
+    return { session, page, pageDebugId: `operation-page-${pages.size}` };
+  });
+  manager.closeOperationPage = vi.fn(async (identity: { platformKey: string; accountId: string }, page: Page) => {
+    const key = identityKey(identity);
+    const session = active.get(key) ?? null;
+    const ownedOperationPage = Boolean(session && operationPages.get(key)?.has(page));
+    const retainedCanonicalPage = Boolean(session && identity.platformKey === "xiaohongshu" && session.page === page);
+    if (!session || (!ownedOperationPage && !retainedCanonicalPage) || !managerState.context.pages().includes(page)) {
+      throw new Error("Operation Page does not belong to the active session Context");
+    }
+    await (page as unknown as { close: () => Promise<void> }).close();
+    if (ownedOperationPage) operationPages.get(key)?.delete(page);
+  });
+  manager.setRuntimeAuthState = vi.fn((identity: { platformKey: string; accountId: string }, state: "UNVERIFIED" | "CHECKING" | "AUTHENTICATED" | "NEEDS_USER_ACTION" | "DISCONNECTED", reason: string | null) => {
+    const session = active.get(identityKey(identity)) ?? null;
+    runtimeStates.set(identityKey(identity), { state, contextDebugId: session?.contextDebugId ?? null, updatedAt: new Date().toISOString(), reason });
+  });
+  manager.getRuntimeAuthState = vi.fn((identity: { platformKey: string; accountId: string }) => runtimeStates.get(identityKey(identity)) ?? {
+    state: "UNVERIFIED",
+    contextDebugId: null,
+    updatedAt: new Date(0).toISOString(),
+    reason: null
+  });
 }
 
 function locator(overrides: Partial<Record<string, unknown>> = {}): Locator {
@@ -80,10 +127,12 @@ function locator(overrides: Partial<Record<string, unknown>> = {}): Locator {
 
 function setupPage(options: FixtureOptions = {}): Fixture {
   const calls: string[] = [];
-  let currentUrl = options.loginPage ? "https://www.xiaohongshu.com/login" : options.pageUrl ?? "https://creator.xiaohongshu.com/";
+  const creatorHomeUrl = options.pageUrl ?? "https://creator.xiaohongshu.com/";
+  let currentUrl = options.loginPage ? "https://www.xiaohongshu.com/login" : creatorHomeUrl;
   let titleValue = "";
   let bodyValue = "";
   let imageUploaded = false;
+  let contextPages: Page[] = [];
   const submitClick = vi.fn(async () => { calls.push("final-submit-click"); });
   const inputSetFiles = vi.fn(async () => { imageUploaded = true; calls.push("image-set-input-files"); });
   const entryClick = vi.fn(async () => { currentUrl = "https://creator.xiaohongshu.com/publish/publish"; calls.push("image-post-entry-click"); });
@@ -164,36 +213,93 @@ function setupPage(options: FixtureOptions = {}): Fixture {
   });
   const empty = locator();
   const pageRoot = locator({ innerText: vi.fn(async () => `${options.accountName ?? "XHS owner"} ${options.securityText ?? ""} ${options.imageFailed ? "图片上传失败" : ""}`) });
-  const page = {
-    goto: vi.fn(async (url: string) => { currentUrl = options.loginPage ? "https://www.xiaohongshu.com/login" : options.pageUrl ?? url; }),
-    url: vi.fn(() => currentUrl),
-    title: vi.fn(async () => "小红书创作服务平台"),
-    frames: vi.fn(() => []),
-    locator: vi.fn((selector: string) => {
-      if (selector === "body") return pageRoot;
-      if (selector === "a[href]") return profile;
-      if (selector.includes("nickname") || selector.includes("账号")) return nickname;
-      if (selector.includes("/publish/video") || selector.includes("视频")) return videoEntry;
-      if (selector.includes("/publish/publish") || selector.includes("图文") || selector.includes("笔记")) return entry;
-      if (selector.includes("input[type=\"file\"]") || selector.includes("input[type='file']")) return fileInput;
-      if (selector.includes("preview") || selector.includes("upload-result") || selector.includes("note-image")) return preview;
-      if (selector.includes("loading") || selector.includes("progress") || selector.includes("上传中")) return loading;
-      if (selector.includes("required") || selector.includes("aria-required")) return required;
-      if (selector.includes("checkbox") || selector.includes("radio") || selector.includes("setting")) return settings;
-      if (selector.includes("button") || selector.includes("[role=\"button\"]")) return submit;
-      if (selector.includes("确认发布")) return secondConfirm;
-      if (selector.includes("textarea") || selector.includes("contenteditable") || selector.includes("textbox") || selector.includes("正文")) return body;
-      if (selector.includes("title") || selector.includes("标题") || selector.includes("placeholder")) return title;
-      return empty;
+  const createPage = (initialUrl: string, onClose?: () => void): Page => {
+    let pageUrl = initialUrl;
+    let closed = false;
+    const page = {
+      goto: vi.fn(async (_url: string) => {
+        pageUrl = options.loginPage ? "https://www.xiaohongshu.com/login" : creatorHomeUrl;
+        currentUrl = pageUrl;
+      }),
+      url: vi.fn(() => pageUrl),
+      title: vi.fn(async () => "小红书创作服务平台"),
+      frames: vi.fn(() => []),
+      close: vi.fn(async () => {
+        closed = true;
+        contextPages = contextPages.filter((candidate) => candidate !== page);
+        onClose?.();
+      }),
+      isClosed: vi.fn(() => closed),
+      locator: vi.fn((selector: string) => {
+        currentUrl = pageUrl;
+        if (selector === "body") return pageRoot;
+        if (selector === "a[href]") return profile;
+        if (selector.includes("nickname") || selector.includes("账号")) return nickname;
+        if (selector.includes("/publish/video") || selector.includes("视频")) return videoEntry;
+        if (selector.includes("/publish/publish") || selector.includes("图文") || selector.includes("笔记")) return entry;
+        if (selector.includes("input[type=\"file\"]") || selector.includes("input[type='file']")) return fileInput;
+        if (selector.includes("preview") || selector.includes("upload-result") || selector.includes("note-image")) return preview;
+        if (selector.includes("loading") || selector.includes("progress") || selector.includes("上传中")) return loading;
+        if (selector.includes("required") || selector.includes("aria-required")) return required;
+        if (selector.includes("checkbox") || selector.includes("radio") || selector.includes("setting")) return settings;
+        if (selector.includes("button") || selector.includes("[role=\"button\"]")) return submit;
+        if (selector.includes("确认发布")) return secondConfirm;
+        if (selector.includes("textarea") || selector.includes("contenteditable") || selector.includes("textbox") || selector.includes("正文")) return body;
+        if (selector.includes("title") || selector.includes("标题") || selector.includes("placeholder")) return title;
+        return empty;
+      })
+    } as unknown as Page;
+    return page;
+  };
+  const page = createPage(currentUrl);
+  contextPages = options.pagePresentInContext === false ? [] : [page];
+  const context = {
+    pages: vi.fn(() => [...contextPages]),
+    newPage: vi.fn(async () => {
+      const operationPage = createPage(creatorHomeUrl);
+      contextPages = [...contextPages, operationPage];
+      return operationPage;
     })
-  } as unknown as Page;
-  const session = { page, executionMode: "VISIBLE", headless: false, hasStoredSession: true, sessionIdHash: `session-${options.accountId ?? "account-a"}`, context: { pages: () => options.pagePresentInContext === false ? [] : [page] } } as unknown as BrowserSession;
+  };
+  const session = {
+    page,
+    executionMode: "VISIBLE",
+    headless: false,
+    hasStoredSession: true,
+    sessionIdHash: `session-${options.accountId ?? "account-a"}`,
+    storageMode: "PERSISTENT_PROFILE",
+    profilePath: "C:/profiles/xiaohongshu/account-a",
+    browserChannel: "chrome",
+    credentialSnapshotInjected: false,
+    contextDebugId: "context-debug-id",
+    pageDebugId: "canonical-page-debug-id",
+    context
+  } as unknown as BrowserSession;
   const open = vi.fn(async (identity: { platformKey: string; accountId: string }) => {
     calls.push(`open:${identity.platformKey}:${identity.accountId}`);
     return session;
   });
-  const manager = { hasStoredSession: vi.fn(() => true), open, save: vi.fn(async () => undefined), close: vi.fn(async () => undefined), clear: vi.fn(), closeAll: vi.fn(async () => undefined) } as unknown as BrowserSessionManager;
-  return { page, manager, submitClick, inputSetFiles, entryClick, open, calls };
+  const manager = {
+    debugId: "manager-debug-id",
+    hasStoredSession: vi.fn(() => true),
+    open,
+    save: vi.fn(async () => undefined),
+    close: vi.fn(async () => undefined),
+    clear: vi.fn(),
+    closeAll: vi.fn(async () => undefined),
+    __fixtureState: {
+      session,
+      context,
+      createOperationPage: () => {
+        const operationPage = createPage(creatorHomeUrl);
+        contextPages = [...contextPages, operationPage];
+        return operationPage;
+      }
+    }
+  } as unknown as BrowserSessionManager;
+  const fixture = { page, manager, submitClick, inputSetFiles, entryClick, open, calls };
+  installSharedConnectionLifecycle(fixture);
+  return fixture;
 }
 
 function installPageEvidence(fixture: Fixture, options: {
@@ -463,6 +569,51 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(afterPersist).toMatchObject({ pageDebugId: beforePersist?.pageDebugId, contextDebugId: beforePersist?.contextDebugId, pageUrl: "https://creator.xiaohongshu.com/new/home" });
     await adapter.releaseConnectionSession?.(ctx);
     expect(fixture.manager.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases only the XHS login Page after persistence and retains the canonical Context", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
+    vi.mocked(fixture.manager.hasStoredSession).mockReturnValue(false);
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    await expect(adapter.completeConnection(ctx)).resolves.toBe("logged_in");
+    await adapter.getAccountProfile(ctx);
+    await adapter.persistConnectionSession(ctx);
+    await adapter.releaseConnectionPage?.(ctx);
+
+    expect((fixture.page as unknown as { close: ReturnType<typeof vi.fn> }).close).toHaveBeenCalledTimes(1);
+    expect(fixture.manager.close).not.toHaveBeenCalled();
+    expect(fixture.manager.getActiveSession?.({ platformKey: "xiaohongshu", accountId: "account-a" })).toBeDefined();
+  });
+
+  it("emits sanitized LOGIN_PAGE_RELEASED evidence after retaining the XHS Context", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
+    vi.mocked(fixture.manager.hasStoredSession).mockReturnValue(false);
+    const diagnostics: Array<Record<string, unknown>> = [];
+    const adapter = new XiaohongshuBrowserAdapter({
+      sessionManager: fixture.manager,
+      onConnectionDiagnostic: (diagnostic: Record<string, unknown>) => diagnostics.push(diagnostic)
+    } as never);
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    await adapter.completeConnection(ctx);
+    await adapter.getAccountProfile(ctx);
+    await adapter.persistConnectionSession(ctx);
+    await adapter.releaseConnectionPage?.(ctx);
+
+    expect(diagnostics.at(-1)).toMatchObject({
+      phase: "LOGIN_PAGE_RELEASED",
+      platformKey: "xiaohongshu",
+      accountId: "account-a",
+      pageClosed: true,
+      sessionRetainedAfterPageClose: true
+    });
+    expect(diagnostics.flatMap((diagnostic) => Object.keys(diagnostic))).not.toContain("storageState");
   });
 
   it("only releases the login-only browser after identity persistence is complete", async () => {

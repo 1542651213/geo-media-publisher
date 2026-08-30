@@ -33,7 +33,19 @@ export function createRuntimeAdapterRegistry(credentials: CredentialStore, inclu
     if (event.platformKey !== "xiaohongshu") return;
     logger?.info("ACCOUNT", `XHS_BROWSER_SESSION_${event.phase}`, "小红书 BrowserSession 生命周期诊断", event as unknown as Record<string, unknown>);
   };
-  const browserSessionManager = new BrowserSessionManager(credentials, { onRuntimeEvent: onBrowserRuntimeEvent, onSessionLifecycle: onBrowserSessionLifecycle, browserProfileRootDir, persistentProfilePlatforms: ["xiaohongshu"], persistentProfileCredentialSnapshotPlatforms: [] });
+  const browserSessionManager = new BrowserSessionManager(credentials, {
+    onRuntimeEvent: onBrowserRuntimeEvent,
+    onSessionLifecycle: onBrowserSessionLifecycle,
+    browserProfileRootDir,
+    persistentProfilePlatforms: ["xiaohongshu"],
+    persistentProfileCredentialSnapshotPlatforms: [],
+    platformPolicies: {
+      xiaohongshu: {
+        retainContextAfterPageClose: true,
+        requireActiveContextForOperations: true
+      }
+    }
+  });
   const beginDiagnostics = new Map<string, BrowserConnectionDiagnostic>();
   const connectionDiagnosticKey = (diagnostic: BrowserConnectionDiagnostic): string => `${diagnostic.platformKey}:${diagnostic.accountId}`;
   const onXiaohongshuConnectionDiagnostic = (diagnostic: BrowserConnectionDiagnostic): void => {
