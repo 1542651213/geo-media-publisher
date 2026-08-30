@@ -12,7 +12,7 @@ import type {
   ValidationResult
 } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
-import { assertBrowserSessionPageOwnership, BrowserSessionManager, browserExecutionModeFromSettings, browserSessionCredentialKey, browserSessionIdHash, PlatformAdapterError, userInitiatedActionFromSettings, type BrowserExecutionMode, type BrowserRuntimeEvent, type BrowserSession, type BrowserSessionCanonicalPage, type BrowserSessionCloseInfo, type BrowserSessionRuntimeState, type BrowserSessionStorageMode, type SystemBrowserChannel } from "@publisher/adapters-core";
+import { assertBrowserSessionPageOwnership, BrowserSessionManager, browserExecutionModeFromSettings, browserSessionCredentialKey, browserSessionIdHash, PlatformAdapterError, userInitiatedActionFromSettings, type BrowserExecutionMode, type BrowserRuntimeEvent, type BrowserSession, type BrowserSessionCanonicalPage, type BrowserSessionCloseInfo, type BrowserSessionRuntimeSnapshot, type BrowserSessionRuntimeState, type BrowserSessionStorageMode, type SystemBrowserChannel } from "@publisher/adapters-core";
 import type { CredentialStore } from "@publisher/security";
 import type { AutomationAdapter, AutomationPrepareResult } from "@publisher/adapters-core";
 
@@ -388,6 +388,36 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
 
   getBrowserRuntimeState(ctx: AccountContext): BrowserSessionRuntimeState {
     return this.runtimeAuthState(this.identity(ctx));
+  }
+
+  getBrowserRuntimeSnapshot(ctx: AccountContext): BrowserSessionRuntimeSnapshot {
+    const identity = this.identity(ctx);
+    const manager = this.sessionManager as unknown as { getSessionSnapshot?: (value: { platformKey: string; accountId: string }) => BrowserSessionRuntimeSnapshot };
+    const snapshot = manager.getSessionSnapshot?.(identity);
+    if (snapshot) return snapshot;
+    const runtimeState = this.runtimeAuthState(identity);
+    return {
+      platformKey: identity.platformKey,
+      accountId: identity.accountId,
+      sessionExists: false,
+      contextDebugId: runtimeState.contextDebugId,
+      canonicalPageDebugId: null,
+      browserConnected: null,
+      contextExists: false,
+      contextPageCount: null,
+      canonicalPageExists: false,
+      canonicalPageClosed: null,
+      canonicalPageContextMatchesSession: null,
+      runtimeAuthState: runtimeState.state,
+      contextLaunchCount: 0,
+      canonicalPagePromotionCount: 0,
+      activeOperation: null,
+      mutexLocked: false,
+      operationInProgress: false,
+      lastDisconnectAt: null,
+      lastDisconnectContextDebugId: null,
+      lastDisconnectReason: null
+    };
   }
 
   getBrowserConnectionDebugState(ctx: AccountContext): {

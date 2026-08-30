@@ -196,6 +196,29 @@ export interface BrowserSessionRuntimeState {
   reason: string | null;
 }
 
+export interface BrowserSessionRuntimeSnapshot {
+  platformKey: string;
+  accountId: string;
+  sessionExists: boolean;
+  contextDebugId: string | null;
+  canonicalPageDebugId: string | null;
+  browserConnected: boolean | null;
+  contextExists: boolean;
+  contextPageCount: number | null;
+  canonicalPageExists: boolean;
+  canonicalPageClosed: boolean | null;
+  canonicalPageContextMatchesSession: boolean | null;
+  runtimeAuthState: BrowserRuntimeAuthState;
+  contextLaunchCount: number;
+  canonicalPagePromotionCount: number;
+  activeOperation: string | null;
+  mutexLocked: boolean;
+  operationInProgress: boolean;
+  lastDisconnectAt: string | null;
+  lastDisconnectContextDebugId: string | null;
+  lastDisconnectReason: string | null;
+}
+
 export type BrowserSessionLifecyclePhase =
   | "OPEN_STARTED"
   | "OPEN_COMPLETED"
@@ -223,6 +246,8 @@ export interface BrowserSessionLifecycleEvent {
   lastExplicitCloseReason: BrowserSessionCloseReason | null;
   activePageCountBeforeDisconnect: number | null;
   browserConnectedBeforeEvent: boolean | null;
+  contextLaunchCount: number;
+  disconnectReason: "UNEXPECTED_BROWSER_DISCONNECT" | "EXPLICIT_CLOSE" | null;
 }
 
 export interface BrowserSessionManagerOptions {
@@ -282,6 +307,9 @@ export class PlaywrightSessionManager {
   private readonly explicitCloseSessions = new Set<BrowserSession>();
   private readonly lastExplicitCloseInfo = new WeakMap<BrowserSession, BrowserSessionCloseInfo>();
   private readonly lastKnownBrowserConnected = new WeakMap<BrowserSession, boolean>();
+  private readonly contextLaunchCounts = new Map<string, number>();
+  private readonly canonicalPagePromotionCounts = new Map<string, number>();
+  private readonly lastDisconnectEvidence = new Map<string, { timestamp: string; contextDebugId: string | null; reason: "UNEXPECTED_BROWSER_DISCONNECT" | "EXPLICIT_CLOSE" }>();
   private closeAllGeneration = 0;
   readonly debugId = randomUUID();
 
@@ -411,6 +439,21 @@ export class PlaywrightSessionManager {
       this.credentials.set(toKey, stored);
       this.credentials.delete(fromKey);
     }
+    const launchCount = this.contextLaunchCounts.get(fromKey);
+    if (launchCount !== undefined) {
+      this.contextLaunchCounts.set(toKey, launchCount);
+      this.contextLaunchCounts.delete(fromKey);
+    }
+    const promotionCount = this.canonicalPagePromotionCounts.get(fromKey);
+    if (promotionCount !== undefined) {
+      this.canonicalPagePromotionCounts.set(toKey, promotionCount);
+      this.canonicalPagePromotionCounts.delete(fromKey);
+    }
+    const disconnect = this.lastDisconnectEvidence.get(fromKey);
+    if (disconnect) {
+      this.lastDisconnectEvidence.set(toKey, disconnect);
+      this.lastDisconnectEvidence.delete(fromKey);
+    }
   }
 
   getActiveSession(identity: BrowserSessionIdentity): BrowserSession | null {
@@ -506,6 +549,46 @@ export class PlaywrightSessionManager {
       updatedAt: new Date(0).toISOString(),
       reason: null
     };
+  }
+
+  getSessionSnapshot(identity: BrowserSessionIdentity): BrowserSessionRuntimeSnapshot {
+    const key = browserSessionCredentialKey(identity);
+    const session = this.activeSessions.get(key) ?? null;
+    const runtimeState = this.getRuntimeAuthState(identity);
+    const contextExists = Boolean(session?.context);
+    const canonicalPageExists = Boolean(session?.page);
+    const canonicalPageClosed = session?.page ? this.isPageClosed(session.page) : null;
+    const canonicalPageContextMatchesSession = session?.page ? this.pageContextIdentityMatches(session, session.page) : null;
+    const disconnect = this.lastDisconnectEvidence.get(key);
+    return {
+      platformKey: identity.platformKey,
+      accountId: identity.accountId,
+      sessionExists: session !== null,
+      contextDebugId: session?.contextDebugId ?? runtimeState.contextDebugId ?? null,
+      canonicalPageDebugId: session?.pageDebugId ?? null,
+      browserConnected: session ? this.browserConnected(session.browser) : null,
+      contextExists,
+      contextPageCount: contextExists && session ? this.safePageCount(session.context) : null,
+      canonicalPageExists,
+      canonicalPageClosed,
+      canonicalPageContextMatchesSession,
+      runtimeAuthState: runtimeState.state,
+      contextLaunchCount: this.contextLaunchCounts.get(key) ?? 0,
+      canonicalPagePromotionCount: this.canonicalPagePromotionCounts.get(key) ?? 0,
+      activeOperation: null,
+      mutexLocked: false,
+      operationInProgress: false,
+      lastDisconnectAt: disconnect?.timestamp ?? null,
+      lastDisconnectContextDebugId: disconnect?.contextDebugId ?? null,
+      lastDisconnectReason: disconnect?.reason ?? null
+    };
+  }
+
+  recordCanonicalPagePromotion(identity: BrowserSessionIdentity, session: BrowserSession): void {
+    const key = browserSessionCredentialKey(identity);
+    if (this.activeSessions.get(key) !== session) throw new BrowserSessionPageOwnershipError("BrowserSession/Page lifecycle ownership invariant failed: canonical Page promotion session is not active");
+    assertBrowserSessionPageOwnership(session, session.page);
+    this.canonicalPagePromotionCounts.set(key, (this.canonicalPagePromotionCounts.get(key) ?? 0) + 1);
   }
 
   async screenshot(page: Page, outputPath: string): Promise<string> {
@@ -659,6 +742,8 @@ export class PlaywrightSessionManager {
     const activePageCountBeforeDisconnect = input.phase === "CONTEXT_DISCONNECTED" ? pageCount : null;
     const explicitCloseInProgress = input.phase === "CONTEXT_DISCONNECTED" ? Boolean(session && this.explicitCloseSessions.has(session)) : Boolean(input.closeInfo);
     const lastExplicitCloseReason = session ? this.lastExplicitCloseInfo.get(session)?.reason ?? null : input.closeInfo?.reason ?? null;
+    const disconnectReason = input.phase === "CONTEXT_DISCONNECTED" ? (explicitCloseInProgress ? "EXPLICIT_CLOSE" : "UNEXPECTED_BROWSER_DISCONNECT") : null;
+    const contextLaunchCount = this.contextLaunchCounts.get(browserSessionCredentialKey(input.identity)) ?? 0;
     if (session && browserConnected !== null) this.lastKnownBrowserConnected.set(session, browserConnected);
     if (!this.options.onSessionLifecycle) return;
     try {
@@ -679,7 +764,9 @@ export class PlaywrightSessionManager {
         explicitCloseInProgress,
         lastExplicitCloseReason,
         activePageCountBeforeDisconnect,
-        browserConnectedBeforeEvent
+        browserConnectedBeforeEvent,
+        contextLaunchCount,
+        disconnectReason
       });
     } catch {
       // Diagnostics must never change the browser lifecycle result.
@@ -702,6 +789,12 @@ export class PlaywrightSessionManager {
       if (error instanceof BrowserSessionPageOwnershipError) return false;
       throw error;
     }
+  }
+
+  private pageContextIdentityMatches(session: BrowserSession, page: Page): boolean {
+    const candidate = page as unknown as { context?: () => BrowserContext };
+    if (typeof candidate.context !== "function") return false;
+    try { return candidate.context() === session.context; } catch { return false; }
   }
 
   private isPageClosed(page: Page): boolean {
@@ -757,6 +850,13 @@ export class PlaywrightSessionManager {
     };
     if (typeof candidate.on !== "function") return;
     const listener = (): void => {
+      const key = browserSessionCredentialKey(identity);
+      const explicitCloseInProgress = this.explicitCloseSessions.has(session);
+      this.lastDisconnectEvidence.set(key, {
+        timestamp: new Date().toISOString(),
+        contextDebugId: session.contextDebugId ?? null,
+        reason: explicitCloseInProgress ? "EXPLICIT_CLOSE" : "UNEXPECTED_BROWSER_DISCONNECT"
+      });
       this.emitSessionLifecycle({ phase: "CONTEXT_DISCONNECTED", identity, session, browserConnected: false });
       if (this.explicitCloseSessions.has(session)) return;
       this.handleBrowserDisconnected(identity, session);
@@ -843,9 +943,11 @@ export class PlaywrightSessionManager {
     }
     this.ownedSessions.add(session);
     this.sessionIdentities.set(session, identity);
-    this.activeSessions.set(browserSessionCredentialKey(identity), session);
+    const key = browserSessionCredentialKey(identity);
+    this.activeSessions.set(key, session);
+    this.contextLaunchCounts.set(key, (this.contextLaunchCounts.get(key) ?? 0) + 1);
     this.observeBrowserDisconnect(identity, session);
-    this.updateRuntimeState(browserSessionCredentialKey(identity), "UNVERIFIED", session.contextDebugId ?? null, null);
+    this.updateRuntimeState(key, "UNVERIFIED", session.contextDebugId ?? null, null);
     this.emitSessionLifecycle({ phase: "OPEN_COMPLETED", identity, session, browserConnected: this.browserConnected(session.browser) });
     return session;
   }

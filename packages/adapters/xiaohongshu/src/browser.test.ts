@@ -763,6 +763,18 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(events).toEqual(["a:start", "b:start", "b:finish", "a:finish", "a2:start", "a2:finish"]);
   });
 
+  it("exposes mutex state while one account operation is active", async () => {
+    const mutex = new AccountOperationMutex();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const running = mutex.run("xiaohongshu:snapshot-account", async () => gate, "checkLogin");
+
+    await vi.waitFor(() => expect(mutex.getState("xiaohongshu:snapshot-account")).toMatchObject({ mutexLocked: true, operationInProgress: true, activeOperation: "checkLogin" }));
+    release();
+    await running;
+    expect(mutex.getState("xiaohongshu:snapshot-account")).toMatchObject({ mutexLocked: false, operationInProgress: false, activeOperation: null });
+  });
+
   it("serializes actual XHS checkLogin calls on the shared canonical Page", async () => {
     const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
     installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "账号状态正常"] });

@@ -616,7 +616,9 @@ describe("BrowserSessionManager credential boundary", () => {
       explicitCloseInProgress: false,
       lastExplicitCloseReason: null,
       activePageCountBeforeDisconnect: 1,
-      browserConnectedBeforeEvent: true
+      browserConnectedBeforeEvent: true,
+      contextLaunchCount: 1,
+      disconnectReason: "UNEXPECTED_BROWSER_DISCONNECT"
     });
 
     browserConnected = true;
@@ -821,5 +823,106 @@ describe("BrowserSessionManager credential boundary", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("exposes an in-process canonical session snapshot without creating browser resources", async () => {
+    const page = { isClosed: vi.fn(() => false), url: vi.fn(() => "https://creator.xiaohongshu.com/"), context: vi.fn() };
+    const newPage = vi.fn(async () => page);
+    const context = {
+      setDefaultTimeout: vi.fn(),
+      newPage,
+      pages: vi.fn(() => [page]),
+      close: vi.fn(async () => undefined)
+    } as unknown as BrowserContext;
+    page.context.mockReturnValue(context);
+    const browser = { newContext: vi.fn(async () => context), close: vi.fn(async () => undefined), isConnected: vi.fn(() => true) } as unknown as Browser;
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser: vi.fn(async () => browser) });
+    const identity = { platformKey: "xiaohongshu", accountId: "snapshot-account" };
+    const session = await manager.open(identity, userAction);
+    manager.setRuntimeAuthState(identity, "AUTHENTICATED", "login-complete");
+    manager.recordCanonicalPagePromotion(identity, session);
+
+    const beforeNewPageCalls = newPage.mock.calls.length;
+    const snapshot = manager.getSessionSnapshot(identity);
+
+    expect(snapshot).toMatchObject({
+      platformKey: identity.platformKey,
+      accountId: identity.accountId,
+      sessionExists: true,
+      contextDebugId: session.contextDebugId,
+      canonicalPageDebugId: session.pageDebugId,
+      browserConnected: true,
+      contextExists: true,
+      contextPageCount: 1,
+      canonicalPageExists: true,
+      canonicalPageClosed: false,
+      canonicalPageContextMatchesSession: true,
+      runtimeAuthState: "AUTHENTICATED",
+      contextLaunchCount: 1,
+      canonicalPagePromotionCount: 1
+    });
+    expect(newPage.mock.calls.length).toBe(beforeNewPageCalls);
+    expect(snapshot).not.toHaveProperty("cookies");
+    expect(snapshot).not.toHaveProperty("storageState");
+    expect(snapshot).not.toHaveProperty("token");
+  });
+
+  it("keeps launch count stable when an existing canonical session is reused", async () => {
+    const page = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), context: vi.fn() };
+    const context = { setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => page), pages: vi.fn(() => [page]), close: vi.fn(async () => undefined) } as unknown as BrowserContext;
+    page.context.mockReturnValue(context);
+    const browser = { newContext: vi.fn(async () => context), close: vi.fn(async () => undefined), isConnected: vi.fn(() => true) } as unknown as Browser;
+    const launchBrowser = vi.fn(async () => browser);
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser });
+    const identity = { platformKey: "xiaohongshu", accountId: "reuse-count-account" };
+
+    await manager.open(identity, userAction);
+    await manager.open(identity, userAction);
+
+    expect(launchBrowser).toHaveBeenCalledTimes(1);
+    expect(manager.getSessionSnapshot(identity).contextLaunchCount).toBe(1);
+  });
+
+  it("records an attributed disconnect and clears the live session without inventing identity", async () => {
+    let disconnected: (() => void) | undefined;
+    let browserConnected = true;
+    const page = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), context: vi.fn() };
+    const context = { setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => page), pages: vi.fn(() => [page]), close: vi.fn(async () => undefined) } as unknown as BrowserContext;
+    page.context.mockReturnValue(context);
+    const browser = {
+      newContext: vi.fn(async () => context),
+      close: vi.fn(async () => undefined),
+      isConnected: vi.fn(() => browserConnected),
+      on: vi.fn((event: string, listener: () => void) => { if (event === "disconnected") disconnected = listener; })
+    } as unknown as Browser;
+    const events: BrowserSessionLifecycleEvent[] = [];
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser: vi.fn(async () => browser), onSessionLifecycle: (event) => events.push(event) });
+    const identity = { platformKey: "xiaohongshu", accountId: "disconnect-snapshot-account" };
+    const session = await manager.open(identity, userAction);
+
+    browserConnected = false;
+    disconnected?.();
+
+    expect(events.at(-1)).toMatchObject({ phase: "CONTEXT_DISCONNECTED", platformKey: identity.platformKey, accountId: identity.accountId, contextDebugId: session.contextDebugId });
+    expect(manager.getSessionSnapshot(identity)).toMatchObject({ sessionExists: false, runtimeAuthState: "DISCONNECTED", lastDisconnectContextDebugId: session.contextDebugId, lastDisconnectReason: "UNEXPECTED_BROWSER_DISCONNECT" });
+  });
+
+  it("reports missing and closed canonical Page liveness without cold-opening a session", async () => {
+    const manager = new BrowserSessionManager(new MemoryCredentialStore());
+    const missing = manager.getSessionSnapshot({ platformKey: "xiaohongshu", accountId: "missing-snapshot-account" });
+    expect(missing).toMatchObject({ sessionExists: false, contextExists: false, canonicalPageExists: false, canonicalPageClosed: null, canonicalPageContextMatchesSession: null, runtimeAuthState: "UNVERIFIED", contextLaunchCount: 0 });
+
+    let pageClosed = false;
+    const page = { isClosed: vi.fn(() => pageClosed), url: vi.fn(() => "about:blank"), context: vi.fn() };
+    const context = { setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => page), pages: vi.fn(() => [page]), close: vi.fn(async () => undefined) } as unknown as BrowserContext;
+    const foreignContext = {} as BrowserContext;
+    page.context.mockReturnValue(context);
+    const browser = { newContext: vi.fn(async () => context), close: vi.fn(async () => undefined), isConnected: vi.fn(() => true) } as unknown as Browser;
+    const identity = { platformKey: "xiaohongshu", accountId: "closed-snapshot-account" };
+    const activeManager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser: vi.fn(async () => browser) });
+    await activeManager.open(identity, userAction);
+    pageClosed = true;
+    page.context.mockReturnValue(foreignContext);
+    expect(activeManager.getSessionSnapshot(identity)).toMatchObject({ sessionExists: true, canonicalPageExists: true, canonicalPageClosed: true, canonicalPageContextMatchesSession: false, contextPageCount: 1 });
   });
 });

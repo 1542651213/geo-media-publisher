@@ -8,7 +8,7 @@ import type {
   PublishStatusResult,
   ValidationResult
 } from "@publisher/domain";
-import type { BrowserSessionRuntimeState } from "./browser";
+import type { BrowserSessionRuntimeSnapshot, BrowserSessionRuntimeState } from "./browser";
 import type { PlatformAdapter } from "./index";
 
 export interface AutomationPrepareResult {
@@ -72,6 +72,8 @@ export interface AutomationAdapter extends PlatformAdapter {
   };
   /** Returns the manager-authored runtime auth state for the account-scoped browser session. */
   getBrowserRuntimeState?(ctx: AccountContext): BrowserSessionRuntimeState;
+  /** Returns a read-only in-process snapshot of the account-scoped BrowserSession. */
+  getBrowserRuntimeSnapshot?(ctx: AccountContext): BrowserSessionRuntimeSnapshot;
   /** Releases only browser resources created and owned by this adapter. */
   closeOwnedSessions?(): Promise<void>;
   publishArticle(ctx: AccountContext, article: PublishArticleInput): Promise<PublishResult>;

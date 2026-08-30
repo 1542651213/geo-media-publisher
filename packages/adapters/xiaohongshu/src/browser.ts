@@ -1,6 +1,6 @@
 import type { AccountContext, AccountProfile, LoginSession, LoginStatus, PublishArticleInput, ValidationResult } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
-import { type AutomationPrepareResult, type BrowserSession } from "@publisher/adapters-core";
+import { type AutomationPrepareResult, type BrowserSession, type BrowserSessionRuntimeSnapshot } from "@publisher/adapters-core";
 import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomationAdapterOptions, type BrowserPlatformDefinition, type BrowserSessionScopeEvidence } from "@publisher/adapters-browser";
 import type { Locator, Page } from "playwright-core";
 import { collectXhsAuthStateMetadata, collectXhsPreNavigationAuthStateMetadata, createXhsDiagnosticFingerprintKey, type XhsAuthStateMetadata } from "./auth-state-diagnostics";
@@ -447,19 +447,27 @@ export function classifyXiaohongshuPublishSettings(settings: Array<{ label: stri
 
 export class AccountOperationMutex {
   private readonly tails = new Map<string, Promise<void>>();
+  private readonly activeOperations = new Map<string, string>();
 
-  async run<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  async run<T>(key: string, operation: () => Promise<T>, operationName = "unknown"): Promise<T> {
     const previous = this.tails.get(key) ?? Promise.resolve();
     let release!: () => void;
     const current = new Promise<void>((resolve) => { release = resolve; });
     this.tails.set(key, current);
     await previous;
+    this.activeOperations.set(key, operationName);
     try {
       return await operation();
     } finally {
+      this.activeOperations.delete(key);
       release();
       if (this.tails.get(key) === current) this.tails.delete(key);
     }
+  }
+
+  getState(key: string): { activeOperation: string | null; mutexLocked: boolean; operationInProgress: boolean } {
+    const activeOperation = this.activeOperations.get(key) ?? null;
+    return { activeOperation, mutexLocked: this.tails.has(key), operationInProgress: activeOperation !== null };
   }
 }
 
@@ -506,11 +514,16 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       const state = status === "logged_in" ? "AUTHENTICATED" : status === "unknown" ? "UNVERIFIED" : "NEEDS_USER_ACTION";
       this.sessionManager.setRuntimeAuthState(identity, state, status === "logged_in" ? null : status);
       return status;
-    });
+    }, "checkLogin");
   }
 
   override async openBackend(ctx: AccountContext) {
-    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, () => super.openBackend(ctx));
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, () => super.openBackend(ctx), "openBackend");
+  }
+
+  override getBrowserRuntimeSnapshot(ctx: AccountContext): BrowserSessionRuntimeSnapshot {
+    const key = `${this.platformKey}:${ctx.accountId}`;
+    return { ...super.getBrowserRuntimeSnapshot(ctx), ...this.accountOperationMutex.getState(key) };
   }
 
   async getAccountProfile(ctx: AccountContext): Promise<AccountProfile> {
@@ -529,11 +542,11 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         ...(identity.displayName ? { accountName: identity.displayName } : {}),
         authorizationStatus: "Authorized"
       };
-    });
+    }, "getAccountProfile");
   }
 
   override async preparePublish(ctx: AccountContext, article: PublishArticleInput): Promise<AutomationPrepareResult> {
-    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, () => this.preparePublishOnCanonicalPage(ctx, article));
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, () => this.preparePublishOnCanonicalPage(ctx, article), "preparePublish");
   }
 
   private async preparePublishOnCanonicalPage(ctx: AccountContext, article: PublishArticleInput): Promise<AutomationPrepareResult> {
@@ -637,6 +650,9 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     this.sessionManager.setRuntimeAuthState({ platformKey: this.platformKey, accountId: ctx.accountId }, "AUTHENTICATED", null);
     await this.emitAuthStateDiagnostic(ctx, "AUTH_STATE_BEFORE_CLOSE", null, null, null);
     this.markConnectionComplete({ platformKey: this.platformKey, accountId: ctx.accountId });
+    const manager = this.sessionManager as unknown as { recordCanonicalPagePromotion?: (identity: { platformKey: string; accountId: string }, session: BrowserSession) => void };
+    const session = this.activeBrowserSession(ctx);
+    if (session) manager.recordCanonicalPagePromotion?.({ platformKey: this.platformKey, accountId: ctx.accountId }, session);
     await this.emitConnectionDiagnostic("CANONICAL_AUTHENTICATED_PAGE_PROMOTED", ctx, this.activeBrowserSession(ctx), true, "RETAINED_ACCOUNT_PAGE");
   }
 
