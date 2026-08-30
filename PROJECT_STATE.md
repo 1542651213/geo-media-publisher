@@ -61,7 +61,7 @@ INTENT_CREATED         = NO
 PUBLISH_RECORD_CREATED = NO
 ```
 
-Task 9 retry was not started. The live same-context Check 1/2 remains Owner-controlled and pending; `XIAOHONGSHU_RUNTIME_SESSION_READY = NOT_VERIFIED`, `READY_FOR_REAL_SELF_TEST = NO`, and `TASK9_RETRY_READY = NO` until a later explicit Owner-controlled retry.
+Task 9 retry was not started. The live same-context Check 1/2 remains Owner-controlled and pending; `XIAOHONGSHU_RUNTIME_SESSION_READY = NOT_VERIFIED` and `READY_FOR_REAL_SELF_TEST = NO`. The deployed fix is ready for a later explicit Owner-controlled retry: `TASK9_RETRY_READY = YES`.
 
 ## Task 9 — Xiaohongshu owner-controlled live same-context verification — BLOCKED - 2026-08-30
 
