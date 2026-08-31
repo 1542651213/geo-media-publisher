@@ -87,6 +87,25 @@ describe("BrowserAutomation account creation semantics", () => {
     expect(source).toContain('accounts.completeLogin(pendingLogin.accountId, pendingLogin.platformKey, "")');
   });
 
+  it("exposes a dedicated XHS controlled self-test entry without changing generic self-test", () => {
+    const source = readFileSync("apps/desktop/src/renderer/V11Workspace.tsx", "utf8");
+    expect(source).toContain("首次上传后发现");
+    expect(source).toContain("supportsControlledPostUploadDiscovery");
+    expect(source).toContain("CONTROLLED_SELF_TEST_CONFIRMATION");
+    expect(source).toContain("platformSelfTest.runPostUploadDiscovery(request)");
+    expect(source).toContain("platformSelfTest.runSafe(accountId)");
+  });
+
+  it("uses the same typed controlled mode in both renderer entry points and IPC", () => {
+    const centerSource = readFileSync("apps/desktop/src/renderer/PlatformSelfTestCenter.tsx", "utf8");
+    const apiSource = readFileSync("apps/desktop/src/shared/api.ts", "utf8");
+    const ipcSource = readFileSync("apps/desktop/src/main/ipc.ts", "utf8");
+    expect(centerSource).toContain("platformSelfTest.runPostUploadDiscovery(request)");
+    expect(apiSource).toContain("mode: ControlledSelfTestMode");
+    expect(ipcSource).toContain('mode: z.literal("POST_UPLOAD_DISCOVERY_ONLY")');
+    expect(ipcSource).toContain("runPostUploadDiscovery(input.platformAccountId, input.mode)");
+  });
+
   it("reuses an incomplete container for connect but creates a new account for add", () => {
     const rows = [row("account-connected", "Connected"), row("account-pending", "NeedsLogin")];
     expect(accountConnectionTarget(rows, "connect")).toEqual({ accountId: "account-pending", createAccount: false });

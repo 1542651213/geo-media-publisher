@@ -152,6 +152,7 @@ const definition: BrowserPlatformDefinition = {
     article: true,
     imagePost: true,
     video: false,
+    controlledSelfTestModes: ["POST_UPLOAD_DISCOVERY_ONLY"],
     coverImage: false,
     tags: true,
     categories: false,

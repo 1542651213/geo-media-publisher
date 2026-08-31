@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AppRepository } from "@publisher/db";
-import { isAutomationAdapter, type AdapterRegistry, type AutomationAdapter, type PlatformAdapter, type UserInitiatedAction } from "@publisher/adapters-core";
+import { isAutomationAdapter, type AdapterRegistry, type AutomationAdapter, type ControlledSelfTestMode, type PlatformAdapter, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { AutomationPrepareResult, ControlledPostUploadDiscoveryResult } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
 import type { PublisherService } from "@publisher/publisher";
@@ -121,6 +121,8 @@ function selfTestError(error: unknown): { result: PlatformSelfTestResult; errorC
 }
 
 export class PlatformSelfTestService {
+  private readonly controlledOperations = new Set<string>();
+
   constructor(private readonly options: PlatformSelfTestServiceOptions) {}
 
   listAccounts(): PlatformSelfTestAccountView[] {
@@ -150,24 +152,31 @@ export class PlatformSelfTestService {
    * PlatformSelfTestRun, Job, SubmissionIntent, or PublishRecord. The XHS
    * adapter owns the browser/mutex lifecycle and stops before content fill.
    */
-  async runPostUploadDiscovery(platformAccountId: string): Promise<ControlledPostUploadDiscoveryResult> {
+  async runPostUploadDiscovery(platformAccountId: string, mode: ControlledSelfTestMode): Promise<ControlledPostUploadDiscoveryResult> {
     const account = this.options.repository.listAccounts().find((item) => (item.platformAccountId ?? item.id) === platformAccountId && item.platformKey === "xiaohongshu");
-    if (!account) throw new Error("小红书受控上传自测账号不存在");
+    if (!account || !account.enabled || account.archivedAt) throw new Error("小红书受控上传自测账号不可用");
+    if (mode !== "POST_UPLOAD_DISCOVERY_ONLY") throw new Error("不支持的受控自测模式");
+    if (this.controlledOperations.has(account.id)) throw new Error("CONTROLLED_SELF_TEST_ALREADY_RUNNING");
     const adapter = this.options.registry.getForContent("xiaohongshu", "article");
     if (!isAutomationAdapter(adapter) || typeof adapter.runControlledPostUploadDiscovery !== "function") throw new Error("当前小红书 Adapter 未提供受控上传后发现能力");
     const operationId = randomUUID();
-    const context: AccountContext = {
-      accountId: account.id,
-      accountName: account.accountAlias || account.name,
-      platformKey: "xiaohongshu",
-      settings: { userActionId: operationId, triggerSource: "RUN_SELF_TEST", browserExecutionMode: "VISIBLE" },
-      secrets: this.options.resolveAccountSecrets(account.id, account.platformKey)
-    };
-    const imagePath = safeSelfTestImagePath();
-    this.options.logger?.info("PLATFORM_SELF_TEST", "CONTROLLED_POST_UPLOAD_DISCOVERY_STARTED", "开始小红书受控首次上传后发现；仅使用安全测试夹具，不创建发布域记录", { platformKey: "xiaohongshu", platformAccountId, mode: "POST_UPLOAD_DISCOVERY_ONLY", imageSource: "SAFE_TEST_FIXTURE" });
-    const result = await adapter.runControlledPostUploadDiscovery(context, { imagePath, imageSource: "SAFE_TEST_FIXTURE" });
-    this.options.logger?.info("PLATFORM_SELF_TEST", "CONTROLLED_POST_UPLOAD_DISCOVERY_COMPLETED", "小红书受控首次上传后发现已停止在标题/正文/最终发布之前", { platformKey: "xiaohongshu", platformAccountId, mode: result.mode, status: result.status, operationId: result.operationId, uploadMutationCount: result.uploadMutationCount, contentMutationCount: result.contentMutationCount, finalSubmitCount: result.finalSubmitCount });
-    return result;
+    this.controlledOperations.add(account.id);
+    try {
+      const context: AccountContext = {
+        accountId: account.id,
+        accountName: account.accountAlias || account.name,
+        platformKey: "xiaohongshu",
+        settings: { userActionId: operationId, triggerSource: "CONTROLLED_SELF_TEST", controlledSelfTestMode: mode, browserExecutionMode: "VISIBLE" },
+        secrets: this.options.resolveAccountSecrets(account.id, account.platformKey)
+      };
+      const imagePath = safeSelfTestImagePath();
+      this.options.logger?.info("PLATFORM_SELF_TEST", "CONTROLLED_POST_UPLOAD_DISCOVERY_STARTED", "开始小红书受控首次上传后发现；仅使用安全测试夹具，不创建发布域记录", { platformKey: "xiaohongshu", platformAccountId, mode, imageSource: "SAFE_TEST_FIXTURE" });
+      const result = await adapter.runControlledPostUploadDiscovery(context, { imagePath, imageSource: "SAFE_TEST_FIXTURE" });
+      this.options.logger?.info("PLATFORM_SELF_TEST", "CONTROLLED_POST_UPLOAD_DISCOVERY_COMPLETED", "小红书受控首次上传后发现已停止在标题/正文/最终发布之前", { platformKey: "xiaohongshu", platformAccountId, mode: result.mode, status: result.status, operationId: result.operationId, uploadMutationCount: result.uploadMutationCount, contentMutationCount: result.contentMutationCount, finalSubmitCount: result.finalSubmitCount });
+      return result;
+    } finally {
+      this.controlledOperations.delete(account.id);
+    }
   }
 
   async continue(testRunId: string): Promise<PlatformSelfTestRun> {

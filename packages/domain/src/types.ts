@@ -559,6 +559,8 @@ export interface PlatformCapabilities {
   article: boolean;
   imagePost: boolean;
   video: boolean;
+  /** Explicit, typed entry modes exposed by the platform UI. */
+  controlledSelfTestModes?: string[];
   coverImage: boolean;
   tags: boolean;
   categories: boolean;
