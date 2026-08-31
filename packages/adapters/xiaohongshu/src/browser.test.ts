@@ -196,6 +196,13 @@ function setupPage(options: FixtureOptions = {}): Fixture {
     getAttribute: vi.fn(async (name: string) => name === "data-testid" ? "publish-entry" : name === "aria-label" ? "发布" : null),
     click: vi.fn(async () => { if (options.publishEntryClickFails) throw new Error("publish entry click failed"); contentTypeShown = true; calls.push("publish-entry-click"); })
   });
+  const publishEntryCandidates = {
+    count: vi.fn(async () => {
+      if (!(currentUrl.endsWith("/") || currentUrl.endsWith("/new/home"))) return 0;
+      return options.publishEntryMode === "generic-publish" ? options.publishEntryCount ?? 1 : options.entryCount ?? 1;
+    }),
+    nth: vi.fn((_index: number) => options.publishEntryMode === "generic-publish" ? publishEntry : entry)
+  } as unknown as Locator;
   const contentTypeEntry = locator({
     count: vi.fn(async () => contentTypeShown ? options.contentTypeEntryCount ?? 1 : 0),
     innerText: vi.fn(async () => "图文"),
@@ -279,6 +286,10 @@ function setupPage(options: FixtureOptions = {}): Fixture {
       locator: vi.fn((selector: string) => {
         currentUrl = pageUrl;
         if (selector === "body") return pageRoot;
+        if (selector === 'a, button, [role="button"]') {
+          setActivePageUrl = (url: string) => { pageUrl = url; currentUrl = url; };
+          return publishEntryCandidates;
+        }
         if (selector === "a[href]") return profile;
         if (selector.includes("data-testid*='publish'") || selector.includes('data-testid*="publish"')) return publishEntry;
         if (selector.includes("content-type-image")) return contentTypeEntry;
@@ -1226,12 +1237,27 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
       status: "editor_not_found",
       failureCode: "PUBLISH_ENTRY_NOT_FOUND",
       failureStage: "PUBLISH_ENTRY_DISCOVERY",
-      missingSignal: expect.stringContaining("/publish/publish")
+      missingSignal: "publish-entry-semantic-candidate"
     });
     expect(diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: "EDITOR_ENTRY_STARTED", operationId: expect.any(String) }),
-      expect.objectContaining({ code: "EDITOR_ENTRY_STEP", stepName: "PUBLISH_ENTRY_FOUND", success: false })
+      expect.objectContaining({ code: "EDITOR_ENTRY_STEP", stepName: "PUBLISH_ENTRY_FOUND", success: false }),
+      expect.objectContaining({ code: "PUBLISH_ENTRY_CANDIDATES_OBSERVED", operationId: expect.any(String), candidateCount: expect.any(Number), candidates: expect.any(Array) })
     ]));
+    const entryStarted = diagnostics.find((diagnostic) => diagnostic.code === "EDITOR_ENTRY_STARTED");
+    const candidatesObserved = diagnostics.find((diagnostic) => diagnostic.code === "PUBLISH_ENTRY_CANDIDATES_OBSERVED");
+    expect(candidatesObserved).toMatchObject({ operationId: entryStarted?.operationId, platformKey: "xiaohongshu", accountId: "account-a", sanitizedUrl: "https://creator.xiaohongshu.com/" });
+    expect(fixture.entryClick).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on multiple publish-entry candidates without clicking either candidate", async () => {
+    const fixture = setupPage({ entryCount: 2 });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    await expect(adapter.inspectPublishEditor(ctx)).resolves.toMatchObject({ status: "editor_not_found", failureCode: "PUBLISH_ENTRY_AMBIGUOUS", failureStage: "PUBLISH_ENTRY_DISCOVERY", missingSignal: "multiple-equivalent-candidates" });
     expect(fixture.entryClick).not.toHaveBeenCalled();
   });
 
@@ -1475,7 +1501,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     await expect(notReachedAdapter.inspectPublishEditor(notReachedContext)).resolves.toMatchObject({ failureCode: "EDITOR_ROUTE_NOT_REACHED", failureStage: "EDITOR_ROUTE", missingSignal: "url:/publish/publish" });
   });
 
-  it("keeps UNKNOWN_UI_STATE as the final fallback for an unexpected editor-entry exception", async () => {
+  it("classifies a candidate inventory exception separately from the final unknown fallback", async () => {
     const fixture = setupPage();
     installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
@@ -1483,7 +1509,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     await adapter.connectAccount(ctx);
     fixture.page.locator = vi.fn(() => { throw new Error("unexpected selector failure"); }) as unknown as Page["locator"];
 
-    await expect(adapter.inspectPublishEditor(ctx)).resolves.toMatchObject({ status: "needs_user_action", failureCode: "UNKNOWN_UI_STATE", failureStage: "EDITOR_NAVIGATION", missingSignal: null });
+    await expect(adapter.inspectPublishEditor(ctx)).resolves.toMatchObject({ status: "editor_not_found", failureCode: "PUBLISH_ENTRY_DIAGNOSTIC_FAILED", failureStage: "PUBLISH_ENTRY_DISCOVERY", missingSignal: "publish-entry-candidate-inventory" });
   });
 
   it("returns auth-expired without entering the editor when the canonical Page is on login", async () => {

@@ -9,7 +9,8 @@ import { XhsNavigationDiagnosticsTracker, type XhsNavigationClassification } fro
 const XIAOHONGSHU_CREATOR_HOME = "https://creator.xiaohongshu.com/";
 const XIAOHONGSHU_IMAGE_POST_ENTRY_SELECTOR = 'a[href*="/publish/publish"]';
 const XIAOHONGSHU_VIDEO_POST_ENTRY_SELECTOR = 'a[href*="/publish/video"]';
-const XIAOHONGSHU_PUBLISH_ENTRY_SELECTOR = 'button[data-testid*="publish" i], [role="button"][data-testid*="publish" i], a[data-testid*="publish" i]';
+const XIAOHONGSHU_PUBLISH_ENTRY_CANDIDATE_SELECTOR = 'a, button, [role="button"]';
+const XIAOHONGSHU_PUBLISH_ENTRY_CANDIDATE_MAX = 20;
 const XIAOHONGSHU_CONTENT_TYPE_ENTRY_SELECTOR = 'button[data-testid*="content-type-image" i], [role="button"][data-testid*="content-type-image" i], a[data-testid*="content-type-image" i]';
 const XIAOHONGSHU_FILE_SELECTOR = 'input[type="file"]';
 const XIAOHONGSHU_PREVIEW_SELECTOR = 'img[class*="preview" i], img[src*="xhscdn" i], [class*="preview" i], [data-testid*="upload-result" i], [class*="uploaded" i]';
@@ -22,7 +23,6 @@ const XIAOHONGSHU_SETTINGS_SELECTOR = 'input[type="checkbox"], input[type="radio
 const XIAOHONGSHU_FINAL_SUBMIT_SELECTOR = 'button, [role="button"]';
 const XIAOHONGSHU_IMAGE_POST_PATTERN = /图文|笔记|image\s*post|image|note/iu;
 const XIAOHONGSHU_VIDEO_PATTERN = /视频|video/iu;
-const XIAOHONGSHU_PUBLISH_MENU_PATTERN = /^(?:发布|发布内容|创建笔记|create(?:\s+post)?|post)$/iu;
 const XIAOHONGSHU_FINAL_SUBMIT_PATTERN = /发布(笔记|图文)?|提交|发表|publish|submit/iu;
 const DEFAULT_LOGIN_STABILITY_WINDOW_MS = 4000;
 const LOGIN_STABILITY_SAMPLE_INTERVAL_MS = 250;
@@ -190,7 +190,7 @@ export type XiaohongshuEditorEntryStepName =
 export type XiaohongshuEditorNavigationTrigger = "DIRECT_GOTO" | "PUBLISH_ENTRY_CLICK" | "CONTENT_TYPE_CLICK" | "PLATFORM_REDIRECT" | "UNKNOWN";
 
 export interface XiaohongshuEditorEntryDiagnostic {
-  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED";
+  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED";
   timestamp: string;
   operationId: string;
   platformKey: "xiaohongshu";
@@ -222,7 +222,58 @@ export interface XiaohongshuEditorEntryDiagnostic {
   failureStage?: PreSubmitGateFailureStage;
   missingSignal?: string | null;
   lastCompletedStep?: XiaohongshuEditorEntryStepName | null;
+  sanitizedUrl?: string;
+  candidateCount?: number;
+  candidates?: XiaohongshuPublishEntryCandidateIdentity[];
+  candidateInventoryTruncated?: boolean;
 }
+
+export type XiaohongshuPublishEntryDiscoveryStrategy = "STABLE_HREF" | "STABLE_DATA_ATTRIBUTE" | "ROLE_EXACT_NAME" | "ARIA_LABEL_OR_TITLE" | "SCOPED_EXACT_TEXT";
+
+export type XiaohongshuPublishEntryResolutionStatus = "FOUND_UNIQUE" | "PUBLISH_ENTRY_AMBIGUOUS" | "PUBLISH_ENTRY_NOT_VISIBLE" | "PUBLISH_ENTRY_DISABLED" | "PUBLISH_ENTRY_NOT_FOUND";
+
+export interface XiaohongshuPublishEntryCandidateIdentity {
+  index: number;
+  tagName: string;
+  role: string | null;
+  normalizedVisibleText: string;
+  sanitizedHref: string | null;
+  ariaLabel: string | null;
+  title: string | null;
+  dataAttributes: Record<string, string>;
+  visible: boolean;
+  enabled: boolean;
+}
+
+export interface XiaohongshuPublishEntryCandidate extends XiaohongshuPublishEntryCandidateIdentity {
+  locator: Locator;
+}
+
+export interface XiaohongshuPublishEntryCandidateSnapshot {
+  candidates: readonly XiaohongshuPublishEntryCandidate[];
+  scannedControlCount: number;
+  truncated: boolean;
+}
+
+export type XiaohongshuPublishEntryDiscoveryResult =
+  | {
+    status: "FOUND_UNIQUE";
+    strategy: XiaohongshuPublishEntryDiscoveryStrategy;
+    selectorSignal: string;
+    candidateIdentity: XiaohongshuPublishEntryCandidateIdentity;
+    candidate: XiaohongshuPublishEntryCandidate;
+    requiresContentTypeSelection: boolean;
+  }
+  | {
+    status: Exclude<XiaohongshuPublishEntryResolutionStatus, "FOUND_UNIQUE">;
+    strategy?: XiaohongshuPublishEntryDiscoveryStrategy;
+    selectorSignal?: string;
+    candidateIdentity?: XiaohongshuPublishEntryCandidateIdentity;
+    failureCode: PreSubmitGateFailureCode;
+    failureStage: "PUBLISH_ENTRY_DISCOVERY";
+    missingSignal: string;
+    candidates: readonly XiaohongshuPublishEntryCandidate[];
+  };
 
 export type XiaohongshuAuthStateDiagnosticPhase = "LIVE_LOGIN_BEFORE_CLOSE" | "AUTH_STATE_BEFORE_CLOSE";
 
@@ -374,6 +425,222 @@ export function normalizeXiaohongshuEditorText(value: string): string {
     return (code === 0x0a || code === 0x0d) || (code > 0x1f && code !== 0x7f && code !== 0xad && code !== 0x200b && code !== 0x200c && code !== 0x200d && code !== 0x2060 && code !== 0xfeff);
   }).join("");
   return stripped.replaceAll("\r\n", "\n").replaceAll("\r", "\n").replace(/[ ]+/gu, " ").trim();
+}
+
+const XIAOHONGSHU_PUBLISH_ENTRY_LABELS = new Set([
+  "发布笔记",
+  "发布图文",
+  "上传图文",
+  "上传笔记",
+  "发笔记",
+  "图文笔记",
+  "image post",
+  "create post",
+  "create note"
+]);
+const XIAOHONGSHU_PUBLISH_ENTRY_INVENTORY_PATTERN = /发布|图文|笔记|上传|publish|post|note/iu;
+const XIAOHONGSHU_STABLE_PUBLISH_DATA_PATTERN = /(?:publish[-_: ]?(?:entry|post|note)|post[-_: ]?entry|note[-_: ]?entry|image[-_: ]?(?:post|entry)|upload[-_: ]?image)/iu;
+const XIAOHONGSHU_PUBLISH_ENTRY_DATA_ATTRIBUTES = ["data-testid", "data-test", "data-action", "data-qa", "data-cy"] as const;
+
+function boundedPublishEntryText(value: string): string {
+  return normalizeXiaohongshuEditorText(value).slice(0, 120);
+}
+
+function sanitizedPublishEntryHref(value: string): string | null {
+  if (!value) return null;
+  try {
+    const parsed = new URL(value, XIAOHONGSHU_CREATOR_HOME);
+    if (parsed.hostname !== "creator.xiaohongshu.com") return null;
+    return parsed.pathname || "/";
+  } catch {
+    return null;
+  }
+}
+
+async function tagName(locator: Locator): Promise<string> {
+  const candidate = locator as unknown as { evaluate?: (pageFunction: (element: unknown) => unknown) => Promise<unknown> };
+  if (typeof candidate.evaluate !== "function") return "UNKNOWN";
+  try {
+    const value = await candidate.evaluate((element) => {
+      if (element && typeof element === "object" && "tagName" in element) return (element as { tagName?: unknown }).tagName;
+      return null;
+    });
+    if (typeof value === "string" && value.trim()) return value.trim().toUpperCase();
+    if (value && typeof value === "object" && "tagName" in value) {
+      const nested = (value as { tagName?: unknown }).tagName;
+      if (typeof nested === "string" && nested.trim()) return nested.trim().toUpperCase();
+    }
+  } catch {
+    // Candidate diagnostics are best-effort and must not affect the Gate result.
+  }
+  return "UNKNOWN";
+}
+
+function normalizedCandidateRole(tag: string, explicitRole: string): string | null {
+  const role = explicitRole.trim().toLowerCase();
+  if (role) return role;
+  if (tag === "BUTTON") return "button";
+  if (tag === "A") return "link";
+  return null;
+}
+
+function exactPublishEntryLabel(value: string): boolean {
+  return XIAOHONGSHU_PUBLISH_ENTRY_LABELS.has(value.toLowerCase());
+}
+
+function stablePublishDataAttribute(candidate: XiaohongshuPublishEntryCandidate): [string, string] | null {
+  for (const name of XIAOHONGSHU_PUBLISH_ENTRY_DATA_ATTRIBUTES) {
+    const value = candidate.dataAttributes[name] ?? "";
+    if (value && XIAOHONGSHU_STABLE_PUBLISH_DATA_PATTERN.test(value)) return [name, value];
+  }
+  return null;
+}
+
+function hasStablePublishHref(candidate: XiaohongshuPublishEntryCandidate): boolean {
+  return candidate.sanitizedHref === "/publish/publish";
+}
+
+function isPublishEntryInventoryCandidate(candidate: XiaohongshuPublishEntryCandidate): boolean {
+  const data = Object.values(candidate.dataAttributes).join(" ");
+  const signals = [candidate.sanitizedHref ?? "", candidate.normalizedVisibleText, candidate.ariaLabel ?? "", candidate.title ?? "", data];
+  return signals.some((signal) => XIAOHONGSHU_PUBLISH_ENTRY_INVENTORY_PATTERN.test(signal)) || hasStablePublishHref(candidate) || Boolean(stablePublishDataAttribute(candidate));
+}
+
+function candidateAccessibleText(candidate: XiaohongshuPublishEntryCandidate): string {
+  return boundedPublishEntryText(candidate.ariaLabel ?? candidate.normalizedVisibleText);
+}
+
+function directImagePostSemantic(candidate: XiaohongshuPublishEntryCandidate): boolean {
+  const label = candidateAccessibleText(candidate).toLowerCase();
+  return /(?:发布笔记|发布图文|上传图文|上传笔记|发笔记|图文笔记|image\s+post|create\s+note)/iu.test(label);
+}
+
+function candidateIdentity(candidate: XiaohongshuPublishEntryCandidate): XiaohongshuPublishEntryCandidateIdentity {
+  const { locator: _locator, ...identity } = candidate;
+  return { ...identity, dataAttributes: { ...identity.dataAttributes } };
+}
+
+function publishEntryFailure(
+  status: Exclude<XiaohongshuPublishEntryResolutionStatus, "FOUND_UNIQUE">,
+  candidates: readonly XiaohongshuPublishEntryCandidate[],
+  strategy?: XiaohongshuPublishEntryDiscoveryStrategy,
+  selectorSignal?: string,
+  candidate?: XiaohongshuPublishEntryCandidate,
+  missingSignal = "publish-entry-semantic-candidate"
+): XiaohongshuPublishEntryDiscoveryResult {
+  return {
+    status,
+    ...(strategy ? { strategy } : {}),
+    ...(selectorSignal ? { selectorSignal } : {}),
+    ...(candidate ? { candidateIdentity: candidateIdentity(candidate) } : {}),
+    failureCode: status,
+    failureStage: "PUBLISH_ENTRY_DISCOVERY",
+    missingSignal,
+    candidates: candidates.map((item) => item)
+  };
+}
+
+function resolvePublishEntryPriority(
+  candidates: readonly XiaohongshuPublishEntryCandidate[],
+  strategy: XiaohongshuPublishEntryDiscoveryStrategy,
+  matches: XiaohongshuPublishEntryCandidate[],
+  selectorFor: (candidate: XiaohongshuPublishEntryCandidate) => string,
+  requiresContentTypeSelection: (candidate: XiaohongshuPublishEntryCandidate) => boolean
+): XiaohongshuPublishEntryDiscoveryResult | null {
+  if (matches.length === 0) return null;
+  if (matches.length > 1) {
+    return publishEntryFailure("PUBLISH_ENTRY_AMBIGUOUS", candidates, strategy, "multiple-equivalent-candidates", undefined, "multiple-equivalent-candidates");
+  }
+  const candidate = matches[0]!;
+  const selectorSignal = selectorFor(candidate);
+  if (!candidate.visible) return publishEntryFailure("PUBLISH_ENTRY_NOT_VISIBLE", candidates, strategy, selectorSignal, candidate, selectorSignal);
+  if (!candidate.enabled) return publishEntryFailure("PUBLISH_ENTRY_DISABLED", candidates, strategy, selectorSignal, candidate, selectorSignal);
+  return {
+    status: "FOUND_UNIQUE",
+    strategy,
+    selectorSignal,
+    candidateIdentity: candidateIdentity(candidate),
+    candidate,
+    requiresContentTypeSelection: requiresContentTypeSelection(candidate)
+  };
+}
+
+/** Read-only, bounded snapshot of publish-semantic controls. The snapshot retains the Locator only for the subsequent safe click. */
+export async function collectPublishEntryCandidates(page: Page): Promise<XiaohongshuPublishEntryCandidateSnapshot> {
+  const controls = page.locator(XIAOHONGSHU_PUBLISH_ENTRY_CANDIDATE_SELECTOR);
+  const controlCount = await locatorCount(controls);
+  const candidates: XiaohongshuPublishEntryCandidate[] = [];
+  for (let index = 0; index < controlCount; index += 1) {
+    const locator = locatorAt(controls, index);
+    const tag = await tagName(locator);
+    const role = normalizedCandidateRole(tag, await attribute(locator, "role"));
+    const visibleText = boundedPublishEntryText(await innerText(locator));
+    const href = sanitizedPublishEntryHref(await attribute(locator, "href"));
+    const ariaLabel = boundedPublishEntryText(await attribute(locator, "aria-label")) || null;
+    const title = boundedPublishEntryText(await attribute(locator, "title")) || null;
+    const dataAttributes: Record<string, string> = {};
+    for (const name of XIAOHONGSHU_PUBLISH_ENTRY_DATA_ATTRIBUTES) {
+      const value = boundedPublishEntryText(await attribute(locator, name));
+      if (value) dataAttributes[name] = value;
+    }
+    const candidate: XiaohongshuPublishEntryCandidate = {
+      index,
+      tagName: tag,
+      role,
+      normalizedVisibleText: visibleText,
+      sanitizedHref: href,
+      ariaLabel,
+      title,
+      dataAttributes,
+      visible: await isVisible(locator),
+      enabled: await isEnabled(locator),
+      locator
+    };
+    const semanticLabel = candidateAccessibleText(candidate);
+    if (isPublishEntryInventoryCandidate(candidate) || exactPublishEntryLabel(semanticLabel) || exactPublishEntryLabel(visibleText)) {
+      candidates.push(candidate);
+    }
+  }
+  return {
+    candidates: candidates.slice(0, XIAOHONGSHU_PUBLISH_ENTRY_CANDIDATE_MAX),
+    scannedControlCount: controlCount,
+    truncated: candidates.length > XIAOHONGSHU_PUBLISH_ENTRY_CANDIDATE_MAX
+  };
+}
+
+/** Resolve only from the supplied snapshot; this function never scans the Page or clicks a Locator. */
+export function findPublishEntry(snapshot: XiaohongshuPublishEntryCandidateSnapshot): XiaohongshuPublishEntryDiscoveryResult {
+  const candidates = snapshot.candidates;
+  if (snapshot.truncated) return publishEntryFailure("PUBLISH_ENTRY_AMBIGUOUS", candidates, undefined, "candidate-inventory-truncated", undefined, "candidate-inventory-truncated");
+
+  const stableMatches = candidates.filter((candidate) => hasStablePublishHref(candidate) || stablePublishDataAttribute(candidate));
+  if (stableMatches.length > 1) return publishEntryFailure("PUBLISH_ENTRY_AMBIGUOUS", candidates, undefined, undefined, undefined, "multiple-equivalent-candidates");
+  if (stableMatches.length === 1) {
+    const candidate = stableMatches[0]!;
+    const hasHref = hasStablePublishHref(candidate);
+    const data = stablePublishDataAttribute(candidate);
+    const strategy: XiaohongshuPublishEntryDiscoveryStrategy = hasHref ? "STABLE_HREF" : "STABLE_DATA_ATTRIBUTE";
+    const selectorSignal = hasHref ? `href:${candidate.sanitizedHref}` : `${data![0]}=${data![1]}`;
+    const stableResult = resolvePublishEntryPriority(candidates, strategy, [candidate], () => selectorSignal, () => !hasHref);
+    if (stableResult) return stableResult;
+  }
+
+  const roleMatches = candidates.filter((candidate) => (candidate.role === "button") && exactPublishEntryLabel(candidate.normalizedVisibleText));
+  const roleResult = resolvePublishEntryPriority(candidates, "ROLE_EXACT_NAME", roleMatches, (candidate) => `role=button,name=${candidate.normalizedVisibleText}`, directImagePostSemantic);
+  if (roleResult) return roleResult;
+
+  const ariaTitleMatches = candidates.filter((candidate) => {
+    const signal = candidate.ariaLabel ?? candidate.title ?? "";
+    return Boolean(signal) && exactPublishEntryLabel(signal) && !(candidate.role === "button" && exactPublishEntryLabel(candidate.normalizedVisibleText));
+  });
+  const ariaTitleResult = resolvePublishEntryPriority(candidates, "ARIA_LABEL_OR_TITLE", ariaTitleMatches, (candidate) => candidate.ariaLabel ? `aria-label=${candidate.ariaLabel}` : `title=${candidate.title}`, directImagePostSemantic);
+  if (ariaTitleResult) return ariaTitleResult;
+
+  const scopedTextMatches = candidates.filter((candidate) => exactPublishEntryLabel(candidate.normalizedVisibleText) && candidate.role !== "button");
+  const scopedTextResult = resolvePublishEntryPriority(candidates, "SCOPED_EXACT_TEXT", scopedTextMatches, (candidate) => `text=${candidate.normalizedVisibleText}`, directImagePostSemantic);
+  if (scopedTextResult) return scopedTextResult;
+
+  return publishEntryFailure("PUBLISH_ENTRY_NOT_FOUND", candidates);
 }
 
 function stableExternalAccountId(href: string): string | null {
@@ -1317,7 +1584,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const failure = this.failureDetailsForError(error);
     if (failure.failureCode === "AUTH_REDIRECTED_TO_LOGIN") return "auth_expired";
     if (failure.failureCode === "SECURITY_VERIFICATION_REQUIRED") return "security_verification_required";
-    if (failure.failureCode === "PUBLISH_ENTRY_NOT_FOUND" || failure.failureCode === "CONTENT_TYPE_ENTRY_NOT_FOUND" || failure.failureCode === "CONTENT_TYPE_SELECTION_FAILED" || failure.failureCode === "EDITOR_SELECTOR_DRIFT") return "editor_not_found";
+    if (failure.failureCode === "PUBLISH_ENTRY_NOT_FOUND" || failure.failureCode === "PUBLISH_ENTRY_AMBIGUOUS" || failure.failureCode === "PUBLISH_ENTRY_NOT_VISIBLE" || failure.failureCode === "PUBLISH_ENTRY_DISABLED" || failure.failureCode === "PUBLISH_ENTRY_DIAGNOSTIC_FAILED" || failure.failureCode === "CONTENT_TYPE_ENTRY_NOT_FOUND" || failure.failureCode === "CONTENT_TYPE_SELECTION_FAILED" || failure.failureCode === "EDITOR_SELECTOR_DRIFT") return "editor_not_found";
     if (failure.failureCode !== "UNKNOWN_UI_STATE") return "needs_user_action";
     if (error instanceof XiaohongshuGateError) {
       if (error.gateCode === "LOGIN_REQUIRED") return "auth_expired";
@@ -1468,7 +1735,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
 
     let entry: { locator: Locator; selectorSignal: string; requiresContentTypeSelection: boolean };
     try {
-      entry = await this.discoverPublishEntry(page);
+      entry = await this.discoverPublishEntry(page, operationId, accountId);
       this.emitEditorEntryStep(page, operationId, accountId, startedAt, "PUBLISH_ENTRY_FOUND", true, entry.selectorSignal);
     } catch (error) {
       const failure = this.failureDetailsForError(error);
@@ -1530,31 +1797,43 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "图文入口点击后未到达 /publish/publish 编辑器路由", { failureCode: "EDITOR_ROUTE_NOT_REACHED", failureStage: "EDITOR_ROUTE", missingSignal: "url:/publish/publish" });
   }
 
-  private async discoverPublishEntry(page: Page): Promise<{ locator: Locator; selectorSignal: string; requiresContentTypeSelection: boolean }> {
-    const direct = page.locator(XIAOHONGSHU_IMAGE_POST_ENTRY_SELECTOR);
-    const directCount = await locatorCount(direct);
-    if (directCount === 1 && await isVisible(direct) && await isEnabled(direct)) return { locator: direct, selectorSignal: XIAOHONGSHU_IMAGE_POST_ENTRY_SELECTOR, requiresContentTypeSelection: false };
-
-    const publishMenu = page.locator(XIAOHONGSHU_PUBLISH_ENTRY_SELECTOR);
-    const publishMenuCount = await locatorCount(publishMenu);
-    if (publishMenuCount === 1 && await isVisible(publishMenu) && await isEnabled(publishMenu)) return { locator: publishMenu, selectorSignal: XIAOHONGSHU_PUBLISH_ENTRY_SELECTOR, requiresContentTypeSelection: true };
-
-    const videoEntry = page.locator(XIAOHONGSHU_VIDEO_POST_ENTRY_SELECTOR);
-    const videoCount = await locatorCount(videoEntry);
-    const generic = page.locator("button, [role=\"button\"], a");
-    const imageMatches: Locator[] = [];
-    const publishMatches: Locator[] = [];
-    for (let index = 0; index < await locatorCount(generic); index += 1) {
-      const candidate = locatorAt(generic, index);
-      if (!(await isVisible(candidate)) || !(await isEnabled(candidate))) continue;
-      const label = normalizeXiaohongshuEditorText((await innerText(candidate)) || (await attribute(candidate, "aria-label")) || (await attribute(candidate, "title")));
-      if (XIAOHONGSHU_IMAGE_POST_PATTERN.test(label) && !XIAOHONGSHU_VIDEO_PATTERN.test(label)) imageMatches.push(candidate);
-      else if (XIAOHONGSHU_PUBLISH_MENU_PATTERN.test(label) && !XIAOHONGSHU_VIDEO_PATTERN.test(label)) publishMatches.push(candidate);
+  private async discoverPublishEntry(page: Page, operationId: string, accountId: string): Promise<{ locator: Locator; selectorSignal: string; requiresContentTypeSelection: boolean }> {
+    let snapshot: XiaohongshuPublishEntryCandidateSnapshot;
+    try {
+      snapshot = await collectPublishEntryCandidates(page);
+      this.emitEditorEntryDiagnostic({
+        code: "PUBLISH_ENTRY_CANDIDATES_OBSERVED",
+        timestamp: new Date().toISOString(),
+        operationId,
+        platformKey: "xiaohongshu",
+        accountId,
+        sanitizedUrl: sanitizePageUrl(page),
+        candidateCount: snapshot.candidates.length,
+        candidates: snapshot.candidates.map(candidateIdentity),
+        candidateInventoryTruncated: snapshot.truncated
+      });
+    } catch (error) {
+      this.emitEditorEntryDiagnostic({
+        code: "PUBLISH_ENTRY_CANDIDATES_OBSERVED",
+        timestamp: new Date().toISOString(),
+        operationId,
+        platformKey: "xiaohongshu",
+        accountId,
+        sanitizedUrl: sanitizePageUrl(page),
+        candidateCount: 0,
+        candidates: [],
+        failureCode: "PUBLISH_ENTRY_DIAGNOSTIC_FAILED",
+        failureStage: "PUBLISH_ENTRY_DISCOVERY",
+        missingSignal: "publish-entry-candidate-inventory"
+      });
+      throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", `发布入口候选诊断失败：${error instanceof Error ? error.message : String(error)}`, { failureCode: "PUBLISH_ENTRY_DIAGNOSTIC_FAILED", failureStage: "PUBLISH_ENTRY_DISCOVERY", missingSignal: "publish-entry-candidate-inventory" });
     }
-    if (imageMatches.length === 1) return { locator: imageMatches[0]!, selectorSignal: "semantic:IMAGE_TEXT_PUBLISH_ENTRY", requiresContentTypeSelection: false };
-    if (publishMatches.length === 1) return { locator: publishMatches[0]!, selectorSignal: "semantic:PUBLISH_ENTRY", requiresContentTypeSelection: true };
-    if (videoCount > 0 || directCount !== 1 || publishMenuCount !== 1) throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", `发布入口未通过唯一、可见、启用校验；imageMatches=${directCount}, publishMatches=${publishMenuCount}`, { failureCode: "PUBLISH_ENTRY_NOT_FOUND", failureStage: "PUBLISH_ENTRY_DISCOVERY", missingSignal: XIAOHONGSHU_IMAGE_POST_ENTRY_SELECTOR });
-    throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "图文发布入口未通过唯一、可见、启用校验", { failureCode: "PUBLISH_ENTRY_NOT_FOUND", failureStage: "PUBLISH_ENTRY_DISCOVERY", missingSignal: XIAOHONGSHU_IMAGE_POST_ENTRY_SELECTOR });
+
+    const result = findPublishEntry(snapshot);
+    if (result.status !== "FOUND_UNIQUE") {
+      throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", `发布入口未通过 fail-closed 候选决策：${result.status}`, { failureCode: result.failureCode, failureStage: result.failureStage, missingSignal: result.missingSignal });
+    }
+    return { locator: result.candidate.locator, selectorSignal: result.selectorSignal, requiresContentTypeSelection: result.requiresContentTypeSelection };
   }
 
   private async discoverContentTypeEntry(page: Page): Promise<{ locator: Locator; selectorSignal: string }> {
