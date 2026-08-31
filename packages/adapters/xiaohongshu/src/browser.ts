@@ -34,13 +34,20 @@ import {
 } from "./publish-note-navigation";
 import {
   inspectImagePostEditor,
+  inspectImagePostEditorPhase,
   type ImageEditorControlDiscovery,
   type ImageEditorContentType,
   type ImageEditorDiagnostic,
   type ImageEditorInspectionStatus,
+  type ImageEditorPhase,
+  type ImageEditorPhaseConfidence,
+  type ImageEditorPhaseTopology,
   type ImageEditorReadinessSample,
+  type ImageEditorSemanticNode,
   type ImageEditorSettingsDiscovery,
-  type ImageEditorShellStatus
+  type ImageEditorShellStatus,
+  type ImageEditorUploadCapabilityStatus,
+  type ImageEditorUploadControlRelationship
 } from "./image-editor-discovery";
 export {
   collectCreatorHomeTopology,
@@ -290,7 +297,7 @@ export type XiaohongshuEditorEntryStepName =
 export type XiaohongshuEditorNavigationTrigger = "DIRECT_GOTO" | "PUBLISH_ENTRY_CLICK" | "CONTENT_TYPE_CLICK" | "PLATFORM_REDIRECT" | "UNKNOWN";
 
 export interface XiaohongshuEditorEntryDiagnostic {
-  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED" | "PUBLISH_EXACT_TARGETS_OBSERVED" | "PUBLISH_TARGET_ANCESTOR_CHAINS" | "PUBLISH_CLICK_SURFACE_DIAGNOSTICS" | "PUBLISH_HIT_TEST_OBSERVED" | "PUBLISH_EVENT_LISTENERS_OBSERVED" | "PUBLISH_NOTE_SURFACE_RESOLVED" | "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED" | "PUBLISH_NOTE_NAVIGATION_CLICK_STARTED" | "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED" | "POST_PUBLISH_NOTE_STATE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_STARTED" | "IMAGE_EDITOR_READINESS_SAMPLE" | "IMAGE_EDITOR_SHELL_READY" | "IMAGE_EDITOR_SHELL_NOT_READY" | "IMAGE_EDITOR_SHELL_TIMEOUT" | "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED" | "IMAGE_EDITOR_CONTROLS_DISCOVERED" | "IMAGE_EDITOR_INSPECTION_COMPLETED" | "IMAGE_EDITOR_INSPECTION_FAILED";
+  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED" | "PUBLISH_EXACT_TARGETS_OBSERVED" | "PUBLISH_TARGET_ANCESTOR_CHAINS" | "PUBLISH_CLICK_SURFACE_DIAGNOSTICS" | "PUBLISH_HIT_TEST_OBSERVED" | "PUBLISH_EVENT_LISTENERS_OBSERVED" | "PUBLISH_NOTE_SURFACE_RESOLVED" | "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED" | "PUBLISH_NOTE_NAVIGATION_CLICK_STARTED" | "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED" | "POST_PUBLISH_NOTE_STATE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_STARTED" | "IMAGE_EDITOR_READINESS_SAMPLE" | "IMAGE_EDITOR_SHELL_READY" | "IMAGE_EDITOR_SHELL_NOT_READY" | "IMAGE_EDITOR_SHELL_TIMEOUT" | "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED" | "IMAGE_EDITOR_CONTROLS_DISCOVERED" | "IMAGE_EDITOR_PHASE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_COMPLETED" | "IMAGE_EDITOR_INSPECTION_FAILED";
   timestamp: string;
   operationId: string;
   platformKey: "xiaohongshu";
@@ -401,6 +408,15 @@ export interface XiaohongshuEditorEntryDiagnostic {
   imageUploadControl?: ImageEditorControlDiscovery;
   publishSettingsArea?: ImageEditorSettingsDiscovery;
   finalSubmitControl?: ImageEditorControlDiscovery;
+  phase?: ImageEditorPhase;
+  phaseConfidence?: ImageEditorPhaseConfidence;
+  phaseReason?: string;
+  preUploadSemanticNodes?: readonly ImageEditorSemanticNode[];
+  uploadControlRelationships?: readonly ImageEditorUploadControlRelationship[];
+  uploadCapabilityStatus?: ImageEditorUploadCapabilityStatus;
+  uploadCapabilityPresent?: boolean;
+  uploadCapabilityUnique?: boolean;
+  phaseTopology?: ImageEditorPhaseTopology;
   imageEditorStatus?: ImageEditorInspectionStatus;
   securityVerificationPresent?: boolean;
   loginPagePresent?: boolean;
@@ -1245,6 +1261,13 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         };
         return complete(result);
       }
+      await inspectImagePostEditorPhase(canonical.page, {
+        operationId,
+        platformKey: "xiaohongshu",
+        accountId: ctx.accountId,
+        contextDebugId: canonical.session.contextDebugId ?? "unknown-context",
+        pageDebugId: canonical.pageDebugId
+      }, { emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
       const editorInspection = await inspectImagePostEditor(canonical.page, {
         operationId,
         platformKey: "xiaohongshu",
@@ -1349,6 +1372,15 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       imageUploadControl: diagnostic.imageUploadControl,
       publishSettingsArea: diagnostic.publishSettingsArea,
       finalSubmitControl: diagnostic.finalSubmitControl,
+      phase: diagnostic.phase,
+      phaseConfidence: diagnostic.phaseConfidence,
+      phaseReason: diagnostic.phaseReason,
+      preUploadSemanticNodes: diagnostic.preUploadSemanticNodes,
+      uploadControlRelationships: diagnostic.uploadControlRelationships,
+      uploadCapabilityStatus: diagnostic.uploadCapabilityStatus,
+      uploadCapabilityPresent: diagnostic.uploadCapabilityPresent,
+      uploadCapabilityUnique: diagnostic.uploadCapabilityUnique,
+      phaseTopology: diagnostic.phaseTopology,
       imageEditorStatus: diagnostic.status,
       failureCode: diagnostic.failureCode,
       failureStage: diagnostic.failureStage,

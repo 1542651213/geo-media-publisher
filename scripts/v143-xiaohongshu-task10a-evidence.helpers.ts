@@ -103,6 +103,15 @@ export type Task10AEvidenceSummary = {
   imageEditorInspectionStarted: boolean;
   imageEditorReadinessSamples: Record<string, unknown>[];
   imageEditorShellResult: string | null;
+  imageEditorPhase: string | null;
+  imageEditorPhaseConfidence: string | null;
+  imageEditorPhaseReason: string | null;
+  preUploadSemanticNodes: unknown[];
+  uploadControlRelationships: unknown[];
+  uploadCapabilityStatus: string | null;
+  uploadCapabilityPresent: boolean | null;
+  uploadCapabilityUnique: boolean | null;
+  imageEditorPhaseTopology: Record<string, unknown> | null;
   titleEditorCandidates: unknown[];
   titleEditorStatus: string | null;
   bodyEditorCandidates: unknown[];
@@ -269,6 +278,15 @@ function emptySummary(input: AnalyzeTask10AEvidenceInput, gateResult: string): T
     imageEditorInspectionStarted: false,
     imageEditorReadinessSamples: [],
     imageEditorShellResult: null,
+    imageEditorPhase: null,
+    imageEditorPhaseConfidence: null,
+    imageEditorPhaseReason: null,
+    preUploadSemanticNodes: [],
+    uploadControlRelationships: [],
+    uploadCapabilityStatus: null,
+    uploadCapabilityPresent: null,
+    uploadCapabilityUnique: null,
+    imageEditorPhaseTopology: null,
     titleEditorCandidates: [],
     titleEditorStatus: null,
     bodyEditorCandidates: [],
@@ -401,8 +419,10 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
   const imageEditorShellEvent = [...gateEvents].reverse().find((event) => event.code === "IMAGE_EDITOR_SHELL_READY" || event.code === "IMAGE_EDITOR_SHELL_NOT_READY" || event.code === "IMAGE_EDITOR_SHELL_TIMEOUT");
   const imageEditorContentTypeEvent = [...gateEvents].reverse().find((event) => event.code === "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED");
   const imageEditorControlsEvent = [...gateEvents].reverse().find((event) => event.code === "IMAGE_EDITOR_CONTROLS_DISCOVERED");
+  const imageEditorPhaseEvent = [...gateEvents].reverse().find((event) => event.code === "IMAGE_EDITOR_PHASE_OBSERVED");
   const imageEditorFailureEvent = [...gateEvents].reverse().find((event) => event.code === "IMAGE_EDITOR_INSPECTION_FAILED");
   const imageEditorControlsContext = imageEditorControlsEvent?.context ?? {};
+  const imageEditorPhaseContext = imageEditorPhaseEvent?.context ?? {};
   const imageEditorControl = (field: string): Record<string, unknown> => isRecord(imageEditorControlsContext[field]) ? imageEditorControlsContext[field] : {};
   const imageEditorCandidates = (field: string): unknown[] => Array.isArray(imageEditorControl(field).candidates) ? imageEditorControl(field).candidates as unknown[] : [];
   const result: Task10AEvidenceSummary = {
@@ -481,6 +501,15 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
     imageEditorInspectionStarted: Boolean(imageEditorInspectionStartedEvent),
     imageEditorReadinessSamples: imageEditorReadinessEvents.map((event) => event.context),
     imageEditorShellResult: stringValue(imageEditorShellEvent?.context.shellStatus) ?? imageEditorShellEvent?.code ?? null,
+    imageEditorPhase: stringValue(imageEditorPhaseContext.phase),
+    imageEditorPhaseConfidence: stringValue(imageEditorPhaseContext.phaseConfidence),
+    imageEditorPhaseReason: stringValue(imageEditorPhaseContext.phaseReason),
+    preUploadSemanticNodes: Array.isArray(imageEditorPhaseContext.preUploadSemanticNodes) ? imageEditorPhaseContext.preUploadSemanticNodes : [],
+    uploadControlRelationships: Array.isArray(imageEditorPhaseContext.uploadControlRelationships) ? imageEditorPhaseContext.uploadControlRelationships : [],
+    uploadCapabilityStatus: stringValue(imageEditorPhaseContext.uploadCapabilityStatus),
+    uploadCapabilityPresent: booleanValue(imageEditorPhaseContext.uploadCapabilityPresent),
+    uploadCapabilityUnique: booleanValue(imageEditorPhaseContext.uploadCapabilityUnique),
+    imageEditorPhaseTopology: isRecord(imageEditorPhaseContext.phaseTopology) ? imageEditorPhaseContext.phaseTopology : null,
     titleEditorCandidates: imageEditorCandidates("titleEditor"),
     titleEditorStatus: stringValue(imageEditorControl("titleEditor").status),
     bodyEditorCandidates: imageEditorCandidates("bodyEditor"),

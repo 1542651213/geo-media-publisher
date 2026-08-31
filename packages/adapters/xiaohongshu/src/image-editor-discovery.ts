@@ -6,6 +6,115 @@ export type ImageEditorInspectionStatus = "READY" | "FAILED";
 export type ImageEditorContentType = "IMAGE_POST" | "VIDEO" | "UNKNOWN";
 export type ImageEditorControlStatus = "FOUND_UNIQUE" | "NOT_FOUND" | "AMBIGUOUS" | "NOT_VISIBLE" | "DISABLED";
 export type ImageEditorSettingsStatus = ImageEditorControlStatus | "NOT_APPLICABLE";
+export type ImageEditorPhase = "IMAGE_POST_PRE_UPLOAD" | "IMAGE_POST_POST_UPLOAD_EDITOR" | "IMAGE_POST_TRANSITIONING" | "IMAGE_POST_UNKNOWN" | "LOGIN" | "SECURITY_VERIFICATION";
+export type ImageEditorPhaseConfidence = "HIGH" | "LOW";
+export type ImageEditorUploadCapabilityStatus = "PRESENT" | "AMBIGUOUS" | "ABSENT";
+
+export interface ImageEditorBoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface ImageEditorSemanticNode {
+  tagName: string;
+  normalizedText: string;
+  role: string | null;
+  visible: boolean;
+  enabled: boolean;
+  boundingBox: ImageEditorBoundingBox | null;
+  nearestInteractiveAncestorTag: string | null;
+  nearestInteractiveAncestorRole: string | null;
+}
+
+export interface ImageEditorUploadAncestor {
+  depth: number;
+  tagName: string;
+  role: string | null;
+  boundedClassTokens: readonly string[];
+  visible: boolean;
+  pointerEvents: string;
+  boundingBox: ImageEditorBoundingBox | null;
+  semanticTextSignal: string | null;
+}
+
+export interface ImageEditorUploadControlRelationship {
+  candidateId: string;
+  tagName: string;
+  type: string;
+  accept: string | null;
+  multiple: boolean;
+  enabled: boolean;
+  visible: boolean;
+  usableSurface: boolean;
+  surfaceSignal: string;
+  ancestors: readonly ImageEditorUploadAncestor[];
+}
+
+export interface ImageEditorPhaseTopology {
+  titleCandidateCount: number;
+  bodyCandidateCount: number;
+  uploadCandidateCount: number;
+  finalSubmitCandidateCount: number;
+  contenteditableCount: number;
+  textareaCount: number;
+  textInputCount: number;
+  fileInputCount: number;
+  buttonCount: number;
+  roleButtonCount: number;
+  semanticSignals: readonly string[];
+  stable: boolean;
+}
+
+export interface ImageEditorPhaseEvidence {
+  shellReady: boolean;
+  contentType: ImageEditorContentType;
+  contentTypeReady: boolean;
+  loginPagePresent: boolean;
+  securityVerificationPresent: boolean;
+  domStable: boolean;
+  uploadCapabilityPresent: boolean;
+  uploadCapabilityUnique: boolean;
+  preUploadSemanticSignalPresent: boolean;
+  titleCandidateCount: number;
+  bodyCandidateCount: number;
+  finalSubmitCandidateCount: number;
+}
+
+export interface ImageEditorPhaseClassification {
+  phase: ImageEditorPhase;
+  confidence: ImageEditorPhaseConfidence;
+  reason: string;
+}
+
+interface ImageEditorPhaseDomSnapshot {
+  currentUrl: string;
+  readyState: string;
+  shellSignal: boolean;
+  shellFingerprint: string;
+  contentTypeSignal: ImageEditorContentType;
+  uploadCandidateCount: number;
+  securityVerificationPresent: boolean;
+  loginPagePresent: boolean;
+  domStable: boolean;
+  uploadCapabilityPresent: boolean;
+  uploadCapabilityUnique: boolean;
+  preUploadSemanticSignalPresent: boolean;
+  titleCandidateCount: number;
+  bodyCandidateCount: number;
+  finalSubmitCandidateCount: number;
+  preUploadSemanticNodes: readonly ImageEditorSemanticNode[];
+  uploadControlRelationships: readonly ImageEditorUploadControlRelationship[];
+  phaseTopology: ImageEditorPhaseTopology;
+}
+
+export interface ImageEditorUploadCapabilityResult {
+  status: ImageEditorUploadCapabilityStatus;
+  present: boolean;
+  uniqueSurface: boolean;
+  usableRelationships: readonly ImageEditorUploadControlRelationship[];
+}
 
 export type ImageEditorControlKind = "TITLE_EDITOR" | "BODY_EDITOR" | "IMAGE_UPLOAD_CONTROL" | "FINAL_SUBMIT_CONTROL";
 
@@ -77,6 +186,7 @@ export type ImageEditorDiagnosticCode =
   | "IMAGE_EDITOR_SHELL_TIMEOUT"
   | "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED"
   | "IMAGE_EDITOR_CONTROLS_DISCOVERED"
+  | "IMAGE_EDITOR_PHASE_OBSERVED"
   | "IMAGE_EDITOR_INSPECTION_COMPLETED"
   | "IMAGE_EDITOR_INSPECTION_FAILED";
 
@@ -107,6 +217,15 @@ export interface ImageEditorDiagnostic {
   imageUploadControl?: ImageEditorControlDiscovery;
   publishSettingsArea?: ImageEditorSettingsDiscovery;
   finalSubmitControl?: ImageEditorControlDiscovery;
+  phase?: ImageEditorPhase;
+  phaseConfidence?: ImageEditorPhaseConfidence;
+  phaseReason?: string;
+  preUploadSemanticNodes?: readonly ImageEditorSemanticNode[];
+  uploadControlRelationships?: readonly ImageEditorUploadControlRelationship[];
+  uploadCapabilityStatus?: ImageEditorUploadCapabilityStatus;
+  uploadCapabilityPresent?: boolean;
+  uploadCapabilityUnique?: boolean;
+  phaseTopology?: ImageEditorPhaseTopology;
   status?: ImageEditorInspectionStatus;
   failureCode?: PreSubmitGateFailureCode;
   failureStage?: PreSubmitGateFailureStage;
@@ -144,6 +263,24 @@ export interface ImageEditorInspectionOptions {
   emit?: (diagnostic: ImageEditorDiagnostic) => void;
 }
 
+export interface ImagePostEditorPhaseInspectionResult {
+  phase: ImageEditorPhase;
+  confidence: ImageEditorPhaseConfidence;
+  reason: string;
+  readinessSamples: readonly ImageEditorReadinessSample[];
+  contentType: ImageEditorContentType;
+  contentTypeReady: boolean;
+  preUploadSemanticNodes: readonly ImageEditorSemanticNode[];
+  uploadControlRelationships: readonly ImageEditorUploadControlRelationship[];
+  uploadCapabilityStatus: ImageEditorUploadCapabilityStatus;
+  uploadCapabilityPresent: boolean;
+  uploadCapabilityUnique: boolean;
+  phaseTopology: ImageEditorPhaseTopology;
+  securityVerificationPresent: boolean;
+  loginPagePresent: boolean;
+  sanitizedUrl: string;
+}
+
 const DEFAULT_MAX_WAIT_MS = 3_000;
 const DEFAULT_PROBE_INTERVAL_MS = 80;
 const DEFAULT_STABLE_SAMPLE_COUNT = 2;
@@ -154,6 +291,61 @@ const BODY_SELECTOR = '[contenteditable="true"][role="textbox"], [contenteditabl
 const UPLOAD_SELECTOR = 'input[type="file"], [aria-label*="上传图片"], [aria-label*="添加图片"], [data-testid*="upload" i], [class*="upload" i][role="button"]';
 const SETTINGS_SELECTOR = 'input[type="checkbox"], input[type="radio"], select, [role="checkbox"], [role="radio"], [data-setting]';
 const FINAL_SUBMIT_SELECTOR = 'button, [role="button"]';
+
+function emptyPhaseTopology(): ImageEditorPhaseTopology {
+  return {
+    titleCandidateCount: 0,
+    bodyCandidateCount: 0,
+    uploadCandidateCount: 0,
+    finalSubmitCandidateCount: 0,
+    contenteditableCount: 0,
+    textareaCount: 0,
+    textInputCount: 0,
+    fileInputCount: 0,
+    buttonCount: 0,
+    roleButtonCount: 0,
+    semanticSignals: [],
+    stable: false
+  };
+}
+
+export function resolveImageEditorUploadCapability(relationships: readonly ImageEditorUploadControlRelationship[]): ImageEditorUploadCapabilityResult {
+  const usableRelationships = relationships.filter((relationship) => relationship.enabled && relationship.usableSurface);
+  const status: ImageEditorUploadCapabilityStatus = usableRelationships.length === 1
+    ? "PRESENT"
+    : usableRelationships.length > 1
+      ? "AMBIGUOUS"
+      : "ABSENT";
+  return {
+    status,
+    present: status === "PRESENT",
+    uniqueSurface: status === "PRESENT",
+    usableRelationships
+  };
+}
+
+export function classifyImagePostEditorPhase(evidence: ImageEditorPhaseEvidence): ImageEditorPhaseClassification {
+  if (evidence.loginPagePresent) return { phase: "LOGIN", confidence: "HIGH", reason: "login evidence is present" };
+  if (evidence.securityVerificationPresent) return { phase: "SECURITY_VERIFICATION", confidence: "HIGH", reason: "security verification evidence is present" };
+  if (!evidence.domStable) return { phase: "IMAGE_POST_TRANSITIONING", confidence: "LOW", reason: "editor DOM evidence is not stable" };
+  if (!evidence.shellReady || evidence.contentType !== "IMAGE_POST" || !evidence.contentTypeReady) {
+    return { phase: "IMAGE_POST_UNKNOWN", confidence: "LOW", reason: "editor shell or image-post content type is not ready" };
+  }
+  if (evidence.titleCandidateCount > 0 && evidence.bodyCandidateCount > 0 && evidence.finalSubmitCandidateCount > 0) {
+    return { phase: "IMAGE_POST_POST_UPLOAD_EDITOR", confidence: "HIGH", reason: "post-upload title, body, and final-submit candidates are present" };
+  }
+  if (
+    evidence.uploadCapabilityPresent
+    && evidence.uploadCapabilityUnique
+    && evidence.preUploadSemanticSignalPresent
+    && evidence.titleCandidateCount === 0
+    && evidence.bodyCandidateCount === 0
+    && evidence.finalSubmitCandidateCount === 0
+  ) {
+    return { phase: "IMAGE_POST_PRE_UPLOAD", confidence: "HIGH", reason: "unique upload capability and pre-upload semantic signals are present while post-upload controls are absent" };
+  }
+  return { phase: "IMAGE_POST_UNKNOWN", confidence: "LOW", reason: "phase evidence does not satisfy a strict staged-editor rule" };
+}
 
 function nowIso(): string { return new Date().toISOString(); }
 
@@ -311,6 +503,145 @@ function normalizeSnapshot(value: unknown, fallbackUrl: string): ImageEditorDomS
   };
 }
 
+function normalizeBoundingBox(value: unknown): ImageEditorBoundingBox | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const numbers = [record.x, record.y, record.width, record.height];
+  if (!numbers.every((number) => typeof number === "number" && Number.isFinite(number))) return null;
+  if ((record.width as number) <= 0 || (record.height as number) <= 0) return null;
+  return { x: record.x as number, y: record.y as number, width: record.width as number, height: record.height as number };
+}
+
+function normalizeSemanticNodes(value: unknown): readonly ImageEditorSemanticNode[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item): ImageEditorSemanticNode | null => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) return null;
+    const record = item as Record<string, unknown>;
+    if (typeof record.tagName !== "string" || typeof record.normalizedText !== "string" || typeof record.visible !== "boolean" || typeof record.enabled !== "boolean") return null;
+    return {
+      tagName: record.tagName,
+      normalizedText: record.normalizedText.slice(0, 120),
+      role: typeof record.role === "string" ? record.role : null,
+      visible: record.visible,
+      enabled: record.enabled,
+      boundingBox: normalizeBoundingBox(record.boundingBox),
+      nearestInteractiveAncestorTag: typeof record.nearestInteractiveAncestorTag === "string" ? record.nearestInteractiveAncestorTag : null,
+      nearestInteractiveAncestorRole: typeof record.nearestInteractiveAncestorRole === "string" ? record.nearestInteractiveAncestorRole : null
+    };
+  }).filter((item): item is ImageEditorSemanticNode => Boolean(item)).slice(0, 20);
+}
+
+function normalizeUploadAncestors(value: unknown): readonly ImageEditorUploadAncestor[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item): ImageEditorUploadAncestor | null => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) return null;
+    const record = item as Record<string, unknown>;
+    if (typeof record.depth !== "number" || typeof record.tagName !== "string" || typeof record.visible !== "boolean" || typeof record.pointerEvents !== "string") return null;
+    return {
+      depth: Math.max(1, Math.min(6, Math.trunc(record.depth))),
+      tagName: record.tagName,
+      role: typeof record.role === "string" ? record.role : null,
+      boundedClassTokens: Array.isArray(record.boundedClassTokens) ? record.boundedClassTokens.filter((token): token is string => typeof token === "string").slice(0, 8) : [],
+      visible: record.visible,
+      pointerEvents: record.pointerEvents,
+      boundingBox: normalizeBoundingBox(record.boundingBox),
+      semanticTextSignal: typeof record.semanticTextSignal === "string" ? record.semanticTextSignal.slice(0, 80) : null
+    };
+  }).filter((item): item is ImageEditorUploadAncestor => Boolean(item)).slice(0, 6);
+}
+
+function normalizeUploadRelationships(value: unknown): readonly ImageEditorUploadControlRelationship[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item): ImageEditorUploadControlRelationship | null => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) return null;
+    const record = item as Record<string, unknown>;
+    if (typeof record.candidateId !== "string" || typeof record.tagName !== "string" || typeof record.type !== "string" || typeof record.enabled !== "boolean" || typeof record.visible !== "boolean" || typeof record.usableSurface !== "boolean" || typeof record.surfaceSignal !== "string") return null;
+    return {
+      candidateId: record.candidateId,
+      tagName: record.tagName,
+      type: record.type,
+      accept: typeof record.accept === "string" ? record.accept.slice(0, 120) : null,
+      multiple: record.multiple === true,
+      enabled: record.enabled,
+      visible: record.visible,
+      usableSurface: record.usableSurface,
+      surfaceSignal: record.surfaceSignal.slice(0, 80),
+      ancestors: normalizeUploadAncestors(record.ancestors)
+    };
+  }).filter((item): item is ImageEditorUploadControlRelationship => Boolean(item)).slice(0, 20);
+}
+
+function normalizePhaseTopology(value: unknown): ImageEditorPhaseTopology {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return emptyPhaseTopology();
+  const record = value as Record<string, unknown>;
+  const count = (key: string): number => typeof record[key] === "number" && Number.isFinite(record[key]) ? Math.max(0, Math.trunc(record[key] as number)) : 0;
+  return {
+    titleCandidateCount: count("titleCandidateCount"),
+    bodyCandidateCount: count("bodyCandidateCount"),
+    uploadCandidateCount: count("uploadCandidateCount"),
+    finalSubmitCandidateCount: count("finalSubmitCandidateCount"),
+    contenteditableCount: count("contenteditableCount"),
+    textareaCount: count("textareaCount"),
+    textInputCount: count("textInputCount"),
+    fileInputCount: count("fileInputCount"),
+    buttonCount: count("buttonCount"),
+    roleButtonCount: count("roleButtonCount"),
+    semanticSignals: Array.isArray(record.semanticSignals) ? record.semanticSignals.filter((signal): signal is string => typeof signal === "string").slice(0, 12) : [],
+    stable: record.stable === true
+  };
+}
+
+function emptyPhaseSnapshot(fallbackUrl: string): ImageEditorPhaseDomSnapshot {
+  return {
+    currentUrl: fallbackUrl,
+    readyState: "loading",
+    shellSignal: false,
+    shellFingerprint: "invalid",
+    contentTypeSignal: "UNKNOWN",
+    uploadCandidateCount: 0,
+    securityVerificationPresent: false,
+    loginPagePresent: false,
+    domStable: false,
+    uploadCapabilityPresent: false,
+    uploadCapabilityUnique: false,
+    preUploadSemanticSignalPresent: false,
+    titleCandidateCount: 0,
+    bodyCandidateCount: 0,
+    finalSubmitCandidateCount: 0,
+    preUploadSemanticNodes: [],
+    uploadControlRelationships: [],
+    phaseTopology: emptyPhaseTopology()
+  };
+}
+
+function normalizePhaseSnapshot(value: unknown, fallbackUrl: string): ImageEditorPhaseDomSnapshot {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return emptyPhaseSnapshot(fallbackUrl);
+  const record = value as Record<string, unknown>;
+  const relationships = normalizeUploadRelationships(record.uploadControlRelationships);
+  const uploadCapability = resolveImageEditorUploadCapability(relationships);
+  const topology = normalizePhaseTopology(record.phaseTopology);
+  return {
+    currentUrl: typeof record.currentUrl === "string" ? record.currentUrl : fallbackUrl,
+    readyState: typeof record.readyState === "string" ? record.readyState : "loading",
+    shellSignal: record.shellSignal === true,
+    shellFingerprint: typeof record.shellFingerprint === "string" ? record.shellFingerprint : "unknown",
+    contentTypeSignal: normalizeContentType(record.contentTypeSignal),
+    uploadCandidateCount: topology.uploadCandidateCount,
+    securityVerificationPresent: record.securityVerificationPresent === true,
+    loginPagePresent: record.loginPagePresent === true,
+    domStable: false,
+    uploadCapabilityPresent: uploadCapability.present,
+    uploadCapabilityUnique: uploadCapability.uniqueSurface,
+    preUploadSemanticSignalPresent: record.preUploadSemanticSignalPresent === true,
+    titleCandidateCount: topology.titleCandidateCount,
+    bodyCandidateCount: topology.bodyCandidateCount,
+    finalSubmitCandidateCount: topology.finalSubmitCandidateCount,
+    preUploadSemanticNodes: normalizeSemanticNodes(record.preUploadSemanticNodes),
+    uploadControlRelationships: relationships,
+    phaseTopology: topology
+  };
+}
+
 function isSnapshotPayload(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
@@ -462,6 +793,155 @@ async function readSnapshot(page: Page): Promise<ImageEditorDomSnapshot> {
   return readSnapshotFromLocators(page, fallbackUrl);
 }
 
+async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnapshot> {
+  const fallbackUrl = page.url();
+  let raw: unknown = null;
+  try {
+    raw = await page.evaluate(() => {
+      const normalize = (value: string): string => value.normalize("NFKC").replace(/[\s]+/gu, " ").trim();
+      const boundingBox = (element: Element): ImageEditorBoundingBox | null => {
+        const rect = element.getBoundingClientRect();
+        if (![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) return null;
+        return { x: Math.round(rect.x * 100) / 100, y: Math.round(rect.y * 100) / 100, width: Math.round(rect.width * 100) / 100, height: Math.round(rect.height * 100) / 100 };
+      };
+      const visible = (element: Element): boolean => {
+        const style = window.getComputedStyle(element);
+        const box = boundingBox(element);
+        return !element.hasAttribute("hidden") && element.getAttribute("aria-hidden") !== "true" && style.display !== "none" && style.visibility !== "hidden" && style.visibility !== "collapse" && style.opacity !== "0" && box !== null;
+      };
+      const enabled = (element: Element): boolean => {
+        const node = element as HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+        return !node.disabled && element.getAttribute("aria-disabled") !== "true";
+      };
+      const role = (element: Element): string | null => element.getAttribute("role");
+      const semanticText = (element: Element): string => normalize(`${element.textContent ?? ""} ${element.getAttribute("aria-label") ?? ""} ${element.getAttribute("title") ?? ""} ${element.getAttribute("data-content-type") ?? ""} ${element.getAttribute("data-type") ?? ""}`).slice(0, 120);
+      const signalFor = (value: string): string | null => {
+        const text = value.toLowerCase();
+        if (/上传|选择图片|添加图片|upload/iu.test(text)) return "upload";
+        if (/拖拽|drag/iu.test(text)) return "drag";
+        if (/图片|图文|image/iu.test(text)) return "image";
+        if (/发布图文|publish.*image/iu.test(text)) return "image-post";
+        if (/发布/iu.test(text)) return "publish";
+        return null;
+      };
+      const isInteractive = (element: Element): boolean => ["A", "BUTTON", "INPUT", "LABEL", "SELECT", "TEXTAREA"].includes(element.tagName) || ["button", "link", "tab", "radio", "checkbox"].includes(element.getAttribute("role") ?? "");
+      const boundedClassTokens = (element: Element): string[] => (element.getAttribute("class") ?? "").split(/[\s]+/u).map((token) => token.replace(/[^\w-]/gu, "")).filter(Boolean).slice(0, 8);
+      const nearestInteractive = (element: Element): Element | null => {
+        let current: Element | null = element.parentElement;
+        for (let depth = 1; current && depth <= 6; depth += 1, current = current.parentElement) {
+          if (isInteractive(current)) return current;
+        }
+        return null;
+      };
+      const semanticElements = Array.from(document.querySelectorAll("button, a, label, [role], [aria-label], [data-testid], [data-content-type], [data-type]"));
+      const preUploadSemanticNodes: ImageEditorSemanticNode[] = [];
+      for (const element of semanticElements) {
+        const text = semanticText(element);
+        if (!signalFor(text) || !visible(element)) continue;
+        const ancestor = nearestInteractive(element);
+        preUploadSemanticNodes.push({
+          tagName: element.tagName.toUpperCase(),
+          normalizedText: text,
+          role: role(element),
+          visible: true,
+          enabled: enabled(element),
+          boundingBox: boundingBox(element),
+          nearestInteractiveAncestorTag: ancestor?.tagName.toUpperCase() ?? null,
+          nearestInteractiveAncestorRole: ancestor ? role(ancestor) : null
+        });
+        if (preUploadSemanticNodes.length >= 20) break;
+      }
+      const uploadInputs = Array.from(document.querySelectorAll('input[type="file"]'));
+      const uploadControlRelationships: ImageEditorUploadControlRelationship[] = uploadInputs.slice(0, 20).map((input, index) => {
+        const ancestors: ImageEditorUploadAncestor[] = [];
+        let current: Element | null = input.parentElement;
+        let usableAncestor = false;
+        for (let depth = 1; current && depth <= 6; depth += 1, current = current.parentElement) {
+          const style = window.getComputedStyle(current);
+          const textSignal = signalFor(semanticText(current));
+          const currentBox = boundingBox(current);
+          const currentVisible = visible(current);
+          if (currentVisible && style.pointerEvents !== "none" && currentBox !== null && (isInteractive(current) || textSignal === "upload" || textSignal === "drag" || textSignal === "image" || textSignal === "image-post")) usableAncestor = true;
+          ancestors.push({
+            depth,
+            tagName: current.tagName.toUpperCase(),
+            role: role(current),
+            boundedClassTokens: boundedClassTokens(current),
+            visible: currentVisible,
+            pointerEvents: style.pointerEvents,
+            boundingBox: currentBox,
+            semanticTextSignal: textSignal
+          });
+        }
+        return {
+          candidateId: input.getAttribute("data-testid")?.trim() || `image-upload-control-${index}`,
+          tagName: input.tagName.toUpperCase(),
+          type: (input.getAttribute("type") ?? "file").toLowerCase(),
+          accept: input.getAttribute("accept"),
+          multiple: input.hasAttribute("multiple"),
+          enabled: enabled(input),
+          visible: visible(input),
+          usableSurface: enabled(input) && usableAncestor,
+          surfaceSignal: usableAncestor ? "visible-upload-ancestor" : "none",
+          ancestors
+        };
+      });
+      const titleCandidateCount = document.querySelectorAll('input[placeholder*="标题"], input[aria-label*="标题"], input[name*="title" i], input[id*="title" i], textarea[placeholder*="标题"], textarea[aria-label*="标题"], [data-testid*="title" i]').length;
+      const bodyCandidateCount = document.querySelectorAll('[contenteditable="true"][role="textbox"], [contenteditable="true"][data-placeholder], textarea[aria-label*="正文"], textarea[name*="body" i], textarea[id*="body" i], [data-testid*="body" i][contenteditable="true"]').length;
+      const uploadCandidateCount = document.querySelectorAll('input[type="file"], [aria-label*="上传图片"], [aria-label*="添加图片"], [data-testid*="upload" i], [class*="upload" i][role="button"]').length;
+      const finalSubmitCandidateCount = Array.from(document.querySelectorAll("button, [role=\"button\"]")).filter((element) => /^(发布|发布笔记|发表|提交|立即发布|publish|submit)$/iu.test(normalize(element.textContent ?? element.getAttribute("aria-label") ?? element.getAttribute("title") ?? "")) && !/视频/iu.test(semanticText(element))).length;
+      const bodyText = normalize(document.body?.innerText ?? "");
+      const semanticControls = semanticElements.map(semanticText).join(" ");
+      const typedAttributes = Array.from(document.querySelectorAll("[data-content-type], [data-type]")).map((element) => `${element.getAttribute("data-content-type") ?? ""} ${element.getAttribute("data-type") ?? ""}`).join(" ");
+      const imageSignal = uploadInputs.length > 0 || /image|图文|图片/iu.test(`${typedAttributes} ${semanticControls} ${bodyText}`);
+      const videoSignal = /video|视频/iu.test(`${typedAttributes} ${semanticControls} ${bodyText}`);
+      const contentTypeSignal: ImageEditorContentType = videoSignal && !imageSignal ? "VIDEO" : imageSignal ? "IMAGE_POST" : "UNKNOWN";
+      const loginPagePresent = /\/login(?:[/?#]|$)/iu.test(window.location.href) || /登录/iu.test(bodyText) || Boolean(document.querySelector('[data-testid*="login" i], form[action*="login" i]'));
+      const securityVerificationPresent = /security|verify|captcha|安全验证|验证码/iu.test(`${window.location.pathname} ${semanticControls} ${bodyText}`) || Boolean(document.querySelector('[data-testid*="captcha" i], [class*="captcha" i], [aria-label*="安全验证"]'));
+      const shellCount = document.querySelectorAll('main, [role="main"], [data-testid*="publish" i], [class*="publish" i], [class*="editor" i]').length;
+      const shellSignal = /^https:\/\/creator\.xiaohongshu\.com\/publish\/publish(?:[/?#]|$)/iu.test(window.location.href) && document.readyState === "complete" && document.body !== null && shellCount > 0 && !loginPagePresent && !securityVerificationPresent;
+      const semanticSignals = Array.from(new Set(preUploadSemanticNodes.map((node) => signalFor(node.normalizedText)).filter((signal): signal is string => signal !== null))).slice(0, 12);
+      const phaseTopology: ImageEditorPhaseTopology = {
+        titleCandidateCount,
+        bodyCandidateCount,
+        uploadCandidateCount,
+        finalSubmitCandidateCount,
+        contenteditableCount: document.querySelectorAll('[contenteditable="true"]').length,
+        textareaCount: document.querySelectorAll("textarea").length,
+        textInputCount: document.querySelectorAll('input[type="text"], input:not([type])').length,
+        fileInputCount: uploadInputs.length,
+        buttonCount: document.querySelectorAll("button").length,
+        roleButtonCount: document.querySelectorAll('[role="button"]').length,
+        semanticSignals,
+        stable: false
+      };
+      const capability = uploadControlRelationships.filter((relationship) => relationship.enabled && relationship.usableSurface);
+      return {
+        currentUrl: window.location.href,
+        readyState: document.readyState,
+        shellSignal,
+        shellFingerprint: JSON.stringify({ shellCount, titleCandidateCount, bodyCandidateCount, uploadCandidateCount, finalSubmitCandidateCount, semanticSignals, capabilityCount: capability.length }),
+        contentTypeSignal,
+        securityVerificationPresent,
+        loginPagePresent,
+        domStable: false,
+        uploadCapabilityPresent: capability.length === 1,
+        uploadCapabilityUnique: capability.length === 1,
+        preUploadSemanticSignalPresent: semanticSignals.some((signal) => signal === "upload" || signal === "drag" || signal === "image" || signal === "image-post"),
+        titleCandidateCount,
+        bodyCandidateCount,
+        finalSubmitCandidateCount,
+        preUploadSemanticNodes,
+        uploadControlRelationships,
+        phaseTopology
+      };
+    });
+  } catch {
+    raw = null;
+  }
+  return normalizePhaseSnapshot(raw, fallbackUrl);
+}
+
 async function waitForProbe(page: Page, intervalMs: number): Promise<void> {
   if (intervalMs <= 0) return;
   const candidate = page as unknown as { waitForTimeout?: (timeout: number) => Promise<void> };
@@ -595,4 +1075,131 @@ export async function inspectImagePostEditor(page: Page, metadata: ImageEditorIn
   }
   emit(options, metadata, "IMAGE_EDITOR_INSPECTION_COMPLETED", { ...baseFields(lastSnapshot), shellStatus: result.shellStatus, status: result.status, contentType, contentTypeReady });
   return result;
+}
+
+function phaseReadinessSample(snapshot: ImageEditorPhaseDomSnapshot, sampleIndex: number, startedAt: number): ImageEditorReadinessSample {
+  return {
+    sampleIndex,
+    elapsedMs: Math.max(0, Date.now() - startedAt),
+    readyState: snapshot.readyState,
+    currentUrl: sanitizeUrl(snapshot.currentUrl),
+    shellSignal: snapshot.shellSignal,
+    shellFingerprint: snapshot.shellFingerprint,
+    titleCandidateCount: snapshot.titleCandidateCount,
+    bodyCandidateCount: snapshot.bodyCandidateCount,
+    uploadCandidateCount: snapshot.uploadCandidateCount,
+    finalSubmitCandidateCount: snapshot.finalSubmitCandidateCount,
+    securityVerificationPresent: snapshot.securityVerificationPresent,
+    loginPagePresent: snapshot.loginPagePresent
+  };
+}
+
+function phaseDiagnosticFields(snapshot: ImageEditorPhaseDomSnapshot): Pick<ImageEditorDiagnostic, "sanitizedUrl" | "currentUrl" | "readyState" | "securityVerificationPresent" | "loginPagePresent" | "contentType" | "contentTypeReady" | "preUploadSemanticNodes" | "uploadControlRelationships" | "uploadCapabilityStatus" | "uploadCapabilityPresent" | "uploadCapabilityUnique" | "phaseTopology"> {
+  const capability = resolveImageEditorUploadCapability(snapshot.uploadControlRelationships);
+  return {
+    sanitizedUrl: sanitizeUrl(snapshot.currentUrl),
+    currentUrl: sanitizeUrl(snapshot.currentUrl),
+    readyState: snapshot.readyState,
+    securityVerificationPresent: snapshot.securityVerificationPresent,
+    loginPagePresent: snapshot.loginPagePresent,
+    contentType: snapshot.contentTypeSignal,
+    contentTypeReady: snapshot.contentTypeSignal === "IMAGE_POST",
+    preUploadSemanticNodes: snapshot.preUploadSemanticNodes,
+    uploadControlRelationships: snapshot.uploadControlRelationships,
+    uploadCapabilityStatus: capability.status,
+    uploadCapabilityPresent: capability.present,
+    uploadCapabilityUnique: capability.uniqueSurface,
+    phaseTopology: snapshot.phaseTopology
+  };
+}
+
+function phaseResult(snapshot: ImageEditorPhaseDomSnapshot, classification: ImageEditorPhaseClassification, readinessSamples: readonly ImageEditorReadinessSample[]): ImagePostEditorPhaseInspectionResult {
+  const capability = resolveImageEditorUploadCapability(snapshot.uploadControlRelationships);
+  return {
+    phase: classification.phase,
+    confidence: classification.confidence,
+    reason: classification.reason,
+    readinessSamples,
+    contentType: snapshot.contentTypeSignal,
+    contentTypeReady: snapshot.contentTypeSignal === "IMAGE_POST",
+    preUploadSemanticNodes: snapshot.preUploadSemanticNodes,
+    uploadControlRelationships: snapshot.uploadControlRelationships,
+    uploadCapabilityStatus: capability.status,
+    uploadCapabilityPresent: capability.present,
+    uploadCapabilityUnique: capability.uniqueSurface,
+    phaseTopology: snapshot.phaseTopology,
+    securityVerificationPresent: snapshot.securityVerificationPresent,
+    loginPagePresent: snapshot.loginPagePresent,
+    sanitizedUrl: sanitizeUrl(snapshot.currentUrl)
+  };
+}
+
+export async function inspectImagePostEditorPhase(page: Page, metadata: ImageEditorInspectionMetadata, options: ImageEditorInspectionOptions = {}): Promise<ImagePostEditorPhaseInspectionResult> {
+  const maxWaitMs = Math.max(0, Math.min(DEFAULT_MAX_WAIT_MS, options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS));
+  const probeIntervalMs = Math.max(0, options.probeIntervalMs ?? DEFAULT_PROBE_INTERVAL_MS);
+  const stableSampleCount = Math.max(2, options.stableSampleCount ?? DEFAULT_STABLE_SAMPLE_COUNT);
+  const startedAt = Date.now();
+  const readinessSamples: ImageEditorReadinessSample[] = [];
+  let previousFingerprint = "";
+  let stableCount = 0;
+  let lastSnapshot = emptyPhaseSnapshot(page.url());
+  let lastClassification: ImageEditorPhaseClassification = { phase: "IMAGE_POST_UNKNOWN", confidence: "LOW", reason: "no phase evidence was observed" };
+  emit(options, metadata, "IMAGE_EDITOR_INSPECTION_STARTED", { sanitizedUrl: sanitizeUrl(page.url()) });
+
+  while (Date.now() - startedAt <= maxWaitMs) {
+    const observed = await readPhaseDomSnapshot(page);
+    const shellStable = observed.shellSignal && EDITOR_ROUTE_PATTERN.test(observed.currentUrl) && observed.readyState === "complete";
+    if (shellStable && observed.shellFingerprint === previousFingerprint) stableCount += 1;
+    else if (shellStable) stableCount = 1;
+    else stableCount = 0;
+    previousFingerprint = shellStable ? observed.shellFingerprint : "";
+    lastSnapshot = {
+      ...observed,
+      domStable: stableCount >= stableSampleCount,
+      phaseTopology: { ...observed.phaseTopology, stable: stableCount >= stableSampleCount }
+    };
+    const sample = phaseReadinessSample(lastSnapshot, readinessSamples.length, startedAt);
+    readinessSamples.push(sample);
+    emit(options, metadata, "IMAGE_EDITOR_READINESS_SAMPLE", {
+      ...phaseDiagnosticFields(lastSnapshot),
+      sampleIndex: sample.sampleIndex,
+      elapsedMs: sample.elapsedMs,
+      titleCandidateCount: sample.titleCandidateCount,
+      bodyCandidateCount: sample.bodyCandidateCount,
+      uploadCandidateCount: sample.uploadCandidateCount,
+      finalSubmitCandidateCount: sample.finalSubmitCandidateCount
+    });
+    lastClassification = classifyImagePostEditorPhase({
+      shellReady: lastSnapshot.shellSignal && EDITOR_ROUTE_PATTERN.test(lastSnapshot.currentUrl) && lastSnapshot.readyState === "complete",
+      contentType: lastSnapshot.contentTypeSignal,
+      contentTypeReady: lastSnapshot.contentTypeSignal === "IMAGE_POST",
+      loginPagePresent: lastSnapshot.loginPagePresent,
+      securityVerificationPresent: lastSnapshot.securityVerificationPresent,
+      domStable: lastSnapshot.domStable,
+      uploadCapabilityPresent: lastSnapshot.uploadCapabilityPresent,
+      uploadCapabilityUnique: lastSnapshot.uploadCapabilityUnique,
+      preUploadSemanticSignalPresent: lastSnapshot.preUploadSemanticSignalPresent,
+      titleCandidateCount: lastSnapshot.titleCandidateCount,
+      bodyCandidateCount: lastSnapshot.bodyCandidateCount,
+      finalSubmitCandidateCount: lastSnapshot.finalSubmitCandidateCount
+    });
+    if (lastClassification.phase === "LOGIN" || lastClassification.phase === "SECURITY_VERIFICATION" || lastSnapshot.domStable) {
+      emit(options, metadata, "IMAGE_EDITOR_PHASE_OBSERVED", {
+        ...phaseDiagnosticFields(lastSnapshot),
+        phase: lastClassification.phase,
+        phaseConfidence: lastClassification.confidence,
+        phaseReason: lastClassification.reason
+      });
+      return phaseResult(lastSnapshot, lastClassification, readinessSamples);
+    }
+    await waitForProbe(page, probeIntervalMs);
+  }
+
+  emit(options, metadata, "IMAGE_EDITOR_PHASE_OBSERVED", {
+    ...phaseDiagnosticFields(lastSnapshot),
+    phase: lastClassification.phase,
+    phaseConfidence: lastClassification.confidence,
+    phaseReason: lastClassification.reason
+  });
+  return phaseResult(lastSnapshot, lastClassification, readinessSamples);
 }

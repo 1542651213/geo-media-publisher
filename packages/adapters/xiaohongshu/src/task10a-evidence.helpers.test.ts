@@ -358,4 +358,36 @@ describe("Task 10A evidence analyzer", () => {
 
     expect(result.sideEffectSummary.finalSubmitCount).toBe(0);
   });
+
+  it("extracts staged image-editor phase evidence and keeps it read-only", () => {
+    const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
+    const events = [
+      ...gateEvents(),
+      event("2026-08-30T08:00:00.012Z", "IMAGE_EDITOR_PHASE_OBSERVED", {
+        ...shared,
+        phase: "IMAGE_POST_PRE_UPLOAD",
+        phaseConfidence: "HIGH",
+        phaseReason: "unique upload capability and pre-upload semantic signals are present",
+        uploadCapabilityStatus: "PRESENT",
+        uploadCapabilityPresent: true,
+        uploadCapabilityUnique: true,
+        preUploadSemanticNodes: [{ tagName: "DIV", normalizedText: "上传图片", visible: true }],
+        uploadControlRelationships: [{ candidateId: "image-upload-control-0", visible: false, usableSurface: true }],
+        phaseTopology: { titleCandidateCount: 0, bodyCandidateCount: 0, uploadCandidateCount: 1, finalSubmitCandidateCount: 0, stable: true }
+      })
+    ];
+
+    const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
+
+    expect(result).toMatchObject({
+      imageEditorPhase: "IMAGE_POST_PRE_UPLOAD",
+      imageEditorPhaseConfidence: "HIGH",
+      uploadCapabilityStatus: "PRESENT",
+      uploadCapabilityPresent: true,
+      uploadCapabilityUnique: true,
+      preUploadSemanticNodes: [{ tagName: "DIV" }],
+      imageEditorPhaseTopology: { titleCandidateCount: 0, uploadCandidateCount: 1, stable: true },
+      sideEffectSummary: { contentMutationCount: 0, uploadCount: 0, finalSubmitCount: 0 }
+    });
+  });
 });

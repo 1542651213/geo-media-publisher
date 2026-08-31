@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { Page } from "playwright-core";
 import {
+  classifyImagePostEditorPhase,
+  resolveImageEditorUploadCapability,
+  inspectImagePostEditorPhase,
   inspectImagePostEditor,
   type ImageEditorDiagnostic,
   type ImageEditorDomSnapshot,
-  type ImageEditorInspectionMetadata
+  type ImageEditorInspectionMetadata,
+  type ImageEditorPhaseEvidence,
+  type ImageEditorUploadControlRelationship
 } from "./image-editor-discovery";
 
 const metadata: ImageEditorInspectionMetadata = {
@@ -78,6 +83,146 @@ async function inspect(snapshots: ImageEditorDomSnapshot[], diagnostics: ImageEd
 }
 
 describe("Xiaohongshu image editor discovery", () => {
+  function phaseEvidence(overrides: Partial<ImageEditorPhaseEvidence> = {}): ImageEditorPhaseEvidence {
+    return {
+      shellReady: true,
+      contentType: "IMAGE_POST",
+      contentTypeReady: true,
+      loginPagePresent: false,
+      securityVerificationPresent: false,
+      domStable: true,
+      uploadCapabilityPresent: true,
+      uploadCapabilityUnique: true,
+      preUploadSemanticSignalPresent: true,
+      titleCandidateCount: 0,
+      bodyCandidateCount: 0,
+      finalSubmitCandidateCount: 0,
+      ...overrides
+    };
+  }
+
+  function uploadRelationship(overrides: Partial<ImageEditorUploadControlRelationship> = {}): ImageEditorUploadControlRelationship {
+    return {
+      candidateId: "upload-0",
+      tagName: "INPUT",
+      type: "file",
+      accept: "image/*",
+      multiple: true,
+      enabled: true,
+      visible: false,
+      usableSurface: true,
+      surfaceSignal: "visible-upload-ancestor",
+      ancestors: [],
+      ...overrides
+    };
+  }
+
+  it("classifies a stable image editor with upload surface and no post-upload controls as pre-upload", () => {
+    expect(classifyImagePostEditorPhase(phaseEvidence()).phase).toBe("IMAGE_POST_PRE_UPLOAD");
+  });
+
+  it("classifies a stable image editor with post-upload controls as post-upload editor", () => {
+    expect(classifyImagePostEditorPhase(phaseEvidence({
+      titleCandidateCount: 1,
+      bodyCandidateCount: 1,
+      finalSubmitCandidateCount: 1
+    })).phase).toBe("IMAGE_POST_POST_UPLOAD_EDITOR");
+  });
+
+  it("fails closed when upload capability is absent or evidence is unstable", () => {
+    expect(classifyImagePostEditorPhase(phaseEvidence({
+      uploadCapabilityPresent: false,
+      uploadCapabilityUnique: false,
+      preUploadSemanticSignalPresent: false
+    })).phase).toBe("IMAGE_POST_UNKNOWN");
+    expect(classifyImagePostEditorPhase(phaseEvidence({ domStable: false })).phase).toBe("IMAGE_POST_TRANSITIONING");
+  });
+
+  it("prioritizes authentication and security phases over editor controls", () => {
+    expect(classifyImagePostEditorPhase(phaseEvidence({ loginPagePresent: true })).phase).toBe("LOGIN");
+    expect(classifyImagePostEditorPhase(phaseEvidence({ securityVerificationPresent: true })).phase).toBe("SECURITY_VERIFICATION");
+  });
+
+  it("treats a hidden file input under one usable upload surface as present", () => {
+    const result = resolveImageEditorUploadCapability([uploadRelationship()]);
+    expect(result.status).toBe("PRESENT");
+    expect(result.present).toBe(true);
+    expect(result.uniqueSurface).toBe(true);
+  });
+
+  it("rejects an isolated hidden file input without a usable upload surface", () => {
+    const result = resolveImageEditorUploadCapability([uploadRelationship({ usableSurface: false, surfaceSignal: "none" })]);
+    expect(result.status).toBe("ABSENT");
+    expect(result.present).toBe(false);
+  });
+
+  it("rejects two distinct usable upload surfaces as ambiguous", () => {
+    const result = resolveImageEditorUploadCapability([
+      uploadRelationship({ candidateId: "upload-0" }),
+      uploadRelationship({ candidateId: "upload-1" })
+    ]);
+    expect(result.status).toBe("AMBIGUOUS");
+    expect(result.present).toBe(false);
+    expect(result.uniqueSurface).toBe(false);
+  });
+
+  it("emits a bounded read-only pre-upload phase observation", async () => {
+    const diagnostics: ImageEditorDiagnostic[] = [];
+    const phaseSnapshot = {
+      currentUrl: editorUrl,
+      readyState: "complete",
+      shellSignal: true,
+      shellFingerprint: "pre-upload-shell",
+      contentTypeSignal: "IMAGE_POST",
+      securityVerificationPresent: false,
+      loginPagePresent: false,
+      preUploadSemanticSignalPresent: true,
+      phaseTopology: {
+        titleCandidateCount: 0,
+        bodyCandidateCount: 0,
+        uploadCandidateCount: 1,
+        finalSubmitCandidateCount: 0,
+        contenteditableCount: 0,
+        textareaCount: 0,
+        textInputCount: 0,
+        fileInputCount: 1,
+        buttonCount: 1,
+        roleButtonCount: 0,
+        semanticSignals: ["upload", "image"],
+        stable: false
+      },
+      preUploadSemanticNodes: [{
+        tagName: "DIV",
+        normalizedText: "上传图片",
+        role: null,
+        visible: true,
+        enabled: true,
+        boundingBox: { x: 10, y: 20, width: 120, height: 40 },
+        nearestInteractiveAncestorTag: "LABEL",
+        nearestInteractiveAncestorRole: null
+      }],
+      uploadControlRelationships: [uploadRelationship()]
+    };
+    let evaluateCount = 0;
+    const page = {
+      url: () => editorUrl,
+      evaluate: async () => {
+        evaluateCount += 1;
+        return phaseSnapshot;
+      }
+    } as unknown as Page;
+
+    const result = await inspectImagePostEditorPhase(page, metadata, { maxWaitMs: 80, probeIntervalMs: 0, stableSampleCount: 2, emit: (event) => diagnostics.push(event) });
+
+    expect(result.phase).toBe("IMAGE_POST_PRE_UPLOAD");
+    expect(result.confidence).toBe("HIGH");
+    expect(result.uploadCapabilityStatus).toBe("PRESENT");
+    expect(result.preUploadSemanticNodes).toHaveLength(1);
+    expect(result.phaseTopology.stable).toBe(true);
+    expect(evaluateCount).toBeGreaterThanOrEqual(2);
+    expect(diagnostics.some((event) => event.code === "IMAGE_EDITOR_PHASE_OBSERVED" && event.phase === "IMAGE_POST_PRE_UPLOAD")).toBe(true);
+  });
+
   it("waits for a stable editor shell before discovering delayed controls", async () => {
     const diagnostics: ImageEditorDiagnostic[] = [];
     const result = await inspect([
