@@ -1117,12 +1117,12 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(fixture.submitClick).not.toHaveBeenCalled();
   });
 
-  it("runs PRE_UPLOAD discovery before preparePublish mutation and reports post-upload control failure", async () => {
+  it("runs PRE_UPLOAD discovery before preparePublish mutation and reports post-upload phase failure first", async () => {
     const fixture = setupPage({ titleCount: 0, settings: [{ label: "公开范围", required: false, value: "公开" }] });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
     await adapter.connectAccount(context());
 
-    await expect(adapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "CONTENT_REJECTED", message: expect.stringContaining("TITLE_EDITOR_NOT_FOUND_POST_UPLOAD"), failureCode: "TITLE_EDITOR_NOT_FOUND_POST_UPLOAD", failureStage: "EDITOR_DISCOVERY" });
+    await expect(adapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "CONTENT_REJECTED", message: expect.stringContaining("POST_UPLOAD_EDITOR_TIMEOUT"), failureCode: "POST_UPLOAD_EDITOR_TIMEOUT", failureStage: "EDITOR_DISCOVERY" });
     expect(fixture.inputSetFiles).toHaveBeenCalledTimes(1);
     expect(fixture.calls).not.toContain("title-fill");
     expect(fixture.calls).not.toContain("body-fill");
@@ -1615,7 +1615,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     fixture.manager.setRuntimeAuthState?.({ platformKey: "xiaohongshu", accountId: "account-a" }, "AUTHENTICATED", null);
     const result = await adapter.runControlledPostUploadDiscovery(ctx, { imagePath: "C:/fixtures/task10n-safe-test.png", imageSource: "SAFE_TEST_FIXTURE" });
 
-    expect(result).toMatchObject({ status: "FAIL", uploadMutationCount: 1, uploadCompletionObserved: true, failureCode: "TITLE_EDITOR_NOT_FOUND_POST_UPLOAD" });
+    expect(result).toMatchObject({ status: "FAIL", uploadMutationCount: 1, uploadCompletionObserved: true, failureCode: "POST_UPLOAD_EDITOR_TIMEOUT" });
     expect(fixture.inputSetFiles).toHaveBeenCalledTimes(1);
     expect(fixture.calls).not.toContain("title-fill");
     expect(fixture.calls).not.toContain("body-fill");

@@ -111,6 +111,18 @@ export type Task10AEvidenceSummary = {
   preUploadGateFailureCode: string | null;
   postUploadControlsStatus: string | null;
   preSubmitGatePassMeaning: string | null;
+  postUploadReadinessDurationMs: number | null;
+  postUploadReadinessSampleCount: number | null;
+  postUploadTerminalStateReached: boolean | null;
+  postUploadIntermediateState: string | null;
+  postUploadPhase: string | null;
+  postUploadPhaseConfidence: string | null;
+  postUploadPhaseReason: string | null;
+  postUploadSemanticNodes: unknown[];
+  postUploadInteractiveTopology: Record<string, unknown> | null;
+  postUploadMediaPreviewDiagnostics: Record<string, unknown> | null;
+  postUploadModalState: Record<string, unknown> | null;
+  intermediateActionCandidates: unknown[];
   preUploadSemanticNodes: unknown[];
   uploadControlRelationships: unknown[];
   uploadCapabilityStatus: string | null;
@@ -291,6 +303,18 @@ function emptySummary(input: AnalyzeTask10AEvidenceInput, gateResult: string): T
     preUploadGateFailureCode: null,
     postUploadControlsStatus: null,
     preSubmitGatePassMeaning: null,
+    postUploadReadinessDurationMs: null,
+    postUploadReadinessSampleCount: null,
+    postUploadTerminalStateReached: null,
+    postUploadIntermediateState: null,
+    postUploadPhase: null,
+    postUploadPhaseConfidence: null,
+    postUploadPhaseReason: null,
+    postUploadSemanticNodes: [],
+    postUploadInteractiveTopology: null,
+    postUploadMediaPreviewDiagnostics: null,
+    postUploadModalState: null,
+    intermediateActionCandidates: [],
     preUploadSemanticNodes: [],
     uploadControlRelationships: [],
     uploadCapabilityStatus: null,
@@ -446,13 +470,48 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
   const imageEditorReadinessEvents = gateEvents.filter((event) => event.code === "IMAGE_EDITOR_READINESS_SAMPLE");
   const imageEditorShellEvent = [...gateEvents].reverse().find((event) => event.code === "IMAGE_EDITOR_SHELL_READY" || event.code === "IMAGE_EDITOR_SHELL_NOT_READY" || event.code === "IMAGE_EDITOR_SHELL_TIMEOUT");
   const imageEditorContentTypeEvent = [...gateEvents].reverse().find((event) => event.code === "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED");
-  const imageEditorControlsEvent = [...gateEvents].reverse().find((event) => event.code === "IMAGE_EDITOR_CONTROLS_DISCOVERED");
+  const imageEditorControlsEvent = [...gateEvents].reverse().find((event) => event.code === "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED") ?? [...gateEvents].reverse().find((event) => event.code === "IMAGE_EDITOR_CONTROLS_DISCOVERED");
   const imageEditorPhaseEvent = [...gateEvents].reverse().find((event) => event.code === "IMAGE_EDITOR_PHASE_OBSERVED");
   const preUploadGateResultEvent = [...gateEvents].reverse().find((event) => event.code === "PRE_UPLOAD_GATE_RESULT");
   const imageEditorFailureEvent = [...gateEvents].reverse().find((event) => event.code === "IMAGE_EDITOR_INSPECTION_FAILED");
+  const postUploadReadinessEvents = gateEvents.filter((event) => event.code === "POST_UPLOAD_EDITOR_READINESS_SAMPLE");
+  const postUploadPhaseEvent = [...gateEvents].reverse().find((event) => event.code === "POST_UPLOAD_EDITOR_PHASE_OBSERVED");
+  const postUploadSemanticEvent = [...gateEvents].reverse().find((event) => event.code === "POST_UPLOAD_EDITOR_SEMANTIC_INVENTORY_OBSERVED");
+  const postUploadInteractiveEvent = [...gateEvents].reverse().find((event) => event.code === "POST_UPLOAD_EDITOR_INTERACTIVE_TOPOLOGY_OBSERVED");
+  const postUploadMediaPreviewEvent = [...gateEvents].reverse().find((event) => event.code === "POST_UPLOAD_EDITOR_MEDIA_PREVIEW_OBSERVED");
+  const postUploadModalEvent = [...gateEvents].reverse().find((event) => event.code === "POST_UPLOAD_EDITOR_MODAL_STATE_OBSERVED");
+  const postUploadPhaseContext = postUploadPhaseEvent?.context ?? {};
   const imageEditorControlsContext = imageEditorControlsEvent?.context ?? {};
   const imageEditorPhaseContext = imageEditorPhaseEvent?.context ?? {};
   const preUploadGateContext = preUploadGateResultEvent?.context ?? {};
+  const postUploadPhase = stringValue(postUploadPhaseContext.phase) ?? stringValue(postUploadPhaseContext.observedPhase);
+  const postUploadPhaseConfidence = stringValue(postUploadPhaseContext.phaseConfidence);
+  const postUploadPhaseReason = stringValue(postUploadPhaseContext.phaseReason);
+  const postUploadIntermediateState = stringValue(postUploadPhaseContext.postUploadIntermediateState);
+  const postUploadTerminalStateReached = booleanValue(postUploadPhaseContext.postUploadTerminalStateReached)
+    ?? (postUploadPhase ? postUploadPhase === "IMAGE_POST_POST_UPLOAD_EDITOR" && stringValue(postUploadPhaseContext.postUploadControlsStatus) === "READY" : null);
+  const postUploadReadinessLastContext = postUploadReadinessEvents[postUploadReadinessEvents.length - 1]?.context ?? {};
+  const postUploadReadinessDurationMs = numberValue(postUploadPhaseContext.postUploadReadinessDurationMs)
+    ?? numberValue(postUploadReadinessLastContext.elapsedMs);
+  const postUploadReadinessSampleCount = numberValue(postUploadPhaseContext.postUploadReadinessSampleCount)
+    ?? (postUploadReadinessEvents.length > 0 ? postUploadReadinessEvents.length : null);
+  const postUploadIsTerminal = postUploadTerminalStateReached === true || postUploadPhase === "IMAGE_POST_POST_UPLOAD_EDITOR" && stringValue(postUploadPhaseContext.postUploadControlsStatus) === "READY";
+  const postUploadHasPhaseObservation = Boolean(postUploadPhaseEvent || postUploadReadinessEvents.length > 0);
+  const postUploadIntermediateActionCandidates = Array.isArray((postUploadModalEvent?.context ?? {}).intermediateActionCandidates)
+    ? (postUploadModalEvent?.context.intermediateActionCandidates as unknown[])
+    : Array.isArray(postUploadPhaseContext.intermediateActionCandidates) ? postUploadPhaseContext.intermediateActionCandidates as unknown[] : [];
+  const postUploadPhaseFailureCode = postUploadHasPhaseObservation && !postUploadIsTerminal && postUploadPhase !== "LOGIN" && postUploadPhase !== "SECURITY_VERIFICATION"
+    ? postUploadPhaseContext.failureCode === "POST_UPLOAD_EDITOR_TIMEOUT" || postUploadPhaseContext.failureCode === "POST_UPLOAD_INTERMEDIATE_STATE" || postUploadPhaseContext.failureCode === "POST_UPLOAD_INTERMEDIATE_ACTION_REQUIRED"
+      ? postUploadPhaseContext.failureCode as string
+      : postUploadIntermediateState
+        ? (postUploadIntermediateActionCandidates.length > 0 ? "POST_UPLOAD_INTERMEDIATE_ACTION_REQUIRED" : "POST_UPLOAD_INTERMEDIATE_STATE")
+        : "POST_UPLOAD_EDITOR_NOT_READY"
+    : null;
+  const effectiveFailureCode = postUploadPhaseFailureCode ?? failureCode;
+  const effectiveFailureStage = postUploadPhaseFailureCode ? "EDITOR_DISCOVERY" : failureStage;
+  const effectiveMissingSignal = postUploadPhaseFailureCode
+    ? (postUploadIntermediateState ? "post-upload-intermediate-state" : "post-upload-terminal-phase")
+    : missingSignal;
   const imageEditorControl = (field: string): Record<string, unknown> => isRecord(imageEditorControlsContext[field]) ? imageEditorControlsContext[field] : {};
   const imageEditorCandidates = (field: string): unknown[] => Array.isArray(imageEditorControl(field).candidates) ? imageEditorControl(field).candidates as unknown[] : [];
   const result: Task10AEvidenceSummary = {
@@ -508,12 +567,12 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
       ...(postHeartbeat ? [{ timestamp: postHeartbeat.timestamp, code: postHeartbeat.code, context: postHeartbeat.context }] : [])
     ],
     entrySteps: steps,
-    failureCode,
-    failureStage,
-    missingSignal,
-    editorEntryFailureCode: failureCode,
-    editorEntryFailureStage: failureStage,
-    editorEntryMissingSignal: missingSignal,
+    failureCode: effectiveFailureCode,
+    failureStage: effectiveFailureStage,
+    missingSignal: effectiveMissingSignal,
+    editorEntryFailureCode: effectiveFailureCode,
+    editorEntryFailureStage: effectiveFailureStage,
+    editorEntryMissingSignal: effectiveMissingSignal,
     editorEntryStartUrl: stringValue(startStep?.context.startUrl) ?? stringValue(inspection?.context.startUrl),
     editorEntryFinalUrl: stringValue(finalContext.sanitizedFinalUrl) ?? stringValue(finalContext.sanitizedUrlAfter),
     editorReached: booleanValue(finalContext.editorReached),
@@ -537,8 +596,20 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
     preSubmitGatePhase: stringValue(preUploadGateContext.preSubmitGatePhase),
     preUploadGateStatus: stringValue(preUploadGateContext.preUploadGateStatus),
     preUploadGateFailureCode: stringValue(preUploadGateContext.preUploadGateFailureCode),
-    postUploadControlsStatus: stringValue(preUploadGateContext.postUploadControlsStatus),
+    postUploadControlsStatus: stringValue(postUploadPhaseContext.postUploadControlsStatus) ?? stringValue(preUploadGateContext.postUploadControlsStatus),
     preSubmitGatePassMeaning: stringValue(preUploadGateContext.preSubmitGatePassMeaning),
+    postUploadReadinessDurationMs,
+    postUploadReadinessSampleCount,
+    postUploadTerminalStateReached,
+    postUploadIntermediateState,
+    postUploadPhase,
+    postUploadPhaseConfidence,
+    postUploadPhaseReason,
+    postUploadSemanticNodes: Array.isArray(postUploadSemanticEvent?.context.postUploadSemanticNodes) ? postUploadSemanticEvent.context.postUploadSemanticNodes : [],
+    postUploadInteractiveTopology: isRecord(postUploadInteractiveEvent?.context.interactiveTopology) ? postUploadInteractiveEvent.context.interactiveTopology : null,
+    postUploadMediaPreviewDiagnostics: isRecord(postUploadMediaPreviewEvent?.context.mediaPreviewDiagnostics) ? postUploadMediaPreviewEvent.context.mediaPreviewDiagnostics : null,
+    postUploadModalState: isRecord(postUploadModalEvent?.context.modalDiagnostics) ? postUploadModalEvent.context.modalDiagnostics : null,
+    intermediateActionCandidates: postUploadIntermediateActionCandidates,
     preUploadSemanticNodes: Array.isArray(imageEditorPhaseContext.preUploadSemanticNodes) ? imageEditorPhaseContext.preUploadSemanticNodes : [],
     uploadControlRelationships: Array.isArray(imageEditorPhaseContext.uploadControlRelationships) ? imageEditorPhaseContext.uploadControlRelationships : [],
     uploadCapabilityStatus: stringValue(imageEditorPhaseContext.uploadCapabilityStatus),
@@ -554,9 +625,9 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
     publishSettingsAreaStatus: stringValue(imageEditorControl("publishSettingsArea").status),
     finalSubmitCandidates: imageEditorCandidates("finalSubmitControl"),
     finalSubmitControlStatus: stringValue(imageEditorControl("finalSubmitControl").status),
-    editorDiscoveryFailureCode: stringValue(imageEditorFailureEvent?.context.failureCode) ?? (failureStage === "EDITOR_DISCOVERY" ? failureCode : null),
-    editorDiscoveryFailureStage: stringValue(imageEditorFailureEvent?.context.failureStage) ?? (failureStage === "EDITOR_DISCOVERY" ? failureStage : null),
-    editorDiscoveryMissingSignal: stringValue(imageEditorFailureEvent?.context.missingSignal) ?? (failureStage === "EDITOR_DISCOVERY" ? missingSignal : null),
+    editorDiscoveryFailureCode: postUploadPhaseFailureCode ?? stringValue(imageEditorFailureEvent?.context.failureCode) ?? (effectiveFailureStage === "EDITOR_DISCOVERY" ? effectiveFailureCode : null),
+    editorDiscoveryFailureStage: postUploadPhaseFailureCode ? "EDITOR_DISCOVERY" : stringValue(imageEditorFailureEvent?.context.failureStage) ?? (effectiveFailureStage === "EDITOR_DISCOVERY" ? effectiveFailureStage : null),
+    editorDiscoveryMissingSignal: postUploadPhaseFailureCode ? effectiveMissingSignal : stringValue(imageEditorFailureEvent?.context.missingSignal) ?? (effectiveFailureStage === "EDITOR_DISCOVERY" ? effectiveMissingSignal : null),
     postGateSnapshot: postHeartbeat?.context ?? null,
     sideEffectSummary: {
       preparePublishCalled: gateEvents.some(isPreparePublishMarker) ? "YES" : "NO",

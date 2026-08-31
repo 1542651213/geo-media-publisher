@@ -3,6 +3,7 @@ import type { Page } from "playwright-core";
 import {
   assertPreUploadImageEditorContract,
   classifyImagePostEditorPhase,
+  classifyPostUploadImageEditorState,
   resolveImageEditorUploadCapability,
   inspectImagePostEditorPhase,
   inspectImagePostEditor,
@@ -59,6 +60,8 @@ function snapshot(overrides: Partial<ImageEditorDomSnapshot> = {}): ImageEditorD
     uploadCandidates: [candidate("upload-0", { tagName: "INPUT", semanticSignal: "input[type=file]" })],
     publishSettingsCandidates: [],
     finalSubmitCandidates: [candidate("submit-0", { tagName: "BUTTON", semanticSignal: "final-submit-label" })],
+    uploadBusy: false,
+    previewReady: true,
     ...overrides
   };
 }
@@ -463,8 +466,139 @@ describe("Xiaohongshu image editor discovery", () => {
     ]), metadata, { maxWaitMs: 80, probeIntervalMs: 0, stableSampleCount: 2 });
 
     expect(result.status).toBe("FAILED");
-    expect(result.phase).toBe("IMAGE_POST_UNKNOWN");
+    expect(result.phase).toBe("IMAGE_POST_TRANSITIONING");
     expect(result.failureCode).toBe("POST_UPLOAD_EDITOR_TIMEOUT");
     expect(result.postUploadControlsStatus).toBe("FAIL");
+  });
+
+  it("does not treat stable DOM as a terminal post-upload state while phase is transitioning", () => {
+    const result = classifyPostUploadImageEditorState({
+      shellReady: true,
+      contentType: "IMAGE_POST",
+      contentTypeReady: true,
+      domStable: true,
+      loginPagePresent: false,
+      securityVerificationPresent: false,
+      uploadBusy: false,
+      previewReady: true,
+      previewCount: 1,
+      mediaPreviewSignalPresent: false,
+      mediaEditingSignalPresent: false,
+      modalVisible: false,
+      intermediateActionSignalPresent: false,
+      titleCandidateCount: 0,
+      bodyCandidateCount: 0,
+      finalSubmitCandidateCount: 0
+    });
+
+    expect(result.phase).toBe("IMAGE_POST_TRANSITIONING");
+    expect(result.terminalStateReached).toBe(false);
+  });
+
+  it("recognizes a stable media preview as an explicit intermediate state without interaction", () => {
+    const result = classifyPostUploadImageEditorState({
+      shellReady: true,
+      contentType: "IMAGE_POST",
+      contentTypeReady: true,
+      domStable: true,
+      loginPagePresent: false,
+      securityVerificationPresent: false,
+      uploadBusy: false,
+      previewReady: true,
+      previewCount: 1,
+      mediaPreviewSignalPresent: true,
+      mediaEditingSignalPresent: false,
+      modalVisible: false,
+      intermediateActionSignalPresent: true,
+      titleCandidateCount: 0,
+      bodyCandidateCount: 0,
+      finalSubmitCandidateCount: 0
+    });
+
+    expect(result.phase).toBe("IMAGE_POST_MEDIA_PREVIEW");
+    expect(result.terminalStateReached).toBe(true);
+    expect(result.intermediateState).toBe("IMAGE_POST_MEDIA_PREVIEW");
+  });
+
+  it("recognizes confirmation-required state without clicking the intermediate action", () => {
+    const result = classifyPostUploadImageEditorState({
+      shellReady: true,
+      contentType: "IMAGE_POST",
+      contentTypeReady: true,
+      domStable: true,
+      loginPagePresent: false,
+      securityVerificationPresent: false,
+      uploadBusy: false,
+      previewReady: true,
+      previewCount: 1,
+      mediaPreviewSignalPresent: false,
+      mediaEditingSignalPresent: false,
+      modalVisible: true,
+      intermediateActionSignalPresent: true,
+      titleCandidateCount: 0,
+      bodyCandidateCount: 0,
+      finalSubmitCandidateCount: 0
+    });
+
+    expect(result.phase).toBe("IMAGE_POST_CONFIRMATION_REQUIRED");
+    expect(result.terminalStateReached).toBe(true);
+    expect(result.intermediateState).toBe("IMAGE_POST_CONFIRMATION_REQUIRED");
+  });
+
+  it("stops on an intermediate state before discovering post-upload controls", async () => {
+    const diagnostics: ImageEditorDiagnostic[] = [];
+    const intermediateAction = { candidateId: "continue-0", tagName: "BUTTON", role: "button", semanticSignal: "继续", visible: true, enabled: true };
+    const result = await inspectPostUploadImageEditor(pageFor([
+      snapshot({
+        titleCandidates: [],
+        bodyCandidates: [],
+        finalSubmitCandidates: [],
+        modalDiagnostics: { dialogCount: 1, modalSignalCount: 1, maskCount: 0, overlayCount: 0, drawerCount: 0, visible: true, ariaModalCount: 1 },
+        intermediateActionCandidates: [intermediateAction],
+        mediaPreviewSignalPresent: true
+      }),
+      snapshot({
+        titleCandidates: [],
+        bodyCandidates: [],
+        finalSubmitCandidates: [],
+        modalDiagnostics: { dialogCount: 1, modalSignalCount: 1, maskCount: 0, overlayCount: 0, drawerCount: 0, visible: true, ariaModalCount: 1 },
+        intermediateActionCandidates: [intermediateAction],
+        mediaPreviewSignalPresent: true
+      })
+    ]), metadata, {
+      maxWaitMs: 80,
+      probeIntervalMs: 0,
+      stableSampleCount: 2,
+      emit: (event) => diagnostics.push(event)
+    });
+
+    expect(result.phase).toBe("IMAGE_POST_CONFIRMATION_REQUIRED");
+    expect(result.failureCode).toBe("POST_UPLOAD_INTERMEDIATE_ACTION_REQUIRED");
+    expect(diagnostics.map((event) => event.code)).not.toContain("POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED");
+    expect(diagnostics.map((event) => event.code)).toContain("POST_UPLOAD_EDITOR_MODAL_STATE_OBSERVED");
+  });
+
+  it("waits beyond stable transitioning samples and gives phase-first failure", async () => {
+    const result = await inspectPostUploadImageEditor(pageFor([
+      snapshot({ titleCandidates: [], bodyCandidates: [], finalSubmitCandidates: [], previewReady: true }),
+      snapshot({ titleCandidates: [], bodyCandidates: [], finalSubmitCandidates: [], previewReady: true })
+    ]), metadata, { maxWaitMs: 12, probeIntervalMs: 0, stableSampleCount: 2 });
+
+    expect(result.phase).toBe("IMAGE_POST_TRANSITIONING");
+    expect(result.failureCode).toBe("POST_UPLOAD_EDITOR_TIMEOUT");
+    expect(result.failureCode).not.toBe("TITLE_EDITOR_NOT_FOUND_POST_UPLOAD");
+  });
+
+  it("continues readiness until the terminal post-upload editor appears", async () => {
+    const result = await inspectPostUploadImageEditor(pageFor([
+      snapshot({ titleCandidates: [], bodyCandidates: [], finalSubmitCandidates: [], previewReady: true }),
+      snapshot({ titleCandidates: [], bodyCandidates: [], finalSubmitCandidates: [], previewReady: true }),
+      snapshot({ previewReady: true }),
+      snapshot({ previewReady: true })
+    ]), metadata, { maxWaitMs: 80, probeIntervalMs: 0, stableSampleCount: 2 });
+
+    expect(result.status).toBe("READY");
+    expect(result.phase).toBe("IMAGE_POST_POST_UPLOAD_EDITOR");
+    expect(result.postUploadControlsStatus).toBe("READY");
   });
 });

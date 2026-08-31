@@ -479,4 +479,90 @@ describe("Task 10A evidence analyzer", () => {
 
     expect(result.sideEffectSummary.uploadCount).toBe(1);
   });
+
+  it("prioritizes post-upload phase failure over a premature title failure", () => {
+    const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
+    const events = [
+      ...gateEvents({ failureCode: "TITLE_EDITOR_NOT_FOUND_POST_UPLOAD", failureStage: "EDITOR_DISCOVERY", missingSignal: "title-editor", result: "needs_user_action" }),
+      event("2026-08-30T08:00:01.002Z", "POST_UPLOAD_EDITOR_READINESS_SAMPLE", {
+        ...shared,
+        sampleIndex: 0,
+        elapsedMs: 13,
+        observedPhase: "IMAGE_POST_TRANSITIONING",
+        domStable: true,
+        uploadBusy: false,
+        previewReady: true,
+        titleCandidateCount: 0,
+        bodyCandidateCount: 0,
+        finalSubmitCandidateCount: 0,
+        securityVerificationPresent: false,
+        loginPagePresent: false
+      }),
+      event("2026-08-30T08:00:01.003Z", "POST_UPLOAD_EDITOR_PHASE_OBSERVED", {
+        ...shared,
+        phase: "IMAGE_POST_UNKNOWN",
+        phaseConfidence: "LOW",
+        phaseReason: "post-upload terminal phase was not proven",
+        postUploadTerminalStateReached: false,
+        postUploadControlsStatus: "FAIL",
+        postUploadReadinessDurationMs: 104,
+        postUploadReadinessSampleCount: 2,
+        failureCode: "TITLE_EDITOR_NOT_FOUND_POST_UPLOAD",
+        failureStage: "EDITOR_DISCOVERY",
+        missingSignal: "title-editor"
+      }),
+      event("2026-08-30T08:00:01.004Z", "POST_UPLOAD_EDITOR_INSPECTION_FAILED", {
+        ...shared,
+        phase: "IMAGE_POST_UNKNOWN",
+        failureCode: "TITLE_EDITOR_NOT_FOUND_POST_UPLOAD",
+        failureStage: "EDITOR_DISCOVERY",
+        missingSignal: "title-editor"
+      })
+    ];
+
+    const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
+
+    expect(result).toMatchObject({
+      postUploadPhase: "IMAGE_POST_UNKNOWN",
+      postUploadPhaseConfidence: "LOW",
+      postUploadTerminalStateReached: false,
+      postUploadReadinessDurationMs: 104,
+      postUploadReadinessSampleCount: 2,
+      failureCode: "POST_UPLOAD_EDITOR_NOT_READY",
+      failureStage: "EDITOR_DISCOVERY",
+      missingSignal: "post-upload-terminal-phase",
+      editorDiscoveryFailureCode: "POST_UPLOAD_EDITOR_NOT_READY",
+      editorDiscoveryFailureStage: "EDITOR_DISCOVERY"
+    });
+  });
+
+  it("retains precise post-upload control failure after a terminal editor phase", () => {
+    const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
+    const events = [
+      ...gateEvents({ failureCode: "TITLE_EDITOR_NOT_FOUND_POST_UPLOAD", failureStage: "EDITOR_DISCOVERY", missingSignal: "title-editor", result: "needs_user_action" }),
+      event("2026-08-30T08:00:01.002Z", "POST_UPLOAD_EDITOR_PHASE_OBSERVED", {
+        ...shared,
+        phase: "IMAGE_POST_POST_UPLOAD_EDITOR",
+        phaseConfidence: "HIGH",
+        postUploadTerminalStateReached: true,
+        postUploadControlsStatus: "FAIL"
+      }),
+      event("2026-08-30T08:00:01.003Z", "POST_UPLOAD_EDITOR_INSPECTION_FAILED", {
+        ...shared,
+        phase: "IMAGE_POST_POST_UPLOAD_EDITOR",
+        failureCode: "TITLE_EDITOR_NOT_FOUND_POST_UPLOAD",
+        failureStage: "EDITOR_DISCOVERY",
+        missingSignal: "title-editor"
+      })
+    ];
+
+    const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
+
+    expect(result).toMatchObject({
+      postUploadPhase: "IMAGE_POST_POST_UPLOAD_EDITOR",
+      postUploadTerminalStateReached: true,
+      editorDiscoveryFailureCode: "TITLE_EDITOR_NOT_FOUND_POST_UPLOAD",
+      failureCode: "TITLE_EDITOR_NOT_FOUND_POST_UPLOAD"
+    });
+  });
 });

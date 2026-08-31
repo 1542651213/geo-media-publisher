@@ -41,6 +41,10 @@ import {
   type ImageEditorContentType,
   type ImageEditorDiagnostic,
   type ImageEditorInspectionStatus,
+  type ImageEditorInteractiveTopology,
+  type ImageEditorIntermediateActionCandidate,
+  type ImageEditorMediaPreviewDiagnostics,
+  type ImageEditorModalDiagnostics,
   type ImageEditorPhase,
   type ImageEditorPhaseConfidence,
   type ImageEditorPhaseTopology,
@@ -301,7 +305,7 @@ export type XiaohongshuEditorEntryStepName =
 export type XiaohongshuEditorNavigationTrigger = "DIRECT_GOTO" | "PUBLISH_ENTRY_CLICK" | "CONTENT_TYPE_CLICK" | "PLATFORM_REDIRECT" | "UNKNOWN";
 
 export interface XiaohongshuEditorEntryDiagnostic {
-  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED" | "PUBLISH_EXACT_TARGETS_OBSERVED" | "PUBLISH_TARGET_ANCESTOR_CHAINS" | "PUBLISH_CLICK_SURFACE_DIAGNOSTICS" | "PUBLISH_HIT_TEST_OBSERVED" | "PUBLISH_EVENT_LISTENERS_OBSERVED" | "PUBLISH_NOTE_SURFACE_RESOLVED" | "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED" | "PUBLISH_NOTE_NAVIGATION_CLICK_STARTED" | "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED" | "POST_PUBLISH_NOTE_STATE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_STARTED" | "IMAGE_EDITOR_READINESS_SAMPLE" | "IMAGE_EDITOR_SHELL_READY" | "IMAGE_EDITOR_SHELL_NOT_READY" | "IMAGE_EDITOR_SHELL_TIMEOUT" | "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED" | "IMAGE_EDITOR_CONTROLS_DISCOVERED" | "IMAGE_EDITOR_PHASE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_COMPLETED" | "IMAGE_EDITOR_INSPECTION_FAILED" | "PRE_UPLOAD_GATE_INSPECTION_STARTED" | "PRE_UPLOAD_GATE_RESULT" | "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED" | "IMAGE_UPLOAD_STARTED" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED" | "POST_UPLOAD_EDITOR_READINESS_STARTED" | "POST_UPLOAD_EDITOR_READINESS_SAMPLE" | "POST_UPLOAD_EDITOR_PHASE_OBSERVED" | "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED" | "POST_UPLOAD_EDITOR_INSPECTION_FAILED" | "POST_UPLOAD_EDITOR_INSPECTION_COMPLETED";
+  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED" | "PUBLISH_EXACT_TARGETS_OBSERVED" | "PUBLISH_TARGET_ANCESTOR_CHAINS" | "PUBLISH_CLICK_SURFACE_DIAGNOSTICS" | "PUBLISH_HIT_TEST_OBSERVED" | "PUBLISH_EVENT_LISTENERS_OBSERVED" | "PUBLISH_NOTE_SURFACE_RESOLVED" | "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED" | "PUBLISH_NOTE_NAVIGATION_CLICK_STARTED" | "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED" | "POST_PUBLISH_NOTE_STATE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_STARTED" | "IMAGE_EDITOR_READINESS_SAMPLE" | "IMAGE_EDITOR_SHELL_READY" | "IMAGE_EDITOR_SHELL_NOT_READY" | "IMAGE_EDITOR_SHELL_TIMEOUT" | "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED" | "IMAGE_EDITOR_CONTROLS_DISCOVERED" | "IMAGE_EDITOR_PHASE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_COMPLETED" | "IMAGE_EDITOR_INSPECTION_FAILED" | "PRE_UPLOAD_GATE_INSPECTION_STARTED" | "PRE_UPLOAD_GATE_RESULT" | "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED" | "IMAGE_UPLOAD_STARTED" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED" | "POST_UPLOAD_EDITOR_READINESS_STARTED" | "POST_UPLOAD_EDITOR_READINESS_SAMPLE" | "POST_UPLOAD_EDITOR_SEMANTIC_INVENTORY_OBSERVED" | "POST_UPLOAD_EDITOR_INTERACTIVE_TOPOLOGY_OBSERVED" | "POST_UPLOAD_EDITOR_MEDIA_PREVIEW_OBSERVED" | "POST_UPLOAD_EDITOR_MODAL_STATE_OBSERVED" | "POST_UPLOAD_EDITOR_PHASE_OBSERVED" | "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED" | "POST_UPLOAD_EDITOR_INSPECTION_FAILED" | "POST_UPLOAD_EDITOR_INSPECTION_COMPLETED";
   timestamp: string;
   operationId: string;
   platformKey: "xiaohongshu";
@@ -416,11 +420,20 @@ export interface XiaohongshuEditorEntryDiagnostic {
   phaseConfidence?: ImageEditorPhaseConfidence;
   phaseReason?: string;
   preUploadSemanticNodes?: readonly ImageEditorSemanticNode[];
+  postUploadSemanticNodes?: readonly ImageEditorSemanticNode[];
   uploadControlRelationships?: readonly ImageEditorUploadControlRelationship[];
   uploadCapabilityStatus?: ImageEditorUploadCapabilityStatus;
   uploadCapabilityPresent?: boolean;
   uploadCapabilityUnique?: boolean;
   phaseTopology?: ImageEditorPhaseTopology;
+  interactiveTopology?: ImageEditorInteractiveTopology;
+  mediaPreviewDiagnostics?: ImageEditorMediaPreviewDiagnostics;
+  modalDiagnostics?: ImageEditorModalDiagnostics;
+  intermediateActionCandidates?: readonly ImageEditorIntermediateActionCandidate[];
+  postUploadTerminalStateReached?: boolean;
+  postUploadIntermediateState?: ImageEditorPhase | null;
+  postUploadReadinessDurationMs?: number;
+  postUploadReadinessSampleCount?: number;
   imageEditorStatus?: ImageEditorInspectionStatus;
   securityVerificationPresent?: boolean;
   loginPagePresent?: boolean;
@@ -1641,11 +1654,20 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       phaseConfidence: diagnostic.phaseConfidence,
       phaseReason: diagnostic.phaseReason,
       preUploadSemanticNodes: diagnostic.preUploadSemanticNodes,
+      postUploadSemanticNodes: diagnostic.postUploadSemanticNodes,
       uploadControlRelationships: diagnostic.uploadControlRelationships,
       uploadCapabilityStatus: diagnostic.uploadCapabilityStatus,
       uploadCapabilityPresent: diagnostic.uploadCapabilityPresent,
       uploadCapabilityUnique: diagnostic.uploadCapabilityUnique,
       phaseTopology: diagnostic.phaseTopology,
+      interactiveTopology: diagnostic.interactiveTopology,
+      mediaPreviewDiagnostics: diagnostic.mediaPreviewDiagnostics,
+      modalDiagnostics: diagnostic.modalDiagnostics,
+      intermediateActionCandidates: diagnostic.intermediateActionCandidates,
+      postUploadTerminalStateReached: diagnostic.postUploadTerminalStateReached,
+      postUploadIntermediateState: diagnostic.postUploadIntermediateState,
+      postUploadReadinessDurationMs: diagnostic.postUploadReadinessDurationMs,
+      postUploadReadinessSampleCount: diagnostic.postUploadReadinessSampleCount,
       imageEditorStatus: diagnostic.status,
       failureCode: diagnostic.failureCode,
       failureStage: diagnostic.failureStage,
