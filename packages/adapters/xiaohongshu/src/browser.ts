@@ -33,8 +33,10 @@ import {
   type PublishNotePostClickState
 } from "./publish-note-navigation";
 import {
-  inspectImagePostEditor,
+  type inspectImagePostEditor,
   inspectImagePostEditorPhase,
+  assertPreUploadImageEditorContract,
+  inspectPostUploadImageEditor,
   type ImageEditorControlDiscovery,
   type ImageEditorContentType,
   type ImageEditorDiagnostic,
@@ -42,6 +44,7 @@ import {
   type ImageEditorPhase,
   type ImageEditorPhaseConfidence,
   type ImageEditorPhaseTopology,
+  type ImageEditorPostUploadControlsStatus,
   type ImageEditorReadinessSample,
   type ImageEditorSemanticNode,
   type ImageEditorSettingsDiscovery,
@@ -297,7 +300,7 @@ export type XiaohongshuEditorEntryStepName =
 export type XiaohongshuEditorNavigationTrigger = "DIRECT_GOTO" | "PUBLISH_ENTRY_CLICK" | "CONTENT_TYPE_CLICK" | "PLATFORM_REDIRECT" | "UNKNOWN";
 
 export interface XiaohongshuEditorEntryDiagnostic {
-  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED" | "PUBLISH_EXACT_TARGETS_OBSERVED" | "PUBLISH_TARGET_ANCESTOR_CHAINS" | "PUBLISH_CLICK_SURFACE_DIAGNOSTICS" | "PUBLISH_HIT_TEST_OBSERVED" | "PUBLISH_EVENT_LISTENERS_OBSERVED" | "PUBLISH_NOTE_SURFACE_RESOLVED" | "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED" | "PUBLISH_NOTE_NAVIGATION_CLICK_STARTED" | "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED" | "POST_PUBLISH_NOTE_STATE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_STARTED" | "IMAGE_EDITOR_READINESS_SAMPLE" | "IMAGE_EDITOR_SHELL_READY" | "IMAGE_EDITOR_SHELL_NOT_READY" | "IMAGE_EDITOR_SHELL_TIMEOUT" | "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED" | "IMAGE_EDITOR_CONTROLS_DISCOVERED" | "IMAGE_EDITOR_PHASE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_COMPLETED" | "IMAGE_EDITOR_INSPECTION_FAILED";
+  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED" | "PUBLISH_EXACT_TARGETS_OBSERVED" | "PUBLISH_TARGET_ANCESTOR_CHAINS" | "PUBLISH_CLICK_SURFACE_DIAGNOSTICS" | "PUBLISH_HIT_TEST_OBSERVED" | "PUBLISH_EVENT_LISTENERS_OBSERVED" | "PUBLISH_NOTE_SURFACE_RESOLVED" | "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED" | "PUBLISH_NOTE_NAVIGATION_CLICK_STARTED" | "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED" | "POST_PUBLISH_NOTE_STATE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_STARTED" | "IMAGE_EDITOR_READINESS_SAMPLE" | "IMAGE_EDITOR_SHELL_READY" | "IMAGE_EDITOR_SHELL_NOT_READY" | "IMAGE_EDITOR_SHELL_TIMEOUT" | "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED" | "IMAGE_EDITOR_CONTROLS_DISCOVERED" | "IMAGE_EDITOR_PHASE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_COMPLETED" | "IMAGE_EDITOR_INSPECTION_FAILED" | "PRE_UPLOAD_GATE_INSPECTION_STARTED" | "PRE_UPLOAD_GATE_RESULT" | "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED" | "POST_UPLOAD_EDITOR_READINESS_STARTED" | "POST_UPLOAD_EDITOR_READINESS_SAMPLE" | "POST_UPLOAD_EDITOR_PHASE_OBSERVED" | "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED" | "POST_UPLOAD_EDITOR_INSPECTION_FAILED" | "POST_UPLOAD_EDITOR_INSPECTION_COMPLETED";
   timestamp: string;
   operationId: string;
   platformKey: "xiaohongshu";
@@ -421,6 +424,15 @@ export interface XiaohongshuEditorEntryDiagnostic {
   securityVerificationPresent?: boolean;
   loginPagePresent?: boolean;
   currentUrl?: string;
+  expectedPhase?: ImageEditorPhase;
+  observedPhase?: ImageEditorPhase;
+  preSubmitGatePhase?: "PRE_UPLOAD" | "POST_UPLOAD";
+  preUploadGateStatus?: "PASS" | "FAIL";
+  preUploadGateFailureCode?: PreSubmitGateFailureCode | null;
+  postUploadControlsStatus?: ImageEditorPostUploadControlsStatus | "NOT_APPLICABLE_BEFORE_UPLOAD";
+  preSubmitGatePassMeaning?: string | null;
+  uploadBusy?: boolean;
+  previewReady?: boolean;
 }
 
 export type XiaohongshuPublishEntryDiscoveryStrategy = "STABLE_HREF" | "STABLE_DATA_ATTRIBUTE" | "ROLE_EXACT_NAME" | "ARIA_LABEL_OR_TITLE" | "SCOPED_EXACT_TEXT";
@@ -1261,21 +1273,35 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         };
         return complete(result);
       }
-      await inspectImagePostEditorPhase(canonical.page, {
+      this.emitStagedEditorDiagnostic(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "PRE_UPLOAD_GATE_INSPECTION_STARTED", {
+        expectedPhase: "IMAGE_POST_PRE_UPLOAD",
+        observedPhase: "IMAGE_POST_TRANSITIONING",
+        sanitizedUrl: sanitizePageUrl(canonical.page)
+      });
+      const editorPhaseInspection = await inspectImagePostEditorPhase(canonical.page, {
         operationId,
         platformKey: "xiaohongshu",
         accountId: ctx.accountId,
         contextDebugId: canonical.session.contextDebugId ?? "unknown-context",
         pageDebugId: canonical.pageDebugId
       }, { emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
-      const editorInspection = await inspectImagePostEditor(canonical.page, {
-        operationId,
-        platformKey: "xiaohongshu",
-        accountId: ctx.accountId,
-        contextDebugId: canonical.session.contextDebugId ?? "unknown-context",
-        pageDebugId: canonical.pageDebugId
-      }, { emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
-      return complete(this.preSubmitGateResultFromEditorInspection(editorEntry, editorInspection));
+      const preUploadContract = assertPreUploadImageEditorContract(editorPhaseInspection);
+      this.emitStagedEditorDiagnostic(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "PRE_UPLOAD_GATE_RESULT", {
+        expectedPhase: preUploadContract.expectedPhase,
+        observedPhase: preUploadContract.observedPhase,
+        preSubmitGatePhase: "PRE_UPLOAD",
+        preUploadGateStatus: preUploadContract.status,
+        preUploadGateFailureCode: preUploadContract.failureCode ?? null,
+        phase: editorPhaseInspection.phase,
+        phaseConfidence: editorPhaseInspection.confidence,
+        phaseReason: editorPhaseInspection.reason,
+        uploadCapabilityPresent: editorPhaseInspection.uploadCapabilityPresent,
+        postUploadControlsStatus: preUploadContract.postUploadControlsStatus,
+        preSubmitGatePassMeaning: preUploadContract.status === "PASS" ? "SAFE_TO_ENTER_PREPARE_PUBLISH_UPLOAD_STAGE" : null,
+        sanitizedUrl: editorPhaseInspection.sanitizedUrl,
+        ...(preUploadContract.failureCode ? { failureCode: preUploadContract.failureCode, failureStage: preUploadContract.failureStage, missingSignal: preUploadContract.missingSignal } : {})
+      });
+      return complete(this.preSubmitGateResultFromPreUploadContract(editorEntry, editorPhaseInspection, preUploadContract));
     } catch (error) {
       const result = emptyPreSubmitGateResult(this.preSubmitGateStatusForError(error));
       result.authStillValid = result.status !== "auth_expired" && result.status !== "security_verification_required";
@@ -1344,6 +1370,84 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     };
   }
 
+  private preSubmitGateResultFromPreUploadContract(
+    editorEntry: XiaohongshuEditorEntryResult,
+    inspection: Awaited<ReturnType<typeof inspectImagePostEditorPhase>>,
+    contract: ReturnType<typeof assertPreUploadImageEditorContract>
+  ): PreSubmitGateResult {
+    const status: PreSubmitGateStatus = contract.status === "PASS"
+      ? "ready"
+      : contract.failureCode === "AUTH_REDIRECTED_TO_LOGIN"
+        ? "auth_expired"
+        : contract.failureCode === "SECURITY_VERIFICATION_REQUIRED"
+          ? "security_verification_required"
+          : "needs_user_action";
+    return {
+      status,
+      editorReached: editorEntry.editorReached,
+      authStillValid: !inspection.loginPagePresent,
+      contentType: inspection.contentType,
+      contentTypeReady: inspection.contentTypeReady,
+      titleEditorDetected: false,
+      bodyEditorDetected: false,
+      imageUploadControlDetected: inspection.uploadCapabilityPresent,
+      publishSettingsAreaDetected: false,
+      finalSubmitControlDetected: false,
+      securityVerificationPresent: inspection.securityVerificationPresent,
+      loginPagePresent: inspection.loginPagePresent,
+      needsUserAction: status !== "ready",
+      sanitizedUrl: inspection.sanitizedUrl,
+      editorEntrySideEffectRisk: "NONE_OBSERVED",
+      preSubmitGatePhase: "PRE_UPLOAD",
+      preUploadGateStatus: contract.status,
+      preUploadGateFailureCode: contract.failureCode ?? null,
+      imageEditorPhase: inspection.phase,
+      imageEditorPhaseConfidence: inspection.confidence,
+      uploadCapabilityPresent: inspection.uploadCapabilityPresent,
+      postUploadControlsStatus: contract.postUploadControlsStatus,
+      preSubmitGatePassMeaning: contract.status === "PASS" ? "SAFE_TO_ENTER_PREPARE_PUBLISH_UPLOAD_STAGE" : null,
+      ...(contract.failureCode ? { failureCode: contract.failureCode } : {}),
+      ...(contract.failureStage ? { failureStage: contract.failureStage } : {}),
+      ...(contract.missingSignal ? { missingSignal: contract.missingSignal } : {})
+    };
+  }
+
+  private emitStagedEditorDiagnostic(
+    ctx: AccountContext,
+    session: BrowserSession,
+    page: Page,
+    pageDebugId: string,
+    operationId: string,
+    code: Extract<XiaohongshuEditorEntryDiagnostic["code"], "PRE_UPLOAD_GATE_INSPECTION_STARTED" | "PRE_UPLOAD_GATE_RESULT" | "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED">,
+    fields: Pick<XiaohongshuEditorEntryDiagnostic, "expectedPhase" | "observedPhase" | "phase" | "preSubmitGatePhase" | "preUploadGateStatus" | "preUploadGateFailureCode" | "postUploadControlsStatus" | "preSubmitGatePassMeaning" | "phaseConfidence" | "phaseReason" | "uploadCapabilityPresent" | "sanitizedUrl" | "failureCode" | "failureStage" | "missingSignal">
+  ): void {
+    this.emitEditorEntryDiagnostic({
+      code,
+      timestamp: new Date().toISOString(),
+      operationId,
+      platformKey: "xiaohongshu",
+      accountId: ctx.accountId,
+      contextDebugId: session.contextDebugId ?? "unknown-context",
+      pageDebugId,
+      sanitizedUrl: fields.sanitizedUrl ?? sanitizePageUrl(page),
+      runtimeAuthState: this.getBrowserRuntimeState(ctx).state,
+      expectedPhase: fields.expectedPhase,
+      observedPhase: fields.observedPhase,
+      phase: fields.phase,
+      preSubmitGatePhase: fields.preSubmitGatePhase,
+      preUploadGateStatus: fields.preUploadGateStatus,
+      preUploadGateFailureCode: fields.preUploadGateFailureCode,
+      postUploadControlsStatus: fields.postUploadControlsStatus,
+      preSubmitGatePassMeaning: fields.preSubmitGatePassMeaning,
+      phaseConfidence: fields.phaseConfidence,
+      phaseReason: fields.phaseReason,
+      uploadCapabilityPresent: fields.uploadCapabilityPresent,
+      failureCode: fields.failureCode,
+      failureStage: fields.failureStage,
+      missingSignal: fields.missingSignal
+    });
+  }
+
   private emitImageEditorDiagnostic(diagnostic: ImageEditorDiagnostic): void {
     this.emitEditorEntryDiagnostic({
       code: diagnostic.code,
@@ -1365,6 +1469,15 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       finalSubmitCandidateCount: diagnostic.finalSubmitCandidateCount,
       securityVerificationPresent: diagnostic.securityVerificationPresent,
       loginPagePresent: diagnostic.loginPagePresent,
+      expectedPhase: diagnostic.expectedPhase,
+      observedPhase: diagnostic.observedPhase,
+      preSubmitGatePhase: diagnostic.preSubmitGatePhase,
+      preUploadGateStatus: diagnostic.preUploadGateStatus,
+      preUploadGateFailureCode: diagnostic.preUploadGateFailureCode,
+      postUploadControlsStatus: diagnostic.postUploadControlsStatus,
+      preSubmitGatePassMeaning: diagnostic.preSubmitGatePassMeaning,
+      uploadBusy: diagnostic.uploadBusy,
+      previewReady: diagnostic.previewReady,
       contentType: diagnostic.contentType,
       contentTypeReady: diagnostic.contentTypeReady,
       titleEditor: diagnostic.titleEditor,
@@ -1430,24 +1543,71 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const operationId = randomUUID();
     await this.navigateToImagePostEditor(page, operationId, ctx.accountId, { context: opened.session.context }, "PREPARE_PUBLISH");
     gates.push("login", "image_post_entry");
-    const editorInspection = await inspectImagePostEditor(page, {
+    const editorMetadata = {
       operationId,
       platformKey: "xiaohongshu",
       accountId: ctx.accountId,
       contextDebugId: opened.session.contextDebugId ?? "unknown-context",
       pageDebugId: opened.session.pageDebugId ?? "unknown-page"
+    } as const;
+    this.emitStagedEditorDiagnostic(ctx, opened.session, page, editorMetadata.pageDebugId, operationId, "PRE_UPLOAD_GATE_INSPECTION_STARTED", {
+      expectedPhase: "IMAGE_POST_PRE_UPLOAD",
+      observedPhase: "IMAGE_POST_TRANSITIONING",
+      sanitizedUrl: sanitizePageUrl(page)
     });
-    if (editorInspection.status !== "READY") {
-      const failureCode = editorInspection.failureCode ?? "UNKNOWN_UI_STATE";
+    const preUploadInspection = await inspectImagePostEditorPhase(page, editorMetadata, {
+      emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic)
+    });
+    const preUploadContract = assertPreUploadImageEditorContract(preUploadInspection);
+    this.emitStagedEditorDiagnostic(ctx, opened.session, page, editorMetadata.pageDebugId, operationId, "PRE_UPLOAD_GATE_RESULT", {
+      expectedPhase: preUploadContract.expectedPhase,
+      observedPhase: preUploadContract.observedPhase,
+      phase: preUploadInspection.phase,
+      phaseConfidence: preUploadInspection.confidence,
+      phaseReason: preUploadInspection.reason,
+      preSubmitGatePhase: "PRE_UPLOAD",
+      preUploadGateStatus: preUploadContract.status,
+      preUploadGateFailureCode: preUploadContract.failureCode ?? null,
+      uploadCapabilityPresent: preUploadInspection.uploadCapabilityPresent,
+      postUploadControlsStatus: preUploadContract.postUploadControlsStatus,
+      preSubmitGatePassMeaning: preUploadContract.status === "PASS" ? "SAFE_TO_ENTER_PREPARE_PUBLISH_UPLOAD_STAGE" : null,
+      sanitizedUrl: preUploadInspection.sanitizedUrl,
+      ...(preUploadContract.failureCode ? { failureCode: preUploadContract.failureCode, failureStage: preUploadContract.failureStage, missingSignal: preUploadContract.missingSignal } : {})
+    });
+    if (preUploadContract.status !== "PASS") {
+      const failureCode = preUploadContract.failureCode ?? "UNKNOWN_UI_STATE";
       throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", `图文编辑器 discovery 未通过：${failureCode}`, {
         failureCode,
-        failureStage: editorInspection.failureStage ?? "EDITOR_DISCOVERY",
-        missingSignal: editorInspection.missingSignal ?? "image-editor-discovery"
+        failureStage: preUploadContract.failureStage ?? "EDITOR_DISCOVERY",
+        missingSignal: preUploadContract.missingSignal ?? "image-editor-discovery"
       });
     }
-    gates.push("editor_discovery");
+    gates.push("pre_upload_gate");
+    this.emitStagedEditorDiagnostic(ctx, opened.session, page, editorMetadata.pageDebugId, operationId, "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED", {
+      expectedPhase: "IMAGE_POST_PRE_UPLOAD",
+      observedPhase: "IMAGE_POST_PRE_UPLOAD",
+      phase: "IMAGE_POST_PRE_UPLOAD",
+      preSubmitGatePhase: "PRE_UPLOAD",
+      preUploadGateStatus: "PASS",
+      postUploadControlsStatus: "NOT_APPLICABLE_BEFORE_UPLOAD",
+      preSubmitGatePassMeaning: "SAFE_TO_ENTER_PREPARE_PUBLISH_UPLOAD_STAGE",
+      uploadCapabilityPresent: true,
+      sanitizedUrl: sanitizePageUrl(page)
+    });
     const imageEvidence = await this.uploadImages(page, article.images ?? []);
     gates.push("image_upload");
+    const postUploadInspection = await inspectPostUploadImageEditor(page, editorMetadata, {
+      emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic)
+    });
+    if (postUploadInspection.status !== "READY") {
+      const failureCode = postUploadInspection.failureCode ?? "POST_UPLOAD_PHASE_NOT_READY";
+      throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", `上传后图文编辑器 discovery 未通过：${failureCode}`, {
+        failureCode,
+        failureStage: postUploadInspection.failureStage ?? "EDITOR_DISCOVERY",
+        missingSignal: postUploadInspection.missingSignal ?? "post-upload-editor-discovery"
+      });
+    }
+    gates.push("post_upload_editor_discovery");
 
     const title = await this.discoverUniqueEditor(page, "title");
     gates.push("title_editor", "title_write");
@@ -2486,7 +2646,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
   private async uploadImages(page: Page, images: string[]): Promise<Record<string, unknown>> {
     const input = page.locator(XIAOHONGSHU_FILE_SELECTOR);
     const inputCount = await locatorCount(input);
-    if (inputCount !== 1 || !(await isVisible(input))) throw new XiaohongshuGateError("IMAGE_UPLOAD_NOT_VERIFIED", "UPLOAD_FAILED", `图片上传控件未通过唯一且可见校验；matches=${inputCount}`);
+    if (inputCount !== 1 || !(await isEnabled(input))) throw new XiaohongshuGateError("IMAGE_UPLOAD_NOT_VERIFIED", "UPLOAD_FAILED", `图片上传控件未通过唯一且启用校验；matches=${inputCount}`);
     try {
       await input.setInputFiles(images);
       for (let attempt = 0; attempt < 8; attempt += 1) {

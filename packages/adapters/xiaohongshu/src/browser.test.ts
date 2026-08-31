@@ -58,6 +58,7 @@ interface Fixture {
   operationPages: Page[];
   calls: string[];
   session: BrowserSession;
+  phaseSnapshot: () => Record<string, unknown>;
 }
 
 function installSharedConnectionLifecycle(fixture: Fixture): void {
@@ -362,7 +363,38 @@ function setupPage(options: FixtureOptions = {}): Fixture {
       }
     }
   } as unknown as BrowserSessionManager;
-  const fixture = { page, manager, submitClick, inputSetFiles, entryClick, open, operationPageDebugIds, operationContextDebugIds, operationPages, calls, session };
+  const phaseSnapshot = (): Record<string, unknown> => {
+    const postUpload = imageUploaded;
+    return {
+      currentUrl,
+      readyState: "complete",
+      shellSignal: currentUrl.includes("/publish/publish"),
+      shellFingerprint: postUpload ? "fixture-post-upload-shell" : "fixture-pre-upload-shell",
+      contentTypeSignal: "IMAGE_POST",
+      securityVerificationPresent: false,
+      loginPagePresent: false,
+      preUploadSemanticSignalPresent: true,
+      phaseTopology: {
+        titleCandidateCount: postUpload ? options.titleCount ?? 1 : 0,
+        bodyCandidateCount: postUpload ? options.bodyCount ?? 1 : 0,
+        uploadCandidateCount: 1,
+        finalSubmitCandidateCount: postUpload ? options.submitCount ?? 1 : 0,
+        contenteditableCount: postUpload ? 1 : 0,
+        textareaCount: 0,
+        textInputCount: postUpload ? 1 : 0,
+        fileInputCount: 1,
+        buttonCount: postUpload ? options.submitCount ?? 1 : 1,
+        roleButtonCount: 0,
+        semanticSignals: ["upload", "image"],
+        stable: false
+      },
+      preUploadSemanticNodes: [{ tagName: "DIV", normalizedText: "上传图片", role: "button", visible: true, enabled: true, boundingBox: { x: 10, y: 20, width: 120, height: 40 }, nearestInteractiveAncestorTag: "DIV", nearestInteractiveAncestorRole: "button" }],
+      uploadControlRelationships: [{ candidateId: "fixture-upload-0", tagName: "INPUT", type: "file", accept: "image/*", multiple: true, enabled: true, visible: false, usableSurface: true, surfaceSignal: "visible-upload-ancestor", ancestors: [] }],
+      uploadBusy: Boolean(options.imageLoading && !postUpload),
+      previewReady: postUpload && (options.imagePreviewCount ?? 1) > 0
+    };
+  };
+  const fixture = { page, manager, submitClick, inputSetFiles, entryClick, open, operationPageDebugIds, operationContextDebugIds, operationPages, calls, session, phaseSnapshot };
   installSharedConnectionLifecycle(fixture);
   installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
   return fixture;
@@ -375,7 +407,9 @@ function installPageEvidence(fixture: Fixture, options: {
   externalAccountId?: string | null;
   profileUrl?: string | null;
 }): void {
-  (fixture.page as unknown as { evaluate: (pageFunction: () => unknown) => Promise<unknown> }).evaluate = vi.fn(async () => ({
+  (fixture.page as unknown as { evaluate: (pageFunction: () => unknown) => Promise<unknown> }).evaluate = vi.fn(async (pageFunction?: () => unknown) => {
+    if (typeof pageFunction === "function" && String(pageFunction).includes("phaseTopology")) return fixture.phaseSnapshot();
+    return ({
     available: true,
     bodyPresent: true,
     bodyTextLength: 512,
@@ -406,7 +440,8 @@ function installPageEvidence(fixture: Fixture, options: {
       externalAccountIdCandidates: options.externalAccountId ? [options.externalAccountId] : [],
       profileUrl: options.profileUrl ?? null
     }
-  }));
+    });
+  });
 }
 
 function context(accountId = "account-a") {
@@ -1080,29 +1115,34 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(fixture.submitClick).not.toHaveBeenCalled();
   });
 
-  it("runs shared read-only editor discovery before preparePublish mutation", async () => {
+  it("runs PRE_UPLOAD discovery before preparePublish mutation and reports post-upload control failure", async () => {
     const fixture = setupPage({ titleCount: 0, settings: [{ label: "公开范围", required: false, value: "公开" }] });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
     await adapter.connectAccount(context());
 
-    await expect(adapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "CONTENT_REJECTED", message: expect.stringContaining("TITLE_EDITOR_NOT_FOUND") });
-    expect(fixture.inputSetFiles).not.toHaveBeenCalled();
+    await expect(adapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "CONTENT_REJECTED", message: expect.stringContaining("TITLE_EDITOR_NOT_FOUND_POST_UPLOAD"), failureCode: "TITLE_EDITOR_NOT_FOUND_POST_UPLOAD", failureStage: "EDITOR_DISCOVERY" });
+    expect(fixture.inputSetFiles).toHaveBeenCalledTimes(1);
     expect(fixture.calls).not.toContain("title-fill");
     expect(fixture.calls).not.toContain("body-fill");
   });
 
-  it("returns a precise post-route editor discovery failure from the Gate", async () => {
+  it("returns a passing PRE_UPLOAD Gate without requiring post-upload controls", async () => {
     const fixture = setupPage({ titleCount: 0 });
     installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
     await adapter.connectAccount(context());
 
     await expect(adapter.inspectPublishEditor(context())).resolves.toMatchObject({
-      status: "needs_user_action",
+      status: "ready",
       editorReached: true,
-      failureCode: "TITLE_EDITOR_NOT_FOUND",
-      failureStage: "EDITOR_DISCOVERY",
-      missingSignal: "title-editor"
+      preSubmitGatePhase: "PRE_UPLOAD",
+      preUploadGateStatus: "PASS",
+      postUploadControlsStatus: "NOT_APPLICABLE_BEFORE_UPLOAD",
+      imageEditorPhase: "IMAGE_POST_PRE_UPLOAD",
+      imageEditorPhaseConfidence: "HIGH",
+      titleEditorDetected: false,
+      bodyEditorDetected: false,
+      finalSubmitControlDetected: false
     });
     expect(fixture.inputSetFiles).not.toHaveBeenCalled();
     expect(fixture.submitClick).not.toHaveBeenCalled();
@@ -1142,7 +1182,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     const ambiguous = setupPage({ titleCount: 2 });
     const ambiguousAdapter = new XiaohongshuBrowserAdapter({ sessionManager: ambiguous.manager });
     await ambiguousAdapter.connectAccount(context());
-    await expect(ambiguousAdapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "CONTENT_REJECTED", message: expect.stringContaining("TITLE_EDITOR_AMBIGUOUS"), failureCode: "TITLE_EDITOR_AMBIGUOUS", failureStage: "EDITOR_DISCOVERY" });
+    await expect(ambiguousAdapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "CONTENT_REJECTED", message: expect.stringContaining("TITLE_EDITOR_AMBIGUOUS_POST_UPLOAD"), failureCode: "TITLE_EDITOR_AMBIGUOUS_POST_UPLOAD", failureStage: "EDITOR_DISCOVERY" });
 
     const mismatch = setupPage({ titleReadback: "other title" });
     const mismatchAdapter = new XiaohongshuBrowserAdapter({ sessionManager: mismatch.manager });
@@ -1184,7 +1224,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     const ambiguous = setupPage({ submitCount: 2 });
     const ambiguousAdapter = new XiaohongshuBrowserAdapter({ sessionManager: ambiguous.manager });
     await ambiguousAdapter.connectAccount(context());
-    await expect(ambiguousAdapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "CONTENT_REJECTED", message: expect.stringContaining("FINAL_SUBMIT_CONTROL_AMBIGUOUS"), failureCode: "FINAL_SUBMIT_CONTROL_AMBIGUOUS", failureStage: "EDITOR_DISCOVERY" });
+    await expect(ambiguousAdapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "CONTENT_REJECTED", message: expect.stringContaining("FINAL_SUBMIT_CONTROL_AMBIGUOUS_POST_UPLOAD"), failureCode: "FINAL_SUBMIT_CONTROL_AMBIGUOUS_POST_UPLOAD", failureStage: "EDITOR_DISCOVERY" });
   });
 
   it("inspects the image-text editor on the canonical Page without content mutation", async () => {
@@ -1212,11 +1252,16 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
       authStillValid: true,
       contentType: "IMAGE_POST",
       contentTypeReady: true,
-      titleEditorDetected: true,
-      bodyEditorDetected: true,
+      titleEditorDetected: false,
+      bodyEditorDetected: false,
       imageUploadControlDetected: true,
-      publishSettingsAreaDetected: true,
-      finalSubmitControlDetected: true,
+      publishSettingsAreaDetected: false,
+      finalSubmitControlDetected: false,
+      preSubmitGatePhase: "PRE_UPLOAD",
+      preUploadGateStatus: "PASS",
+      postUploadControlsStatus: "NOT_APPLICABLE_BEFORE_UPLOAD",
+      imageEditorPhase: "IMAGE_POST_PRE_UPLOAD",
+      imageEditorPhaseConfidence: "HIGH",
       securityVerificationPresent: false,
       loginPagePresent: false,
       needsUserAction: false,
@@ -1246,6 +1291,10 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
       expect.objectContaining({ code: "EDITOR_ENTRY_STEP", stepName: "PUBLISH_ENTRY_FOUND", success: true }),
       expect.objectContaining({ code: "EDITOR_ENTRY_STEP", stepName: "PUBLISH_ENTRY_CLICKED", success: true }),
       expect.objectContaining({ code: "EDITOR_ENTRY_STEP", stepName: "EDITOR_ROUTE_REACHED", success: true, selectorSignal: "url:/publish/publish" })
+    ]));
+    expect(entryDiagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "PRE_UPLOAD_GATE_INSPECTION_STARTED", expectedPhase: "IMAGE_POST_PRE_UPLOAD" }),
+      expect.objectContaining({ code: "PRE_UPLOAD_GATE_RESULT", preSubmitGatePhase: "PRE_UPLOAD", preUploadGateStatus: "PASS", postUploadControlsStatus: "NOT_APPLICABLE_BEFORE_UPLOAD" })
     ]));
   });
 

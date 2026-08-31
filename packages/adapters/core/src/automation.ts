@@ -60,6 +60,10 @@ export type PreSubmitGateFailureCode =
   | "EDITOR_ROUTE_NOT_REACHED"
   | "EDITOR_SELECTOR_DRIFT"
   | "IMAGE_EDITOR_SHELL_TIMEOUT"
+  | "PRE_UPLOAD_PHASE_NOT_READY"
+  | "UPLOAD_CAPABILITY_NOT_VERIFIED"
+  | "POST_UPLOAD_EDITOR_TIMEOUT"
+  | "POST_UPLOAD_PHASE_NOT_READY"
   | "CONTENT_TYPE_NOT_READY"
   | "TITLE_EDITOR_NOT_FOUND"
   | "TITLE_EDITOR_AMBIGUOUS"
@@ -77,6 +81,19 @@ export type PreSubmitGateFailureCode =
   | "FINAL_SUBMIT_CONTROL_AMBIGUOUS"
   | "FINAL_SUBMIT_CONTROL_NOT_VISIBLE"
   | "FINAL_SUBMIT_CONTROL_DISABLED"
+  | "TITLE_EDITOR_NOT_FOUND_POST_UPLOAD"
+  | "TITLE_EDITOR_AMBIGUOUS_POST_UPLOAD"
+  | "TITLE_EDITOR_NOT_VISIBLE_POST_UPLOAD"
+  | "TITLE_EDITOR_DISABLED_POST_UPLOAD"
+  | "BODY_EDITOR_NOT_FOUND_POST_UPLOAD"
+  | "BODY_EDITOR_AMBIGUOUS_POST_UPLOAD"
+  | "BODY_EDITOR_NOT_VISIBLE_POST_UPLOAD"
+  | "BODY_EDITOR_DISABLED_POST_UPLOAD"
+  | "FINAL_SUBMIT_CONTROL_NOT_FOUND_POST_UPLOAD"
+  | "FINAL_SUBMIT_CONTROL_AMBIGUOUS_POST_UPLOAD"
+  | "FINAL_SUBMIT_CONTROL_NOT_VISIBLE_POST_UPLOAD"
+  | "FINAL_SUBMIT_CONTROL_DISABLED_POST_UPLOAD"
+  | "UPLOAD_COMPLETION_NOT_OBSERVED"
   | "EDITOR_CONTROL_AMBIGUOUS"
   | "AUTH_REDIRECTED_TO_LOGIN"
   | "SECURITY_VERIFICATION_REQUIRED"
@@ -113,6 +130,14 @@ export interface PreSubmitGateResult {
   failureCode?: PreSubmitGateFailureCode;
   failureStage?: PreSubmitGateFailureStage;
   missingSignal?: string | null;
+  preSubmitGatePhase?: "PRE_UPLOAD" | "POST_UPLOAD";
+  preUploadGateStatus?: "PASS" | "FAIL";
+  preUploadGateFailureCode?: PreSubmitGateFailureCode | null;
+  imageEditorPhase?: string | null;
+  imageEditorPhaseConfidence?: string | null;
+  uploadCapabilityPresent?: boolean;
+  postUploadControlsStatus?: "READY" | "NOT_APPLICABLE_BEFORE_UPLOAD" | "FAIL";
+  preSubmitGatePassMeaning?: string | null;
 }
 
 export interface AutomationAdapter extends PlatformAdapter {

@@ -9,6 +9,7 @@ export type ImageEditorSettingsStatus = ImageEditorControlStatus | "NOT_APPLICAB
 export type ImageEditorPhase = "IMAGE_POST_PRE_UPLOAD" | "IMAGE_POST_POST_UPLOAD_EDITOR" | "IMAGE_POST_TRANSITIONING" | "IMAGE_POST_UNKNOWN" | "LOGIN" | "SECURITY_VERIFICATION";
 export type ImageEditorPhaseConfidence = "HIGH" | "LOW";
 export type ImageEditorUploadCapabilityStatus = "PRESENT" | "AMBIGUOUS" | "ABSENT";
+export type ImageEditorPostUploadControlsStatus = "READY" | "FAIL";
 
 export interface ImageEditorBoundingBox {
   x: number;
@@ -107,6 +108,8 @@ interface ImageEditorPhaseDomSnapshot {
   preUploadSemanticNodes: readonly ImageEditorSemanticNode[];
   uploadControlRelationships: readonly ImageEditorUploadControlRelationship[];
   phaseTopology: ImageEditorPhaseTopology;
+  uploadBusy?: boolean;
+  previewReady?: boolean;
 }
 
 export interface ImageEditorUploadCapabilityResult {
@@ -153,6 +156,8 @@ export interface ImageEditorDomSnapshot {
   uploadCandidates: readonly ImageEditorControlCandidate[];
   publishSettingsCandidates: readonly ImageEditorControlCandidate[];
   finalSubmitCandidates: readonly ImageEditorControlCandidate[];
+  uploadBusy?: boolean;
+  previewReady?: boolean;
 }
 
 export interface ImageEditorReadinessSample {
@@ -168,6 +173,8 @@ export interface ImageEditorReadinessSample {
   finalSubmitCandidateCount: number;
   securityVerificationPresent: boolean;
   loginPagePresent: boolean;
+  uploadBusy?: boolean;
+  previewReady?: boolean;
 }
 
 export interface ImageEditorInspectionMetadata {
@@ -188,7 +195,16 @@ export type ImageEditorDiagnosticCode =
   | "IMAGE_EDITOR_CONTROLS_DISCOVERED"
   | "IMAGE_EDITOR_PHASE_OBSERVED"
   | "IMAGE_EDITOR_INSPECTION_COMPLETED"
-  | "IMAGE_EDITOR_INSPECTION_FAILED";
+  | "IMAGE_EDITOR_INSPECTION_FAILED"
+  | "PRE_UPLOAD_GATE_INSPECTION_STARTED"
+  | "PRE_UPLOAD_GATE_RESULT"
+  | "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED"
+  | "POST_UPLOAD_EDITOR_READINESS_STARTED"
+  | "POST_UPLOAD_EDITOR_READINESS_SAMPLE"
+  | "POST_UPLOAD_EDITOR_PHASE_OBSERVED"
+  | "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED"
+  | "POST_UPLOAD_EDITOR_INSPECTION_FAILED"
+  | "POST_UPLOAD_EDITOR_INSPECTION_COMPLETED";
 
 export interface ImageEditorDiagnostic {
   code: ImageEditorDiagnosticCode;
@@ -230,6 +246,15 @@ export interface ImageEditorDiagnostic {
   failureCode?: PreSubmitGateFailureCode;
   failureStage?: PreSubmitGateFailureStage;
   missingSignal?: string | null;
+  expectedPhase?: ImageEditorPhase;
+  observedPhase?: ImageEditorPhase;
+  preSubmitGatePhase?: "PRE_UPLOAD" | "POST_UPLOAD";
+  preUploadGateStatus?: "PASS" | "FAIL";
+  preUploadGateFailureCode?: PreSubmitGateFailureCode | null;
+  postUploadControlsStatus?: ImageEditorPostUploadControlsStatus | "NOT_APPLICABLE_BEFORE_UPLOAD";
+  preSubmitGatePassMeaning?: string | null;
+  uploadBusy?: boolean;
+  previewReady?: boolean;
 }
 
 export interface ImagePostEditorInspectionResult {
@@ -256,10 +281,31 @@ export interface ImagePostEditorInspectionResult {
   missingSignal?: string | null;
 }
 
+export interface ImagePostUploadEditorInspectionResult extends ImagePostEditorInspectionResult {
+  expectedPhase: "IMAGE_POST_POST_UPLOAD_EDITOR";
+  phase: ImageEditorPhase;
+  observedPhase: ImageEditorPhase;
+  confidence: ImageEditorPhaseConfidence;
+  reason: string;
+  postUploadControlsStatus: ImageEditorPostUploadControlsStatus;
+}
+
+export interface PreUploadImageEditorContractResult {
+  status: "PASS" | "FAIL";
+  expectedPhase: "IMAGE_POST_PRE_UPLOAD";
+  observedPhase: ImageEditorPhase;
+  observedConfidence: ImageEditorPhaseConfidence;
+  postUploadControlsStatus: "NOT_APPLICABLE_BEFORE_UPLOAD";
+  failureCode?: PreSubmitGateFailureCode;
+  failureStage?: PreSubmitGateFailureStage;
+  missingSignal?: string;
+}
+
 export interface ImageEditorInspectionOptions {
   maxWaitMs?: number;
   probeIntervalMs?: number;
   stableSampleCount?: number;
+  requiredControls?: readonly ImageEditorControlKind[];
   emit?: (diagnostic: ImageEditorDiagnostic) => void;
 }
 
@@ -345,6 +391,31 @@ export function classifyImagePostEditorPhase(evidence: ImageEditorPhaseEvidence)
     return { phase: "IMAGE_POST_PRE_UPLOAD", confidence: "HIGH", reason: "unique upload capability and pre-upload semantic signals are present while post-upload controls are absent" };
   }
   return { phase: "IMAGE_POST_UNKNOWN", confidence: "LOW", reason: "phase evidence does not satisfy a strict staged-editor rule" };
+}
+
+export function assertPreUploadImageEditorContract(inspection: ImagePostEditorPhaseInspectionResult): PreUploadImageEditorContractResult {
+  const base: Pick<PreUploadImageEditorContractResult, "expectedPhase" | "observedPhase" | "observedConfidence" | "postUploadControlsStatus"> = {
+    expectedPhase: "IMAGE_POST_PRE_UPLOAD",
+    observedPhase: inspection.phase,
+    observedConfidence: inspection.confidence,
+    postUploadControlsStatus: "NOT_APPLICABLE_BEFORE_UPLOAD"
+  };
+  const failure = (failureCode: PreSubmitGateFailureCode, missingSignal: string): PreUploadImageEditorContractResult => ({
+    ...base,
+    status: "FAIL",
+    failureCode,
+    failureStage: failureCode === "AUTH_REDIRECTED_TO_LOGIN" || failureCode === "SECURITY_VERIFICATION_REQUIRED" ? "AUTHENTICATION" : "EDITOR_DISCOVERY",
+    missingSignal
+  });
+  if (inspection.loginPagePresent) return failure("AUTH_REDIRECTED_TO_LOGIN", "login-url");
+  if (inspection.securityVerificationPresent) return failure("SECURITY_VERIFICATION_REQUIRED", "security-verification-signal");
+  if (inspection.phaseTopology.stable !== true || inspection.phase === "IMAGE_POST_TRANSITIONING") return failure("PRE_UPLOAD_PHASE_NOT_READY", "stable-pre-upload-phase");
+  if (inspection.contentType !== "IMAGE_POST" || !inspection.contentTypeReady) return failure("CONTENT_TYPE_NOT_READY", "content-type:image-post");
+  if (!inspection.uploadCapabilityPresent || !inspection.uploadCapabilityUnique || inspection.uploadCapabilityStatus !== "PRESENT") return failure("UPLOAD_CAPABILITY_NOT_VERIFIED", "image-upload-capability");
+  if (inspection.preUploadSemanticNodes.length === 0) return failure("PRE_UPLOAD_PHASE_NOT_READY", "pre-upload-semantic-signal");
+  if (inspection.phase !== "IMAGE_POST_PRE_UPLOAD" || inspection.confidence !== "HIGH") return failure("PRE_UPLOAD_PHASE_NOT_READY", "image-post-pre-upload-phase");
+  if (inspection.phaseTopology.titleCandidateCount !== 0 || inspection.phaseTopology.bodyCandidateCount !== 0 || inspection.phaseTopology.finalSubmitCandidateCount !== 0) return failure("PRE_UPLOAD_PHASE_NOT_READY", "post-upload-controls-absent-before-upload");
+  return { ...base, status: "PASS" };
 }
 
 function nowIso(): string { return new Date().toISOString(); }
@@ -499,7 +570,9 @@ function normalizeSnapshot(value: unknown, fallbackUrl: string): ImageEditorDomS
     bodyCandidates: normalizeCandidates(record.bodyCandidates),
     uploadCandidates: normalizeCandidates(record.uploadCandidates),
     publishSettingsCandidates: normalizeCandidates(record.publishSettingsCandidates),
-    finalSubmitCandidates: normalizeCandidates(record.finalSubmitCandidates)
+    finalSubmitCandidates: normalizeCandidates(record.finalSubmitCandidates),
+    ...(typeof record.uploadBusy === "boolean" ? { uploadBusy: record.uploadBusy } : {}),
+    ...(typeof record.previewReady === "boolean" ? { previewReady: record.previewReady } : {})
   };
 }
 
@@ -610,7 +683,9 @@ function emptyPhaseSnapshot(fallbackUrl: string): ImageEditorPhaseDomSnapshot {
     finalSubmitCandidateCount: 0,
     preUploadSemanticNodes: [],
     uploadControlRelationships: [],
-    phaseTopology: emptyPhaseTopology()
+    phaseTopology: emptyPhaseTopology(),
+    uploadBusy: false,
+    previewReady: false
   };
 }
 
@@ -638,7 +713,9 @@ function normalizePhaseSnapshot(value: unknown, fallbackUrl: string): ImageEdito
     finalSubmitCandidateCount: topology.finalSubmitCandidateCount,
     preUploadSemanticNodes: normalizeSemanticNodes(record.preUploadSemanticNodes),
     uploadControlRelationships: relationships,
-    phaseTopology: topology
+    phaseTopology: topology,
+    ...(typeof record.uploadBusy === "boolean" ? { uploadBusy: record.uploadBusy } : {}),
+    ...(typeof record.previewReady === "boolean" ? { previewReady: record.previewReady } : {})
   };
 }
 
@@ -738,7 +815,11 @@ async function readSnapshotFromLocators(page: Page, fallbackUrl: string): Promis
   const contentTypeSignal: ImageEditorContentType = /视频|video/iu.test(bodyText) && uploadCandidates.length === 0 ? "VIDEO" : uploadCandidates.length > 0 || /图文|图片|image/iu.test(bodyText) ? "IMAGE_POST" : "UNKNOWN";
   const shellSignal = EDITOR_ROUTE_PATTERN.test(currentUrl) && !loginPagePresent && !securityVerificationPresent;
   const shellFingerprint = JSON.stringify({ title: titleCandidates.length, body: bodyCandidates.length, upload: uploadCandidates.length, settings: publishSettingsCandidates.length, finalSubmit: finalSubmitCandidates.length });
-  return { currentUrl, readyState: "complete", shellSignal, shellFingerprint, contentTypeSignal, securityVerificationPresent, loginPagePresent, titleCandidates, bodyCandidates, uploadCandidates, publishSettingsCandidates, finalSubmitCandidates };
+  const busy = page.locator('[aria-busy="true"], [class*="loading" i], [class*="uploading" i], progress');
+  const preview = page.locator('img[class*="preview" i], img[src*="xhscdn" i], [class*="preview" i], [data-testid*="upload-result" i], [class*="uploaded" i]');
+  const uploadBusy = await locatorCount(busy) > 0;
+  const previewReady = await locatorCount(preview) > 0 && await locatorVisible(locatorAt(preview, 0));
+  return { currentUrl, readyState: "complete", shellSignal, shellFingerprint, contentTypeSignal, securityVerificationPresent, loginPagePresent, titleCandidates, bodyCandidates, uploadCandidates, publishSettingsCandidates, finalSubmitCandidates, uploadBusy, previewReady };
 }
 
 async function readSnapshot(page: Page): Promise<ImageEditorDomSnapshot> {
@@ -774,6 +855,8 @@ async function readSnapshot(page: Page): Promise<ImageEditorDomSnapshot> {
       const label = normalize(element.textContent ?? element.getAttribute("aria-label") ?? element.getAttribute("title") ?? "");
       return /^(发布|发布笔记|发表|提交|立即发布|publish|submit)$/iu.test(label) && !/视频/iu.test(label);
     });
+    const uploadBusy = document.querySelector('[aria-busy="true"], [class*="loading" i], [class*="uploading" i], progress') !== null;
+    const previewReady = Array.from(document.querySelectorAll('img[class*="preview" i], img[src*="xhscdn" i], [class*="preview" i], [data-testid*="upload-result" i], [class*="uploaded" i]')).some(visible);
     const semanticControls = Array.from(document.querySelectorAll('[role="tab"], [role="radio"], button, [aria-label], [data-content-type], [data-type]')).map((element) => normalize(`${element.textContent ?? ""} ${element.getAttribute("aria-label") ?? ""} ${element.getAttribute("data-content-type") ?? ""} ${element.getAttribute("data-type") ?? ""}`)).join(" ");
     const typedAttributes = Array.from(document.querySelectorAll("[data-content-type], [data-type]")).map((element) => `${element.getAttribute("data-content-type") ?? ""} ${element.getAttribute("data-type") ?? ""}`).join(" ").toLowerCase();
     const hasVideoSignal = /video|视频/iu.test(`${typedAttributes} ${semanticControls}`);
@@ -784,7 +867,7 @@ async function readSnapshot(page: Page): Promise<ImageEditorDomSnapshot> {
     const shellCount = document.querySelectorAll('main, [role="main"], [data-testid*="publish" i], [class*="publish" i], [class*="editor" i]').length;
     const shellSignal = document.readyState === "complete" && document.body.childElementCount > 0 && shellCount > 0 && !loginPagePresent && !securityVerificationPresent;
     const shellFingerprint = JSON.stringify({ shellCount, title: titleCandidates.length, body: bodyCandidates.length, upload: uploadCandidates.length, settings: settingsCandidates.length, finalSubmit: finalSubmitCandidates.length });
-    return { currentUrl: window.location.href, readyState: document.readyState, shellSignal, shellFingerprint, contentTypeSignal, securityVerificationPresent, loginPagePresent, titleCandidates, bodyCandidates, uploadCandidates, publishSettingsCandidates: settingsCandidates, finalSubmitCandidates };
+    return { currentUrl: window.location.href, readyState: document.readyState, shellSignal, shellFingerprint, contentTypeSignal, securityVerificationPresent, loginPagePresent, titleCandidates, bodyCandidates, uploadCandidates, publishSettingsCandidates: settingsCandidates, finalSubmitCandidates, uploadBusy, previewReady };
     });
   } catch {
     raw = null;
@@ -916,6 +999,8 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
         stable: false
       };
       const capability = uploadControlRelationships.filter((relationship) => relationship.enabled && relationship.usableSurface);
+      const uploadBusy = document.querySelector('[aria-busy="true"], [class*="loading" i], [class*="uploading" i], progress') !== null;
+      const previewReady = Array.from(document.querySelectorAll('img[class*="preview" i], img[src*="xhscdn" i], [class*="preview" i], [data-testid*="upload-result" i], [class*="uploaded" i]')).some(visible);
       return {
         currentUrl: window.location.href,
         readyState: document.readyState,
@@ -933,7 +1018,9 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
         finalSubmitCandidateCount,
         preUploadSemanticNodes,
         uploadControlRelationships,
-        phaseTopology
+        phaseTopology,
+        uploadBusy,
+        previewReady
       };
     });
   } catch {
@@ -965,7 +1052,9 @@ function readinessSample(snapshot: ImageEditorDomSnapshot, sampleIndex: number, 
     uploadCandidateCount: snapshot.uploadCandidates.length,
     finalSubmitCandidateCount: snapshot.finalSubmitCandidates.length,
     securityVerificationPresent: snapshot.securityVerificationPresent,
-    loginPagePresent: snapshot.loginPagePresent
+    loginPagePresent: snapshot.loginPagePresent,
+    ...(snapshot.uploadBusy === undefined ? {} : { uploadBusy: snapshot.uploadBusy }),
+    ...(snapshot.previewReady === undefined ? {} : { previewReady: snapshot.previewReady })
   };
 }
 
@@ -988,7 +1077,7 @@ export async function inspectImagePostEditor(page: Page, metadata: ImageEditorIn
     lastSnapshot = await readSnapshot(page);
     const sample = readinessSample(lastSnapshot, readinessSamples.length, startedAt);
     readinessSamples.push(sample);
-    emit(options, metadata, "IMAGE_EDITOR_READINESS_SAMPLE", { ...baseFields(lastSnapshot), sampleIndex: sample.sampleIndex, elapsedMs: sample.elapsedMs, titleCandidateCount: sample.titleCandidateCount, bodyCandidateCount: sample.bodyCandidateCount, uploadCandidateCount: sample.uploadCandidateCount, finalSubmitCandidateCount: sample.finalSubmitCandidateCount });
+    emit(options, metadata, "IMAGE_EDITOR_READINESS_SAMPLE", { ...baseFields(lastSnapshot), sampleIndex: sample.sampleIndex, elapsedMs: sample.elapsedMs, titleCandidateCount: sample.titleCandidateCount, bodyCandidateCount: sample.bodyCandidateCount, uploadCandidateCount: sample.uploadCandidateCount, finalSubmitCandidateCount: sample.finalSubmitCandidateCount, ...(sample.uploadBusy === undefined ? {} : { uploadBusy: sample.uploadBusy }), ...(sample.previewReady === undefined ? {} : { previewReady: sample.previewReady }) });
     if (lastSnapshot.loginPagePresent || lastSnapshot.securityVerificationPresent) {
       const result = emptyResult("FAILED", "IMAGE_EDITOR_SHELL_NOT_READY", sample.currentUrl, readinessSamples);
       result.loginPagePresent = lastSnapshot.loginPagePresent;
@@ -1049,7 +1138,8 @@ export async function inspectImagePostEditor(page: Page, metadata: ImageEditorIn
   const publishSettingsArea = settingsDiscovery(lastSnapshot.publishSettingsCandidates);
   const finalSubmitControl = controlDiscovery("FINAL_SUBMIT_CONTROL", lastSnapshot.finalSubmitCandidates);
   emit(options, metadata, "IMAGE_EDITOR_CONTROLS_DISCOVERED", { ...baseFields(lastSnapshot), contentType, contentTypeReady, titleEditor, bodyEditor, imageUploadControl, publishSettingsArea, finalSubmitControl });
-  const controls = [titleEditor, bodyEditor, imageUploadControl, finalSubmitControl];
+  const requiredControls = options.requiredControls ?? ["TITLE_EDITOR", "BODY_EDITOR", "IMAGE_UPLOAD_CONTROL", "FINAL_SUBMIT_CONTROL"];
+  const controls = [titleEditor, bodyEditor, imageUploadControl, finalSubmitControl].filter((control) => requiredControls.includes(control.kind));
   const failedControl = controls.find((control) => control.status !== "FOUND_UNIQUE");
   const result = emptyResult(failedControl ? "FAILED" : "READY", "IMAGE_EDITOR_SHELL_READY", sanitizeUrl(lastSnapshot.currentUrl), readinessSamples);
   result.contentType = contentType;
@@ -1077,6 +1167,146 @@ export async function inspectImagePostEditor(page: Page, metadata: ImageEditorIn
   return result;
 }
 
+function postUploadControlFailureCode(code: PreSubmitGateFailureCode | undefined): PreSubmitGateFailureCode | undefined {
+  switch (code) {
+    case "TITLE_EDITOR_NOT_FOUND": return "TITLE_EDITOR_NOT_FOUND_POST_UPLOAD";
+    case "TITLE_EDITOR_AMBIGUOUS": return "TITLE_EDITOR_AMBIGUOUS_POST_UPLOAD";
+    case "TITLE_EDITOR_NOT_VISIBLE": return "TITLE_EDITOR_NOT_VISIBLE_POST_UPLOAD";
+    case "TITLE_EDITOR_DISABLED": return "TITLE_EDITOR_DISABLED_POST_UPLOAD";
+    case "BODY_EDITOR_NOT_FOUND": return "BODY_EDITOR_NOT_FOUND_POST_UPLOAD";
+    case "BODY_EDITOR_AMBIGUOUS": return "BODY_EDITOR_AMBIGUOUS_POST_UPLOAD";
+    case "BODY_EDITOR_NOT_VISIBLE": return "BODY_EDITOR_NOT_VISIBLE_POST_UPLOAD";
+    case "BODY_EDITOR_DISABLED": return "BODY_EDITOR_DISABLED_POST_UPLOAD";
+    case "FINAL_SUBMIT_CONTROL_NOT_FOUND": return "FINAL_SUBMIT_CONTROL_NOT_FOUND_POST_UPLOAD";
+    case "FINAL_SUBMIT_CONTROL_AMBIGUOUS": return "FINAL_SUBMIT_CONTROL_AMBIGUOUS_POST_UPLOAD";
+    case "FINAL_SUBMIT_CONTROL_NOT_VISIBLE": return "FINAL_SUBMIT_CONTROL_NOT_VISIBLE_POST_UPLOAD";
+    case "FINAL_SUBMIT_CONTROL_DISABLED": return "FINAL_SUBMIT_CONTROL_DISABLED_POST_UPLOAD";
+    default: return code;
+  }
+}
+
+export async function inspectPostUploadImageEditor(page: Page, metadata: ImageEditorInspectionMetadata, options: ImageEditorInspectionOptions = {}): Promise<ImagePostUploadEditorInspectionResult> {
+  emit(options, metadata, "POST_UPLOAD_EDITOR_READINESS_STARTED", {
+    sanitizedUrl: sanitizeUrl(page.url()),
+    expectedPhase: "IMAGE_POST_POST_UPLOAD_EDITOR",
+    observedPhase: "IMAGE_POST_TRANSITIONING"
+  });
+  const forwardedEmitter = (diagnostic: ImageEditorDiagnostic): void => {
+    try { options.emit?.(diagnostic); } catch { /* diagnostics are best effort */ }
+    if (diagnostic.code !== "IMAGE_EDITOR_READINESS_SAMPLE") return;
+    emit(options, metadata, "POST_UPLOAD_EDITOR_READINESS_SAMPLE", {
+      sanitizedUrl: diagnostic.sanitizedUrl,
+      currentUrl: diagnostic.currentUrl,
+      readyState: diagnostic.readyState,
+      sampleIndex: diagnostic.sampleIndex,
+      elapsedMs: diagnostic.elapsedMs,
+      titleCandidateCount: diagnostic.titleCandidateCount,
+      bodyCandidateCount: diagnostic.bodyCandidateCount,
+      uploadCandidateCount: diagnostic.uploadCandidateCount,
+      finalSubmitCandidateCount: diagnostic.finalSubmitCandidateCount,
+      securityVerificationPresent: diagnostic.securityVerificationPresent,
+      loginPagePresent: diagnostic.loginPagePresent,
+      uploadBusy: diagnostic.uploadBusy,
+      previewReady: diagnostic.previewReady,
+      expectedPhase: "IMAGE_POST_POST_UPLOAD_EDITOR",
+      observedPhase: "IMAGE_POST_TRANSITIONING"
+    });
+  };
+  const inspected = await inspectImagePostEditor(page, metadata, {
+    ...options,
+    requiredControls: ["TITLE_EDITOR", "BODY_EDITOR", "FINAL_SUBMIT_CONTROL"],
+    emit: forwardedEmitter
+  });
+  const lastSample = inspected.readinessSamples[inspected.readinessSamples.length - 1];
+  const uploadBusy = lastSample?.uploadBusy === true;
+  const previewReady = lastSample?.previewReady ?? true;
+  const controlsReady = inspected.status === "READY";
+  const completionReady = !uploadBusy && previewReady;
+  const isAuthenticated = !inspected.loginPagePresent && !inspected.securityVerificationPresent;
+  const ready = controlsReady && completionReady && isAuthenticated && inspected.contentType === "IMAGE_POST" && inspected.contentTypeReady;
+  const observedPhase: ImageEditorPhase = inspected.loginPagePresent
+    ? "LOGIN"
+    : inspected.securityVerificationPresent
+      ? "SECURITY_VERIFICATION"
+      : ready
+        ? "IMAGE_POST_POST_UPLOAD_EDITOR"
+        : inspected.shellStatus === "IMAGE_EDITOR_SHELL_TIMEOUT"
+          ? "IMAGE_POST_TRANSITIONING"
+          : "IMAGE_POST_UNKNOWN";
+  const confidence: ImageEditorPhaseConfidence = ready || inspected.loginPagePresent || inspected.securityVerificationPresent ? "HIGH" : "LOW";
+  const reason = ready
+    ? "upload completion and stable post-upload editor controls are present"
+    : uploadBusy
+      ? "upload is still busy"
+      : !previewReady
+        ? "upload completion preview was not observed"
+        : "post-upload editor controls are not ready";
+  const postUploadControlsStatus: ImageEditorPostUploadControlsStatus = ready ? "READY" : "FAIL";
+  if (!ready) {
+    if (inspected.failureCode) inspected.failureCode = postUploadControlFailureCode(inspected.failureCode);
+    else if (!completionReady) inspected.failureCode = uploadBusy ? "POST_UPLOAD_EDITOR_TIMEOUT" : "UPLOAD_COMPLETION_NOT_OBSERVED";
+    else inspected.failureCode = "POST_UPLOAD_PHASE_NOT_READY";
+    inspected.failureStage = inspected.failureStage ?? "EDITOR_DISCOVERY";
+    inspected.missingSignal = inspected.missingSignal ?? (uploadBusy || !previewReady ? "upload-completion" : "post-upload-editor-controls");
+  }
+  const markerFields = {
+    sanitizedUrl: inspected.sanitizedUrl,
+    contentType: inspected.contentType,
+    contentTypeReady: inspected.contentTypeReady,
+    titleEditor: inspected.titleEditor,
+    bodyEditor: inspected.bodyEditor,
+    imageUploadControl: inspected.imageUploadControl,
+    publishSettingsArea: inspected.publishSettingsArea,
+    finalSubmitControl: inspected.finalSubmitControl,
+    expectedPhase: "IMAGE_POST_POST_UPLOAD_EDITOR" as const,
+    observedPhase,
+    postUploadControlsStatus,
+    uploadBusy,
+    previewReady
+  };
+  emit(options, metadata, "POST_UPLOAD_EDITOR_PHASE_OBSERVED", {
+    ...markerFields,
+    phase: observedPhase,
+    phaseConfidence: confidence,
+    phaseReason: reason,
+    failureCode: inspected.failureCode,
+    failureStage: inspected.failureStage,
+    missingSignal: inspected.missingSignal
+  });
+  emit(options, metadata, "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED", markerFields);
+  const result: ImagePostUploadEditorInspectionResult = {
+    ...inspected,
+    expectedPhase: "IMAGE_POST_POST_UPLOAD_EDITOR",
+    phase: observedPhase,
+    observedPhase,
+    confidence,
+    reason,
+    postUploadControlsStatus,
+    status: ready ? "READY" : "FAILED"
+  };
+  if (ready) {
+    emit(options, metadata, "POST_UPLOAD_EDITOR_INSPECTION_COMPLETED", {
+      ...markerFields,
+      status: result.status,
+      phase: observedPhase,
+      phaseConfidence: confidence,
+      phaseReason: reason
+    });
+  } else {
+    emit(options, metadata, "POST_UPLOAD_EDITOR_INSPECTION_FAILED", {
+      ...markerFields,
+      status: result.status,
+      phase: observedPhase,
+      phaseConfidence: confidence,
+      phaseReason: reason,
+      failureCode: result.failureCode,
+      failureStage: result.failureStage,
+      missingSignal: result.missingSignal
+    });
+  }
+  return result;
+}
+
 function phaseReadinessSample(snapshot: ImageEditorPhaseDomSnapshot, sampleIndex: number, startedAt: number): ImageEditorReadinessSample {
   return {
     sampleIndex,
@@ -1090,11 +1320,13 @@ function phaseReadinessSample(snapshot: ImageEditorPhaseDomSnapshot, sampleIndex
     uploadCandidateCount: snapshot.uploadCandidateCount,
     finalSubmitCandidateCount: snapshot.finalSubmitCandidateCount,
     securityVerificationPresent: snapshot.securityVerificationPresent,
-    loginPagePresent: snapshot.loginPagePresent
+    loginPagePresent: snapshot.loginPagePresent,
+    ...(snapshot.uploadBusy === undefined ? {} : { uploadBusy: snapshot.uploadBusy }),
+    ...(snapshot.previewReady === undefined ? {} : { previewReady: snapshot.previewReady })
   };
 }
 
-function phaseDiagnosticFields(snapshot: ImageEditorPhaseDomSnapshot): Pick<ImageEditorDiagnostic, "sanitizedUrl" | "currentUrl" | "readyState" | "securityVerificationPresent" | "loginPagePresent" | "contentType" | "contentTypeReady" | "preUploadSemanticNodes" | "uploadControlRelationships" | "uploadCapabilityStatus" | "uploadCapabilityPresent" | "uploadCapabilityUnique" | "phaseTopology"> {
+function phaseDiagnosticFields(snapshot: ImageEditorPhaseDomSnapshot): Pick<ImageEditorDiagnostic, "sanitizedUrl" | "currentUrl" | "readyState" | "securityVerificationPresent" | "loginPagePresent" | "contentType" | "contentTypeReady" | "preUploadSemanticNodes" | "uploadControlRelationships" | "uploadCapabilityStatus" | "uploadCapabilityPresent" | "uploadCapabilityUnique" | "phaseTopology" | "uploadBusy" | "previewReady"> {
   const capability = resolveImageEditorUploadCapability(snapshot.uploadControlRelationships);
   return {
     sanitizedUrl: sanitizeUrl(snapshot.currentUrl),
@@ -1109,7 +1341,9 @@ function phaseDiagnosticFields(snapshot: ImageEditorPhaseDomSnapshot): Pick<Imag
     uploadCapabilityStatus: capability.status,
     uploadCapabilityPresent: capability.present,
     uploadCapabilityUnique: capability.uniqueSurface,
-    phaseTopology: snapshot.phaseTopology
+    phaseTopology: snapshot.phaseTopology,
+    ...(snapshot.uploadBusy === undefined ? {} : { uploadBusy: snapshot.uploadBusy }),
+    ...(snapshot.previewReady === undefined ? {} : { previewReady: snapshot.previewReady })
   };
 }
 

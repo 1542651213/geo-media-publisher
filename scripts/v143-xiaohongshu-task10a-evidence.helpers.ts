@@ -106,6 +106,11 @@ export type Task10AEvidenceSummary = {
   imageEditorPhase: string | null;
   imageEditorPhaseConfidence: string | null;
   imageEditorPhaseReason: string | null;
+  preSubmitGatePhase: string | null;
+  preUploadGateStatus: string | null;
+  preUploadGateFailureCode: string | null;
+  postUploadControlsStatus: string | null;
+  preSubmitGatePassMeaning: string | null;
   preUploadSemanticNodes: unknown[];
   uploadControlRelationships: unknown[];
   uploadCapabilityStatus: string | null;
@@ -281,6 +286,11 @@ function emptySummary(input: AnalyzeTask10AEvidenceInput, gateResult: string): T
     imageEditorPhase: null,
     imageEditorPhaseConfidence: null,
     imageEditorPhaseReason: null,
+    preSubmitGatePhase: null,
+    preUploadGateStatus: null,
+    preUploadGateFailureCode: null,
+    postUploadControlsStatus: null,
+    preSubmitGatePassMeaning: null,
     preUploadSemanticNodes: [],
     uploadControlRelationships: [],
     uploadCapabilityStatus: null,
@@ -420,9 +430,11 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
   const imageEditorContentTypeEvent = [...gateEvents].reverse().find((event) => event.code === "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED");
   const imageEditorControlsEvent = [...gateEvents].reverse().find((event) => event.code === "IMAGE_EDITOR_CONTROLS_DISCOVERED");
   const imageEditorPhaseEvent = [...gateEvents].reverse().find((event) => event.code === "IMAGE_EDITOR_PHASE_OBSERVED");
+  const preUploadGateResultEvent = [...gateEvents].reverse().find((event) => event.code === "PRE_UPLOAD_GATE_RESULT");
   const imageEditorFailureEvent = [...gateEvents].reverse().find((event) => event.code === "IMAGE_EDITOR_INSPECTION_FAILED");
   const imageEditorControlsContext = imageEditorControlsEvent?.context ?? {};
   const imageEditorPhaseContext = imageEditorPhaseEvent?.context ?? {};
+  const preUploadGateContext = preUploadGateResultEvent?.context ?? {};
   const imageEditorControl = (field: string): Record<string, unknown> => isRecord(imageEditorControlsContext[field]) ? imageEditorControlsContext[field] : {};
   const imageEditorCandidates = (field: string): unknown[] => Array.isArray(imageEditorControl(field).candidates) ? imageEditorControl(field).candidates as unknown[] : [];
   const result: Task10AEvidenceSummary = {
@@ -501,14 +513,19 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
     imageEditorInspectionStarted: Boolean(imageEditorInspectionStartedEvent),
     imageEditorReadinessSamples: imageEditorReadinessEvents.map((event) => event.context),
     imageEditorShellResult: stringValue(imageEditorShellEvent?.context.shellStatus) ?? imageEditorShellEvent?.code ?? null,
-    imageEditorPhase: stringValue(imageEditorPhaseContext.phase),
-    imageEditorPhaseConfidence: stringValue(imageEditorPhaseContext.phaseConfidence),
-    imageEditorPhaseReason: stringValue(imageEditorPhaseContext.phaseReason),
+    imageEditorPhase: stringValue(preUploadGateContext.imageEditorPhase) ?? stringValue(preUploadGateContext.phase) ?? stringValue(imageEditorPhaseContext.phase),
+    imageEditorPhaseConfidence: stringValue(preUploadGateContext.imageEditorPhaseConfidence) ?? stringValue(preUploadGateContext.phaseConfidence) ?? stringValue(imageEditorPhaseContext.phaseConfidence),
+    imageEditorPhaseReason: stringValue(preUploadGateContext.phaseReason) ?? stringValue(imageEditorPhaseContext.phaseReason),
+    preSubmitGatePhase: stringValue(preUploadGateContext.preSubmitGatePhase),
+    preUploadGateStatus: stringValue(preUploadGateContext.preUploadGateStatus),
+    preUploadGateFailureCode: stringValue(preUploadGateContext.preUploadGateFailureCode),
+    postUploadControlsStatus: stringValue(preUploadGateContext.postUploadControlsStatus),
+    preSubmitGatePassMeaning: stringValue(preUploadGateContext.preSubmitGatePassMeaning),
     preUploadSemanticNodes: Array.isArray(imageEditorPhaseContext.preUploadSemanticNodes) ? imageEditorPhaseContext.preUploadSemanticNodes : [],
     uploadControlRelationships: Array.isArray(imageEditorPhaseContext.uploadControlRelationships) ? imageEditorPhaseContext.uploadControlRelationships : [],
     uploadCapabilityStatus: stringValue(imageEditorPhaseContext.uploadCapabilityStatus),
-    uploadCapabilityPresent: booleanValue(imageEditorPhaseContext.uploadCapabilityPresent),
-    uploadCapabilityUnique: booleanValue(imageEditorPhaseContext.uploadCapabilityUnique),
+    uploadCapabilityPresent: booleanValue(preUploadGateContext.uploadCapabilityPresent) ?? booleanValue(imageEditorPhaseContext.uploadCapabilityPresent),
+    uploadCapabilityUnique: booleanValue(preUploadGateContext.uploadCapabilityUnique) ?? booleanValue(imageEditorPhaseContext.uploadCapabilityUnique),
     imageEditorPhaseTopology: isRecord(imageEditorPhaseContext.phaseTopology) ? imageEditorPhaseContext.phaseTopology : null,
     titleEditorCandidates: imageEditorCandidates("titleEditor"),
     titleEditorStatus: stringValue(imageEditorControl("titleEditor").status),

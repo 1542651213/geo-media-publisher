@@ -390,4 +390,49 @@ describe("Task 10A evidence analyzer", () => {
       sideEffectSummary: { contentMutationCount: 0, uploadCount: 0, finalSubmitCount: 0 }
     });
   });
+
+  it("extracts phase-aware PRE_UPLOAD Gate semantics without counting discovery as submit", () => {
+    const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
+    const events = [
+      ...gateEvents(),
+      event("2026-08-30T08:00:00.012Z", "PRE_UPLOAD_GATE_INSPECTION_STARTED", {
+        ...shared,
+        expectedPhase: "IMAGE_POST_PRE_UPLOAD",
+        sanitizedUrl: "https://creator.xiaohongshu.com/publish/publish"
+      }),
+      event("2026-08-30T08:00:00.013Z", "PRE_UPLOAD_GATE_RESULT", {
+        ...shared,
+        preSubmitGatePhase: "PRE_UPLOAD",
+        preUploadGateStatus: "PASS",
+        preUploadGateFailureCode: null,
+        imageEditorPhase: "IMAGE_POST_PRE_UPLOAD",
+        imageEditorPhaseConfidence: "HIGH",
+        uploadCapabilityPresent: true,
+        postUploadControlsStatus: "NOT_APPLICABLE_BEFORE_UPLOAD",
+        preSubmitGatePassMeaning: "SAFE_TO_ENTER_PREPARE_PUBLISH_UPLOAD_STAGE"
+      }),
+      event("2026-08-30T08:00:00.014Z", "IMAGE_EDITOR_CONTROLS_DISCOVERED", {
+        ...shared,
+        action: "IMAGE_EDITOR_CONTROLS_DISCOVERED"
+      }),
+      event("2026-08-30T08:00:00.015Z", "FINAL_SUBMIT_CONTROL_DETECTED", {
+        ...shared,
+        action: "FINAL_SUBMIT_CONTROL_DETECTED"
+      })
+    ];
+
+    const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
+
+    expect(result).toMatchObject({
+      preSubmitGatePhase: "PRE_UPLOAD",
+      preUploadGateStatus: "PASS",
+      preUploadGateFailureCode: null,
+      imageEditorPhase: "IMAGE_POST_PRE_UPLOAD",
+      imageEditorPhaseConfidence: "HIGH",
+      uploadCapabilityPresent: true,
+      postUploadControlsStatus: "NOT_APPLICABLE_BEFORE_UPLOAD",
+      preSubmitGatePassMeaning: "SAFE_TO_ENTER_PREPARE_PUBLISH_UPLOAD_STAGE",
+      sideEffectSummary: { finalSubmitCount: 0 }
+    });
+  });
 });

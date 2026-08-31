@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { Page } from "playwright-core";
 import {
+  assertPreUploadImageEditorContract,
   classifyImagePostEditorPhase,
   resolveImageEditorUploadCapability,
   inspectImagePostEditorPhase,
   inspectImagePostEditor,
+  inspectPostUploadImageEditor,
   type ImageEditorDiagnostic,
   type ImageEditorDomSnapshot,
   type ImageEditorInspectionMetadata,
@@ -306,5 +308,163 @@ describe("Xiaohongshu image editor discovery", () => {
     expect(serialized).not.toContain("outerHTML");
     expect(serialized).not.toContain("正文内容");
     expect(serialized).not.toContain("handler");
+  });
+
+  it("passes the PRE_UPLOAD contract without requiring post-upload controls", () => {
+    const phase = {
+      phase: "IMAGE_POST_PRE_UPLOAD" as const,
+      confidence: "HIGH" as const,
+      reason: "unique upload capability and stable pre-upload evidence",
+      readinessSamples: [],
+      contentType: "IMAGE_POST" as const,
+      contentTypeReady: true,
+      preUploadSemanticNodes: [{
+        tagName: "DIV",
+        normalizedText: "上传图片",
+        role: "button",
+        visible: true,
+        enabled: true,
+        boundingBox: { x: 1, y: 2, width: 120, height: 40 },
+        nearestInteractiveAncestorTag: "DIV",
+        nearestInteractiveAncestorRole: "button"
+      }],
+      uploadControlRelationships: [uploadRelationship()],
+      uploadCapabilityStatus: "PRESENT" as const,
+      uploadCapabilityPresent: true,
+      uploadCapabilityUnique: true,
+      phaseTopology: {
+        titleCandidateCount: 0,
+        bodyCandidateCount: 0,
+        uploadCandidateCount: 1,
+        finalSubmitCandidateCount: 0,
+        contenteditableCount: 0,
+        textareaCount: 0,
+        textInputCount: 0,
+        fileInputCount: 1,
+        buttonCount: 1,
+        roleButtonCount: 1,
+        semanticSignals: ["upload", "image"],
+        stable: true
+      },
+      securityVerificationPresent: false,
+      loginPagePresent: false,
+      sanitizedUrl: editorUrl
+    };
+
+    expect(assertPreUploadImageEditorContract(phase)).toMatchObject({
+      status: "PASS",
+      expectedPhase: "IMAGE_POST_PRE_UPLOAD",
+      observedPhase: "IMAGE_POST_PRE_UPLOAD",
+      postUploadControlsStatus: "NOT_APPLICABLE_BEFORE_UPLOAD"
+    });
+  });
+
+  it("fails the PRE_UPLOAD contract when the upload capability is not unique", () => {
+    const phase = {
+      phase: "IMAGE_POST_PRE_UPLOAD" as const,
+      confidence: "HIGH" as const,
+      reason: "missing unique upload capability",
+      readinessSamples: [],
+      contentType: "IMAGE_POST" as const,
+      contentTypeReady: true,
+      preUploadSemanticNodes: [{
+        tagName: "DIV",
+        normalizedText: "上传图片",
+        role: "button",
+        visible: true,
+        enabled: true,
+        boundingBox: null,
+        nearestInteractiveAncestorTag: null,
+        nearestInteractiveAncestorRole: null
+      }],
+      uploadControlRelationships: [],
+      uploadCapabilityStatus: "ABSENT" as const,
+      uploadCapabilityPresent: false,
+      uploadCapabilityUnique: false,
+      phaseTopology: {
+        titleCandidateCount: 0,
+        bodyCandidateCount: 0,
+        uploadCandidateCount: 0,
+        finalSubmitCandidateCount: 0,
+        contenteditableCount: 0,
+        textareaCount: 0,
+        textInputCount: 0,
+        fileInputCount: 0,
+        buttonCount: 0,
+        roleButtonCount: 0,
+        semanticSignals: ["upload"],
+        stable: true
+      },
+      securityVerificationPresent: false,
+      loginPagePresent: false,
+      sanitizedUrl: editorUrl
+    };
+
+    expect(assertPreUploadImageEditorContract(phase)).toMatchObject({
+      status: "FAIL",
+      failureCode: "UPLOAD_CAPABILITY_NOT_VERIFIED",
+      failureStage: "EDITOR_DISCOVERY",
+      missingSignal: "image-upload-capability"
+    });
+  });
+
+  it("keeps IMAGE_POST classification when supporting copy mentions video", () => {
+    const classification = classifyImagePostEditorPhase(phaseEvidence());
+
+    expect(classification.phase).toBe("IMAGE_POST_PRE_UPLOAD");
+    expect(classification.confidence).toBe("HIGH");
+  });
+
+  it("discovers post-upload controls only after bounded post-upload readiness", async () => {
+    const diagnostics: ImageEditorDiagnostic[] = [];
+    const result = await inspectPostUploadImageEditor(pageFor([
+      snapshot({
+        shellFingerprint: "post-upload-shell",
+        titleCandidates: [candidate("title-0")],
+        bodyCandidates: [candidate("body-0", { tagName: "DIV", role: "textbox" })],
+        uploadCandidates: [candidate("upload-0", { tagName: "INPUT", semanticSignal: "input[type=file]" })],
+        finalSubmitCandidates: [candidate("submit-0", { tagName: "BUTTON", semanticSignal: "final-submit-label" })]
+      }),
+      snapshot({
+        shellFingerprint: "post-upload-shell",
+        titleCandidates: [candidate("title-0")],
+        bodyCandidates: [candidate("body-0", { tagName: "DIV", role: "textbox" })],
+        uploadCandidates: [candidate("upload-0", { tagName: "INPUT", semanticSignal: "input[type=file]" })],
+        finalSubmitCandidates: [candidate("submit-0", { tagName: "BUTTON", semanticSignal: "final-submit-label" })]
+      })
+    ]), metadata, {
+      maxWaitMs: 80,
+      probeIntervalMs: 0,
+      stableSampleCount: 2,
+      emit: (event) => diagnostics.push(event)
+    });
+
+    expect(result).toMatchObject({
+      status: "READY",
+      phase: "IMAGE_POST_POST_UPLOAD_EDITOR",
+      postUploadControlsStatus: "READY"
+    });
+    expect(result.readinessSamples).toEqual(expect.arrayContaining([
+      expect.objectContaining({ titleCandidateCount: 1, bodyCandidateCount: 1, finalSubmitCandidateCount: 1 })
+    ]));
+    expect(diagnostics.map((event) => event.code)).toEqual(expect.arrayContaining([
+      "POST_UPLOAD_EDITOR_READINESS_STARTED",
+      "POST_UPLOAD_EDITOR_READINESS_SAMPLE",
+      "POST_UPLOAD_EDITOR_PHASE_OBSERVED",
+      "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED",
+      "POST_UPLOAD_EDITOR_INSPECTION_COMPLETED"
+    ]));
+  });
+
+  it("fails closed when upload completion remains busy", async () => {
+    const result = await inspectPostUploadImageEditor(pageFor([
+      snapshot({ uploadBusy: true, previewReady: false }),
+      snapshot({ uploadBusy: true, previewReady: false })
+    ]), metadata, { maxWaitMs: 80, probeIntervalMs: 0, stableSampleCount: 2 });
+
+    expect(result.status).toBe("FAILED");
+    expect(result.phase).toBe("IMAGE_POST_UNKNOWN");
+    expect(result.failureCode).toBe("POST_UPLOAD_EDITOR_TIMEOUT");
+    expect(result.postUploadControlsStatus).toBe("FAIL");
   });
 });
