@@ -62,6 +62,14 @@ export type Task10AEvidenceSummary = {
   eventListenerDiagnostics: unknown[];
   hitTestDiagnostics: unknown[];
   publishNoteSurface: Record<string, unknown> | null;
+  publishNoteSurfaceStatus: string | null;
+  publishNotePreclickRevalidated: boolean | null;
+  publishNoteNavigationClickCount: number | null;
+  publishNoteUrlBefore: string | null;
+  publishNoteUrlAfter: string | null;
+  postPublishNoteState: string | null;
+  imagePostSurfaceAfterPublishNote: Record<string, unknown> | null;
+  navigationTransitionObserved: boolean | null;
   imagePostSurface: Record<string, unknown> | null;
   clickableSurfaceStatus: string | null;
   clickableSurfaceFailureCode: string | null;
@@ -205,6 +213,14 @@ function emptySummary(input: AnalyzeTask10AEvidenceInput, gateResult: string): T
     eventListenerDiagnostics: [],
     hitTestDiagnostics: [],
     publishNoteSurface: null,
+    publishNoteSurfaceStatus: null,
+    publishNotePreclickRevalidated: null,
+    publishNoteNavigationClickCount: null,
+    publishNoteUrlBefore: null,
+    publishNoteUrlAfter: null,
+    postPublishNoteState: null,
+    imagePostSurfaceAfterPublishNote: null,
+    navigationTransitionObserved: null,
     imagePostSurface: null,
     clickableSurfaceStatus: null,
     clickableSurfaceFailureCode: null,
@@ -266,6 +282,22 @@ function countOccurrences(events: EvidenceLogEvent[], patterns: RegExp[]): numbe
   }, 0);
 }
 
+const FINAL_SUBMIT_MARKERS = new Set(["FINAL_SUBMIT_ATTEMPTED", "FINAL_SUBMIT_CLICKED", "SUBMIT_COMMITTED"]);
+
+function isFinalSubmitMarker(event: EvidenceLogEvent): boolean {
+  if (FINAL_SUBMIT_MARKERS.has(event.code)) return true;
+  const action = stringValue(event.context.action);
+  return action !== null && FINAL_SUBMIT_MARKERS.has(action);
+}
+
+function countFinalSubmitEvidence(events: EvidenceLogEvent[]): number {
+  return events.reduce((count, event) => count + (isFinalSubmitMarker(event) ? 1 : 0), 0);
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task10AEvidenceSummary {
   const parsed = parseTask10AEvidenceLog(input.logText);
   const scoped = parsed.filter((event) => event.context.platformKey === input.platformKey && event.context.accountId === input.accountId && inTimeWindow(event, input.from, input.to));
@@ -322,6 +354,10 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
   const surfaceEvent = [...gateEvents].reverse().find((event) => event.code === "PUBLISH_CLICK_SURFACE_DIAGNOSTICS");
   const hitTestEvent = [...gateEvents].reverse().find((event) => event.code === "PUBLISH_HIT_TEST_OBSERVED");
   const eventListenerEvent = [...gateEvents].reverse().find((event) => event.code === "PUBLISH_EVENT_LISTENERS_OBSERVED");
+  const surfaceResolvedEvent = [...gateEvents].reverse().find((event) => event.code === "PUBLISH_NOTE_SURFACE_RESOLVED");
+  const preClickEvent = [...gateEvents].reverse().find((event) => event.code === "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED");
+  const navigationClickEvent = [...gateEvents].reverse().find((event) => event.code === "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED") ?? [...gateEvents].reverse().find((event) => event.code === "PUBLISH_NOTE_NAVIGATION_CLICK_STARTED");
+  const postPublishNoteStateEvent = [...gateEvents].reverse().find((event) => event.code === "POST_PUBLISH_NOTE_STATE_OBSERVED");
   const exactTargetsContext = exactTargetsEvent?.context ?? {};
   const ancestorChainsContext = ancestorChainsEvent?.context ?? {};
   const surfaceContext = surfaceEvent?.context ?? {};
@@ -362,6 +398,14 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
     eventListenerDiagnostics: Array.isArray(eventListenerContext.eventListenerDiagnostics) ? eventListenerContext.eventListenerDiagnostics : [],
     hitTestDiagnostics: Array.isArray(hitTestContext.hitTestDiagnostics) ? hitTestContext.hitTestDiagnostics : [],
     publishNoteSurface: isRecord(surfaceContext.publishNoteSurface) ? surfaceContext.publishNoteSurface : null,
+    publishNoteSurfaceStatus: stringValue(surfaceResolvedEvent?.context.status) ?? stringValue(surfaceContext.publishNoteSurfaceStatus) ?? (isRecord(surfaceContext.publishNoteSurface) ? stringValue(surfaceContext.publishNoteSurface.status) : null),
+    publishNotePreclickRevalidated: booleanValue(preClickEvent?.context.revalidated) ?? booleanValue(surfaceContext.publishNotePreclickRevalidated),
+    publishNoteNavigationClickCount: numberValue(navigationClickEvent?.context.navigationClickCount) ?? numberValue(surfaceContext.publishNoteNavigationClickCount),
+    publishNoteUrlBefore: stringValue(navigationClickEvent?.context.sanitizedUrlBefore) ?? stringValue(surfaceContext.publishNoteUrlBefore),
+    publishNoteUrlAfter: stringValue(navigationClickEvent?.context.sanitizedUrlAfter) ?? stringValue(surfaceContext.publishNoteUrlAfter),
+    postPublishNoteState: stringValue(postPublishNoteStateEvent?.context.state) ?? stringValue(postPublishNoteStateEvent?.context.postPublishNoteState),
+    imagePostSurfaceAfterPublishNote: isRecord(postPublishNoteStateEvent?.context.imagePostSurfaceAfterPublishNote) ? postPublishNoteStateEvent.context.imagePostSurfaceAfterPublishNote : null,
+    navigationTransitionObserved: booleanValue(navigationClickEvent?.context.navigationTransition) ?? booleanValue(surfaceContext.navigationTransitionObserved),
     imagePostSurface: isRecord(surfaceContext.imagePostSurface) ? surfaceContext.imagePostSurface : null,
     clickableSurfaceStatus: stringValue(surfaceContext.clickableSurfaceStatus),
     clickableSurfaceFailureCode: stringValue(surfaceContext.clickableSurfaceFailureCode),
@@ -400,7 +444,7 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
       preparePublishCalled: countOccurrences(gateEvents, [/preparePublish/iu]) > 0 ? "YES" : "NO",
       contentMutationCount: countOccurrences(gateEvents, [/setInputFiles|\.fill|\.type|insertText|keyboard/iu]),
       uploadCount: countOccurrences(gateEvents, [/upload/iu]),
-      finalSubmitCount: countOccurrences(gateEvents, [/final.?submit|submit.?click|publish.?click/iu])
+      finalSubmitCount: countFinalSubmitEvidence(gateEvents)
     }
   };
   // Keep the result tied to the selected lifecycle even when the final event is a non-terminal diagnostic.

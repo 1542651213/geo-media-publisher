@@ -241,4 +241,59 @@ describe("Task 10A evidence analyzer", () => {
       keyboardEventCount: 0
     });
   });
+
+  it("does not count clickable-surface or navigation diagnostics as final submit", () => {
+    const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
+    const events = [
+      ...gateEvents(),
+      event("2026-08-30T08:00:00.012Z", "PUBLISH_CLICK_SURFACE_DIAGNOSTICS", { ...shared, clickableSurfaceStatus: "PROVEN_UNIQUE" }),
+      event("2026-08-30T08:00:00.013Z", "PUBLISH_NOTE_NAVIGATION_CLICK", { ...shared, action: "PUBLISH_NOTE_NAVIGATION_CLICK", navigationClickCount: 1 }),
+      event("2026-08-30T08:00:00.014Z", "FINAL_SUBMIT_CLICKED", { ...shared, action: "FINAL_SUBMIT_CLICKED" })
+    ];
+
+    const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
+
+    expect(result.sideEffectSummary.finalSubmitCount).toBe(1);
+  });
+
+  it("keeps clickable-surface diagnostics at zero final submits without an explicit submit marker", () => {
+    const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
+    const events = [
+      ...gateEvents(),
+      event("2026-08-30T08:00:00.012Z", "PUBLISH_CLICK_SURFACE_DIAGNOSTICS", {
+        ...shared,
+        action: "PUBLISH_CLICK_SURFACE_DIAGNOSTICS",
+        clickableSurfaceStatus: "PROVEN_UNIQUE",
+        gateFinalSubmitCount: 0
+      })
+    ];
+
+    const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
+
+    expect(result.sideEffectSummary.finalSubmitCount).toBe(0);
+  });
+
+  it("extracts Task 10I note-navigation evidence from structured markers", () => {
+    const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
+    const events = [
+      ...gateEvents(),
+      event("2026-08-30T08:00:00.012Z", "PUBLISH_NOTE_SURFACE_RESOLVED", { ...shared, status: "PROVEN_UNIQUE" }),
+      event("2026-08-30T08:00:00.013Z", "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED", { ...shared, revalidated: true }),
+      event("2026-08-30T08:00:00.014Z", "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED", { ...shared, action: "PUBLISH_NOTE_NAVIGATION_CLICK", navigationClickCount: 1, sanitizedUrlBefore: "https://creator.xiaohongshu.com/new/home", sanitizedUrlAfter: "https://creator.xiaohongshu.com/publish/publish", navigationTransition: true }),
+      event("2026-08-30T08:00:00.015Z", "POST_PUBLISH_NOTE_STATE_OBSERVED", { ...shared, postPublishNoteState: "IMAGE_EDITOR", imagePostSurfaceAfterPublishNote: { status: "AMBIGUOUS" } })
+    ];
+
+    const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
+
+    expect(result).toMatchObject({
+      publishNoteSurfaceStatus: "PROVEN_UNIQUE",
+      publishNotePreclickRevalidated: true,
+      publishNoteNavigationClickCount: 1,
+      publishNoteUrlBefore: "https://creator.xiaohongshu.com/new/home",
+      publishNoteUrlAfter: "https://creator.xiaohongshu.com/publish/publish",
+      postPublishNoteState: "IMAGE_EDITOR",
+      imagePostSurfaceAfterPublishNote: { status: "AMBIGUOUS" },
+      navigationTransitionObserved: true
+    });
+  });
 });
