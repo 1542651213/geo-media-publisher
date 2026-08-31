@@ -341,6 +341,8 @@ function countOccurrences(events: EvidenceLogEvent[], patterns: RegExp[]): numbe
 }
 
 const FINAL_SUBMIT_MARKERS = new Set(["FINAL_SUBMIT_ATTEMPTED", "FINAL_SUBMIT_CLICKED", "SUBMIT_COMMITTED"]);
+const PREPARE_PUBLISH_MARKERS = new Set(["PREPARE_PUBLISH_STARTED"]);
+const UPLOAD_MUTATION_MARKERS = new Set(["IMAGE_UPLOAD_STARTED", "SET_INPUT_FILES_CALLED", "UPLOAD_MUTATION_EXECUTED"]);
 
 function isFinalSubmitMarker(event: EvidenceLogEvent): boolean {
   if (FINAL_SUBMIT_MARKERS.has(event.code)) return true;
@@ -350,6 +352,22 @@ function isFinalSubmitMarker(event: EvidenceLogEvent): boolean {
 
 function countFinalSubmitEvidence(events: EvidenceLogEvent[]): number {
   return events.reduce((count, event) => count + (isFinalSubmitMarker(event) ? 1 : 0), 0);
+}
+
+function isPreparePublishMarker(event: EvidenceLogEvent): boolean {
+  if (PREPARE_PUBLISH_MARKERS.has(event.code)) return true;
+  const action = stringValue(event.context.action);
+  return action !== null && PREPARE_PUBLISH_MARKERS.has(action);
+}
+
+function isUploadMutationMarker(event: EvidenceLogEvent): boolean {
+  if (UPLOAD_MUTATION_MARKERS.has(event.code)) return true;
+  const action = stringValue(event.context.action);
+  return action !== null && UPLOAD_MUTATION_MARKERS.has(action);
+}
+
+function countUploadMutations(events: EvidenceLogEvent[]): number {
+  return events.reduce((count, event) => count + (isUploadMutationMarker(event) ? 1 : 0), 0);
 }
 
 function numberValue(value: unknown): number | null {
@@ -541,9 +559,11 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
     editorDiscoveryMissingSignal: stringValue(imageEditorFailureEvent?.context.missingSignal) ?? (failureStage === "EDITOR_DISCOVERY" ? missingSignal : null),
     postGateSnapshot: postHeartbeat?.context ?? null,
     sideEffectSummary: {
-      preparePublishCalled: countOccurrences(gateEvents, [/preparePublish/iu]) > 0 ? "YES" : "NO",
+      preparePublishCalled: gateEvents.some(isPreparePublishMarker) ? "YES" : "NO",
       contentMutationCount: countOccurrences(gateEvents, [/setInputFiles|\.fill|\.type|insertText|keyboard/iu]),
-      uploadCount: countOccurrences(gateEvents, [/upload/iu]),
+      // Upload count is a mutation-attempt count. Diagnostic names such as
+      // PRE_UPLOAD_* and POST_UPLOAD_* are deliberately not evidence of an upload.
+      uploadCount: countUploadMutations(gateEvents),
       finalSubmitCount: countFinalSubmitEvidence(gateEvents)
     }
   };

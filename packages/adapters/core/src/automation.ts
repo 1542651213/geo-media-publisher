@@ -23,6 +23,37 @@ export interface AutomationPrepareResult {
   response: Record<string, unknown>;
 }
 
+export type ControlledSelfTestMode = "POST_UPLOAD_DISCOVERY_ONLY";
+
+export interface ControlledPostUploadDiscoveryResult {
+  mode: ControlledSelfTestMode;
+  status: "PASS" | "FAIL";
+  operationId: string;
+  platformKey: string;
+  accountId: string;
+  imageSource: "SAFE_TEST_FIXTURE";
+  sanitizedUrlBefore: string | null;
+  sanitizedUrlAfter: string | null;
+  preUploadGateStatus: "PASS" | "FAIL";
+  preUploadMutationRevalidated: boolean;
+  uploadMutationCount: number;
+  uploadCompletionObserved: boolean;
+  postUploadPhase: string | null;
+  postUploadPhaseConfidence: string | null;
+  postUploadControlsStatus: "READY" | "FAIL";
+  titleEditorStatus: string;
+  bodyEditorStatus: string;
+  finalSubmitStatus: string;
+  contentMutationCount: number;
+  finalSubmitCount: number;
+  sameCanonicalPage: boolean;
+  sameContext: boolean;
+  failureCode: string | null;
+  failureStage: string | null;
+  missingSignal: string | null;
+  evidence: Record<string, unknown>;
+}
+
 export type PreSubmitGateStatus = "ready" | "needs_user_action" | "auth_expired" | "editor_not_found" | "security_verification_required";
 
 export type PreSubmitGateFailureCode =
@@ -150,6 +181,8 @@ export interface AutomationAdapter extends PlatformAdapter {
   openBackend(ctx: AccountContext): Promise<{ opened: boolean; backendUrl: string; sessionIdHash: string }>;
   /** Optional side-effect-free editor discovery. This must never call preparePublish or mutate content. */
   inspectPublishEditor?(ctx: AccountContext): Promise<PreSubmitGateResult>;
+  /** Optional controlled upload-only self-test. It may upload exactly one approved fixture, then must stop before content mutation or final submit. */
+  runControlledPostUploadDiscovery?(ctx: AccountContext, input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE" }): Promise<ControlledPostUploadDiscoveryResult>;
   preparePublish(ctx: AccountContext, article: PublishArticleInput): Promise<AutomationPrepareResult>;
   verifyPublish(ctx: AccountContext, externalId?: string): Promise<PublishStatusResult>;
   logout(ctx: AccountContext): Promise<void>;

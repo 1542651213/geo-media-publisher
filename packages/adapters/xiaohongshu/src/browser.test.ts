@@ -44,6 +44,7 @@ type FixtureOptions = {
   contentTypeSelectionEnabled?: boolean;
   contentTypeSelectionFails?: boolean;
   routeWaitTimeout?: boolean;
+  fileInputCount?: number;
 };
 
 interface Fixture {
@@ -225,7 +226,7 @@ function setupPage(options: FixtureOptions = {}): Fixture {
     getAttribute: vi.fn(async (name: string) => ({ role: "textbox", contenteditable: "true", "data-placeholder": "填写正文", class: "note-editor ProseMirror" }[name] ?? null))
   });
   const fileInput = locator({
-    count: vi.fn(async () => currentUrl.includes("/publish/") ? 1 : 0),
+    count: vi.fn(async () => currentUrl.includes("/publish/") ? options.fileInputCount ?? 1 : 0),
     setInputFiles: inputSetFiles,
     getAttribute: vi.fn(async (name: string) => name === "accept" ? "image/*" : name === "aria-label" ? "上传图片" : null)
   });
@@ -365,6 +366,7 @@ function setupPage(options: FixtureOptions = {}): Fixture {
   } as unknown as BrowserSessionManager;
   const phaseSnapshot = (): Record<string, unknown> => {
     const postUpload = imageUploaded;
+    const uploadPresent = (options.fileInputCount ?? 1) > 0;
     return {
       currentUrl,
       readyState: "complete",
@@ -377,19 +379,19 @@ function setupPage(options: FixtureOptions = {}): Fixture {
       phaseTopology: {
         titleCandidateCount: postUpload ? options.titleCount ?? 1 : 0,
         bodyCandidateCount: postUpload ? options.bodyCount ?? 1 : 0,
-        uploadCandidateCount: 1,
+        uploadCandidateCount: options.fileInputCount ?? 1,
         finalSubmitCandidateCount: postUpload ? options.submitCount ?? 1 : 0,
         contenteditableCount: postUpload ? 1 : 0,
         textareaCount: 0,
         textInputCount: postUpload ? 1 : 0,
-        fileInputCount: 1,
+        fileInputCount: options.fileInputCount ?? 1,
         buttonCount: postUpload ? options.submitCount ?? 1 : 1,
         roleButtonCount: 0,
         semanticSignals: ["upload", "image"],
         stable: false
       },
       preUploadSemanticNodes: [{ tagName: "DIV", normalizedText: "上传图片", role: "button", visible: true, enabled: true, boundingBox: { x: 10, y: 20, width: 120, height: 40 }, nearestInteractiveAncestorTag: "DIV", nearestInteractiveAncestorRole: "button" }],
-      uploadControlRelationships: [{ candidateId: "fixture-upload-0", tagName: "INPUT", type: "file", accept: "image/*", multiple: true, enabled: true, visible: false, usableSurface: true, surfaceSignal: "visible-upload-ancestor", ancestors: [] }],
+        uploadControlRelationships: uploadPresent ? [{ candidateId: "fixture-upload-0", tagName: "INPUT", type: "file", accept: "image/*", multiple: true, enabled: true, visible: false, usableSurface: true, surfaceSignal: "visible-upload-ancestor", ancestors: [] }] : [],
       uploadBusy: Boolean(options.imageLoading && !postUpload),
       previewReady: postUpload && (options.imagePreviewCount ?? 1) > 0
     };
@@ -1547,6 +1549,77 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     await adapter.connectAccount(ctx);
     await expect(adapter.inspectPublishEditor(ctx)).resolves.toMatchObject({ status: "needs_user_action", failureCode: "PUBLISH_ENTRY_CLICK_FAILED", failureStage: "PUBLISH_ENTRY_CLICK", missingSignal: expect.stringContaining("/publish/publish") });
     expect(fixture.entryClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs the controlled post-upload discovery path with exactly one upload and no content mutation", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
+    const diagnostics: Array<Record<string, unknown>> = [];
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager, onEditorEntryDiagnostic: (diagnostic: Record<string, unknown>) => diagnostics.push(diagnostic) } as never);
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    fixture.manager.setRuntimeAuthState?.({ platformKey: "xiaohongshu", accountId: "account-a" }, "AUTHENTICATED", null);
+    const result = await (adapter as unknown as {
+      runControlledPostUploadDiscovery: (context: AccountContext, input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE" }) => Promise<Record<string, unknown>>;
+    }).runControlledPostUploadDiscovery(ctx, { imagePath: "C:/fixtures/task10n-safe-test.png", imageSource: "SAFE_TEST_FIXTURE" });
+
+    expect(result).toMatchObject({
+      mode: "POST_UPLOAD_DISCOVERY_ONLY",
+      status: "PASS",
+      preUploadMutationRevalidated: true,
+      uploadMutationCount: 1,
+      uploadCompletionObserved: true,
+      postUploadPhase: "IMAGE_POST_POST_UPLOAD_EDITOR",
+      postUploadControlsStatus: "READY",
+      contentMutationCount: 0,
+      finalSubmitCount: 0,
+      sameCanonicalPage: true,
+      sameContext: true
+    });
+    expect(fixture.entryClick).toHaveBeenCalledTimes(1);
+    expect(fixture.inputSetFiles).toHaveBeenCalledTimes(1);
+    expect(fixture.calls).not.toContain("title-fill");
+    expect(fixture.calls).not.toContain("body-fill");
+    expect(fixture.submitClick).not.toHaveBeenCalled();
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED", mutationType: "IMAGE_UPLOAD_ONLY", selfTestMode: "POST_UPLOAD_DISCOVERY_ONLY" }),
+      expect.objectContaining({ code: "IMAGE_UPLOAD_STARTED", action: "IMAGE_UPLOAD_MUTATION" }),
+      expect.objectContaining({ code: "IMAGE_UPLOAD_COMPLETED" }),
+      expect.objectContaining({ code: "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED" })
+    ]));
+  });
+
+  it("does not upload when PRE_UPLOAD capability is absent", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", fileInputCount: 0 });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    fixture.manager.setRuntimeAuthState?.({ platformKey: "xiaohongshu", accountId: "account-a" }, "AUTHENTICATED", null);
+    const result = await adapter.runControlledPostUploadDiscovery(ctx, { imagePath: "C:/fixtures/task10n-safe-test.png", imageSource: "SAFE_TEST_FIXTURE" });
+
+    expect(result).toMatchObject({ status: "FAIL", uploadMutationCount: 0, preUploadGateStatus: "FAIL" });
+    expect(result.failureCode).toBeTruthy();
+    expect(fixture.inputSetFiles).not.toHaveBeenCalled();
+  });
+
+  it("stops after one upload when a post-upload title control is missing", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", titleCount: 0 });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    fixture.manager.setRuntimeAuthState?.({ platformKey: "xiaohongshu", accountId: "account-a" }, "AUTHENTICATED", null);
+    const result = await adapter.runControlledPostUploadDiscovery(ctx, { imagePath: "C:/fixtures/task10n-safe-test.png", imageSource: "SAFE_TEST_FIXTURE" });
+
+    expect(result).toMatchObject({ status: "FAIL", uploadMutationCount: 1, uploadCompletionObserved: true, failureCode: "TITLE_EDITOR_NOT_FOUND_POST_UPLOAD" });
+    expect(fixture.inputSetFiles).toHaveBeenCalledTimes(1);
+    expect(fixture.calls).not.toContain("title-fill");
+    expect(fixture.calls).not.toContain("body-fill");
+    expect(fixture.submitClick).not.toHaveBeenCalled();
   });
 
   it("reports missing and failed content-type selection as distinct editor-entry failures", async () => {

@@ -1,6 +1,10 @@
+import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import type { AppRepository } from "@publisher/db";
 import { isAutomationAdapter, type AdapterRegistry, type AutomationAdapter, type PlatformAdapter, type UserInitiatedAction } from "@publisher/adapters-core";
-import type { AutomationPrepareResult } from "@publisher/adapters-core";
+import type { AutomationPrepareResult, ControlledPostUploadDiscoveryResult } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
 import type { PublisherService } from "@publisher/publisher";
 import type { Account, AccountContext, BackgroundAutomationStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PublishArticleInput } from "@publisher/domain";
@@ -14,6 +18,15 @@ const SHORT_CONTENT_PLATFORMS = new Set(["weibo"]);
 const VIDEO_PLATFORMS = new Set(["douyin", "tiktok", "youtube", "bilibili"]);
 const SELF_TEST_LEVEL_ORDER: PlatformSelfTestLevel[] = ["L1_LOGIN", "L2_EDITOR", "L3_CONTENT_FILL", "L4_DRAFT", "L5_PUBLISH"];
 const SECURITY_OR_LOGIN_CODES = new Set(["AUTH_REQUIRED", "LOGIN_EXPIRED", "USER_ACTION_REQUIRED", "CAPTCHA", "SECURITY_CHECK", "SMS_REQUIRED", "QR_LOGIN", "RISK_CONTROL"]);
+const SAFE_TEST_IMAGE_BYTES = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAQAAACoE2KBAAAADUlEQVR42mNk+M/wHwAF/gL+J1Q6WQAAAABJRU5ErkJggg==", "base64");
+
+function safeSelfTestImagePath(): string {
+  const directory = join(tmpdir(), "geo-media-publisher-safe-fixtures");
+  const imagePath = join(directory, "task10n-safe-test.png");
+  mkdirSync(directory, { recursive: true });
+  if (!existsSync(imagePath) || statSync(imagePath).size !== SAFE_TEST_IMAGE_BYTES.byteLength) writeFileSync(imagePath, SAFE_TEST_IMAGE_BYTES, { flag: "w" });
+  return imagePath;
+}
 function realPublishTestBatchConfirmed(): boolean {
   return ["1", "true", "yes"].includes((process.env.REAL_PUBLISH_TEST_BATCH_CONFIRMED ?? "").trim().toLowerCase());
 }
@@ -130,6 +143,31 @@ export class PlatformSelfTestService {
     // must use the BrowserSessionManager-owned system browser/page so the
     // evidence is page.url()/DOM-backed and never depends on desktop windows.
     return this.runVisibleAutomation(run, account, adapter);
+  }
+
+  /**
+   * Runs the explicitly controlled first-upload proof without creating a
+   * PlatformSelfTestRun, Job, SubmissionIntent, or PublishRecord. The XHS
+   * adapter owns the browser/mutex lifecycle and stops before content fill.
+   */
+  async runPostUploadDiscovery(platformAccountId: string): Promise<ControlledPostUploadDiscoveryResult> {
+    const account = this.options.repository.listAccounts().find((item) => (item.platformAccountId ?? item.id) === platformAccountId && item.platformKey === "xiaohongshu");
+    if (!account) throw new Error("小红书受控上传自测账号不存在");
+    const adapter = this.options.registry.getForContent("xiaohongshu", "article");
+    if (!isAutomationAdapter(adapter) || typeof adapter.runControlledPostUploadDiscovery !== "function") throw new Error("当前小红书 Adapter 未提供受控上传后发现能力");
+    const operationId = randomUUID();
+    const context: AccountContext = {
+      accountId: account.id,
+      accountName: account.accountAlias || account.name,
+      platformKey: "xiaohongshu",
+      settings: { userActionId: operationId, triggerSource: "RUN_SELF_TEST", browserExecutionMode: "VISIBLE" },
+      secrets: this.options.resolveAccountSecrets(account.id, account.platformKey)
+    };
+    const imagePath = safeSelfTestImagePath();
+    this.options.logger?.info("PLATFORM_SELF_TEST", "CONTROLLED_POST_UPLOAD_DISCOVERY_STARTED", "开始小红书受控首次上传后发现；仅使用安全测试夹具，不创建发布域记录", { platformKey: "xiaohongshu", platformAccountId, mode: "POST_UPLOAD_DISCOVERY_ONLY", imageSource: "SAFE_TEST_FIXTURE" });
+    const result = await adapter.runControlledPostUploadDiscovery(context, { imagePath, imageSource: "SAFE_TEST_FIXTURE" });
+    this.options.logger?.info("PLATFORM_SELF_TEST", "CONTROLLED_POST_UPLOAD_DISCOVERY_COMPLETED", "小红书受控首次上传后发现已停止在标题/正文/最终发布之前", { platformKey: "xiaohongshu", platformAccountId, mode: result.mode, status: result.status, operationId: result.operationId, uploadMutationCount: result.uploadMutationCount, contentMutationCount: result.contentMutationCount, finalSubmitCount: result.finalSubmitCount });
+    return result;
   }
 
   async continue(testRunId: string): Promise<PlatformSelfTestRun> {

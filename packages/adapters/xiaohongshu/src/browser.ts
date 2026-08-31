@@ -1,6 +1,6 @@
 import type { AccountContext, AccountProfile, LoginSession, LoginStatus, PublishArticleInput, ValidationResult } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
-import { type AutomationPrepareResult, type BrowserRuntimeAuthState, type BrowserSession, type BrowserSessionRuntimeSnapshot, type PreSubmitGateFailureCode, type PreSubmitGateFailureStage, type PreSubmitGateResult, type PreSubmitGateStatus } from "@publisher/adapters-core";
+import { type AutomationPrepareResult, type BrowserRuntimeAuthState, type BrowserSession, type BrowserSessionRuntimeSnapshot, type ControlledPostUploadDiscoveryResult, type PreSubmitGateFailureCode, type PreSubmitGateFailureStage, type PreSubmitGateResult, type PreSubmitGateStatus } from "@publisher/adapters-core";
 import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomationAdapterOptions, type BrowserPlatformDefinition, type BrowserSessionScopeEvidence } from "@publisher/adapters-browser";
 import type { Locator, Page } from "playwright-core";
 import { collectXhsAuthStateMetadata, collectXhsPreNavigationAuthStateMetadata, createXhsDiagnosticFingerprintKey, type XhsAuthStateMetadata } from "./auth-state-diagnostics";
@@ -268,7 +268,7 @@ export interface XiaohongshuCanonicalPageOperationEvidence {
   operationId: string;
   platformKey: "xiaohongshu";
   accountId: string;
-  action: "CHECK_LOGIN" | "PRE_SUBMIT_GATE";
+  action: "CHECK_LOGIN" | "PRE_SUBMIT_GATE" | "CONTROLLED_POST_UPLOAD_DISCOVERY";
   contextDebugId: string;
   pageDebugId: string;
   pageRole: "CANONICAL_AUTHENTICATED";
@@ -300,7 +300,7 @@ export type XiaohongshuEditorEntryStepName =
 export type XiaohongshuEditorNavigationTrigger = "DIRECT_GOTO" | "PUBLISH_ENTRY_CLICK" | "CONTENT_TYPE_CLICK" | "PLATFORM_REDIRECT" | "UNKNOWN";
 
 export interface XiaohongshuEditorEntryDiagnostic {
-  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED" | "PUBLISH_EXACT_TARGETS_OBSERVED" | "PUBLISH_TARGET_ANCESTOR_CHAINS" | "PUBLISH_CLICK_SURFACE_DIAGNOSTICS" | "PUBLISH_HIT_TEST_OBSERVED" | "PUBLISH_EVENT_LISTENERS_OBSERVED" | "PUBLISH_NOTE_SURFACE_RESOLVED" | "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED" | "PUBLISH_NOTE_NAVIGATION_CLICK_STARTED" | "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED" | "POST_PUBLISH_NOTE_STATE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_STARTED" | "IMAGE_EDITOR_READINESS_SAMPLE" | "IMAGE_EDITOR_SHELL_READY" | "IMAGE_EDITOR_SHELL_NOT_READY" | "IMAGE_EDITOR_SHELL_TIMEOUT" | "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED" | "IMAGE_EDITOR_CONTROLS_DISCOVERED" | "IMAGE_EDITOR_PHASE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_COMPLETED" | "IMAGE_EDITOR_INSPECTION_FAILED" | "PRE_UPLOAD_GATE_INSPECTION_STARTED" | "PRE_UPLOAD_GATE_RESULT" | "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED" | "POST_UPLOAD_EDITOR_READINESS_STARTED" | "POST_UPLOAD_EDITOR_READINESS_SAMPLE" | "POST_UPLOAD_EDITOR_PHASE_OBSERVED" | "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED" | "POST_UPLOAD_EDITOR_INSPECTION_FAILED" | "POST_UPLOAD_EDITOR_INSPECTION_COMPLETED";
+  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED" | "PUBLISH_EXACT_TARGETS_OBSERVED" | "PUBLISH_TARGET_ANCESTOR_CHAINS" | "PUBLISH_CLICK_SURFACE_DIAGNOSTICS" | "PUBLISH_HIT_TEST_OBSERVED" | "PUBLISH_EVENT_LISTENERS_OBSERVED" | "PUBLISH_NOTE_SURFACE_RESOLVED" | "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED" | "PUBLISH_NOTE_NAVIGATION_CLICK_STARTED" | "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED" | "POST_PUBLISH_NOTE_STATE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_STARTED" | "IMAGE_EDITOR_READINESS_SAMPLE" | "IMAGE_EDITOR_SHELL_READY" | "IMAGE_EDITOR_SHELL_NOT_READY" | "IMAGE_EDITOR_SHELL_TIMEOUT" | "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED" | "IMAGE_EDITOR_CONTROLS_DISCOVERED" | "IMAGE_EDITOR_PHASE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_COMPLETED" | "IMAGE_EDITOR_INSPECTION_FAILED" | "PRE_UPLOAD_GATE_INSPECTION_STARTED" | "PRE_UPLOAD_GATE_RESULT" | "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED" | "IMAGE_UPLOAD_STARTED" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED" | "POST_UPLOAD_EDITOR_READINESS_STARTED" | "POST_UPLOAD_EDITOR_READINESS_SAMPLE" | "POST_UPLOAD_EDITOR_PHASE_OBSERVED" | "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED" | "POST_UPLOAD_EDITOR_INSPECTION_FAILED" | "POST_UPLOAD_EDITOR_INSPECTION_COMPLETED";
   timestamp: string;
   operationId: string;
   platformKey: "xiaohongshu";
@@ -382,7 +382,7 @@ export interface XiaohongshuEditorEntryDiagnostic {
   gateFinalSubmitCount?: 0;
   finalSubmitCount?: 0;
   navigationClickCount?: number;
-  action?: "PUBLISH_NOTE_NAVIGATION_CLICK";
+  action?: "PUBLISH_NOTE_NAVIGATION_CLICK" | "IMAGE_UPLOAD_MUTATION" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED";
   status?: string;
   revalidated?: boolean;
   exactSemanticText?: string;
@@ -428,11 +428,19 @@ export interface XiaohongshuEditorEntryDiagnostic {
   observedPhase?: ImageEditorPhase;
   preSubmitGatePhase?: "PRE_UPLOAD" | "POST_UPLOAD";
   preUploadGateStatus?: "PASS" | "FAIL";
+  preUploadMutationRevalidated?: boolean;
   preUploadGateFailureCode?: PreSubmitGateFailureCode | null;
   postUploadControlsStatus?: ImageEditorPostUploadControlsStatus | "NOT_APPLICABLE_BEFORE_UPLOAD";
   preSubmitGatePassMeaning?: string | null;
   uploadBusy?: boolean;
   previewReady?: boolean;
+  mutationType?: "IMAGE_UPLOAD_ONLY";
+  selfTestMode?: "POST_UPLOAD_DISCOVERY_ONLY";
+  uploadMutationCount?: 1;
+  requestedCount?: number;
+  previewCount?: number;
+  verified?: boolean;
+  uploadFailureCode?: string;
 }
 
 export type XiaohongshuPublishEntryDiscoveryStrategy = "STABLE_HREF" | "STABLE_DATA_ATTRIBUTE" | "ROLE_EXACT_NAME" | "ARIA_LABEL_OR_TITLE" | "SCOPED_EXACT_TEXT";
@@ -1154,13 +1162,149 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
   /**
    * Read-only editor readiness check. This deliberately has no article input and
    * never enters the content mutation path used by preparePublish.
+   * The activeCanonicalPage is resolved by the private PRE_SUBMIT_GATE path.
    */
   async inspectPublishEditor(ctx: AccountContext): Promise<PreSubmitGateResult> {
+    // The activeCanonicalPage is resolved inside the read-only PRE_SUBMIT_GATE path.
     return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, () => this.inspectPublishEditorOnCanonicalPage(ctx), "preSubmitGate");
   }
 
-  private async inspectPublishEditorOnCanonicalPage(ctx: AccountContext): Promise<PreSubmitGateResult> {
+  /**
+   * Controlled first-upload proof. This is intentionally separate from
+   * preparePublish: it may mutate only the image input once, then stops at
+   * post-upload discovery without filling content or submitting anything.
+   */
+  async runControlledPostUploadDiscovery(ctx: AccountContext, input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE" }): Promise<ControlledPostUploadDiscoveryResult> {
     const operationId = randomUUID();
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, () => this.runControlledPostUploadDiscoveryOnCanonicalPage(ctx, input, operationId), "controlledPostUploadDiscovery");
+  }
+
+  private async runControlledPostUploadDiscoveryOnCanonicalPage(
+    ctx: AccountContext,
+    input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE" },
+    operationId: ReturnType<typeof randomUUID>
+  ): Promise<ControlledPostUploadDiscoveryResult> {
+    const initialCanonical = await this.activeCanonicalPage(ctx).catch(() => null);
+    const sanitizedUrlBefore = initialCanonical ? sanitizePageUrl(initialCanonical.page) : null;
+    const preUploadGate = await this.inspectPublishEditorOnCanonicalPage(ctx, operationId, false, "CONTROLLED_POST_UPLOAD_DISCOVERY");
+    const canonical = await this.activeCanonicalPage(ctx).catch(() => null);
+    const sameCanonicalPage = Boolean(initialCanonical && canonical && initialCanonical.page === canonical.page);
+    const sameContext = Boolean(initialCanonical && canonical && initialCanonical.session.context === canonical.session.context);
+    const finish = (result: ControlledPostUploadDiscoveryResult): ControlledPostUploadDiscoveryResult => {
+      if (canonical) {
+        this.emitCanonicalPageOperation(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "COMPLETED", sameContext, result.status === "PASS" ? "ready" : "needs_user_action", "CONTROLLED_POST_UPLOAD_DISCOVERY", {
+          failureCode: (result.failureCode as PreSubmitGateFailureCode | null) ?? undefined,
+          failureStage: (result.failureStage as PreSubmitGateFailureStage | null) ?? undefined,
+          missingSignal: result.missingSignal
+        });
+      }
+      return result;
+    };
+    const failure = (failureCode: string, failureStage: string, missingSignal: string, uploadMutationCount = 0): ControlledPostUploadDiscoveryResult => finish({
+      mode: "POST_UPLOAD_DISCOVERY_ONLY",
+      status: "FAIL",
+      operationId,
+      platformKey: this.platformKey,
+      accountId: ctx.accountId,
+      imageSource: input.imageSource,
+      sanitizedUrlBefore,
+      sanitizedUrlAfter: canonical ? sanitizePageUrl(canonical.page) : sanitizedUrlBefore,
+      preUploadGateStatus: preUploadGate.preUploadGateStatus === "PASS" ? "PASS" : "FAIL",
+      preUploadMutationRevalidated: false,
+      uploadMutationCount,
+      uploadCompletionObserved: false,
+      postUploadPhase: null,
+      postUploadPhaseConfidence: null,
+      postUploadControlsStatus: "FAIL",
+      titleEditorStatus: "NOT_TESTED",
+      bodyEditorStatus: "NOT_TESTED",
+      finalSubmitStatus: "NOT_TESTED",
+      contentMutationCount: 0,
+      finalSubmitCount: 0,
+      sameCanonicalPage,
+      sameContext,
+      failureCode,
+      failureStage,
+      missingSignal,
+      evidence: { preUploadGate }
+    });
+
+    if (!canonical) return failure(preUploadGate.failureCode ?? "CANONICAL_PAGE_UNAVAILABLE", preUploadGate.failureStage ?? "SESSION_PAGE_LIFECYCLE", preUploadGate.missingSignal ?? "active-canonical-page");
+    if (!sameCanonicalPage) return failure("CANONICAL_PAGE_OWNERSHIP_FAILURE", "SESSION_PAGE_LIFECYCLE", "canonical-page-identity");
+    if (!sameContext) return failure("CANONICAL_PAGE_OWNERSHIP_FAILURE", "SESSION_PAGE_LIFECYCLE", "canonical-context-identity");
+    if (!this.isBrowserConnected(canonical.session)) return failure("BROWSER_SESSION_DISCONNECTED", "SESSION_PAGE_LIFECYCLE", "browser-disconnected");
+    if (this.isCanonicalPageClosed(canonical.page)) return failure("CANONICAL_PAGE_UNAVAILABLE", "SESSION_PAGE_LIFECYCLE", "canonical-page-closed");
+    if (this.getBrowserRuntimeState(ctx).state !== "AUTHENTICATED") return failure("AUTH_REDIRECTED_TO_LOGIN", "AUTHENTICATION", "runtime-auth-state");
+    if (preUploadGate.status !== "ready" || preUploadGate.preUploadGateStatus !== "PASS") return failure(preUploadGate.failureCode ?? "PRE_UPLOAD_PHASE_NOT_READY", preUploadGate.failureStage ?? "EDITOR_DISCOVERY", preUploadGate.missingSignal ?? "pre-upload-gate");
+
+    const metadata = {
+      operationId,
+      platformKey: "xiaohongshu" as const,
+      accountId: ctx.accountId,
+      contextDebugId: canonical.session.contextDebugId ?? "unknown-context",
+      pageDebugId: canonical.pageDebugId
+    };
+    this.emitStagedEditorDiagnostic(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED", {
+      expectedPhase: "IMAGE_POST_PRE_UPLOAD",
+      observedPhase: "IMAGE_POST_PRE_UPLOAD",
+      phase: "IMAGE_POST_PRE_UPLOAD",
+      preSubmitGatePhase: "PRE_UPLOAD",
+      preUploadGateStatus: "PASS",
+      postUploadControlsStatus: "NOT_APPLICABLE_BEFORE_UPLOAD",
+      preSubmitGatePassMeaning: "SAFE_TO_ENTER_PREPARE_PUBLISH_UPLOAD_STAGE",
+      uploadCapabilityPresent: true,
+      mutationType: "IMAGE_UPLOAD_ONLY",
+      selfTestMode: "POST_UPLOAD_DISCOVERY_ONLY",
+      sanitizedUrl: sanitizePageUrl(canonical.page)
+    });
+
+    try {
+      const imageEvidence = await this.uploadImages(canonical.page, [input.imagePath], { ctx, session: canonical.session, metadata, selfTestMode: "POST_UPLOAD_DISCOVERY_ONLY" });
+      const uploadCompletionObserved = imageEvidence.verified === true;
+      if (!uploadCompletionObserved) return failure("UPLOAD_COMPLETION_NOT_OBSERVED", "EDITOR_DISCOVERY", "upload-completion", 1);
+      const postUploadInspection = await inspectPostUploadImageEditor(canonical.page, metadata, { emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
+      const postUploadPassed = postUploadInspection.status === "READY" && postUploadInspection.phase === "IMAGE_POST_POST_UPLOAD_EDITOR" && postUploadInspection.postUploadControlsStatus === "READY";
+      const result: ControlledPostUploadDiscoveryResult = {
+        mode: "POST_UPLOAD_DISCOVERY_ONLY",
+        status: postUploadPassed ? "PASS" : "FAIL",
+        operationId,
+        platformKey: this.platformKey,
+        accountId: ctx.accountId,
+        imageSource: input.imageSource,
+        sanitizedUrlBefore,
+        sanitizedUrlAfter: sanitizePageUrl(canonical.page),
+      preUploadGateStatus: "PASS",
+        preUploadMutationRevalidated: true,
+        uploadMutationCount: 1,
+        uploadCompletionObserved,
+        postUploadPhase: postUploadInspection.phase,
+        postUploadPhaseConfidence: postUploadInspection.confidence,
+        postUploadControlsStatus: postUploadInspection.postUploadControlsStatus,
+        titleEditorStatus: postUploadInspection.titleEditor.status,
+        bodyEditorStatus: postUploadInspection.bodyEditor.status,
+        finalSubmitStatus: postUploadInspection.finalSubmitControl.status,
+        contentMutationCount: 0,
+        finalSubmitCount: 0,
+        sameCanonicalPage: true,
+        sameContext: true,
+        failureCode: postUploadPassed ? null : (postUploadInspection.failureCode ?? "POST_UPLOAD_PHASE_NOT_READY"),
+        failureStage: postUploadPassed ? null : (postUploadInspection.failureStage ?? "EDITOR_DISCOVERY"),
+        missingSignal: postUploadPassed ? null : (postUploadInspection.missingSignal ?? "post-upload-editor-controls"),
+        evidence: { preUploadGate, imageEvidence, postUploadInspection }
+      };
+      return finish(result);
+    } catch (error) {
+      const details = this.failureDetailsForError(error);
+      return failure(details.failureCode ?? "UPLOAD_FAILED", details.failureStage ?? "EDITOR_DISCOVERY", details.missingSignal ?? "image-upload", 1);
+    }
+  }
+
+  private async inspectPublishEditorOnCanonicalPage(
+    ctx: AccountContext,
+    operationId: ReturnType<typeof randomUUID> = randomUUID(),
+    completeOperation = true,
+    operationAction: "PRE_SUBMIT_GATE" | "CONTROLLED_POST_UPLOAD_DISCOVERY" = "PRE_SUBMIT_GATE"
+  ): Promise<PreSubmitGateResult> {
     const key = `${this.platformKey}:${ctx.accountId}`;
     let canonical: Awaited<ReturnType<typeof this.activeCanonicalPage>> = null;
     let activeSession: BrowserSession | null = null;
@@ -1185,7 +1329,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const pageContextMatchesSession = this.pageContextMatchesSession(canonical.session, canonical.page);
     const operationStartUrl = sanitizePageUrl(canonical.page);
     this.emitPreSubmitGateInspectionDiagnostic(ctx, operationId, canonical, canonical.page, pageContextMatchesSession);
-    this.emitCanonicalPageOperation(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "STARTED", pageContextMatchesSession, undefined, "PRE_SUBMIT_GATE");
+    this.emitCanonicalPageOperation(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "STARTED", pageContextMatchesSession, undefined, operationAction);
     if (!pageContextMatchesSession) {
       const failure = { failureCode: "CANONICAL_PAGE_OWNERSHIP_FAILURE" as const, failureStage: "SESSION_PAGE_LIFECYCLE" as const, missingSignal: "page-context-ownership" };
       const result = this.preSubmitGateFailureResult("needs_user_action", failure, canonical.page);
@@ -1217,7 +1361,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     }
 
     const complete = (result: PreSubmitGateResult): PreSubmitGateResult => {
-      this.emitCanonicalPageOperation(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "COMPLETED", true, result.status, "PRE_SUBMIT_GATE", result);
+      if (completeOperation) this.emitCanonicalPageOperation(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "COMPLETED", true, result.status, operationAction, result);
       return result;
     };
     const failBeforeEditorHelper = (failure: Pick<PreSubmitGateResult, "failureCode" | "failureStage" | "missingSignal">): PreSubmitGateResult => {
@@ -1419,7 +1563,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     pageDebugId: string,
     operationId: string,
     code: Extract<XiaohongshuEditorEntryDiagnostic["code"], "PRE_UPLOAD_GATE_INSPECTION_STARTED" | "PRE_UPLOAD_GATE_RESULT" | "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED">,
-    fields: Pick<XiaohongshuEditorEntryDiagnostic, "expectedPhase" | "observedPhase" | "phase" | "preSubmitGatePhase" | "preUploadGateStatus" | "preUploadGateFailureCode" | "postUploadControlsStatus" | "preSubmitGatePassMeaning" | "phaseConfidence" | "phaseReason" | "uploadCapabilityPresent" | "sanitizedUrl" | "failureCode" | "failureStage" | "missingSignal">
+    fields: Pick<XiaohongshuEditorEntryDiagnostic, "expectedPhase" | "observedPhase" | "phase" | "preSubmitGatePhase" | "preUploadGateStatus" | "preUploadMutationRevalidated" | "preUploadGateFailureCode" | "postUploadControlsStatus" | "preSubmitGatePassMeaning" | "phaseConfidence" | "phaseReason" | "uploadCapabilityPresent" | "sanitizedUrl" | "failureCode" | "failureStage" | "missingSignal" | "mutationType" | "selfTestMode">
   ): void {
     this.emitEditorEntryDiagnostic({
       code,
@@ -1436,12 +1580,15 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       phase: fields.phase,
       preSubmitGatePhase: fields.preSubmitGatePhase,
       preUploadGateStatus: fields.preUploadGateStatus,
+      preUploadMutationRevalidated: fields.preUploadMutationRevalidated,
       preUploadGateFailureCode: fields.preUploadGateFailureCode,
       postUploadControlsStatus: fields.postUploadControlsStatus,
       preSubmitGatePassMeaning: fields.preSubmitGatePassMeaning,
       phaseConfidence: fields.phaseConfidence,
       phaseReason: fields.phaseReason,
       uploadCapabilityPresent: fields.uploadCapabilityPresent,
+      mutationType: fields.mutationType,
+      selfTestMode: fields.selfTestMode,
       failureCode: fields.failureCode,
       failureStage: fields.failureStage,
       missingSignal: fields.missingSignal
@@ -1476,6 +1623,10 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       preUploadGateFailureCode: diagnostic.preUploadGateFailureCode,
       postUploadControlsStatus: diagnostic.postUploadControlsStatus,
       preSubmitGatePassMeaning: diagnostic.preSubmitGatePassMeaning,
+      action: diagnostic.action,
+      mutationType: diagnostic.mutationType,
+      selfTestMode: diagnostic.selfTestMode,
+      uploadMutationCount: diagnostic.uploadMutationCount,
       uploadBusy: diagnostic.uploadBusy,
       previewReady: diagnostic.previewReady,
       contentType: diagnostic.contentType,
@@ -1594,7 +1745,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       uploadCapabilityPresent: true,
       sanitizedUrl: sanitizePageUrl(page)
     });
-    const imageEvidence = await this.uploadImages(page, article.images ?? []);
+    const imageEvidence = await this.uploadImages(page, article.images ?? [], { ctx, session: opened.session, metadata: editorMetadata });
     gates.push("image_upload");
     const postUploadInspection = await inspectPostUploadImageEditor(page, editorMetadata, {
       emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic)
@@ -1875,7 +2026,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     this.onLoginEvaluation({ phase, ...(operationId ? { operationId } : {}), timestamp: new Date().toISOString(), platformKey: this.platformKey, accountId: ctx.accountId, pageIsClosed, pageUrl, pageTitle, creatorDomain: login.creatorHost, creatorHomePath: login.creatorHomePath, publishNoteVisible: login.publishNoteVisible, noteManagementVisible: login.noteManagementVisible, dataDashboardVisible: login.dataDashboardVisible, accountStatusVisible: login.accountStatusVisible, profileAreaVisible: login.profileAreaVisible, visibleLoginForm: login.visibleLoginForm, visibleQrLogin: login.visibleQrLogin, visibleSmsVerification: login.visibleSmsVerification, visibleCaptcha: login.visibleCaptcha, visibleSlider: login.visibleSlider, visibleSecurityModal: login.visibleSecurityModal, positiveSignalCount: new Set(login.positiveSignals).size, blockingSignalCount: blockers.filter(Boolean).length, loginClassification: decision, stableObservationWindowMs, stableObservationSamples, stableObservationPassed });
   }
 
-  private emitCanonicalPageOperation(ctx: AccountContext, session: BrowserSession, page: Page, pageDebugId: string, operationId: string, phase: XiaohongshuCanonicalPageOperationPhase, pageContextMatchesSession: boolean, finalStatus?: LoginStatus | PreSubmitGateStatus, action: "CHECK_LOGIN" | "PRE_SUBMIT_GATE" = "CHECK_LOGIN", result?: Pick<PreSubmitGateResult, "failureCode" | "failureStage" | "missingSignal">): void {
+  private emitCanonicalPageOperation(ctx: AccountContext, session: BrowserSession, page: Page, pageDebugId: string, operationId: string, phase: XiaohongshuCanonicalPageOperationPhase, pageContextMatchesSession: boolean, finalStatus?: LoginStatus | PreSubmitGateStatus, action: "CHECK_LOGIN" | "PRE_SUBMIT_GATE" | "CONTROLLED_POST_UPLOAD_DISCOVERY" = "CHECK_LOGIN", result?: Pick<PreSubmitGateResult, "failureCode" | "failureStage" | "missingSignal">): void {
     if (!this.onCanonicalPageOperation) return;
     const key = `${this.platformKey}:${ctx.accountId}`;
     const mutex = this.accountOperationMutex.getState(key);
@@ -2643,10 +2794,36 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", `图文入口未通过唯一、可见、启用校验；matches=${imageCount}`, { failureCode: "PUBLISH_ENTRY_NOT_FOUND", failureStage: "PUBLISH_ENTRY_DISCOVERY", missingSignal: XIAOHONGSHU_IMAGE_POST_ENTRY_SELECTOR });
   }
 
-  private async uploadImages(page: Page, images: string[]): Promise<Record<string, unknown>> {
+  private async uploadImages(
+    page: Page,
+    images: string[],
+    diagnosticContext?: {
+      ctx: AccountContext;
+      session: BrowserSession;
+      metadata: { operationId: string; platformKey: "xiaohongshu"; accountId: string; contextDebugId: string; pageDebugId: string };
+      selfTestMode?: "POST_UPLOAD_DISCOVERY_ONLY";
+    }
+  ): Promise<Record<string, unknown>> {
     const input = page.locator(XIAOHONGSHU_FILE_SELECTOR);
     const inputCount = await locatorCount(input);
     if (inputCount !== 1 || !(await isEnabled(input))) throw new XiaohongshuGateError("IMAGE_UPLOAD_NOT_VERIFIED", "UPLOAD_FAILED", `图片上传控件未通过唯一且启用校验；matches=${inputCount}`);
+    if (diagnosticContext) {
+      this.emitEditorEntryDiagnostic({
+        code: "IMAGE_UPLOAD_STARTED",
+        timestamp: new Date().toISOString(),
+        operationId: diagnosticContext.metadata.operationId,
+        platformKey: "xiaohongshu",
+        accountId: diagnosticContext.ctx.accountId,
+        contextDebugId: diagnosticContext.metadata.contextDebugId,
+        pageDebugId: diagnosticContext.metadata.pageDebugId,
+        sanitizedUrl: sanitizePageUrl(page),
+        action: "IMAGE_UPLOAD_MUTATION",
+        mutationType: "IMAGE_UPLOAD_ONLY",
+        ...(diagnosticContext.selfTestMode ? { selfTestMode: diagnosticContext.selfTestMode } : {}),
+        uploadMutationCount: 1,
+        requestedCount: images.length
+      });
+    }
     try {
       await input.setInputFiles(images);
       for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -2656,13 +2833,65 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         const preview = page.locator(XIAOHONGSHU_PREVIEW_SELECTOR);
         const previewCount = await locatorCount(preview);
         if (previewCount >= images.length && previewCount > 0 && (await isVisible(locatorAt(preview, 0))) && await locatorCount(busy) === 0) {
+          if (diagnosticContext) {
+            this.emitEditorEntryDiagnostic({
+              code: "IMAGE_UPLOAD_COMPLETED",
+              timestamp: new Date().toISOString(),
+              operationId: diagnosticContext.metadata.operationId,
+              platformKey: "xiaohongshu",
+              accountId: diagnosticContext.ctx.accountId,
+              contextDebugId: diagnosticContext.metadata.contextDebugId,
+              pageDebugId: diagnosticContext.metadata.pageDebugId,
+              sanitizedUrl: sanitizePageUrl(page),
+              action: "IMAGE_UPLOAD_COMPLETED",
+              mutationType: "IMAGE_UPLOAD_ONLY",
+              ...(diagnosticContext.selfTestMode ? { selfTestMode: diagnosticContext.selfTestMode } : {}),
+              requestedCount: images.length,
+              previewCount,
+              verified: true
+            });
+          }
           return { mechanism: "input[type=file]", requestedCount: images.length, previewCount, previewVisible: true, uploadBusyCount: 0, verified: true };
         }
         await waitForProbe(page);
       }
     } catch (error) {
+      if (diagnosticContext) {
+        this.emitEditorEntryDiagnostic({
+          code: "IMAGE_UPLOAD_FAILED",
+          timestamp: new Date().toISOString(),
+          operationId: diagnosticContext.metadata.operationId,
+          platformKey: "xiaohongshu",
+          accountId: diagnosticContext.ctx.accountId,
+          contextDebugId: diagnosticContext.metadata.contextDebugId,
+          pageDebugId: diagnosticContext.metadata.pageDebugId,
+          sanitizedUrl: sanitizePageUrl(page),
+          action: "IMAGE_UPLOAD_FAILED",
+          mutationType: "IMAGE_UPLOAD_ONLY",
+          ...(diagnosticContext.selfTestMode ? { selfTestMode: diagnosticContext.selfTestMode } : {}),
+          requestedCount: images.length,
+          uploadFailureCode: error instanceof XiaohongshuGateError ? error.gateCode : "IMAGE_UPLOAD_NOT_VERIFIED"
+        });
+      }
       if (error instanceof XiaohongshuGateError) throw error;
       throw new XiaohongshuGateError("IMAGE_UPLOAD_NOT_VERIFIED", "UPLOAD_FAILED", `图片上传控件操作或页面验证失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (diagnosticContext) {
+      this.emitEditorEntryDiagnostic({
+        code: "IMAGE_UPLOAD_FAILED",
+        timestamp: new Date().toISOString(),
+        operationId: diagnosticContext.metadata.operationId,
+        platformKey: "xiaohongshu",
+        accountId: diagnosticContext.ctx.accountId,
+        contextDebugId: diagnosticContext.metadata.contextDebugId,
+        pageDebugId: diagnosticContext.metadata.pageDebugId,
+        sanitizedUrl: sanitizePageUrl(page),
+        action: "IMAGE_UPLOAD_FAILED",
+        mutationType: "IMAGE_UPLOAD_ONLY",
+        ...(diagnosticContext.selfTestMode ? { selfTestMode: diagnosticContext.selfTestMode } : {}),
+        requestedCount: images.length,
+        uploadFailureCode: "IMAGE_UPLOAD_NOT_VERIFIED"
+      });
     }
     throw new XiaohongshuGateError("IMAGE_UPLOAD_NOT_VERIFIED", "UPLOAD_FAILED", "setInputFiles 后未取得真实页面预览且无上传进行中状态；未声明上传成功");
   }

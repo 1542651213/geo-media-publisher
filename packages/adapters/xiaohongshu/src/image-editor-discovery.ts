@@ -199,6 +199,9 @@ export type ImageEditorDiagnosticCode =
   | "PRE_UPLOAD_GATE_INSPECTION_STARTED"
   | "PRE_UPLOAD_GATE_RESULT"
   | "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED"
+  | "IMAGE_UPLOAD_STARTED"
+  | "IMAGE_UPLOAD_COMPLETED"
+  | "IMAGE_UPLOAD_FAILED"
   | "POST_UPLOAD_EDITOR_READINESS_STARTED"
   | "POST_UPLOAD_EDITOR_READINESS_SAMPLE"
   | "POST_UPLOAD_EDITOR_PHASE_OBSERVED"
@@ -255,6 +258,10 @@ export interface ImageEditorDiagnostic {
   preSubmitGatePassMeaning?: string | null;
   uploadBusy?: boolean;
   previewReady?: boolean;
+  action?: "IMAGE_UPLOAD_MUTATION" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED";
+  mutationType?: "IMAGE_UPLOAD_ONLY";
+  selfTestMode?: "POST_UPLOAD_DISCOVERY_ONLY";
+  uploadMutationCount?: 1;
 }
 
 export interface ImagePostEditorInspectionResult {

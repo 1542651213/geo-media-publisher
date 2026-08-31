@@ -435,4 +435,48 @@ describe("Task 10A evidence analyzer", () => {
       sideEffectSummary: { finalSubmitCount: 0 }
     });
   });
+
+  it("does not count PRE_UPLOAD diagnostics as an upload mutation", () => {
+    const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
+    const events = [
+      ...gateEvents(),
+      event("2026-08-30T08:00:00.012Z", "PRE_UPLOAD_GATE_INSPECTION_STARTED", { ...shared, expectedPhase: "IMAGE_POST_PRE_UPLOAD" }),
+      event("2026-08-30T08:00:00.013Z", "PRE_UPLOAD_GATE_RESULT", { ...shared, preUploadGateStatus: "PASS", uploadCapabilityPresent: true }),
+      event("2026-08-30T08:00:00.014Z", "UPLOAD_CAPABILITY_PRESENT", { ...shared, uploadCapabilityPresent: true }),
+      event("2026-08-30T08:00:00.015Z", "UPLOAD_CONTROL_RELATIONSHIP", { ...shared, usableSurface: true })
+    ];
+
+    const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
+
+    expect(result.sideEffectSummary.uploadCount).toBe(0);
+  });
+
+  it("does not count POST_UPLOAD diagnostics as an upload mutation", () => {
+    const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
+    const events = [
+      ...gateEvents(),
+      event("2026-08-30T08:00:00.012Z", "POST_UPLOAD_EDITOR_READINESS_STARTED", { ...shared, expectedPhase: "IMAGE_POST_POST_UPLOAD_EDITOR" }),
+      event("2026-08-30T08:00:00.013Z", "POST_UPLOAD_EDITOR_READINESS_SAMPLE", { ...shared, uploadBusy: false, previewReady: true }),
+      event("2026-08-30T08:00:00.014Z", "POST_UPLOAD_EDITOR_PHASE_OBSERVED", { ...shared, phase: "IMAGE_POST_POST_UPLOAD_EDITOR" }),
+      event("2026-08-30T08:00:00.015Z", "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED", { ...shared, postUploadControlsStatus: "READY" })
+    ];
+
+    const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
+
+    expect(result.sideEffectSummary.uploadCount).toBe(0);
+  });
+
+  it("counts one upload mutation from an explicit upload-start marker only", () => {
+    const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
+    const events = [
+      ...gateEvents(),
+      event("2026-08-30T08:00:00.012Z", "UPLOAD_CAPABILITY_PRESENT", { ...shared, uploadCapabilityPresent: true }),
+      event("2026-08-30T08:00:00.013Z", "IMAGE_UPLOAD_STARTED", { ...shared, action: "IMAGE_UPLOAD_MUTATION", requestedCount: 1 }),
+      event("2026-08-30T08:00:00.014Z", "IMAGE_UPLOAD_COMPLETED", { ...shared, action: "IMAGE_UPLOAD_COMPLETED", requestedCount: 1, previewCount: 1 })
+    ];
+
+    const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
+
+    expect(result.sideEffectSummary.uploadCount).toBe(1);
+  });
 });
