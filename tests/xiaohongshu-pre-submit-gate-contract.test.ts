@@ -34,4 +34,25 @@ describe("side-effect-free Xiaohongshu pre-submit gate contract", () => {
     expect(gateMethod).not.toContain(".type(");
     expect(gateMethod).not.toContain("keyboard.press(");
   });
+
+  it("separates editor shell readiness from post-route control discovery", () => {
+    const xhs = read("packages/adapters/xiaohongshu/src/browser.ts");
+    const discovery = read("packages/adapters/xiaohongshu/src/image-editor-discovery.ts");
+    expect(xhs).toContain("inspectImagePostEditor");
+    expect(xhs).toContain("preSubmitGateResultFromEditorInspection");
+    expect(xhs).toContain('"EDITOR_DISCOVERY"');
+    expect(discovery).toContain('"IMAGE_EDITOR_SHELL_READY"');
+    expect(discovery).toContain('"IMAGE_EDITOR_READINESS_SAMPLE"');
+    expect(discovery).toContain('"TITLE_EDITOR_NOT_FOUND"');
+    expect(discovery).toContain('"BODY_EDITOR_NOT_FOUND"');
+    expect(discovery).toContain('"IMAGE_UPLOAD_CONTROL_NOT_FOUND"');
+    expect(discovery).toContain('"FINAL_SUBMIT_CONTROL_NOT_FOUND"');
+  });
+
+  it("keeps publish settings observable without making them a required Gate control", () => {
+    const xhs = read("packages/adapters/xiaohongshu/src/browser.ts");
+    const discovery = read("packages/adapters/xiaohongshu/src/image-editor-discovery.ts");
+    expect(discovery).toContain('"NOT_APPLICABLE"');
+    expect(xhs).toContain("publishSettingsAreaDetected");
+  });
 });

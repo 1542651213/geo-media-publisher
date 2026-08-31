@@ -32,6 +32,16 @@ import {
   type PublishNoteNavigationSurfaceResolution,
   type PublishNotePostClickState
 } from "./publish-note-navigation";
+import {
+  inspectImagePostEditor,
+  type ImageEditorControlDiscovery,
+  type ImageEditorContentType,
+  type ImageEditorDiagnostic,
+  type ImageEditorInspectionStatus,
+  type ImageEditorReadinessSample,
+  type ImageEditorSettingsDiscovery,
+  type ImageEditorShellStatus
+} from "./image-editor-discovery";
 export {
   collectCreatorHomeTopology,
   collectPublishSemanticNodes,
@@ -280,7 +290,7 @@ export type XiaohongshuEditorEntryStepName =
 export type XiaohongshuEditorNavigationTrigger = "DIRECT_GOTO" | "PUBLISH_ENTRY_CLICK" | "CONTENT_TYPE_CLICK" | "PLATFORM_REDIRECT" | "UNKNOWN";
 
 export interface XiaohongshuEditorEntryDiagnostic {
-  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED" | "PUBLISH_EXACT_TARGETS_OBSERVED" | "PUBLISH_TARGET_ANCESTOR_CHAINS" | "PUBLISH_CLICK_SURFACE_DIAGNOSTICS" | "PUBLISH_HIT_TEST_OBSERVED" | "PUBLISH_EVENT_LISTENERS_OBSERVED" | "PUBLISH_NOTE_SURFACE_RESOLVED" | "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED" | "PUBLISH_NOTE_NAVIGATION_CLICK_STARTED" | "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED" | "POST_PUBLISH_NOTE_STATE_OBSERVED";
+  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED" | "PUBLISH_EXACT_TARGETS_OBSERVED" | "PUBLISH_TARGET_ANCESTOR_CHAINS" | "PUBLISH_CLICK_SURFACE_DIAGNOSTICS" | "PUBLISH_HIT_TEST_OBSERVED" | "PUBLISH_EVENT_LISTENERS_OBSERVED" | "PUBLISH_NOTE_SURFACE_RESOLVED" | "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED" | "PUBLISH_NOTE_NAVIGATION_CLICK_STARTED" | "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED" | "POST_PUBLISH_NOTE_STATE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_STARTED" | "IMAGE_EDITOR_READINESS_SAMPLE" | "IMAGE_EDITOR_SHELL_READY" | "IMAGE_EDITOR_SHELL_NOT_READY" | "IMAGE_EDITOR_SHELL_TIMEOUT" | "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED" | "IMAGE_EDITOR_CONTROLS_DISCOVERED" | "IMAGE_EDITOR_INSPECTION_COMPLETED" | "IMAGE_EDITOR_INSPECTION_FAILED";
   timestamp: string;
   operationId: string;
   platformKey: "xiaohongshu";
@@ -378,6 +388,23 @@ export interface XiaohongshuEditorEntryDiagnostic {
   navigationTransition?: boolean;
   imagePostSurfaceAfterPublishNote?: XiaohongshuClickableSurfaceResolution;
   postPublishNoteState?: PublishNotePostClickState;
+  shellStatus?: ImageEditorShellStatus;
+  imageEditorReadinessSample?: ImageEditorReadinessSample;
+  titleCandidateCount?: number;
+  bodyCandidateCount?: number;
+  uploadCandidateCount?: number;
+  finalSubmitCandidateCount?: number;
+  contentType?: ImageEditorContentType;
+  contentTypeReady?: boolean;
+  titleEditor?: ImageEditorControlDiscovery;
+  bodyEditor?: ImageEditorControlDiscovery;
+  imageUploadControl?: ImageEditorControlDiscovery;
+  publishSettingsArea?: ImageEditorSettingsDiscovery;
+  finalSubmitControl?: ImageEditorControlDiscovery;
+  imageEditorStatus?: ImageEditorInspectionStatus;
+  securityVerificationPresent?: boolean;
+  loginPagePresent?: boolean;
+  currentUrl?: string;
 }
 
 export type XiaohongshuPublishEntryDiscoveryStrategy = "STABLE_HREF" | "STABLE_DATA_ATTRIBUTE" | "ROLE_EXACT_NAME" | "ARIA_LABEL_OR_TITLE" | "SCOPED_EXACT_TEXT";
@@ -1206,53 +1233,26 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         startUrl: helperStartUrl
       });
       const editorEntry = await this.navigateToImagePostEditor(canonical.page, operationId, ctx.accountId, { context: canonical.session.context, contextDebugId: canonical.session.contextDebugId ?? "unknown-context", pageDebugId: canonical.pageDebugId }, "GATE_NAVIGATION");
-      const finalUrl = sanitizePageUrl(canonical.page);
-      const editorReached = editorEntry.editorReached;
-      const finalEvidence = await readXiaohongshuPageEvidence(canonical.page);
-      const loginPagePresent = this.isLoginPage(canonical.page.url()) || finalEvidence.login.explicitLoginUrl;
-      const securityVerificationPresent = this.isVerificationUrl(canonical.page.url())
-        || finalEvidence.login.verificationUrl
-        || finalEvidence.login.visibleQrLogin
-        || finalEvidence.login.visibleSmsVerification
-        || finalEvidence.login.visibleCaptcha
-        || finalEvidence.login.visibleSlider
-        || finalEvidence.login.visibleSecurityModal;
-      if (loginPagePresent) {
-        return complete({ ...emptyPreSubmitGateResult("auth_expired"), authStillValid: false, loginPagePresent: true, sanitizedUrl: finalUrl, failureCode: "AUTH_REDIRECTED_TO_LOGIN", failureStage: "AUTHENTICATION", missingSignal: "login-url" });
+      if (!editorEntry.editorReached || editorEntry.postPublishNoteState !== "IMAGE_EDITOR") {
+        const result: PreSubmitGateResult = {
+          ...emptyPreSubmitGateResult("needs_user_action"),
+          editorReached: editorEntry.editorReached,
+          authStillValid: true,
+          sanitizedUrl: sanitizePageUrl(canonical.page),
+          failureCode: "EDITOR_ROUTE_NOT_REACHED",
+          failureStage: "EDITOR_ROUTE",
+          missingSignal: "url:/publish/publish"
+        };
+        return complete(result);
       }
-      if (securityVerificationPresent) {
-        return complete({ ...emptyPreSubmitGateResult("security_verification_required"), authStillValid: true, securityVerificationPresent: true, sanitizedUrl: finalUrl, failureCode: "SECURITY_VERIFICATION_REQUIRED", failureStage: "AUTHENTICATION", missingSignal: "security-verification-signal" });
-      }
-
-      const titleEditorDetected = await this.hasUniqueEditor(canonical.page, "title");
-      const bodyEditorDetected = await this.hasUniqueEditor(canonical.page, "body");
-      const imageUploadControlDetected = await this.hasImageUploadControl(canonical.page);
-      const publishSettings = await this.inspectPublishSettings(canonical.page);
-      const publishSettingsAreaDetected = publishSettings.length > 0;
-      let finalSubmitControlDetected = false;
-      try {
-        finalSubmitControlDetected = (await this.inspectFinalSubmitControl(canonical.page)).verified;
-      } catch {
-        finalSubmitControlDetected = false;
-      }
-      const ready = editorReached && titleEditorDetected && bodyEditorDetected && imageUploadControlDetected && publishSettingsAreaDetected && finalSubmitControlDetected;
-      return complete({
-        status: ready ? "ready" : "editor_not_found",
-        editorReached,
-        authStillValid: true,
-        contentType: editorReached ? "IMAGE_TEXT" : null,
-        contentTypeReady: editorReached,
-        titleEditorDetected,
-        bodyEditorDetected,
-        imageUploadControlDetected,
-        publishSettingsAreaDetected,
-        finalSubmitControlDetected,
-        securityVerificationPresent: false,
-        loginPagePresent: false,
-        needsUserAction: !ready,
-        sanitizedUrl: finalUrl,
-        editorEntrySideEffectRisk: "NONE_OBSERVED"
-      });
+      const editorInspection = await inspectImagePostEditor(canonical.page, {
+        operationId,
+        platformKey: "xiaohongshu",
+        accountId: ctx.accountId,
+        contextDebugId: canonical.session.contextDebugId ?? "unknown-context",
+        pageDebugId: canonical.pageDebugId
+      }, { emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
+      return complete(this.preSubmitGateResultFromEditorInspection(editorEntry, editorInspection));
     } catch (error) {
       const result = emptyPreSubmitGateResult(this.preSubmitGateStatusForError(error));
       result.authStillValid = result.status !== "auth_expired" && result.status !== "security_verification_required";
@@ -1289,6 +1289,71 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       });
       return complete(result);
     }
+  }
+
+  private preSubmitGateResultFromEditorInspection(editorEntry: XiaohongshuEditorEntryResult, inspection: Awaited<ReturnType<typeof inspectImagePostEditor>>): PreSubmitGateResult {
+    const status: PreSubmitGateStatus = inspection.status === "READY"
+      ? "ready"
+      : inspection.failureCode === "AUTH_REDIRECTED_TO_LOGIN"
+        ? "auth_expired"
+        : inspection.failureCode === "SECURITY_VERIFICATION_REQUIRED"
+          ? "security_verification_required"
+          : "needs_user_action";
+    return {
+      status,
+      editorReached: editorEntry.editorReached,
+      authStillValid: !inspection.loginPagePresent,
+      contentType: inspection.contentType,
+      contentTypeReady: inspection.contentTypeReady,
+      titleEditorDetected: inspection.titleEditorDetected,
+      bodyEditorDetected: inspection.bodyEditorDetected,
+      imageUploadControlDetected: inspection.imageUploadControlDetected,
+      publishSettingsAreaDetected: inspection.publishSettingsAreaDetected,
+      finalSubmitControlDetected: inspection.finalSubmitControlDetected,
+      securityVerificationPresent: inspection.securityVerificationPresent,
+      loginPagePresent: inspection.loginPagePresent,
+      needsUserAction: status !== "ready",
+      sanitizedUrl: inspection.sanitizedUrl,
+      editorEntrySideEffectRisk: "NONE_OBSERVED",
+      ...(inspection.failureCode ? { failureCode: inspection.failureCode } : {}),
+      ...(inspection.failureStage ? { failureStage: inspection.failureStage } : {}),
+      ...(inspection.missingSignal !== undefined ? { missingSignal: inspection.missingSignal } : {})
+    };
+  }
+
+  private emitImageEditorDiagnostic(diagnostic: ImageEditorDiagnostic): void {
+    this.emitEditorEntryDiagnostic({
+      code: diagnostic.code,
+      timestamp: diagnostic.timestamp,
+      operationId: diagnostic.operationId,
+      platformKey: diagnostic.platformKey,
+      accountId: diagnostic.accountId,
+      contextDebugId: diagnostic.contextDebugId,
+      pageDebugId: diagnostic.pageDebugId,
+      sanitizedUrl: diagnostic.sanitizedUrl,
+      currentUrl: diagnostic.currentUrl,
+      shellStatus: diagnostic.shellStatus,
+      sampleIndex: diagnostic.sampleIndex,
+      elapsedMs: diagnostic.elapsedMs,
+      readyState: diagnostic.readyState,
+      titleCandidateCount: diagnostic.titleCandidateCount,
+      bodyCandidateCount: diagnostic.bodyCandidateCount,
+      uploadCandidateCount: diagnostic.uploadCandidateCount,
+      finalSubmitCandidateCount: diagnostic.finalSubmitCandidateCount,
+      securityVerificationPresent: diagnostic.securityVerificationPresent,
+      loginPagePresent: diagnostic.loginPagePresent,
+      contentType: diagnostic.contentType,
+      contentTypeReady: diagnostic.contentTypeReady,
+      titleEditor: diagnostic.titleEditor,
+      bodyEditor: diagnostic.bodyEditor,
+      imageUploadControl: diagnostic.imageUploadControl,
+      publishSettingsArea: diagnostic.publishSettingsArea,
+      finalSubmitControl: diagnostic.finalSubmitControl,
+      imageEditorStatus: diagnostic.status,
+      failureCode: diagnostic.failureCode,
+      failureStage: diagnostic.failureStage,
+      missingSignal: diagnostic.missingSignal
+    });
   }
 
   override getBrowserRuntimeSnapshot(ctx: AccountContext): BrowserSessionRuntimeSnapshot {
@@ -1330,8 +1395,25 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const gates: string[] = ["account_identity"];
     const identity = await this.inspectAccountIdentity(page, evidence);
 
-    await this.navigateToImagePostEditor(page, undefined, ctx.accountId, { context: opened.session.context }, "PREPARE_PUBLISH");
+    const operationId = randomUUID();
+    await this.navigateToImagePostEditor(page, operationId, ctx.accountId, { context: opened.session.context }, "PREPARE_PUBLISH");
     gates.push("login", "image_post_entry");
+    const editorInspection = await inspectImagePostEditor(page, {
+      operationId,
+      platformKey: "xiaohongshu",
+      accountId: ctx.accountId,
+      contextDebugId: opened.session.contextDebugId ?? "unknown-context",
+      pageDebugId: opened.session.pageDebugId ?? "unknown-page"
+    });
+    if (editorInspection.status !== "READY") {
+      const failureCode = editorInspection.failureCode ?? "UNKNOWN_UI_STATE";
+      throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", `图文编辑器 discovery 未通过：${failureCode}`, {
+        failureCode,
+        failureStage: editorInspection.failureStage ?? "EDITOR_DISCOVERY",
+        missingSignal: editorInspection.missingSignal ?? "image-editor-discovery"
+      });
+    }
+    gates.push("editor_discovery");
     const imageEvidence = await this.uploadImages(page, article.images ?? []);
     gates.push("image_upload");
 
@@ -1995,7 +2077,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     if (this.isEditorRoute(page.url())) {
       this.emitEditorEntryDiagnostic({ code: "EDITOR_ENTRY_STARTED", timestamp: new Date().toISOString(), operationId, platformKey: "xiaohongshu", accountId, startUrl, entryMethod: "ALREADY_ON_EDITOR", expectedTarget: "https://creator.xiaohongshu.com/publish/publish" });
       this.emitEditorEntryStep(page, operationId, accountId, startedAt, "EDITOR_ROUTE_REACHED", true, "url:/publish/publish", startUrl, startUrl, "DIRECT_GOTO");
-      return { editorReached: true, sanitizedUrl: startUrl };
+      return { editorReached: true, sanitizedUrl: startUrl, navigationClickCount: 0, navigationTransitionObserved: false, postPublishNoteState: "IMAGE_EDITOR" };
     }
     this.emitEditorEntryDiagnostic({ code: "EDITOR_ENTRY_STARTED", timestamp: new Date().toISOString(), operationId, platformKey: "xiaohongshu", accountId, startUrl, entryMethod: "CLICK_NAVIGATION", expectedTarget: "https://creator.xiaohongshu.com/publish/publish" });
 
@@ -2084,7 +2166,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       }
       if (/\/publish\/publish(?:[/?#]|$)/iu.test(currentUrl)) {
         this.emitEditorEntryStep(page, operationId, accountId, startedAt, "EDITOR_ROUTE_REACHED", true, "url:/publish/publish");
-        return { editorReached: true, sanitizedUrl: sanitizePageUrl(page) };
+        return { editorReached: true, sanitizedUrl: sanitizePageUrl(page), navigationClickCount: 1, navigationTransitionObserved: true, postPublishNoteState: "IMAGE_EDITOR" };
       }
       try {
         await waitForProbe(page);

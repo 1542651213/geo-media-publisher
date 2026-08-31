@@ -296,4 +296,66 @@ describe("Task 10A evidence analyzer", () => {
       navigationTransitionObserved: true
     });
   });
+
+  it("extracts structured image-editor discovery without counting discovery as final submit", () => {
+    const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
+    const controls = {
+      kind: "TITLE_EDITOR",
+      status: "FOUND_UNIQUE",
+      detected: true,
+      candidates: [{ candidateId: "title-0", tagName: "INPUT", role: null, semanticSignal: "title-editor", visible: true, enabled: true }]
+    };
+    const events = [
+      ...gateEvents(),
+      event("2026-08-30T08:00:00.012Z", "IMAGE_EDITOR_INSPECTION_STARTED", { ...shared, sanitizedUrl: "https://creator.xiaohongshu.com/publish/publish" }),
+      event("2026-08-30T08:00:00.013Z", "IMAGE_EDITOR_READINESS_SAMPLE", { ...shared, sampleIndex: 0, elapsedMs: 12, readyState: "complete", currentUrl: "https://creator.xiaohongshu.com/publish/publish", titleCandidateCount: 1, bodyCandidateCount: 1, uploadCandidateCount: 1, finalSubmitCandidateCount: 1, securityVerificationPresent: false, loginPagePresent: false }),
+      event("2026-08-30T08:00:00.014Z", "IMAGE_EDITOR_SHELL_READY", { ...shared, shellStatus: "IMAGE_EDITOR_SHELL_READY", sanitizedUrl: "https://creator.xiaohongshu.com/publish/publish" }),
+      event("2026-08-30T08:00:00.015Z", "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED", { ...shared, contentType: "IMAGE_POST", contentTypeReady: true }),
+      event("2026-08-30T08:00:00.016Z", "IMAGE_EDITOR_CONTROLS_DISCOVERED", {
+        ...shared,
+        contentType: "IMAGE_POST",
+        contentTypeReady: true,
+        titleEditor: controls,
+        bodyEditor: { ...controls, kind: "BODY_EDITOR", candidates: [{ ...controls.candidates[0], candidateId: "body-0", tagName: "DIV", role: "textbox", semanticSignal: "body-editor" }] },
+        imageUploadControl: { ...controls, kind: "IMAGE_UPLOAD_CONTROL", candidates: [{ ...controls.candidates[0], candidateId: "upload-0", semanticSignal: "image-upload-control" }] },
+        publishSettingsArea: { status: "NOT_APPLICABLE", detected: false, candidates: [] },
+        finalSubmitControl: { ...controls, kind: "FINAL_SUBMIT_CONTROL", candidates: [{ ...controls.candidates[0], candidateId: "submit-0", tagName: "BUTTON", semanticSignal: "final-submit" }] }
+      }),
+      event("2026-08-30T08:00:00.017Z", "FINAL_SUBMIT_CONTROL_DETECTED", { ...shared, detected: true }),
+      event("2026-08-30T08:00:00.018Z", "PUBLISH_NOTE_NAVIGATION_CLICK", { ...shared, action: "PUBLISH_NOTE_NAVIGATION_CLICK", navigationClickCount: 1 }),
+      event("2026-08-30T08:00:00.019Z", "FINAL_SUBMIT_CLICKED", { ...shared, action: "FINAL_SUBMIT_CLICKED" })
+    ];
+
+    const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
+
+    expect(result).toMatchObject({
+      imageEditorInspectionStarted: true,
+      imageEditorReadinessSamples: [expect.objectContaining({ sampleIndex: 0, titleCandidateCount: 1 })],
+      imageEditorShellResult: "IMAGE_EDITOR_SHELL_READY",
+      contentType: "IMAGE_POST",
+      contentTypeReady: true,
+      titleEditorCandidates: [{ candidateId: "title-0" }],
+      titleEditorStatus: "FOUND_UNIQUE",
+      bodyEditorStatus: "FOUND_UNIQUE",
+      imageUploadControlStatus: "FOUND_UNIQUE",
+      publishSettingsAreaStatus: "NOT_APPLICABLE",
+      finalSubmitControlStatus: "FOUND_UNIQUE",
+      editorDiscoveryFailureCode: null,
+      sideEffectSummary: { finalSubmitCount: 1 }
+    });
+  });
+
+  it("does not count navigation or editor-control discovery markers as final submit", () => {
+    const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
+    const events = [
+      ...gateEvents(),
+      event("2026-08-30T08:00:00.012Z", "PUBLISH_NOTE_NAVIGATION_CLICK", { ...shared, action: "PUBLISH_NOTE_NAVIGATION_CLICK" }),
+      event("2026-08-30T08:00:00.013Z", "IMAGE_EDITOR_CONTROLS_DISCOVERED", { ...shared, action: "IMAGE_EDITOR_CONTROLS_DISCOVERED" }),
+      event("2026-08-30T08:00:00.014Z", "FINAL_SUBMIT_CONTROL_DETECTED", { ...shared, action: "FINAL_SUBMIT_CONTROL_DETECTED" })
+    ];
+
+    const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
+
+    expect(result.sideEffectSummary.finalSubmitCount).toBe(0);
+  });
 });

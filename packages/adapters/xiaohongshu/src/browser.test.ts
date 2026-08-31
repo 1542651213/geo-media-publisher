@@ -1080,6 +1080,34 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(fixture.submitClick).not.toHaveBeenCalled();
   });
 
+  it("runs shared read-only editor discovery before preparePublish mutation", async () => {
+    const fixture = setupPage({ titleCount: 0, settings: [{ label: "公开范围", required: false, value: "公开" }] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context());
+
+    await expect(adapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "CONTENT_REJECTED", message: expect.stringContaining("TITLE_EDITOR_NOT_FOUND") });
+    expect(fixture.inputSetFiles).not.toHaveBeenCalled();
+    expect(fixture.calls).not.toContain("title-fill");
+    expect(fixture.calls).not.toContain("body-fill");
+  });
+
+  it("returns a precise post-route editor discovery failure from the Gate", async () => {
+    const fixture = setupPage({ titleCount: 0 });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context());
+
+    await expect(adapter.inspectPublishEditor(context())).resolves.toMatchObject({
+      status: "needs_user_action",
+      editorReached: true,
+      failureCode: "TITLE_EDITOR_NOT_FOUND",
+      failureStage: "EDITOR_DISCOVERY",
+      missingSignal: "title-editor"
+    });
+    expect(fixture.inputSetFiles).not.toHaveBeenCalled();
+    expect(fixture.submitClick).not.toHaveBeenCalled();
+  });
+
   it("rejects a video-only entry instead of navigating to it", async () => {
     const fixture = setupPage({ entryCount: 0, videoEntryCount: 1 });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
@@ -1114,7 +1142,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     const ambiguous = setupPage({ titleCount: 2 });
     const ambiguousAdapter = new XiaohongshuBrowserAdapter({ sessionManager: ambiguous.manager });
     await ambiguousAdapter.connectAccount(context());
-    await expect(ambiguousAdapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "CONTENT_REJECTED", message: expect.stringContaining("CONTENT_TITLE_NOT_VERIFIED") });
+    await expect(ambiguousAdapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "CONTENT_REJECTED", message: expect.stringContaining("TITLE_EDITOR_AMBIGUOUS"), failureCode: "TITLE_EDITOR_AMBIGUOUS", failureStage: "EDITOR_DISCOVERY" });
 
     const mismatch = setupPage({ titleReadback: "other title" });
     const mismatchAdapter = new XiaohongshuBrowserAdapter({ sessionManager: mismatch.manager });
@@ -1156,7 +1184,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     const ambiguous = setupPage({ submitCount: 2 });
     const ambiguousAdapter = new XiaohongshuBrowserAdapter({ sessionManager: ambiguous.manager });
     await ambiguousAdapter.connectAccount(context());
-    await expect(ambiguousAdapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "FINAL_SUBMIT_CONTROL_NOT_FOUND", message: expect.stringContaining("FINAL_SUBMIT_CONTROL_NOT_VERIFIED") });
+    await expect(ambiguousAdapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "CONTENT_REJECTED", message: expect.stringContaining("FINAL_SUBMIT_CONTROL_AMBIGUOUS"), failureCode: "FINAL_SUBMIT_CONTROL_AMBIGUOUS", failureStage: "EDITOR_DISCOVERY" });
   });
 
   it("inspects the image-text editor on the canonical Page without content mutation", async () => {
@@ -1182,7 +1210,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
       status: "ready",
       editorReached: true,
       authStillValid: true,
-      contentType: "IMAGE_TEXT",
+      contentType: "IMAGE_POST",
       contentTypeReady: true,
       titleEditorDetected: true,
       bodyEditorDetected: true,

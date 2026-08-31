@@ -100,6 +100,21 @@ export type Task10AEvidenceSummary = {
   securityVerificationPresent: boolean | null;
   loginPagePresent: boolean | null;
   needsUserAction: boolean | null;
+  imageEditorInspectionStarted: boolean;
+  imageEditorReadinessSamples: Record<string, unknown>[];
+  imageEditorShellResult: string | null;
+  titleEditorCandidates: unknown[];
+  titleEditorStatus: string | null;
+  bodyEditorCandidates: unknown[];
+  bodyEditorStatus: string | null;
+  imageUploadCandidates: unknown[];
+  imageUploadControlStatus: string | null;
+  publishSettingsAreaStatus: string | null;
+  finalSubmitCandidates: unknown[];
+  finalSubmitControlStatus: string | null;
+  editorDiscoveryFailureCode: string | null;
+  editorDiscoveryFailureStage: string | null;
+  editorDiscoveryMissingSignal: string | null;
   postGateSnapshot: Record<string, unknown> | null;
   publishDomainCounts: PublishDomainCounts;
   sideEffectSummary: {
@@ -251,6 +266,21 @@ function emptySummary(input: AnalyzeTask10AEvidenceInput, gateResult: string): T
     securityVerificationPresent: null,
     loginPagePresent: null,
     needsUserAction: null,
+    imageEditorInspectionStarted: false,
+    imageEditorReadinessSamples: [],
+    imageEditorShellResult: null,
+    titleEditorCandidates: [],
+    titleEditorStatus: null,
+    bodyEditorCandidates: [],
+    bodyEditorStatus: null,
+    imageUploadCandidates: [],
+    imageUploadControlStatus: null,
+    publishSettingsAreaStatus: null,
+    finalSubmitCandidates: [],
+    finalSubmitControlStatus: null,
+    editorDiscoveryFailureCode: null,
+    editorDiscoveryFailureStage: null,
+    editorDiscoveryMissingSignal: null,
     postGateSnapshot: null,
     publishDomainCounts: input.publishDomainCounts ?? { publishJobs: 0, submissionIntents: 0, publishRecords: 0 },
     sideEffectSummary: { preparePublishCalled: "NO", contentMutationCount: 0, uploadCount: 0, finalSubmitCount: 0 }
@@ -366,6 +396,15 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
   const frameEvent = [...gateEvents].reverse().find((event) => event.code === "FRAME_TOPOLOGY_OBSERVED");
   const shadowEvent = [...gateEvents].reverse().find((event) => event.code === "SHADOW_TOPOLOGY_OBSERVED");
   const accessibilityEvent = [...gateEvents].reverse().find((event) => event.code === "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED");
+  const imageEditorInspectionStartedEvent = gateEvents.find((event) => event.code === "IMAGE_EDITOR_INSPECTION_STARTED");
+  const imageEditorReadinessEvents = gateEvents.filter((event) => event.code === "IMAGE_EDITOR_READINESS_SAMPLE");
+  const imageEditorShellEvent = [...gateEvents].reverse().find((event) => event.code === "IMAGE_EDITOR_SHELL_READY" || event.code === "IMAGE_EDITOR_SHELL_NOT_READY" || event.code === "IMAGE_EDITOR_SHELL_TIMEOUT");
+  const imageEditorContentTypeEvent = [...gateEvents].reverse().find((event) => event.code === "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED");
+  const imageEditorControlsEvent = [...gateEvents].reverse().find((event) => event.code === "IMAGE_EDITOR_CONTROLS_DISCOVERED");
+  const imageEditorFailureEvent = [...gateEvents].reverse().find((event) => event.code === "IMAGE_EDITOR_INSPECTION_FAILED");
+  const imageEditorControlsContext = imageEditorControlsEvent?.context ?? {};
+  const imageEditorControl = (field: string): Record<string, unknown> => isRecord(imageEditorControlsContext[field]) ? imageEditorControlsContext[field] : {};
+  const imageEditorCandidates = (field: string): unknown[] => Array.isArray(imageEditorControl(field).candidates) ? imageEditorControl(field).candidates as unknown[] : [];
   const result: Task10AEvidenceSummary = {
     ...emptySummary(input, gateResult),
     evidenceAmbiguous: "NO",
@@ -429,16 +468,31 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
     editorEntryFinalUrl: stringValue(finalContext.sanitizedFinalUrl) ?? stringValue(finalContext.sanitizedUrlAfter),
     editorReached: booleanValue(finalContext.editorReached),
     authStillValid: booleanValue(finalContext.authStillValid),
-    contentType: stringValue(finalContext.contentType),
-    contentTypeReady: booleanValue(finalContext.contentTypeReady),
-    titleEditorDetected: booleanValue(finalContext.titleEditorDetected),
-    bodyEditorDetected: booleanValue(finalContext.bodyEditorDetected),
-    imageUploadControlDetected: booleanValue(finalContext.imageUploadControlDetected),
-    publishSettingsAreaDetected: booleanValue(finalContext.publishSettingsAreaDetected),
-    finalSubmitControlDetected: booleanValue(finalContext.finalSubmitControlDetected),
+    contentType: stringValue(imageEditorContentTypeEvent?.context.contentType) ?? stringValue(finalContext.contentType),
+    contentTypeReady: booleanValue(imageEditorContentTypeEvent?.context.contentTypeReady) ?? booleanValue(finalContext.contentTypeReady),
+    titleEditorDetected: booleanValue(imageEditorControlsContext.titleEditor && isRecord(imageEditorControlsContext.titleEditor) ? imageEditorControlsContext.titleEditor.detected : undefined) ?? booleanValue(finalContext.titleEditorDetected),
+    bodyEditorDetected: booleanValue(imageEditorControlsContext.bodyEditor && isRecord(imageEditorControlsContext.bodyEditor) ? imageEditorControlsContext.bodyEditor.detected : undefined) ?? booleanValue(finalContext.bodyEditorDetected),
+    imageUploadControlDetected: booleanValue(imageEditorControlsContext.imageUploadControl && isRecord(imageEditorControlsContext.imageUploadControl) ? imageEditorControlsContext.imageUploadControl.detected : undefined) ?? booleanValue(finalContext.imageUploadControlDetected),
+    publishSettingsAreaDetected: booleanValue(imageEditorControlsContext.publishSettingsArea && isRecord(imageEditorControlsContext.publishSettingsArea) ? imageEditorControlsContext.publishSettingsArea.detected : undefined) ?? booleanValue(finalContext.publishSettingsAreaDetected),
+    finalSubmitControlDetected: booleanValue(imageEditorControlsContext.finalSubmitControl && isRecord(imageEditorControlsContext.finalSubmitControl) ? imageEditorControlsContext.finalSubmitControl.detected : undefined) ?? booleanValue(finalContext.finalSubmitControlDetected),
     securityVerificationPresent: booleanValue(finalContext.securityVerificationPresent),
     loginPagePresent: booleanValue(finalContext.loginPagePresent),
     needsUserAction: booleanValue(finalContext.needsUserAction),
+    imageEditorInspectionStarted: Boolean(imageEditorInspectionStartedEvent),
+    imageEditorReadinessSamples: imageEditorReadinessEvents.map((event) => event.context),
+    imageEditorShellResult: stringValue(imageEditorShellEvent?.context.shellStatus) ?? imageEditorShellEvent?.code ?? null,
+    titleEditorCandidates: imageEditorCandidates("titleEditor"),
+    titleEditorStatus: stringValue(imageEditorControl("titleEditor").status),
+    bodyEditorCandidates: imageEditorCandidates("bodyEditor"),
+    bodyEditorStatus: stringValue(imageEditorControl("bodyEditor").status),
+    imageUploadCandidates: imageEditorCandidates("imageUploadControl"),
+    imageUploadControlStatus: stringValue(imageEditorControl("imageUploadControl").status),
+    publishSettingsAreaStatus: stringValue(imageEditorControl("publishSettingsArea").status),
+    finalSubmitCandidates: imageEditorCandidates("finalSubmitControl"),
+    finalSubmitControlStatus: stringValue(imageEditorControl("finalSubmitControl").status),
+    editorDiscoveryFailureCode: stringValue(imageEditorFailureEvent?.context.failureCode) ?? (failureStage === "EDITOR_DISCOVERY" ? failureCode : null),
+    editorDiscoveryFailureStage: stringValue(imageEditorFailureEvent?.context.failureStage) ?? (failureStage === "EDITOR_DISCOVERY" ? failureStage : null),
+    editorDiscoveryMissingSignal: stringValue(imageEditorFailureEvent?.context.missingSignal) ?? (failureStage === "EDITOR_DISCOVERY" ? missingSignal : null),
     postGateSnapshot: postHeartbeat?.context ?? null,
     sideEffectSummary: {
       preparePublishCalled: countOccurrences(gateEvents, [/preparePublish/iu]) > 0 ? "YES" : "NO",
