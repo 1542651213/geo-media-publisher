@@ -1,0 +1,668 @@
+import type { CDPSession, Page } from "playwright-core";
+
+const MAX_EXACT_TARGETS = 20;
+const MAX_ANCESTOR_DEPTH = 8;
+const MAX_HIT_TEST_ELEMENTS = 8;
+const MAX_CLASS_TOKENS = 8;
+const MAX_STABLE_DATA_ATTRIBUTES = 5;
+const MAX_STRING_LENGTH = 120;
+
+export const XIAOHONGSHU_PUBLISH_NOTE_TEXT = "发布笔记";
+export const XIAOHONGSHU_IMAGE_POST_TEXT = "发布图文笔记";
+export const XIAOHONGSHU_PUBLISH_INTERACTION_EVENTS = [
+  "click",
+  "pointerup",
+  "pointerdown",
+  "mousedown",
+  "mouseup",
+  "touchstart",
+  "touchend"
+] as const;
+
+export type XiaohongshuPublishInteractionEvent = typeof XIAOHONGSHU_PUBLISH_INTERACTION_EVENTS[number];
+export type XiaohongshuClickableSurfaceStatus = "PROVEN_UNIQUE" | "AMBIGUOUS" | "NO_CLICK_SURFACE_FOUND" | "EVENT_LISTENER_INSPECTION_UNAVAILABLE";
+export type XiaohongshuClickableSurfaceFailureCode =
+  | "PUBLISH_SEMANTIC_TARGET_NOT_FOUND"
+  | "PUBLISH_SEMANTIC_TARGET_AMBIGUOUS"
+  | "PUBLISH_CLICK_SURFACE_NOT_FOUND"
+  | "PUBLISH_CLICK_SURFACE_AMBIGUOUS"
+  | "PUBLISH_CLICK_SURFACE_NOT_VISIBLE"
+  | "PUBLISH_CLICK_SURFACE_HIT_TEST_FAILED"
+  | "PUBLISH_CLICK_SURFACE_DIAGNOSTIC_FAILED";
+
+export interface XiaohongshuPublishBoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface XiaohongshuExactPublishSemanticTarget {
+  targetId: string;
+  tagName: string;
+  exactText: typeof XIAOHONGSHU_PUBLISH_NOTE_TEXT | typeof XIAOHONGSHU_IMAGE_POST_TEXT;
+  visible: boolean;
+  boundingBox: XiaohongshuPublishBoundingBox | null;
+  parentTag: string | null;
+  depth: number;
+}
+
+export interface XiaohongshuPublishAncestorDiagnostic {
+  targetId: string;
+  surfaceId: string;
+  depth: number;
+  tagName: string;
+  role: string | null;
+  tabIndex: number;
+  ariaLabel: string | null;
+  title: string | null;
+  stableDataAttributes: Record<string, string>;
+  classTokens: string[];
+  cursor: string;
+  pointerEvents: string;
+  display: string;
+  visibility: string;
+  visible: boolean;
+  boundingBox: XiaohongshuPublishBoundingBox | null;
+  onclickAttributePresent: boolean;
+}
+
+export interface XiaohongshuPublishEventListenerEntry {
+  eventType: XiaohongshuPublishInteractionEvent;
+  listenerCount: number;
+  ancestorDepth: number;
+  surfaceId: string | null;
+}
+
+export interface XiaohongshuPublishEventListenerTarget {
+  targetId: string;
+  listeners: readonly XiaohongshuPublishEventListenerEntry[];
+}
+
+export interface XiaohongshuPublishEventListenerInspection {
+  status: "AVAILABLE" | "UNAVAILABLE";
+  targets: readonly XiaohongshuPublishEventListenerTarget[];
+}
+
+export type XiaohongshuPublishHitTestAncestorRelation = "TARGET" | "ANCESTOR" | "DESCENDANT" | "UNRELATED";
+
+export interface XiaohongshuPublishHitTestElement {
+  surfaceId: string | null;
+  tagName: string;
+  role: string | null;
+  exactSemanticText: string | null;
+  ancestorRelation: XiaohongshuPublishHitTestAncestorRelation;
+}
+
+export interface XiaohongshuPublishHitTestDiagnostic {
+  targetId: string;
+  center: { x: number; y: number } | null;
+  elements: readonly XiaohongshuPublishHitTestElement[];
+}
+
+export interface XiaohongshuClickableSurfaceResolution {
+  exactText: typeof XIAOHONGSHU_PUBLISH_NOTE_TEXT | typeof XIAOHONGSHU_IMAGE_POST_TEXT;
+  status: XiaohongshuClickableSurfaceStatus;
+  confidence: "HIGH" | "NONE";
+  surface: {
+    surfaceId: string;
+    targetId: string;
+    ancestorDepth: number;
+    tagName: string;
+    boundingBox: XiaohongshuPublishBoundingBox;
+    strongSignals: string[];
+  } | null;
+  failureCode?: XiaohongshuClickableSurfaceFailureCode;
+}
+
+export interface XiaohongshuClickableSurfaceDiagnostics {
+  exactPublishSemanticTargets: readonly XiaohongshuExactPublishSemanticTarget[];
+  ancestorChainDiagnostics: readonly XiaohongshuPublishAncestorDiagnostic[];
+  eventListenerInspection: XiaohongshuPublishEventListenerInspection;
+  eventListenerDiagnostics: readonly XiaohongshuPublishEventListenerTarget[];
+  hitTestDiagnostics: readonly XiaohongshuPublishHitTestDiagnostic[];
+  publishNoteSurface: XiaohongshuClickableSurfaceResolution;
+  imagePostSurface: XiaohongshuClickableSurfaceResolution;
+  clickableSurfaceStatus: XiaohongshuClickableSurfaceStatus;
+  clickableSurfaceFailureCode: XiaohongshuClickableSurfaceFailureCode | null;
+  clickableSurfaceConfidence: "HIGH" | "NONE";
+  diagnosticClickCount: 0;
+  mouseEventDispatchCount: 0;
+  keyboardEventCount: 0;
+  gateSideEffects: {
+    preparePublish: "NO";
+    contentMutationCount: 0;
+    uploadCount: 0;
+    finalSubmitCount: 0;
+  };
+}
+
+interface PageEvaluateLike {
+  evaluate?: <T>(pageFunction: (...args: never[]) => T, arg?: unknown) => Promise<T>;
+}
+
+interface RawChain {
+  targetId?: unknown;
+  ancestors?: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function boundedString(value: unknown, fallback = ""): string {
+  return stringValue(value, fallback).normalize("NFKC").replace(/[\s]+/gu, " ").trim().slice(0, MAX_STRING_LENGTH);
+}
+
+function booleanValue(value: unknown, fallback = false): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function numberValue(value: unknown, fallback = 0): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function nonNegativeNumber(value: unknown, fallback = 0): number {
+  return Math.max(0, numberValue(value, fallback));
+}
+
+function boundedDepth(value: unknown): number {
+  return Math.min(MAX_ANCESTOR_DEPTH, Math.max(0, Math.trunc(nonNegativeNumber(value))));
+}
+
+function boundedBox(value: unknown): XiaohongshuPublishBoundingBox | null {
+  if (!isRecord(value)) return null;
+  const x = numberValue(value.x, Number.NaN);
+  const y = numberValue(value.y, Number.NaN);
+  const width = nonNegativeNumber(value.width, Number.NaN);
+  const height = nonNegativeNumber(value.height, Number.NaN);
+  if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+  return { x, y, width, height };
+}
+
+function normalizedRole(value: unknown): string | null {
+  const role = boundedString(value).toLowerCase();
+  return role || null;
+}
+
+function normalizedTagName(value: unknown, fallback = "UNKNOWN"): string {
+  return boundedString(value, fallback).toUpperCase() || fallback;
+}
+
+function normalizedNullable(value: unknown): string | null {
+  const result = boundedString(value);
+  return result || null;
+}
+
+function normalizeStableDataAttributes(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(Object.entries(value).slice(0, MAX_STABLE_DATA_ATTRIBUTES).map(([key, item]) => [boundedString(key, "data-attribute"), boundedString(item)]).filter(([key, item]) => key && item));
+}
+
+function normalizeClassTokens(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => boundedString(item)).filter(Boolean).slice(0, MAX_CLASS_TOKENS);
+}
+
+function exactPublishText(value: unknown): XiaohongshuExactPublishSemanticTarget["exactText"] | null {
+  const text = boundedString(value);
+  return text === XIAOHONGSHU_PUBLISH_NOTE_TEXT || text === XIAOHONGSHU_IMAGE_POST_TEXT ? text : null;
+}
+
+function targetIndex(targetId: string): number | null {
+  const match = targetId.match(/-(\d+)$/u);
+  if (!match) return null;
+  const index = Number.parseInt(match[1]!, 10);
+  return Number.isInteger(index) && index >= 0 && index < MAX_EXACT_TARGETS ? index : null;
+}
+
+function normalizeExactTarget(value: unknown, index: number): XiaohongshuExactPublishSemanticTarget | null {
+  if (!isRecord(value)) return null;
+  const exactText = exactPublishText(value.exactText);
+  if (!exactText) return null;
+  return {
+    targetId: boundedString(value.targetId, `xhs-publish-target-${index}`),
+    tagName: normalizedTagName(value.tagName),
+    exactText,
+    visible: booleanValue(value.visible),
+    boundingBox: boundedBox(value.boundingBox),
+    parentTag: normalizedNullable(value.parentTag)?.toUpperCase() ?? null,
+    depth: Math.min(64, Math.max(0, Math.trunc(nonNegativeNumber(value.depth))))
+  };
+}
+
+function normalizeAncestor(value: unknown, fallbackTargetId: string, fallbackDepth: number): XiaohongshuPublishAncestorDiagnostic | null {
+  if (!isRecord(value)) return null;
+  const targetId = boundedString(value.targetId, fallbackTargetId);
+  const surfaceId = boundedString(value.surfaceId);
+  if (!surfaceId) return null;
+  return {
+    targetId,
+    surfaceId,
+    depth: boundedDepth(value.depth ?? fallbackDepth),
+    tagName: normalizedTagName(value.tagName),
+    role: normalizedRole(value.role),
+    tabIndex: Math.trunc(numberValue(value.tabIndex, -1)),
+    ariaLabel: normalizedNullable(value.ariaLabel),
+    title: normalizedNullable(value.title),
+    stableDataAttributes: normalizeStableDataAttributes(value.stableDataAttributes),
+    classTokens: normalizeClassTokens(value.classTokens),
+    cursor: boundedString(value.cursor),
+    pointerEvents: boundedString(value.pointerEvents),
+    display: boundedString(value.display),
+    visibility: boundedString(value.visibility),
+    visible: booleanValue(value.visible),
+    boundingBox: boundedBox(value.boundingBox),
+    onclickAttributePresent: booleanValue(value.onclickAttributePresent)
+  };
+}
+
+function normalizeHitTestElement(value: unknown): XiaohongshuPublishHitTestElement | null {
+  if (!isRecord(value)) return null;
+  const relation = boundedString(value.ancestorRelation);
+  if (relation !== "TARGET" && relation !== "ANCESTOR" && relation !== "DESCENDANT" && relation !== "UNRELATED") return null;
+  return {
+    surfaceId: normalizedNullable(value.surfaceId),
+    tagName: normalizedTagName(value.tagName),
+    role: normalizedRole(value.role),
+    exactSemanticText: exactPublishText(value.exactSemanticText),
+    ancestorRelation: relation
+  };
+}
+
+function normalizeHitTest(value: unknown): XiaohongshuPublishHitTestDiagnostic | null {
+  if (!isRecord(value)) return null;
+  const targetId = boundedString(value.targetId);
+  if (!targetId) return null;
+  const center = isRecord(value.center) && Number.isFinite(value.center.x) && Number.isFinite(value.center.y)
+    ? { x: numberValue(value.center.x), y: numberValue(value.center.y) }
+    : null;
+  const elements = Array.isArray(value.elements)
+    ? value.elements.map(normalizeHitTestElement).filter((entry): entry is XiaohongshuPublishHitTestElement => Boolean(entry)).slice(0, MAX_HIT_TEST_ELEMENTS)
+    : [];
+  return { targetId, center, elements };
+}
+
+function rawTargets(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) return payload;
+  if (!isRecord(payload)) return [];
+  return Array.isArray(payload.targets) ? payload.targets : [];
+}
+
+/** Collects only bounded exact semantic targets. It never clicks or dispatches events. */
+export async function collectExactPublishSemanticTargets(page: Page): Promise<readonly XiaohongshuExactPublishSemanticTarget[]> {
+  const candidate = page as unknown as PageEvaluateLike;
+  if (typeof candidate.evaluate !== "function") return [];
+  try {
+    const payload = await candidate.evaluate(readExactPublishSemanticTargets);
+    return rawTargets(payload).slice(0, MAX_EXACT_TARGETS).map((value, index) => normalizeExactTarget(value, index)).filter((target): target is XiaohongshuExactPublishSemanticTarget => Boolean(target));
+  } catch {
+    return [];
+  }
+}
+
+function readExactPublishSemanticTargets(): { targets: Array<Record<string, unknown>>; truncated: boolean } {
+  const maxExactTargets = 20;
+  const maxScanElements = 2000;
+  const maxStringLength = 120;
+  const exactTextInPage = (value: string): boolean => value === "发布笔记" || value === "发布图文笔记";
+  const compact = (value: string): string => value.normalize("NFKC").replace(/[\s]+/gu, " ").trim();
+  const visible = (element: Element): boolean => {
+    const node = element as HTMLElement;
+    if (element.hasAttribute("hidden") || element.getAttribute("aria-hidden") === "true") return false;
+    const style = window.getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && style.visibility !== "collapse" && style.opacity !== "0" && rect.width > 0 && rect.height > 0;
+  };
+  const boxOf = (element: Element): { x: number; y: number; width: number; height: number } | null => {
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
+  };
+  const depthOf = (element: Element): number => {
+    let depth = 0;
+    let current: Element | null = element;
+    while (current?.parentElement && depth < 64) { depth += 1; current = current.parentElement; }
+    return depth;
+  };
+  const targets: Array<Record<string, unknown>> = [];
+  let scanned = 0;
+  let candidateCount = 0;
+  for (const element of Array.from(document.querySelectorAll("*"))) {
+    if (scanned >= maxScanElements) break;
+    scanned += 1;
+    const tagName = element.tagName.toUpperCase();
+    if (tagName === "HTML" || tagName === "BODY" || tagName === "SCRIPT" || tagName === "STYLE") continue;
+    const exactText = compact((element.textContent ?? "").slice(0, maxStringLength));
+    if (!exactTextInPage(exactText)) continue;
+    candidateCount += 1;
+    if (targets.length >= maxExactTargets) continue;
+    targets.push({
+      targetId: `xhs-publish-target-${targets.length}`,
+      tagName,
+      exactText,
+      visible: visible(element),
+      boundingBox: boxOf(element),
+      parentTag: element.parentElement?.tagName.toUpperCase() ?? null,
+      depth: depthOf(element)
+    });
+  }
+  return { targets, truncated: candidateCount > maxExactTargets };
+}
+
+/** Collects at most eight ancestors per exact target and only safe presentation metadata. */
+export async function collectPublishAncestorChainDiagnostics(page: Page, targets: readonly XiaohongshuExactPublishSemanticTarget[]): Promise<readonly XiaohongshuPublishAncestorDiagnostic[]> {
+  const candidate = page as unknown as PageEvaluateLike;
+  if (typeof candidate.evaluate !== "function" || targets.length === 0) return [];
+  try {
+    const payload: unknown = await candidate.evaluate(readPublishAncestorChains as unknown as (...args: never[]) => unknown, targets.map(({ targetId, exactText }) => ({ targetId, exactText })));
+    const chains: RawChain[] = Array.isArray(payload)
+      ? [{ targetId: targets[0]?.targetId, ancestors: payload }]
+      : isRecord(payload) && Array.isArray(payload.chains)
+        ? payload.chains.filter((value): value is RawChain => isRecord(value))
+        : isRecord(payload) && Array.isArray(payload.ancestors)
+          ? [{ targetId: payload.targetId, ancestors: payload.ancestors }]
+          : [];
+    return chains.flatMap((chain) => {
+      const targetId = boundedString(chain.targetId);
+      const ancestors = Array.isArray(chain.ancestors) ? chain.ancestors.slice(0, MAX_ANCESTOR_DEPTH) : [];
+      return ancestors.map((value, index) => normalizeAncestor(value, targetId, index)).filter((entry): entry is XiaohongshuPublishAncestorDiagnostic => Boolean(entry));
+    });
+  } catch {
+    return [];
+  }
+}
+
+function readPublishAncestorChains(input: readonly { targetId: string; exactText: string }[]): { chains: Array<{ targetId: string; ancestors: Array<Record<string, unknown>> }> } {
+  const maxExactTargets = 20;
+  const maxScanElements = 2000;
+  const maxAncestorDepth = 8;
+  const maxStringLength = 120;
+  const maxClassTokens = 8;
+  const compact = (value: string, limit = maxStringLength): string => value.normalize("NFKC").replace(/[\s]+/gu, " ").trim().slice(0, limit);
+  const exactTexts = new Set(["发布笔记", "发布图文笔记"]);
+  const exactTargets = Array.from(document.querySelectorAll("*")).filter((element) => {
+    const tagName = element.tagName.toUpperCase();
+    return tagName !== "HTML" && tagName !== "BODY" && tagName !== "SCRIPT" && tagName !== "STYLE" && exactTexts.has(compact(element.textContent ?? ""));
+  });
+  const elements = Array.from(document.querySelectorAll("*")).slice(0, maxScanElements);
+  const surfaceIdOf = (element: Element): string => `xhs-publish-surface-${Math.max(0, elements.indexOf(element))}`;
+  const boxOf = (element: Element): Record<string, number> | null => {
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
+  };
+  const visible = (element: Element): boolean => {
+    const node = element as HTMLElement;
+    const style = window.getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return !element.hasAttribute("hidden") && element.getAttribute("aria-hidden") !== "true" && style.display !== "none" && style.visibility !== "hidden" && style.visibility !== "collapse" && style.opacity !== "0" && rect.width > 0 && rect.height > 0;
+  };
+  const roleOf = (element: Element): string | null => compact(element.getAttribute("role") ?? "", 40).toLowerCase() || null;
+  const dataAttributesOf = (element: Element): Record<string, string> => Object.fromEntries(["data-testid", "data-test", "data-action", "data-qa", "data-cy"].map((name) => [name, compact(element.getAttribute(name) ?? "", 80)]).filter(([, value]) => value));
+  const classTokensOf = (element: Element): string[] => compact(element.getAttribute("class") ?? "", 320).split(/\s+/u).filter(Boolean).slice(0, maxClassTokens);
+  const chains: Array<{ targetId: string; ancestors: Array<Record<string, unknown>> }> = [];
+  for (const item of input.slice(0, maxExactTargets)) {
+    const targetIndex = Number.parseInt(item.targetId.match(/-(\d+)$/u)?.[1] ?? "-1", 10);
+    const target = Number.isInteger(targetIndex) ? exactTargets[targetIndex] : undefined;
+    if (!target) continue;
+    const ancestors: Array<Record<string, unknown>> = [];
+    let current: Element | null = target;
+    for (let depth = 0; depth < maxAncestorDepth && current; depth += 1, current = current.parentElement) {
+      const node = current as HTMLElement;
+      const style = window.getComputedStyle(node);
+      ancestors.push({
+        targetId: item.targetId,
+        surfaceId: surfaceIdOf(current),
+        depth,
+        tagName: current.tagName.toUpperCase(),
+        role: roleOf(current),
+        tabIndex: node.tabIndex,
+        ariaLabel: compact(current.getAttribute("aria-label") ?? "") || null,
+        title: compact(current.getAttribute("title") ?? "") || null,
+        stableDataAttributes: dataAttributesOf(current),
+        classTokens: classTokensOf(current),
+        cursor: style.cursor,
+        pointerEvents: style.pointerEvents,
+        display: style.display,
+        visibility: style.visibility,
+        visible: visible(current),
+        boundingBox: boxOf(current),
+        onclickAttributePresent: current.hasAttribute("onclick")
+      });
+    }
+    chains.push({ targetId: item.targetId, ancestors });
+  }
+  return { chains };
+}
+
+/** Performs a read-only elementsFromPoint() probe at each exact target's center. */
+export async function collectPublishHitTestDiagnostics(page: Page, targets: readonly XiaohongshuExactPublishSemanticTarget[]): Promise<readonly XiaohongshuPublishHitTestDiagnostic[]> {
+  const candidate = page as unknown as PageEvaluateLike;
+  if (typeof candidate.evaluate !== "function" || targets.length === 0) return [];
+  try {
+    const payload = await candidate.evaluate(readPublishHitTests, targets.map(({ targetId, exactText }) => ({ targetId, exactText })));
+    const values = Array.isArray(payload) ? payload : isRecord(payload) && Array.isArray(payload.hitTests) ? payload.hitTests : [];
+    return values.slice(0, MAX_EXACT_TARGETS).map(normalizeHitTest).filter((entry): entry is XiaohongshuPublishHitTestDiagnostic => Boolean(entry));
+  } catch {
+    return [];
+  }
+}
+
+function readPublishHitTests(input: readonly { targetId: string; exactText: string }[]): { hitTests: Array<Record<string, unknown>> } {
+  const maxExactTargets = 20;
+  const maxScanElements = 2000;
+  const maxHitTestElements = 8;
+  const maxStringLength = 120;
+  const compact = (value: string): string => value.normalize("NFKC").replace(/[\s]+/gu, " ").trim().slice(0, maxStringLength);
+  const exactTexts = new Set(["发布笔记", "发布图文笔记"]);
+  const exactTargets = Array.from(document.querySelectorAll("*")).filter((element) => {
+    const tagName = element.tagName.toUpperCase();
+    return tagName !== "HTML" && tagName !== "BODY" && tagName !== "SCRIPT" && tagName !== "STYLE" && exactTexts.has(compact(element.textContent ?? ""));
+  });
+  const allElements = Array.from(document.querySelectorAll("*")).slice(0, maxScanElements);
+  const surfaceIdOf = (element: Element): string => `xhs-publish-surface-${Math.max(0, allElements.indexOf(element))}`;
+  const roleOf = (element: Element): string | null => compact(element.getAttribute("role") ?? "").toLowerCase() || null;
+  const hitTests: Array<Record<string, unknown>> = [];
+  for (const item of input.slice(0, maxExactTargets)) {
+    const targetIndex = Number.parseInt(item.targetId.match(/-(\d+)$/u)?.[1] ?? "-1", 10);
+    const target = Number.isInteger(targetIndex) ? exactTargets[targetIndex] : undefined;
+    if (!target) continue;
+    const rect = target.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) { hitTests.push({ targetId: item.targetId, center: null, elements: [] }); continue; }
+    const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    const elements = document.elementsFromPoint(center.x, center.y).slice(0, maxHitTestElements).map((element) => ({
+      surfaceId: surfaceIdOf(element),
+      tagName: element.tagName.toUpperCase(),
+      role: roleOf(element),
+      exactSemanticText: exactTexts.has(compact(element.textContent ?? "")) ? compact(element.textContent ?? "") : null,
+      ancestorRelation: element === target ? "TARGET" : element.contains(target) ? "ANCESTOR" : target.contains(element) ? "DESCENDANT" : "UNRELATED"
+    }));
+    hitTests.push({ targetId: item.targetId, center, elements });
+  }
+  return { hitTests };
+}
+
+interface CdpSessionLike {
+  send(method: string, params?: Record<string, unknown>): Promise<unknown>;
+  detach?: () => Promise<void>;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) ? value : null;
+}
+
+function remoteObjectId(value: unknown): string | null {
+  const root = recordValue(value);
+  const result = recordValue(root?.result);
+  return typeof result?.objectId === "string" ? result.objectId : null;
+}
+
+function listenerTypeCounts(value: unknown): Map<XiaohongshuPublishInteractionEvent, number> {
+  const root = recordValue(value);
+  const listeners = Array.isArray(root?.listeners) ? root.listeners : [];
+  const counts = new Map<XiaohongshuPublishInteractionEvent, number>();
+  for (const listener of listeners) {
+    if (!isRecord(listener)) continue;
+    const type = boundedString(listener.type) as XiaohongshuPublishInteractionEvent;
+    if (!XIAOHONGSHU_PUBLISH_INTERACTION_EVENTS.includes(type)) continue;
+    counts.set(type, (counts.get(type) ?? 0) + 1);
+  }
+  return counts;
+}
+
+async function cdpSessionForPage(page: Page): Promise<CdpSessionLike | null> {
+  try {
+    const context = page.context() as unknown as { newCDPSession?: (targetPage: Page) => Promise<CDPSession> };
+    if (typeof context.newCDPSession !== "function") return null;
+    return await context.newCDPSession(page);
+  } catch {
+    return null;
+  }
+}
+
+function eventTargetExpression(targetIndex: number, depth: number): string {
+  return `(() => { const exact = new Set(["${XIAOHONGSHU_PUBLISH_NOTE_TEXT}", "${XIAOHONGSHU_IMAGE_POST_TEXT}"]); const nodes = Array.from(document.querySelectorAll("*")).filter((element) => { const tagName = element.tagName.toUpperCase(); return tagName !== "HTML" && tagName !== "BODY" && tagName !== "SCRIPT" && tagName !== "STYLE" && exact.has((element.textContent || "").normalize("NFKC").replace(/[\\s]+/gu, " ").trim()); }); let current = nodes[${targetIndex}] || null; for (let i = 0; i < ${depth} && current; i += 1) current = current.parentElement; return current; })()`;
+}
+
+/** Uses only Runtime.evaluate + DOMDebugger.getEventListeners and never serializes listener source or closures. */
+export async function collectPublishEventListenerDiagnostics(page: Page, targets: readonly XiaohongshuExactPublishSemanticTarget[], options: { cdpSession?: CDPSession } = {}): Promise<XiaohongshuPublishEventListenerInspection> {
+  if (targets.length === 0) return { status: "AVAILABLE", targets: [] };
+  const session = (options.cdpSession as unknown as CdpSessionLike | undefined) ?? await cdpSessionForPage(page);
+  if (!session) return { status: "UNAVAILABLE", targets: [] };
+  const diagnostics: XiaohongshuPublishEventListenerTarget[] = [];
+  try {
+    for (const target of targets.slice(0, MAX_EXACT_TARGETS)) {
+      const index = targetIndex(target.targetId);
+      if (index === null) continue;
+      const listeners: XiaohongshuPublishEventListenerEntry[] = [];
+      for (let depth = 0; depth < MAX_ANCESTOR_DEPTH; depth += 1) {
+        const evaluated = await session.send("Runtime.evaluate", { expression: eventTargetExpression(index, depth), returnByValue: false, objectGroup: "xhs-publish-clickable-surface" });
+        const objectId = remoteObjectId(evaluated);
+        if (!objectId) continue;
+        const eventPayload = await session.send("DOMDebugger.getEventListeners", { objectId });
+        const counts = listenerTypeCounts(eventPayload);
+        let surfaceId: string | null = null;
+        try {
+          const surfacePayload = await session.send("Runtime.callFunctionOn", {
+            objectId,
+            functionDeclaration: "function () { const all = Array.from(document.querySelectorAll('*')); return 'xhs-publish-surface-' + Math.max(0, all.indexOf(this)); }",
+            returnByValue: true
+          });
+          const result = recordValue(recordValue(surfacePayload)?.result);
+          surfaceId = typeof result?.value === "string" ? result.value : null;
+        } catch {
+          surfaceId = null;
+        }
+        for (const eventType of XIAOHONGSHU_PUBLISH_INTERACTION_EVENTS) listeners.push({ eventType, listenerCount: counts.get(eventType) ?? 0, ancestorDepth: depth, surfaceId });
+      }
+      diagnostics.push({ targetId: target.targetId, listeners });
+    }
+    return { status: "AVAILABLE", targets: diagnostics };
+  } catch {
+    return { status: "UNAVAILABLE", targets: [] };
+  }
+}
+
+function hitTestContainsSurface(hitTest: XiaohongshuPublishHitTestDiagnostic | undefined, surfaceId: string): boolean {
+  return Boolean(hitTest?.center && hitTest.elements.some((element) => element.surfaceId === surfaceId && element.ancestorRelation !== "UNRELATED"));
+}
+
+function resolutionForExactText(
+  exactText: XiaohongshuClickableSurfaceResolution["exactText"],
+  targets: readonly XiaohongshuExactPublishSemanticTarget[],
+  ancestors: readonly XiaohongshuPublishAncestorDiagnostic[],
+  eventListeners: XiaohongshuPublishEventListenerInspection,
+  hitTests: readonly XiaohongshuPublishHitTestDiagnostic[]
+): XiaohongshuClickableSurfaceResolution {
+  const exactTargets = targets.filter((target) => target.exactText === exactText);
+  if (exactTargets.length === 0) return { exactText, status: "NO_CLICK_SURFACE_FOUND", confidence: "NONE", surface: null, failureCode: "PUBLISH_SEMANTIC_TARGET_NOT_FOUND" };
+  if (new Set(exactTargets.map((target) => target.targetId)).size !== exactTargets.length) return { exactText, status: "AMBIGUOUS", confidence: "NONE", surface: null, failureCode: "PUBLISH_SEMANTIC_TARGET_AMBIGUOUS" };
+
+  const visibleTargets = exactTargets.filter((target) => target.visible);
+  if (visibleTargets.length === 0) return { exactText, status: "NO_CLICK_SURFACE_FOUND", confidence: "NONE", surface: null, failureCode: "PUBLISH_CLICK_SURFACE_NOT_VISIBLE" };
+
+  const eventByTarget = new Map(eventListeners.targets.map((entry) => [entry.targetId, entry.listeners]));
+  const hitByTarget = new Map(hitTests.map((entry) => [entry.targetId, entry]));
+  const candidates = new Map<string, XiaohongshuClickableSurfaceResolution["surface"]>();
+  let invisibleSurface = false;
+  let hitTestFailure = false;
+  let relationFailure = false;
+  for (const target of visibleTargets) {
+    const chain = ancestors.filter((ancestor) => ancestor.targetId === target.targetId && ancestor.depth < MAX_ANCESTOR_DEPTH);
+    const listenerEntries = eventByTarget.get(target.targetId) ?? [];
+    const strongByDepth = new Map<number, string[]>();
+    for (const listener of listenerEntries) {
+      if (listener.listenerCount <= 0) continue;
+      const signals = strongByDepth.get(listener.ancestorDepth) ?? [];
+      signals.push(`event:${listener.eventType}`);
+      strongByDepth.set(listener.ancestorDepth, signals);
+    }
+    for (const surface of chain) {
+      const strongSignals = [...(strongByDepth.get(surface.depth) ?? [])];
+      if (surface.onclickAttributePresent) strongSignals.push("onclick-attribute");
+      if (strongSignals.length === 0) continue;
+      if (!surface.visible || surface.display === "none" || surface.visibility === "hidden" || surface.visibility === "collapse" || surface.boundingBox === null) { invisibleSurface = true; continue; }
+      if (surface.pointerEvents === "none") { hitTestFailure = true; continue; }
+      if (!hitTestContainsSurface(hitByTarget.get(target.targetId), surface.surfaceId)) { hitTestFailure = true; continue; }
+      if (!candidates.has(surface.surfaceId)) candidates.set(surface.surfaceId, { surfaceId: surface.surfaceId, targetId: target.targetId, ancestorDepth: surface.depth, tagName: surface.tagName, boundingBox: surface.boundingBox!, strongSignals: [...new Set(strongSignals)] });
+    }
+    if (chain.length === 0) relationFailure = true;
+  }
+  if (candidates.size > 1) return { exactText, status: "AMBIGUOUS", confidence: "NONE", surface: null, failureCode: "PUBLISH_CLICK_SURFACE_AMBIGUOUS" };
+  if (candidates.size === 1) return { exactText, status: "PROVEN_UNIQUE", confidence: "HIGH", surface: candidates.values().next().value!, };
+  if (invisibleSurface) return { exactText, status: "NO_CLICK_SURFACE_FOUND", confidence: "NONE", surface: null, failureCode: "PUBLISH_CLICK_SURFACE_NOT_VISIBLE" };
+  if (hitTestFailure || relationFailure) return { exactText, status: "NO_CLICK_SURFACE_FOUND", confidence: "NONE", surface: null, failureCode: "PUBLISH_CLICK_SURFACE_HIT_TEST_FAILED" };
+  if (eventListeners.status === "UNAVAILABLE") return { exactText, status: "EVENT_LISTENER_INSPECTION_UNAVAILABLE", confidence: "NONE", surface: null, failureCode: "PUBLISH_CLICK_SURFACE_DIAGNOSTIC_FAILED" };
+  return { exactText, status: "NO_CLICK_SURFACE_FOUND", confidence: "NONE", surface: null, failureCode: "PUBLISH_CLICK_SURFACE_NOT_FOUND" };
+}
+
+function overallStatus(resolutions: readonly XiaohongshuClickableSurfaceResolution[]): XiaohongshuClickableSurfaceStatus {
+  if (resolutions.some((resolution) => resolution.status === "AMBIGUOUS")) return "AMBIGUOUS";
+  if (resolutions.some((resolution) => resolution.status === "EVENT_LISTENER_INSPECTION_UNAVAILABLE")) return "EVENT_LISTENER_INSPECTION_UNAVAILABLE";
+  if (resolutions.some((resolution) => resolution.status === "NO_CLICK_SURFACE_FOUND")) return "NO_CLICK_SURFACE_FOUND";
+  return "PROVEN_UNIQUE";
+}
+
+/** Resolves only from read-only diagnostic evidence; it never receives or clicks a Locator. */
+export function resolvePublishClickableSurfaces(input: {
+  exactTargets: readonly XiaohongshuExactPublishSemanticTarget[];
+  ancestorChains: readonly XiaohongshuPublishAncestorDiagnostic[];
+  eventListeners: XiaohongshuPublishEventListenerInspection;
+  hitTests: readonly XiaohongshuPublishHitTestDiagnostic[];
+}): XiaohongshuClickableSurfaceDiagnostics {
+  const publishNoteSurface = resolutionForExactText(XIAOHONGSHU_PUBLISH_NOTE_TEXT, input.exactTargets, input.ancestorChains, input.eventListeners, input.hitTests);
+  const imagePostSurface = resolutionForExactText(XIAOHONGSHU_IMAGE_POST_TEXT, input.exactTargets, input.ancestorChains, input.eventListeners, input.hitTests);
+  const status = overallStatus([publishNoteSurface, imagePostSurface]);
+  const clickableSurfaceFailureCode = publishNoteSurface.failureCode ?? imagePostSurface.failureCode ?? null;
+  return {
+    exactPublishSemanticTargets: input.exactTargets.slice(0, MAX_EXACT_TARGETS),
+    ancestorChainDiagnostics: input.ancestorChains.slice(0, MAX_EXACT_TARGETS * MAX_ANCESTOR_DEPTH),
+    eventListenerInspection: input.eventListeners,
+    eventListenerDiagnostics: input.eventListeners.targets.slice(0, MAX_EXACT_TARGETS),
+    hitTestDiagnostics: input.hitTests.slice(0, MAX_EXACT_TARGETS),
+    publishNoteSurface,
+    imagePostSurface,
+    clickableSurfaceStatus: status,
+    clickableSurfaceFailureCode,
+    clickableSurfaceConfidence: status === "PROVEN_UNIQUE" ? "HIGH" : "NONE",
+    diagnosticClickCount: 0,
+    mouseEventDispatchCount: 0,
+    keyboardEventCount: 0,
+    gateSideEffects: { preparePublish: "NO", contentMutationCount: 0, uploadCount: 0, finalSubmitCount: 0 }
+  };
+}
+
+export async function collectPublishClickableSurfaceDiagnostics(page: Page): Promise<XiaohongshuClickableSurfaceDiagnostics> {
+  const exactTargets = await collectExactPublishSemanticTargets(page);
+  const [ancestorChainDiagnostics, hitTestDiagnostics, eventListeners] = await Promise.all([
+    collectPublishAncestorChainDiagnostics(page, exactTargets),
+    collectPublishHitTestDiagnostics(page, exactTargets),
+    collectPublishEventListenerDiagnostics(page, exactTargets)
+  ]);
+  return resolvePublishClickableSurfaces({ exactTargets, ancestorChains: ancestorChainDiagnostics, eventListeners, hitTests: hitTestDiagnostics });
+}
+
+export { MAX_ANCESTOR_DEPTH, MAX_EXACT_TARGETS };

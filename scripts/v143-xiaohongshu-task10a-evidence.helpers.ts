@@ -56,6 +56,19 @@ export type Task10AEvidenceSummary = {
   publishSemanticNodes: unknown[];
   accessibilityPublishSignals: unknown[];
   discoveryDiagnosis: string | null;
+  exactPublishTargets: unknown[];
+  publishTargetAncestorChains: unknown[];
+  eventListenerInspection: string | null;
+  eventListenerDiagnostics: unknown[];
+  hitTestDiagnostics: unknown[];
+  publishNoteSurface: Record<string, unknown> | null;
+  imagePostSurface: Record<string, unknown> | null;
+  clickableSurfaceStatus: string | null;
+  clickableSurfaceFailureCode: string | null;
+  clickableSurfaceConfidence: string | null;
+  diagnosticClickCount: number | null;
+  mouseEventDispatchCount: number | null;
+  keyboardEventCount: number | null;
   timeline: EvidenceTimelineEntry[];
   entrySteps: EvidenceEntryStep[];
   failureCode: string | null;
@@ -186,6 +199,19 @@ function emptySummary(input: AnalyzeTask10AEvidenceInput, gateResult: string): T
     publishSemanticNodes: [],
     accessibilityPublishSignals: [],
     discoveryDiagnosis: null,
+    exactPublishTargets: [],
+    publishTargetAncestorChains: [],
+    eventListenerInspection: null,
+    eventListenerDiagnostics: [],
+    hitTestDiagnostics: [],
+    publishNoteSurface: null,
+    imagePostSurface: null,
+    clickableSurfaceStatus: null,
+    clickableSurfaceFailureCode: null,
+    clickableSurfaceConfidence: null,
+    diagnosticClickCount: null,
+    mouseEventDispatchCount: null,
+    keyboardEventCount: null,
     timeline: [],
     entrySteps: [],
     failureCode: null,
@@ -291,6 +317,16 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
   const semanticEvent = [...gateEvents].reverse().find((event) => event.code === "PUBLISH_SEMANTIC_NODES_OBSERVED");
   const semanticContext = semanticEvent?.context ?? {};
   const topologyContext = topologyEvent?.context ?? {};
+  const exactTargetsEvent = [...gateEvents].reverse().find((event) => event.code === "PUBLISH_EXACT_TARGETS_OBSERVED");
+  const ancestorChainsEvent = [...gateEvents].reverse().find((event) => event.code === "PUBLISH_TARGET_ANCESTOR_CHAINS");
+  const surfaceEvent = [...gateEvents].reverse().find((event) => event.code === "PUBLISH_CLICK_SURFACE_DIAGNOSTICS");
+  const hitTestEvent = [...gateEvents].reverse().find((event) => event.code === "PUBLISH_HIT_TEST_OBSERVED");
+  const eventListenerEvent = [...gateEvents].reverse().find((event) => event.code === "PUBLISH_EVENT_LISTENERS_OBSERVED");
+  const exactTargetsContext = exactTargetsEvent?.context ?? {};
+  const ancestorChainsContext = ancestorChainsEvent?.context ?? {};
+  const surfaceContext = surfaceEvent?.context ?? {};
+  const hitTestContext = hitTestEvent?.context ?? {};
+  const eventListenerContext = eventListenerEvent?.context ?? {};
   const frameEvent = [...gateEvents].reverse().find((event) => event.code === "FRAME_TOPOLOGY_OBSERVED");
   const shadowEvent = [...gateEvents].reverse().find((event) => event.code === "SHADOW_TOPOLOGY_OBSERVED");
   const accessibilityEvent = [...gateEvents].reverse().find((event) => event.code === "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED");
@@ -320,6 +356,19 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
     publishSemanticNodes: Array.isArray(semanticContext.semanticNodes) ? semanticContext.semanticNodes : [],
     accessibilityPublishSignals: Array.isArray(accessibilityEvent?.context.accessibilityPublishSignals) ? accessibilityEvent.context.accessibilityPublishSignals : Array.isArray(semanticContext.accessibilityPublishSignals) ? semanticContext.accessibilityPublishSignals : [],
     discoveryDiagnosis: stringValue(semanticContext.discoveryDiagnosis),
+    exactPublishTargets: Array.isArray(exactTargetsContext.exactPublishSemanticTargets) ? exactTargetsContext.exactPublishSemanticTargets : [],
+    publishTargetAncestorChains: Array.isArray(ancestorChainsContext.ancestorChainDiagnostics) ? ancestorChainsContext.ancestorChainDiagnostics : Array.isArray(surfaceContext.ancestorChainDiagnostics) ? surfaceContext.ancestorChainDiagnostics : [],
+    eventListenerInspection: stringValue(eventListenerContext.eventListenerInspection),
+    eventListenerDiagnostics: Array.isArray(eventListenerContext.eventListenerDiagnostics) ? eventListenerContext.eventListenerDiagnostics : [],
+    hitTestDiagnostics: Array.isArray(hitTestContext.hitTestDiagnostics) ? hitTestContext.hitTestDiagnostics : [],
+    publishNoteSurface: isRecord(surfaceContext.publishNoteSurface) ? surfaceContext.publishNoteSurface : null,
+    imagePostSurface: isRecord(surfaceContext.imagePostSurface) ? surfaceContext.imagePostSurface : null,
+    clickableSurfaceStatus: stringValue(surfaceContext.clickableSurfaceStatus),
+    clickableSurfaceFailureCode: stringValue(surfaceContext.clickableSurfaceFailureCode),
+    clickableSurfaceConfidence: stringValue(surfaceContext.clickableSurfaceConfidence),
+    diagnosticClickCount: typeof surfaceContext.diagnosticClickCount === "number" ? surfaceContext.diagnosticClickCount : null,
+    mouseEventDispatchCount: typeof surfaceContext.mouseEventDispatchCount === "number" ? surfaceContext.mouseEventDispatchCount : null,
+    keyboardEventCount: typeof surfaceContext.keyboardEventCount === "number" ? surfaceContext.keyboardEventCount : null,
     timeline: [
       ...(preHeartbeat ? [{ timestamp: preHeartbeat.timestamp, code: preHeartbeat.code, context: preHeartbeat.context }] : []),
       ...gateEvents.map((event) => ({ timestamp: event.timestamp, code: event.code, context: event.context })),

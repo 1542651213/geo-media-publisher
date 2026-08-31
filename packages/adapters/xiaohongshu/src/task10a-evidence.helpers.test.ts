@@ -189,4 +189,56 @@ describe("Task 10A evidence analyzer", () => {
     const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
     expect(result).toMatchObject({ gateResult: "editor_not_found", failureCode: "PUBLISH_ENTRY_NOT_FOUND", failureStage: "PUBLISH_ENTRY_DISCOVERY" });
   });
+
+  it("correlates exact publish targets, bounded surfaces, listener proof and hit-test evidence", () => {
+    const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
+    const events = [
+      ...gateEvents(),
+      event("2026-08-30T08:00:00.012Z", "PUBLISH_EXACT_TARGETS_OBSERVED", {
+        ...shared,
+        exactPublishSemanticTargets: [{ targetId: "target-0", tagName: "SPAN", exactText: "发布笔记", visible: true, boundingBox: { x: 1, y: 2, width: 3, height: 4 }, parentTag: "DIV", depth: 5 }]
+      }),
+      event("2026-08-30T08:00:00.013Z", "PUBLISH_TARGET_ANCESTOR_CHAINS", {
+        ...shared,
+        ancestorChainDiagnostics: [{ targetId: "target-0", surfaceId: "surface-0", depth: 1, tagName: "DIV", pointerEvents: "auto", visibility: "visible" }]
+      }),
+      event("2026-08-30T08:00:00.014Z", "PUBLISH_EVENT_LISTENERS_OBSERVED", {
+        ...shared,
+        eventListenerInspection: "AVAILABLE",
+        eventListenerDiagnostics: [{ targetId: "target-0", listeners: [{ eventType: "click", listenerCount: 1, ancestorDepth: 1, surfaceId: "surface-0" }] }]
+      }),
+      event("2026-08-30T08:00:00.015Z", "PUBLISH_HIT_TEST_OBSERVED", {
+        ...shared,
+        hitTestDiagnostics: [{ targetId: "target-0", center: { x: 2, y: 3 }, elements: [{ surfaceId: "surface-0", ancestorRelation: "ANCESTOR" }] }]
+      }),
+      event("2026-08-30T08:00:00.016Z", "PUBLISH_CLICK_SURFACE_DIAGNOSTICS", {
+        ...shared,
+        publishNoteSurface: { exactText: "发布笔记", status: "PROVEN_UNIQUE", confidence: "HIGH", surface: { surfaceId: "surface-0", ancestorDepth: 1 } },
+        imagePostSurface: { exactText: "发布图文笔记", status: "NO_CLICK_SURFACE_FOUND", failureCode: "PUBLISH_SEMANTIC_TARGET_NOT_FOUND" },
+        clickableSurfaceStatus: "NO_CLICK_SURFACE_FOUND",
+        clickableSurfaceFailureCode: "PUBLISH_SEMANTIC_TARGET_NOT_FOUND",
+        clickableSurfaceConfidence: "NONE",
+        diagnosticClickCount: 0,
+        mouseEventDispatchCount: 0,
+        keyboardEventCount: 0
+      })
+    ];
+
+    const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
+
+    expect(result).toMatchObject({
+      exactPublishTargets: [{ targetId: "target-0", exactText: "发布笔记" }],
+      publishTargetAncestorChains: [{ targetId: "target-0", surfaceId: "surface-0", depth: 1 }],
+      eventListenerInspection: "AVAILABLE",
+      eventListenerDiagnostics: [{ targetId: "target-0" }],
+      hitTestDiagnostics: [{ targetId: "target-0" }],
+      publishNoteSurface: { status: "PROVEN_UNIQUE" },
+      imagePostSurface: { status: "NO_CLICK_SURFACE_FOUND" },
+      clickableSurfaceStatus: "NO_CLICK_SURFACE_FOUND",
+      clickableSurfaceFailureCode: "PUBLISH_SEMANTIC_TARGET_NOT_FOUND",
+      diagnosticClickCount: 0,
+      mouseEventDispatchCount: 0,
+      keyboardEventCount: 0
+    });
+  });
 });

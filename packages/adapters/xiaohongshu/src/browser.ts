@@ -13,12 +13,30 @@ import {
   type XiaohongshuHomeReadinessObservation,
   type XiaohongshuPublishSemanticNodeCollection
 } from "./creator-home-diagnostics";
+import {
+  collectPublishClickableSurfaceDiagnostics,
+  type XiaohongshuClickableSurfaceDiagnostics,
+  type XiaohongshuClickableSurfaceResolution,
+  type XiaohongshuExactPublishSemanticTarget,
+  type XiaohongshuPublishAncestorDiagnostic,
+  type XiaohongshuPublishEventListenerInspection,
+  type XiaohongshuPublishEventListenerTarget,
+  type XiaohongshuPublishHitTestDiagnostic
+} from "./publish-clickable-surface";
 export {
   collectCreatorHomeTopology,
   collectPublishSemanticNodes,
   inspectCreatorHomeReadiness,
   observeCreatorHomeReadiness
 } from "./creator-home-diagnostics";
+export {
+  collectExactPublishSemanticTargets,
+  collectPublishAncestorChainDiagnostics,
+  collectPublishClickableSurfaceDiagnostics,
+  collectPublishEventListenerDiagnostics,
+  collectPublishHitTestDiagnostics,
+  resolvePublishClickableSurfaces
+} from "./publish-clickable-surface";
 export type {
   XiaohongshuAccessibilityPublishSignal,
   XiaohongshuCreatorHomeTopology,
@@ -35,6 +53,22 @@ export type {
   XiaohongshuPublishSemanticNodeCollection,
   XiaohongshuShadowDiagnostic
 } from "./creator-home-diagnostics";
+export type {
+  XiaohongshuClickableSurfaceDiagnostics,
+  XiaohongshuClickableSurfaceFailureCode,
+  XiaohongshuClickableSurfaceResolution,
+  XiaohongshuClickableSurfaceStatus,
+  XiaohongshuExactPublishSemanticTarget,
+  XiaohongshuPublishAncestorDiagnostic,
+  XiaohongshuPublishBoundingBox,
+  XiaohongshuPublishEventListenerEntry,
+  XiaohongshuPublishEventListenerInspection,
+  XiaohongshuPublishEventListenerTarget,
+  XiaohongshuPublishHitTestDiagnostic,
+  XiaohongshuPublishHitTestElement,
+  XiaohongshuPublishHitTestAncestorRelation,
+  XiaohongshuPublishInteractionEvent
+} from "./publish-clickable-surface";
 
 const XIAOHONGSHU_CREATOR_HOME = "https://creator.xiaohongshu.com/";
 const XIAOHONGSHU_IMAGE_POST_ENTRY_SELECTOR = 'a[href*="/publish/publish"]';
@@ -220,7 +254,7 @@ export type XiaohongshuEditorEntryStepName =
 export type XiaohongshuEditorNavigationTrigger = "DIRECT_GOTO" | "PUBLISH_ENTRY_CLICK" | "CONTENT_TYPE_CLICK" | "PLATFORM_REDIRECT" | "UNKNOWN";
 
 export interface XiaohongshuEditorEntryDiagnostic {
-  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED";
+  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED" | "PUBLISH_EXACT_TARGETS_OBSERVED" | "PUBLISH_TARGET_ANCESTOR_CHAINS" | "PUBLISH_CLICK_SURFACE_DIAGNOSTICS" | "PUBLISH_HIT_TEST_OBSERVED" | "PUBLISH_EVENT_LISTENERS_OBSERVED";
   timestamp: string;
   operationId: string;
   platformKey: "xiaohongshu";
@@ -283,6 +317,23 @@ export interface XiaohongshuEditorEntryDiagnostic {
   semanticNodes?: XiaohongshuPublishSemanticNodeCollection["nodes"];
   discoveryDiagnosis?: XiaohongshuPublishSemanticNodeCollection["discoveryDiagnosis"];
   accessibilityPublishSignals?: XiaohongshuPublishSemanticNodeCollection["accessibilityPublishSignals"];
+  exactPublishSemanticTargets?: readonly XiaohongshuExactPublishSemanticTarget[];
+  ancestorChainDiagnostics?: readonly XiaohongshuPublishAncestorDiagnostic[];
+  eventListenerInspection?: XiaohongshuPublishEventListenerInspection["status"];
+  eventListenerDiagnostics?: readonly XiaohongshuPublishEventListenerTarget[];
+  hitTestDiagnostics?: readonly XiaohongshuPublishHitTestDiagnostic[];
+  publishNoteSurface?: XiaohongshuClickableSurfaceResolution;
+  imagePostSurface?: XiaohongshuClickableSurfaceResolution;
+  clickableSurfaceStatus?: XiaohongshuClickableSurfaceDiagnostics["clickableSurfaceStatus"];
+  clickableSurfaceFailureCode?: XiaohongshuClickableSurfaceDiagnostics["clickableSurfaceFailureCode"];
+  clickableSurfaceConfidence?: XiaohongshuClickableSurfaceDiagnostics["clickableSurfaceConfidence"];
+  diagnosticClickCount?: 0;
+  mouseEventDispatchCount?: 0;
+  keyboardEventCount?: 0;
+  gateCallsPreparePublish?: "NO";
+  gateContentMutationCount?: 0;
+  gateUploadCount?: 0;
+  gateFinalSubmitCount?: 0;
 }
 
 export type XiaohongshuPublishEntryDiscoveryStrategy = "STABLE_HREF" | "STABLE_DATA_ATTRIBUTE" | "ROLE_EXACT_NAME" | "ARIA_LABEL_OR_TITLE" | "SCOPED_EXACT_TEXT";
@@ -1641,7 +1692,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const failure = this.failureDetailsForError(error);
     if (failure.failureCode === "AUTH_REDIRECTED_TO_LOGIN") return "auth_expired";
     if (failure.failureCode === "SECURITY_VERIFICATION_REQUIRED") return "security_verification_required";
-    if (failure.failureCode === "PUBLISH_ENTRY_NOT_FOUND" || failure.failureCode === "PUBLISH_ENTRY_AMBIGUOUS" || failure.failureCode === "PUBLISH_ENTRY_NOT_VISIBLE" || failure.failureCode === "PUBLISH_ENTRY_DISABLED" || failure.failureCode === "PUBLISH_ENTRY_DIAGNOSTIC_FAILED" || failure.failureCode === "CONTENT_TYPE_ENTRY_NOT_FOUND" || failure.failureCode === "CONTENT_TYPE_SELECTION_FAILED" || failure.failureCode === "EDITOR_SELECTOR_DRIFT") return "editor_not_found";
+    if (failure.failureCode === "PUBLISH_ENTRY_NOT_FOUND" || failure.failureCode === "PUBLISH_ENTRY_AMBIGUOUS" || failure.failureCode === "PUBLISH_ENTRY_NOT_VISIBLE" || failure.failureCode === "PUBLISH_ENTRY_DISABLED" || failure.failureCode === "PUBLISH_ENTRY_DIAGNOSTIC_FAILED" || failure.failureCode === "PUBLISH_SEMANTIC_TARGET_NOT_FOUND" || failure.failureCode === "PUBLISH_SEMANTIC_TARGET_AMBIGUOUS" || failure.failureCode === "PUBLISH_CLICK_SURFACE_NOT_FOUND" || failure.failureCode === "PUBLISH_CLICK_SURFACE_AMBIGUOUS" || failure.failureCode === "PUBLISH_CLICK_SURFACE_NOT_VISIBLE" || failure.failureCode === "PUBLISH_CLICK_SURFACE_HIT_TEST_FAILED" || failure.failureCode === "PUBLISH_CLICK_SURFACE_DIAGNOSTIC_FAILED" || failure.failureCode === "CONTENT_TYPE_ENTRY_NOT_FOUND" || failure.failureCode === "CONTENT_TYPE_SELECTION_FAILED" || failure.failureCode === "EDITOR_SELECTOR_DRIFT") return "editor_not_found";
     if (failure.failureCode !== "UNKNOWN_UI_STATE") return "needs_user_action";
     if (error instanceof XiaohongshuGateError) {
       if (error.gateCode === "LOGIN_REQUIRED") return "auth_expired";
@@ -1831,6 +1882,57 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       if (semantic.accessibilityPublishSignals) {
         this.emitEditorEntryDiagnostic({ code: "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED", timestamp: new Date().toISOString(), ...shared, accessibilityPublishSignals: semantic.accessibilityPublishSignals });
       }
+      const clickable = await collectPublishClickableSurfaceDiagnostics(page);
+      this.emitEditorEntryDiagnostic({
+        code: "PUBLISH_EXACT_TARGETS_OBSERVED",
+        timestamp: new Date().toISOString(),
+        ...shared,
+        sanitizedUrl: sanitizePageUrl(page),
+        exactPublishSemanticTargets: clickable.exactPublishSemanticTargets,
+        candidateCount: clickable.exactPublishSemanticTargets.length,
+        candidateInventoryTruncated: clickable.exactPublishSemanticTargets.length >= 20
+      });
+      this.emitEditorEntryDiagnostic({
+        code: "PUBLISH_TARGET_ANCESTOR_CHAINS",
+        timestamp: new Date().toISOString(),
+        ...shared,
+        sanitizedUrl: sanitizePageUrl(page),
+        ancestorChainDiagnostics: clickable.ancestorChainDiagnostics
+      });
+      this.emitEditorEntryDiagnostic({
+        code: "PUBLISH_CLICK_SURFACE_DIAGNOSTICS",
+        timestamp: new Date().toISOString(),
+        ...shared,
+        sanitizedUrl: sanitizePageUrl(page),
+        ancestorChainDiagnostics: clickable.ancestorChainDiagnostics,
+        publishNoteSurface: clickable.publishNoteSurface,
+        imagePostSurface: clickable.imagePostSurface,
+        clickableSurfaceStatus: clickable.clickableSurfaceStatus,
+        clickableSurfaceFailureCode: clickable.clickableSurfaceFailureCode,
+        clickableSurfaceConfidence: clickable.clickableSurfaceConfidence,
+        diagnosticClickCount: clickable.diagnosticClickCount,
+        mouseEventDispatchCount: clickable.mouseEventDispatchCount,
+        keyboardEventCount: clickable.keyboardEventCount,
+        gateCallsPreparePublish: clickable.gateSideEffects.preparePublish,
+        gateContentMutationCount: clickable.gateSideEffects.contentMutationCount,
+        gateUploadCount: clickable.gateSideEffects.uploadCount,
+        gateFinalSubmitCount: clickable.gateSideEffects.finalSubmitCount
+      });
+      this.emitEditorEntryDiagnostic({
+        code: "PUBLISH_HIT_TEST_OBSERVED",
+        timestamp: new Date().toISOString(),
+        ...shared,
+        sanitizedUrl: sanitizePageUrl(page),
+        hitTestDiagnostics: clickable.hitTestDiagnostics
+      });
+      this.emitEditorEntryDiagnostic({
+        code: "PUBLISH_EVENT_LISTENERS_OBSERVED",
+        timestamp: new Date().toISOString(),
+        ...shared,
+        sanitizedUrl: sanitizePageUrl(page),
+        eventListenerInspection: clickable.eventListenerInspection.status,
+        eventListenerDiagnostics: clickable.eventListenerDiagnostics
+      });
     } catch {
       // Diagnostics are best-effort and must never alter the existing entry resolver or Gate result.
     }
