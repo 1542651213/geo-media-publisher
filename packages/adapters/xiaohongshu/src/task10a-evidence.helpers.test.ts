@@ -159,4 +159,34 @@ describe("Task 10A evidence analyzer", () => {
     const result = analyzeTask10AEvidence({ logText: logText([event("2026-08-30T08:00:00.000Z", "CANONICAL_SESSION_HEARTBEAT", { platformKey, accountId: accountA })]), platformKey, accountId: accountA, publishDomainCounts: counts });
     expect(result).toMatchObject({ evidenceAmbiguous: "NO", gateOperationId: null, gateResult: "NOT_FOUND" });
   });
+
+  it("correlates Creator Home readiness, topology and semantic diagnostics to the selected Gate", () => {
+    const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
+    const events = [
+      ...gateEvents(),
+      event("2026-08-30T08:00:00.012Z", "CREATOR_HOME_READINESS_SAMPLE", { ...shared, readinessResult: "HOME_SHELL_READY", sampleIndex: 1, readyState: "complete", bodyChildCount: 3, visibleInteractiveCount: 4, navigationElementCount: 1, publishSemanticTextSignalCount: 1 }),
+      event("2026-08-30T08:00:00.013Z", "CREATOR_HOME_TOPOLOGY_OBSERVED", { ...shared, topLevelElementCounts: { DIV: 2, NAV: 1 }, interactiveElementTypeCounts: { a: 0, button: 0, "role=button": 0, "role=menuitem": 1, "role=link": 0, "role=tab": 0, "[tabindex]": 1, nav: 1, aside: 0 }, frameCount: 0, frameSummary: [], shadowHostCount: 0, shadowSummary: [], publishEntryLocation: "MAIN_DOCUMENT", publishSemanticSignalPresent: true }),
+      event("2026-08-30T08:00:00.014Z", "PUBLISH_SEMANTIC_NODES_OBSERVED", { ...shared, textSignalPresent: true, candidateCount: 1, publishSemanticTextSignalCount: 1, semanticNodes: [{ tagName: "SPAN", nearestInteractiveAncestorTag: "DIV", nearestInteractiveAncestorHasOnclick: true }], discoveryDiagnosis: "PUBLISH_ENTRY_OUTSIDE_LEGACY_ELEMENT_TYPES", accessibilityPublishSignals: [{ role: "button", name: "发布笔记" }] })
+    ];
+    const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
+    expect(result).toMatchObject({
+      creatorHomeShellReady: "HOME_SHELL_READY",
+      publishSemanticTextSignalCount: 1,
+      discoveryDiagnosis: "PUBLISH_ENTRY_OUTSIDE_LEGACY_ELEMENT_TYPES",
+      domTopologySummary: { topLevelElementCounts: { DIV: 2, NAV: 1 } },
+      publishSemanticNodes: [{ tagName: "SPAN" }],
+      accessibilityPublishSignals: [{ role: "button", name: "发布笔记" }]
+    });
+    expect(result.homeReadinessSamples).toEqual([expect.objectContaining({ sampleIndex: 1, bodyChildCount: 3 })]);
+  });
+
+  it("prefers canonical completion finalStatus when navigation failure logging arrives later", () => {
+    const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
+    const events = [
+      ...gateEvents({ failureCode: "PUBLISH_ENTRY_NOT_FOUND", failureStage: "PUBLISH_ENTRY_DISCOVERY", missingSignal: "publish-entry-semantic-candidate" }),
+      event("2026-08-30T08:00:01.001Z", "XHS_CANONICAL_PAGE_OPERATION_COMPLETED", { ...shared, phase: "COMPLETED", finalStatus: "editor_not_found", sanitizedFinalUrl: "https://creator.xiaohongshu.com/new/home", failureCode: "PUBLISH_ENTRY_NOT_FOUND", failureStage: "PUBLISH_ENTRY_DISCOVERY", missingSignal: "publish-entry-semantic-candidate" })
+    ];
+    const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
+    expect(result).toMatchObject({ gateResult: "editor_not_found", failureCode: "PUBLISH_ENTRY_NOT_FOUND", failureStage: "PUBLISH_ENTRY_DISCOVERY" });
+  });
 });

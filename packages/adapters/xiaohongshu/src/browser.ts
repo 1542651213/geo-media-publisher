@@ -5,6 +5,36 @@ import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomatio
 import type { Locator, Page } from "playwright-core";
 import { collectXhsAuthStateMetadata, collectXhsPreNavigationAuthStateMetadata, createXhsDiagnosticFingerprintKey, type XhsAuthStateMetadata } from "./auth-state-diagnostics";
 import { XhsNavigationDiagnosticsTracker, type XhsNavigationClassification } from "./navigation-diagnostics";
+import {
+  collectCreatorHomeTopology,
+  collectPublishSemanticNodes,
+  observeCreatorHomeReadiness,
+  type XiaohongshuCreatorHomeTopology,
+  type XiaohongshuHomeReadinessObservation,
+  type XiaohongshuPublishSemanticNodeCollection
+} from "./creator-home-diagnostics";
+export {
+  collectCreatorHomeTopology,
+  collectPublishSemanticNodes,
+  inspectCreatorHomeReadiness,
+  observeCreatorHomeReadiness
+} from "./creator-home-diagnostics";
+export type {
+  XiaohongshuAccessibilityPublishSignal,
+  XiaohongshuCreatorHomeTopology,
+  XiaohongshuDiscoveryDiagnosis,
+  XiaohongshuFrameDiagnostic,
+  XiaohongshuHomeReadinessObservation,
+  XiaohongshuHomeReadinessOptions,
+  XiaohongshuHomeReadinessSample,
+  XiaohongshuHomeReadinessSnapshot,
+  XiaohongshuHomeShellResult,
+  XiaohongshuInteractiveElementTypeCounts,
+  XiaohongshuPublishEntryLocation,
+  XiaohongshuPublishSemanticNode,
+  XiaohongshuPublishSemanticNodeCollection,
+  XiaohongshuShadowDiagnostic
+} from "./creator-home-diagnostics";
 
 const XIAOHONGSHU_CREATOR_HOME = "https://creator.xiaohongshu.com/";
 const XIAOHONGSHU_IMAGE_POST_ENTRY_SELECTOR = 'a[href*="/publish/publish"]';
@@ -190,7 +220,7 @@ export type XiaohongshuEditorEntryStepName =
 export type XiaohongshuEditorNavigationTrigger = "DIRECT_GOTO" | "PUBLISH_ENTRY_CLICK" | "CONTENT_TYPE_CLICK" | "PLATFORM_REDIRECT" | "UNKNOWN";
 
 export interface XiaohongshuEditorEntryDiagnostic {
-  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED";
+  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED";
   timestamp: string;
   operationId: string;
   platformKey: "xiaohongshu";
@@ -226,6 +256,33 @@ export interface XiaohongshuEditorEntryDiagnostic {
   candidateCount?: number;
   candidates?: XiaohongshuPublishEntryCandidateIdentity[];
   candidateInventoryTruncated?: boolean;
+  readinessResult?: XiaohongshuHomeReadinessObservation["result"];
+  sampleIndex?: number;
+  readyState?: string;
+  bodyExists?: boolean;
+  bodyChildCount?: number;
+  documentElementChildCount?: number;
+  anchorCount?: number;
+  buttonCount?: number;
+  roleButtonCount?: number;
+  tabbableCount?: number;
+  navigationElementCount?: number;
+  frameCount?: number;
+  iframeCount?: number;
+  shadowHostCount?: number;
+  visibleInteractiveCount?: number;
+  creatorShellSignalCount?: number;
+  publishSemanticTextSignalCount?: number;
+  topLevelElementCounts?: Record<string, number>;
+  interactiveElementTypeCounts?: XiaohongshuCreatorHomeTopology["interactiveElementTypeCounts"];
+  frameSummary?: XiaohongshuCreatorHomeTopology["frameSummary"];
+  shadowSummary?: XiaohongshuCreatorHomeTopology["shadowSummary"];
+  publishEntryLocation?: XiaohongshuCreatorHomeTopology["publishEntryLocation"];
+  publishSemanticSignalPresent?: boolean;
+  textSignalPresent?: boolean;
+  semanticNodes?: XiaohongshuPublishSemanticNodeCollection["nodes"];
+  discoveryDiagnosis?: XiaohongshuPublishSemanticNodeCollection["discoveryDiagnosis"];
+  accessibilityPublishSignals?: XiaohongshuPublishSemanticNodeCollection["accessibilityPublishSignals"];
 }
 
 export type XiaohongshuPublishEntryDiscoveryStrategy = "STABLE_HREF" | "STABLE_DATA_ATTRIBUTE" | "ROLE_EXACT_NAME" | "ARIA_LABEL_OR_TITLE" | "SCOPED_EXACT_TEXT";
@@ -1046,7 +1103,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         helper: "navigateToImagePostEditor",
         startUrl: helperStartUrl
       });
-      const editorEntry = await this.navigateToImagePostEditor(canonical.page, operationId, ctx.accountId);
+      const editorEntry = await this.navigateToImagePostEditor(canonical.page, operationId, ctx.accountId, { contextDebugId: canonical.session.contextDebugId ?? "unknown-context", pageDebugId: canonical.pageDebugId });
       const finalUrl = sanitizePageUrl(canonical.page);
       const editorReached = editorEntry.editorReached;
       const finalEvidence = await readXiaohongshuPageEvidence(canonical.page);
@@ -1712,7 +1769,74 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     this.emitEditorEntryDiagnostic({ code: "EDITOR_ENTRY_STEP", timestamp: new Date().toISOString(), operationId, platformKey: "xiaohongshu", accountId, stepName, success, sanitizedUrlBefore, sanitizedUrlAfter, selectorSignal, elapsedMs: Math.max(0, Date.now() - startedAt), navigationTrigger });
   }
 
-  private async navigateToImagePostEditor(page: Page, operationId = randomUUID(), accountId = "unknown-account"): Promise<XiaohongshuEditorEntryResult> {
+  private async emitCreatorHomeDiagnostics(page: Page, operationId: string, accountId: string, identity: { contextDebugId?: string; pageDebugId?: string } = {}): Promise<void> {
+    const shared = { operationId, platformKey: "xiaohongshu" as const, accountId, ...identity };
+    try {
+      const observation = await observeCreatorHomeReadiness(page);
+      for (const sample of observation.samples) {
+        this.emitEditorEntryDiagnostic({
+          code: "CREATOR_HOME_READINESS_SAMPLE",
+          timestamp: new Date().toISOString(),
+          ...shared,
+          readinessResult: observation.result,
+          sampleIndex: sample.sampleIndex,
+          elapsedMs: sample.elapsedMs,
+          readyState: sample.readyState,
+          bodyChildCount: sample.bodyChildCount,
+          visibleInteractiveCount: sample.interactiveCount,
+          navigationElementCount: sample.navigationCount,
+          publishSemanticTextSignalCount: sample.publishSemanticTextSignalCount
+        });
+      }
+      const topology = await collectCreatorHomeTopology(page);
+      this.emitEditorEntryDiagnostic({
+        code: "CREATOR_HOME_TOPOLOGY_OBSERVED",
+        timestamp: new Date().toISOString(),
+        ...shared,
+        sanitizedUrl: sanitizePageUrl(page),
+        topLevelElementCounts: topology.topLevelElementCounts,
+        interactiveElementTypeCounts: topology.interactiveElementTypeCounts,
+        frameCount: topology.frameCount,
+        frameSummary: topology.frameSummary,
+        shadowHostCount: topology.shadowHostCount,
+        shadowSummary: topology.shadowSummary,
+        publishEntryLocation: topology.publishEntryLocation,
+        publishSemanticSignalPresent: topology.publishSemanticSignalPresent
+      });
+      const semantic = await collectPublishSemanticNodes(page);
+      const discoveryDiagnosis = observation.result === "HOME_SHELL_TIMEOUT"
+        ? "CREATOR_HOME_SHELL_TIMEOUT" as const
+        : observation.result === "HOME_SHELL_NOT_READY"
+          ? "CREATOR_HOME_SHELL_NOT_READY" as const
+          : semantic.discoveryDiagnosis;
+      this.emitEditorEntryDiagnostic({
+        code: "PUBLISH_SEMANTIC_NODES_OBSERVED",
+        timestamp: new Date().toISOString(),
+        ...shared,
+        sanitizedUrl: sanitizePageUrl(page),
+        textSignalPresent: semantic.textSignalPresent,
+        candidateCount: semantic.candidateCount,
+        semanticNodes: semantic.nodes,
+        candidateInventoryTruncated: semantic.truncated,
+        publishSemanticTextSignalCount: semantic.candidateCount,
+        discoveryDiagnosis,
+        accessibilityPublishSignals: semantic.accessibilityPublishSignals
+      });
+      if (topology.frameCount > 0) {
+        this.emitEditorEntryDiagnostic({ code: "FRAME_TOPOLOGY_OBSERVED", timestamp: new Date().toISOString(), ...shared, frameCount: topology.frameCount, frameSummary: topology.frameSummary, publishEntryLocation: topology.publishEntryLocation });
+      }
+      if (topology.shadowHostCount > 0) {
+        this.emitEditorEntryDiagnostic({ code: "SHADOW_TOPOLOGY_OBSERVED", timestamp: new Date().toISOString(), ...shared, shadowHostCount: topology.shadowHostCount, shadowSummary: topology.shadowSummary, publishEntryLocation: topology.publishEntryLocation });
+      }
+      if (semantic.accessibilityPublishSignals) {
+        this.emitEditorEntryDiagnostic({ code: "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED", timestamp: new Date().toISOString(), ...shared, accessibilityPublishSignals: semantic.accessibilityPublishSignals });
+      }
+    } catch {
+      // Diagnostics are best-effort and must never alter the existing entry resolver or Gate result.
+    }
+  }
+
+  private async navigateToImagePostEditor(page: Page, operationId = randomUUID(), accountId = "unknown-account", identity: { contextDebugId?: string; pageDebugId?: string } = {}): Promise<XiaohongshuEditorEntryResult> {
     const startedAt = Date.now();
     const startUrl = sanitizePageUrl(page);
     if (this.isEditorRoute(page.url())) {
@@ -1732,6 +1856,8 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
           : { failureCode: "EDITOR_ROUTE_NOT_REACHED" as const, failureStage: "CREATOR_HOME" as const, missingSignal: "creator-home" };
       throw new XiaohongshuGateError(failure.failureCode === "AUTH_REDIRECTED_TO_LOGIN" ? "LOGIN_REQUIRED" : failure.failureCode === "SECURITY_VERIFICATION_REQUIRED" ? "SECURITY_VERIFICATION_REQUIRED" : "IMAGE_POST_ENTRY_NOT_VERIFIED", "USER_ACTION_REQUIRED", "小红书 Creator 首页未处于可用的编辑器入口状态", failure);
     }
+
+    await this.emitCreatorHomeDiagnostics(page, operationId, accountId, identity);
 
     let entry: { locator: Locator; selectorSignal: string; requiresContentTypeSelection: boolean };
     try {

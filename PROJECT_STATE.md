@@ -1,5 +1,66 @@
 # Project State
 
+## Task 10G Creator Home readiness / DOM topology diagnostics — DIAGNOSTICS PASS / DEPLOYMENT BLOCKED - 2026-08-31
+
+本轮仅围绕 `platformKey=xiaohongshu`、`accountId=54b390ac-d81e-440a-baeb-d00f9f346cc3` 完成离线 diagnostics hardening。没有登录、checkLogin、live PRE-SUBMIT Gate、SELF_TEST、preparePublish、标题/正文/图片 mutation、草稿保存、发布设置修改、final submit 或真实发布；没有创建 Job、SubmissionIntent 或 PublishRecord。
+
+### Task 10G status
+
+| Item | Result |
+| --- | --- |
+| Task 9C / single canonical XHS session | `PASS` / `LIVE VERIFIED`（既有 evidence；本轮未改生命周期架构） |
+| Task 10B | `PASS` |
+| Task 10C | `PASS` |
+| Task 10D implementation | `PASS` |
+| Task 10F | `PASS_DIAGNOSTICS_ONLY`; publish resolver behavior unchanged; selector fix not applied |
+| `CREATOR_HOME_READY` | 当前仍是 Creator host/path + 非 login/verification URL 判定；不要求 DOM shell，confidence `LOW`，`POSSIBLE_FALSE_READINESS=YES` |
+| Task 10G | `PASS_DIAGNOSTICS_ONLY` |
+| Task 10A live Gate | `NOT_RUN`（本轮明确禁止） |
+| `TASK_10A_RETRY_READY` | `NO`；Task 10G staging 未部署，等待活动 XHS profile 正常关闭 |
+| `XIAOHONGSHU_RUNTIME_SESSION_READY` | `NOT_VERIFIED_AFTER_DEPLOYMENT` |
+| `READY_FOR_REAL_SELF_TEST` | `NO` |
+
+Task 10G 新增了 bounded `inspectCreatorHomeReadiness` / readiness observation、Creator Home topology、publish semantic node 与 nearest interactive ancestor、same-origin/cross-origin iframe metadata、open shadow-root metadata、bounded accessibility signals，以及 operation-correlated diagnostics events。diagnostics 只读，不改变既有 `findPublishEntry` 的实际选择或点击策略；下一次 live Gate 才会取得真实的 `PUBLISH_SEMANTIC_NODES_OBSERVED` 内容。
+
+### Verification and package
+
+| Check | Result |
+| --- | --- |
+| XHS focused diagnostics/Gate/editor/canonical/mutex/heartbeat/analyzer tests | `6 files / 127 passed` |
+| Full tests | `85 files / 604 passed` |
+| Typecheck | `PASS` |
+| Lint | `PASS` |
+| Build | `PASS` |
+| Staging packaged diagnostics | `PASS` |
+| Staging app.asar | `release-task10g-20260831-final2/win-unpacked/resources/app.asar` |
+| Staging app.asar SHA256 | `135FE293ACCA1A7F6F76131708A796D07749F0FD2F61A51EC5C7630825BA71F8` |
+
+The staging package contains the Task 10G readiness/topology/semantic/frame/shadow markers plus the existing Task 10D candidate/editor/failure markers. It targets Electron `37.10.3` / native ABI `136`.
+
+### Deployment boundary and production safety
+
+```text
+DEPLOYMENT                         = BLOCKED_ACTIVE_XHS_PROFILE_SESSION
+INSTALLED_PROCESS_COUNT            = 4
+XHS_PROFILE_PROCESS_COUNT          = 9
+XHS_PROFILE_LOCK_OWNED_BY_PROCESS  = YES
+INSTALLED_APP_ASAR_SHA256          = ED6196B824A2350F803203B1445C46E86980510C133C719E981C2144B9AA8074
+ROLLBACK                           = NOT_CREATED
+
+DB_BEFORE                          = publish_jobs 15 / submission_intents 12 / publish_records 9
+DB_AFTER                           = publish_jobs 15 / submission_intents 12 / publish_records 9
+PUBLISH_DOMAIN_UNCHANGED           = YES
+FINAL_SUBMIT_COUNT                 = 0
+JOB_CREATED                        = NO
+INTENT_CREATED                     = NO
+PUBLISH_RECORD_CREATED             = NO
+LIVE_PRE_SUBMIT_GATE               = NOT_RUN
+SELF_TEST                          = NOT_RUN
+REAL_PREPARE_PUBLISH               = NOT_CALLED
+```
+
+Owner 下一步只需正常关闭 installed app 与 XHS BrowserSession；之后可部署此 staging package，再由 Owner 登录一次、等待 heartbeat、点击一次 Gate 取得真实 DOM topology evidence。
+
 ## Task 10D hardening / Task 10A evidence readiness — IMPLEMENTATION PASS / DEPLOYMENT BLOCKED - 2026-08-30
 
 本轮严格限定在 `platformKey=xiaohongshu`、`accountId=54b390ac-d81e-440a-baeb-d00f9f346cc3` 的离线源码、fixture、只读日志分析和 staging package。没有 Owner login、XHS checkLogin、live PRE-SUBMIT Gate、SELF_TEST、真实 `preparePublish`、标题/正文/图片 mutation、草稿/保存、final submit 或真实发布；没有创建 Job、SubmissionIntent 或 PublishRecord。

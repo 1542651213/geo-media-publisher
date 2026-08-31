@@ -47,6 +47,15 @@ export type Task10AEvidenceSummary = {
   inspectionStarted: boolean;
   navigationHelperInvocationStarted: boolean;
   editorEntryStarted: boolean;
+  homeReadinessSamples: Record<string, unknown>[];
+  creatorHomeShellReady: string | null;
+  domTopologySummary: Record<string, unknown> | null;
+  frameSummary: unknown[];
+  shadowDomSummary: unknown[];
+  publishSemanticTextSignalCount: number | null;
+  publishSemanticNodes: unknown[];
+  accessibilityPublishSignals: unknown[];
+  discoveryDiagnosis: string | null;
   timeline: EvidenceTimelineEntry[];
   entrySteps: EvidenceEntryStep[];
   failureCode: string | null;
@@ -168,6 +177,15 @@ function emptySummary(input: AnalyzeTask10AEvidenceInput, gateResult: string): T
     inspectionStarted: false,
     navigationHelperInvocationStarted: false,
     editorEntryStarted: false,
+    homeReadinessSamples: [],
+    creatorHomeShellReady: null,
+    domTopologySummary: null,
+    frameSummary: [],
+    shadowDomSummary: [],
+    publishSemanticTextSignalCount: null,
+    publishSemanticNodes: [],
+    accessibilityPublishSignals: [],
+    discoveryDiagnosis: null,
     timeline: [],
     entrySteps: [],
     failureCode: null,
@@ -244,7 +262,9 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
   const selected = candidates[0]!;
   const gateEvents = selected.events;
   const startTime = timestampValue(selected.start);
-  const completion = [...gateEvents].reverse().find((event) => event.code === "XHS_CANONICAL_PAGE_OPERATION_COMPLETED" || event.code === "EDITOR_NAVIGATION_FAILED");
+  const canonicalCompletion = [...gateEvents].reverse().find((event) => event.code === "XHS_CANONICAL_PAGE_OPERATION_COMPLETED");
+  const navigationFailure = [...gateEvents].reverse().find((event) => event.code === "EDITOR_NAVIGATION_FAILED");
+  const completion = canonicalCompletion ?? navigationFailure;
   const endTime = completion ? timestampValue(completion) : startTime;
   const preHeartbeat = findHeartbeat(scoped, "PRE_SUBMIT_GATE_PRECHECK", startTime, "before", selected.operationId);
   const postHeartbeat = completion ? findHeartbeat(scoped, "POST_SUBMIT_GATE", endTime, "after", selected.operationId) : null;
@@ -266,6 +286,14 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
   const failureStage = stringValue(failureContext.failureStage);
   const missingSignal = stringValue(failureContext.missingSignal);
   const startStep = gateEvents.find((event) => event.code === "EDITOR_ENTRY_STARTED");
+  const readinessEvents = gateEvents.filter((event) => event.code === "CREATOR_HOME_READINESS_SAMPLE");
+  const topologyEvent = [...gateEvents].reverse().find((event) => event.code === "CREATOR_HOME_TOPOLOGY_OBSERVED");
+  const semanticEvent = [...gateEvents].reverse().find((event) => event.code === "PUBLISH_SEMANTIC_NODES_OBSERVED");
+  const semanticContext = semanticEvent?.context ?? {};
+  const topologyContext = topologyEvent?.context ?? {};
+  const frameEvent = [...gateEvents].reverse().find((event) => event.code === "FRAME_TOPOLOGY_OBSERVED");
+  const shadowEvent = [...gateEvents].reverse().find((event) => event.code === "SHADOW_TOPOLOGY_OBSERVED");
+  const accessibilityEvent = [...gateEvents].reverse().find((event) => event.code === "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED");
   const result: Task10AEvidenceSummary = {
     ...emptySummary(input, gateResult),
     evidenceAmbiguous: "NO",
@@ -283,6 +311,15 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
     inspectionStarted: gateEvents.some((event) => event.code === "PRE_SUBMIT_GATE_INSPECTION_STARTED"),
     navigationHelperInvocationStarted: gateEvents.some((event) => event.code === "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED"),
     editorEntryStarted: gateEvents.some((event) => event.code === "EDITOR_ENTRY_STARTED"),
+    homeReadinessSamples: readinessEvents.map((event) => event.context),
+    creatorHomeShellReady: stringValue(readinessEvents[readinessEvents.length - 1]?.context.readinessResult),
+    domTopologySummary: topologyEvent?.context ?? null,
+    frameSummary: Array.isArray(frameEvent?.context.frameSummary) ? frameEvent.context.frameSummary : Array.isArray(topologyContext.frameSummary) ? topologyContext.frameSummary : [],
+    shadowDomSummary: Array.isArray(shadowEvent?.context.shadowSummary) ? shadowEvent.context.shadowSummary : Array.isArray(topologyContext.shadowSummary) ? topologyContext.shadowSummary : [],
+    publishSemanticTextSignalCount: typeof semanticContext.publishSemanticTextSignalCount === "number" ? semanticContext.publishSemanticTextSignalCount : typeof semanticContext.candidateCount === "number" ? semanticContext.candidateCount : null,
+    publishSemanticNodes: Array.isArray(semanticContext.semanticNodes) ? semanticContext.semanticNodes : [],
+    accessibilityPublishSignals: Array.isArray(accessibilityEvent?.context.accessibilityPublishSignals) ? accessibilityEvent.context.accessibilityPublishSignals : Array.isArray(semanticContext.accessibilityPublishSignals) ? semanticContext.accessibilityPublishSignals : [],
+    discoveryDiagnosis: stringValue(semanticContext.discoveryDiagnosis),
     timeline: [
       ...(preHeartbeat ? [{ timestamp: preHeartbeat.timestamp, code: preHeartbeat.code, context: preHeartbeat.context }] : []),
       ...gateEvents.map((event) => ({ timestamp: event.timestamp, code: event.code, context: event.context })),

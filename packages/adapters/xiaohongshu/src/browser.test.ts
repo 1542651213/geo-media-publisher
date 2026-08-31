@@ -1242,7 +1242,10 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: "EDITOR_ENTRY_STARTED", operationId: expect.any(String) }),
       expect.objectContaining({ code: "EDITOR_ENTRY_STEP", stepName: "PUBLISH_ENTRY_FOUND", success: false }),
-      expect.objectContaining({ code: "PUBLISH_ENTRY_CANDIDATES_OBSERVED", operationId: expect.any(String), candidateCount: expect.any(Number), candidates: expect.any(Array) })
+      expect.objectContaining({ code: "PUBLISH_ENTRY_CANDIDATES_OBSERVED", operationId: expect.any(String), candidateCount: expect.any(Number), candidates: expect.any(Array) }),
+      expect.objectContaining({ code: "CREATOR_HOME_READINESS_SAMPLE", operationId: expect.any(String), platformKey: "xiaohongshu", accountId: "account-a" }),
+      expect.objectContaining({ code: "CREATOR_HOME_TOPOLOGY_OBSERVED", operationId: expect.any(String), platformKey: "xiaohongshu", accountId: "account-a" }),
+      expect.objectContaining({ code: "PUBLISH_SEMANTIC_NODES_OBSERVED", operationId: expect.any(String), platformKey: "xiaohongshu", accountId: "account-a" })
     ]));
     const entryStarted = diagnostics.find((diagnostic) => diagnostic.code === "EDITOR_ENTRY_STARTED");
     const candidatesObserved = diagnostics.find((diagnostic) => diagnostic.code === "PUBLISH_ENTRY_CANDIDATES_OBSERVED");
