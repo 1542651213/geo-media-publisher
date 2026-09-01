@@ -64,7 +64,7 @@ const intermediatePhaseSet = new Set<ImageEditorPhase>([
 ]);
 
 const intermediateActionPattern = /完成|确认|下一步|继续|编辑图片|编辑照片|裁剪完成|返回编辑|done|confirm|next|continue|edit\s*(?:image|photo)|crop(?:ping)?\s*done|back\s*to\s*edit/iu;
-const finalSubmitPattern = /^(?:发布|发布笔记|发表|提交|立即发布|publish|submit)$/iu;
+const finalSubmitPattern = /发布|发表|提交|确认发布|立即发布|publish|submit/iu;
 
 export function selectSafeIntermediateAction(
   candidates: readonly XhsIntermediateActionCandidate[],

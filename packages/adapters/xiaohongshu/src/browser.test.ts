@@ -45,6 +45,7 @@ type FixtureOptions = {
   contentTypeSelectionFails?: boolean;
   routeWaitTimeout?: boolean;
   fileInputCount?: number;
+  intermediateAction?: boolean;
 };
 
 interface Fixture {
@@ -136,6 +137,7 @@ function locator(overrides: Partial<Record<string, unknown>> = {}): Locator {
     innerText: vi.fn(async () => ""),
     textContent: vi.fn(async () => ""),
     inputValue: vi.fn(async () => ""),
+    boundingBox: vi.fn(async () => ({ x: 10, y: 10, width: 120, height: 40 })),
     fill: vi.fn(async () => undefined),
     focus: vi.fn(async () => undefined),
     setInputFiles: vi.fn(async () => undefined),
@@ -152,6 +154,7 @@ function setupPage(options: FixtureOptions = {}): Fixture {
   let titleValue = "";
   let bodyValue = "";
   let imageUploaded = false;
+  let intermediateActionVisible = options.intermediateAction === true;
   let contentTypeShown = false;
   let contextPages: Page[] = [];
   const pageContextRef: { value?: BrowserSession["context"] } = {};
@@ -260,6 +263,13 @@ function setupPage(options: FixtureOptions = {}): Fixture {
     getAttribute: vi.fn(async (name: string) => name === "aria-label" ? "发布笔记" : name === "data-confirm" ? options.secondConfirmation ? "true" : null : null),
     click: submitClick
   });
+  const intermediateAction = locator({
+    count: vi.fn(async () => imageUploaded && intermediateActionVisible ? 1 : 0),
+    innerText: vi.fn(async () => "下一步"),
+    boundingBox: vi.fn(async () => ({ x: 240, y: 20, width: 96, height: 40 })),
+    getAttribute: vi.fn(async (name: string) => name === "role" ? "button" : null),
+    click: vi.fn(async () => { intermediateActionVisible = false; calls.push("intermediate-next-click"); })
+  });
   const secondConfirm = locator({
     count: vi.fn(async () => options.secondConfirmation ? 1 : 0),
     innerText: vi.fn(async () => "确认发布")
@@ -306,6 +316,7 @@ function setupPage(options: FixtureOptions = {}): Fixture {
         if (selector.includes("loading") || selector.includes("progress") || selector.includes("上传中")) return loading;
         if (selector.includes("required") || selector.includes("aria-required")) return required;
         if (selector.includes("checkbox") || selector.includes("radio") || selector.includes("setting")) return settings;
+        if (selector.includes("[role=\"tab\"]") || selector.includes("[role=\"button\"]")) return intermediateActionVisible ? intermediateAction : submit;
         if (selector.includes("button") || selector.includes("[role=\"button\"]")) return submit;
         if (selector.includes("确认发布")) return secondConfirm;
         if (selector.includes("textarea") || selector.includes("contenteditable") || selector.includes("textbox") || selector.includes("正文")) return body;
@@ -366,6 +377,7 @@ function setupPage(options: FixtureOptions = {}): Fixture {
   } as unknown as BrowserSessionManager;
   const phaseSnapshot = (): Record<string, unknown> => {
     const postUpload = imageUploaded;
+    const intermediate = postUpload && intermediateActionVisible;
     const uploadPresent = (options.fileInputCount ?? 1) > 0;
     return {
       currentUrl,
@@ -377,15 +389,15 @@ function setupPage(options: FixtureOptions = {}): Fixture {
       loginPagePresent: false,
       preUploadSemanticSignalPresent: true,
       phaseTopology: {
-        titleCandidateCount: postUpload ? options.titleCount ?? 1 : 0,
-        bodyCandidateCount: postUpload ? options.bodyCount ?? 1 : 0,
+        titleCandidateCount: postUpload && !intermediate ? options.titleCount ?? 1 : 0,
+        bodyCandidateCount: postUpload && !intermediate ? options.bodyCount ?? 1 : 0,
         uploadCandidateCount: options.fileInputCount ?? 1,
-        finalSubmitCandidateCount: postUpload ? options.submitCount ?? 1 : 0,
-        contenteditableCount: postUpload ? 1 : 0,
+        finalSubmitCandidateCount: postUpload && !intermediate ? options.submitCount ?? 1 : 0,
+        contenteditableCount: postUpload && !intermediate ? 1 : 0,
         textareaCount: 0,
-        textInputCount: postUpload ? 1 : 0,
+        textInputCount: postUpload && !intermediate ? 1 : 0,
         fileInputCount: options.fileInputCount ?? 1,
-        buttonCount: postUpload ? options.submitCount ?? 1 : 1,
+        buttonCount: postUpload && !intermediate ? options.submitCount ?? 1 : 2,
         roleButtonCount: 0,
         semanticSignals: ["upload", "image"],
         stable: false
@@ -393,7 +405,12 @@ function setupPage(options: FixtureOptions = {}): Fixture {
       preUploadSemanticNodes: [{ tagName: "DIV", normalizedText: "上传图片", role: "button", visible: true, enabled: true, boundingBox: { x: 10, y: 20, width: 120, height: 40 }, nearestInteractiveAncestorTag: "DIV", nearestInteractiveAncestorRole: "button" }],
         uploadControlRelationships: uploadPresent ? [{ candidateId: "fixture-upload-0", tagName: "INPUT", type: "file", accept: "image/*", multiple: true, enabled: true, visible: false, usableSurface: true, surfaceSignal: "visible-upload-ancestor", ancestors: [] }] : [],
       uploadBusy: Boolean(options.imageLoading && !postUpload),
-      previewReady: postUpload && (options.imagePreviewCount ?? 1) > 0
+      previewReady: postUpload && (options.imagePreviewCount ?? 1) > 0,
+      mediaPreviewSignalPresent: intermediate,
+      mediaEditingSignalPresent: false,
+      mediaPreviewDiagnostics: { previewCount: postUpload ? 1 : 0, previewVisible: postUpload, previewGeometry: postUpload ? [{ x: 20, y: 80, width: 160, height: 160 }] : [], deleteReplaceEditSignals: [], associatedSemanticText: postUpload ? ["预览"] : [] },
+      intermediateActionCandidates: intermediate ? [{ candidateId: "intermediate-action-0", tagName: "BUTTON", role: "button", semanticSignal: "intermediate-action", normalizedText: "下一步", visible: true, enabled: true, boundingBox: { x: 240, y: 20, width: 96, height: 40 }, nearestInteractiveAncestorTag: "BUTTON", nearestInteractiveAncestorRole: "button", pointerEvents: "auto", hitTestValid: true }] : [],
+      modalDiagnostics: { dialogCount: 0, modalSignalCount: 0, maskCount: 0, overlayCount: 0, drawerCount: 0, visible: false, ariaModalCount: 0 }
     };
   };
   const fixture = { page, manager, submitClick, inputSetFiles, entryClick, open, operationPageDebugIds, operationContextDebugIds, operationPages, calls, session, phaseSnapshot };
@@ -1588,6 +1605,105 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
       expect.objectContaining({ code: "IMAGE_UPLOAD_COMPLETED" }),
       expect.objectContaining({ code: "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED" })
     ]));
+  });
+
+  it("runs publish-flow exploration through title/body readback and proves final submit without clicking", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
+    const diagnostics: Array<Record<string, unknown>> = [];
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager, onEditorEntryDiagnostic: (diagnostic: Record<string, unknown>) => diagnostics.push(diagnostic) } as never);
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    fixture.manager.setRuntimeAuthState?.({ platformKey: "xiaohongshu", accountId: "account-a" }, "AUTHENTICATED", null);
+    const result = await (adapter as unknown as {
+      runPublishFlowExploration: (context: AccountContext, input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE"; title: string; body: string }) => Promise<Record<string, unknown>>;
+    }).runPublishFlowExploration(ctx, {
+      imagePath: "C:/fixtures/task10r-safe-test.png",
+      imageSource: "SAFE_TEST_FIXTURE",
+      title: "小红书发布流程测试-请勿发布",
+      body: "自动化发布流程验证，仅用于本地测试，不执行最终发布。"
+    });
+
+    expect(result).toMatchObject({
+      mode: "XHS_PUBLISH_FLOW_EXPLORATION",
+      status: "PASS_READY_FOR_FINAL_SUBMIT",
+      readyForFinalSubmit: true,
+      uploadMutationCount: 1,
+      uploadRetryCount: 0,
+      titleReadbackVerified: true,
+      bodyReadbackVerified: true,
+      finalSubmitCount: 0
+    });
+    expect(fixture.entryClick).toHaveBeenCalledTimes(1);
+    expect(fixture.inputSetFiles).toHaveBeenCalledTimes(1);
+    expect(fixture.calls).toContain("title-fill");
+    expect(fixture.calls).toContain("body-fill");
+    expect(fixture.submitClick).not.toHaveBeenCalled();
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "XHS_PUBLISH_FLOW_TIMELINE" }),
+      expect.objectContaining({ code: "XHS_PUBLISH_FLOW_COMPLETED", finalSubmitCount: 0 })
+    ]));
+  });
+
+  it("autonomously clicks one proven intermediate next action before editing content", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", intermediateAction: true });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager } as never);
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    fixture.manager.setRuntimeAuthState?.({ platformKey: "xiaohongshu", accountId: "account-a" }, "AUTHENTICATED", null);
+    const result = await adapter.runPublishFlowExploration(ctx, {
+      imagePath: "C:/fixtures/task10r-safe-test.png",
+      imageSource: "SAFE_TEST_FIXTURE",
+      title: "小红书发布流程测试-请勿发布",
+      body: "自动化发布流程验证，仅用于本地测试，不执行最终发布。"
+    });
+
+    expect(result).toMatchObject({ status: "PASS_READY_FOR_FINAL_SUBMIT", intermediateActionClickCount: 1, finalSubmitCount: 0 });
+    expect(fixture.calls).toContain("intermediate-next-click");
+    expect(fixture.submitClick).not.toHaveBeenCalled();
+  });
+
+  it("bounds upload retries and derives mutation counters from actual file mutations", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", imageFailed: true });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager } as never);
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    fixture.manager.setRuntimeAuthState?.({ platformKey: "xiaohongshu", accountId: "account-a" }, "AUTHENTICATED", null);
+    const result = await adapter.runPublishFlowExploration(ctx, {
+      imagePath: "C:/fixtures/task10r-safe-test.png",
+      imageSource: "SAFE_TEST_FIXTURE",
+      title: "小红书发布流程测试-请勿发布",
+      body: "自动化发布流程验证，仅用于本地测试，不执行最终发布。",
+      budgets: { maxUploadAttempts: 2 }
+    });
+
+    expect(result).toMatchObject({ status: "BLOCKED", uploadAttempts: 2, uploadMutationCount: 2, uploadRetryCount: 1, finalSubmitCount: 0 });
+    expect(fixture.inputSetFiles).toHaveBeenCalledTimes(2);
+    expect(fixture.submitClick).not.toHaveBeenCalled();
+  });
+
+  it("reports a disabled final-submit control without clicking it", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", submitEnabled: false });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager } as never);
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    fixture.manager.setRuntimeAuthState?.({ platformKey: "xiaohongshu", accountId: "account-a" }, "AUTHENTICATED", null);
+    const result = await adapter.runPublishFlowExploration(ctx, {
+      imagePath: "C:/fixtures/task10r-safe-test.png",
+      imageSource: "SAFE_TEST_FIXTURE",
+      title: "小红书发布流程测试-请勿发布",
+      body: "自动化发布流程验证，仅用于本地测试，不执行最终发布。"
+    });
+
+    expect(result).toMatchObject({ status: "BLOCKED", blocker: "FINAL_SUBMIT_NOT_READY", finalSubmit: { status: "DISABLED", visible: true, enabled: false }, finalSubmitCount: 0 });
+    expect(fixture.submitClick).not.toHaveBeenCalled();
   });
 
   it("does not upload when PRE_UPLOAD capability is absent", async () => {

@@ -63,9 +63,20 @@ function result(overrides: Partial<PublishFlowExplorationResult> = {}): PublishF
     actions: [],
     selectors: [],
     counters: counters(),
+    uploadAttempts: 0,
+    uploadMutationCount: 0,
+    uploadRetryCount: 0,
+    intermediateActionClickCount: 0,
+    titleMutationCount: 0,
+    bodyMutationCount: 0,
+    settingsMutationCount: 0,
+    contentMutationCount: 0,
+    finalSubmitCount: 0,
     budgets: budgets(),
-    title: { attempted: false, readbackVerified: false },
-    body: { attempted: false, readbackVerified: false },
+    title: { attempted: false, mutationCount: 0, strategyCount: 0, readbackVerified: false },
+    titleReadbackVerified: false,
+    body: { attempted: false, mutationCount: 0, strategyCount: 0, readbackVerified: false },
+    bodyReadbackVerified: false,
     requiredSettings: { status: "NOT_REQUIRED", mutations: [] },
     finalSubmit: { status: "NOT_DISCOVERED", visible: false, enabled: false, hitTestValid: false },
     forbiddenMutationObserved: false,
@@ -84,6 +95,7 @@ describe("Xiaohongshu publish-flow exploration safety policy", () => {
 
   it("rejects final-submit labels and unsafe candidates", () => {
     expect(selectSafeIntermediateAction([candidate({ normalizedText: "发布" })], "IMAGE_POST_POST_UPLOAD_EDITOR").status).toBe("NOT_FOUND");
+    expect(selectSafeIntermediateAction([candidate({ normalizedText: "确认发布" })], "IMAGE_POST_MEDIA_PREVIEW").status).toBe("NOT_FOUND");
     expect(selectSafeIntermediateAction([candidate({ enabled: false })], "IMAGE_POST_MEDIA_PREVIEW").status).toBe("NOT_FOUND");
     expect(selectSafeIntermediateAction([candidate({ hitTestValid: false })], "IMAGE_POST_MEDIA_PREVIEW").status).toBe("NOT_FOUND");
   });

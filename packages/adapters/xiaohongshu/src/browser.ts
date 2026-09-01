@@ -1,6 +1,6 @@
 import type { AccountContext, AccountProfile, LoginSession, LoginStatus, PublishArticleInput, ValidationResult } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
-import { type AutomationPrepareResult, type BrowserRuntimeAuthState, type BrowserSession, type BrowserSessionRuntimeSnapshot, type ControlledPostUploadDiscoveryResult, type PreSubmitGateFailureCode, type PreSubmitGateFailureStage, type PreSubmitGateResult, type PreSubmitGateStatus } from "@publisher/adapters-core";
+import { type AutomationPrepareResult, type BrowserRuntimeAuthState, type BrowserSession, type BrowserSessionRuntimeSnapshot, type ControlledPostUploadDiscoveryResult, type PreSubmitGateFailureCode, type PreSubmitGateFailureStage, type PreSubmitGateResult, type PreSubmitGateStatus, type PublishFlowExplorationBudgets, type PublishFlowExplorationCounters, type PublishFlowExplorationInput, type PublishFlowExplorationResult } from "@publisher/adapters-core";
 import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomationAdapterOptions, type BrowserPlatformDefinition, type BrowserSessionScopeEvidence } from "@publisher/adapters-browser";
 import type { Locator, Page } from "playwright-core";
 import { collectXhsAuthStateMetadata, collectXhsPreNavigationAuthStateMetadata, createXhsDiagnosticFingerprintKey, type XhsAuthStateMetadata } from "./auth-state-diagnostics";
@@ -38,6 +38,7 @@ import {
   assertPreUploadImageEditorContract,
   inspectPostUploadImageEditor,
   type ImageEditorControlDiscovery,
+  type ImageEditorBoundingBox,
   type ImageEditorContentType,
   type ImageEditorDiagnostic,
   type ImageEditorInspectionStatus,
@@ -56,6 +57,14 @@ import {
   type ImageEditorUploadCapabilityStatus,
   type ImageEditorUploadControlRelationship
 } from "./image-editor-discovery";
+import {
+  assertExplorationSafety,
+  canSpendBudget,
+  DEFAULT_XHS_PUBLISH_FLOW_EXPLORATION_BUDGETS,
+  recordBudgetUse,
+  selectSafeIntermediateAction,
+  type XhsIntermediateActionCandidate
+} from "./publish-flow-exploration";
 export {
   collectCreatorHomeTopology,
   collectPublishSemanticNodes,
@@ -156,7 +165,7 @@ const definition: BrowserPlatformDefinition = {
     article: true,
     imagePost: true,
     video: false,
-    controlledSelfTestModes: ["POST_UPLOAD_DISCOVERY_ONLY"],
+    controlledSelfTestModes: ["POST_UPLOAD_DISCOVERY_ONLY", "XHS_PUBLISH_FLOW_EXPLORATION"],
     coverImage: false,
     tags: true,
     categories: false,
@@ -273,7 +282,7 @@ export interface XiaohongshuCanonicalPageOperationEvidence {
   operationId: string;
   platformKey: "xiaohongshu";
   accountId: string;
-  action: "CHECK_LOGIN" | "PRE_SUBMIT_GATE" | "CONTROLLED_POST_UPLOAD_DISCOVERY";
+  action: "CHECK_LOGIN" | "PRE_SUBMIT_GATE" | "CONTROLLED_POST_UPLOAD_DISCOVERY" | "XHS_PUBLISH_FLOW_EXPLORATION";
   contextDebugId: string;
   pageDebugId: string;
   pageRole: "CANONICAL_AUTHENTICATED";
@@ -305,7 +314,7 @@ export type XiaohongshuEditorEntryStepName =
 export type XiaohongshuEditorNavigationTrigger = "DIRECT_GOTO" | "PUBLISH_ENTRY_CLICK" | "CONTENT_TYPE_CLICK" | "PLATFORM_REDIRECT" | "UNKNOWN";
 
 export interface XiaohongshuEditorEntryDiagnostic {
-  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED" | "PUBLISH_EXACT_TARGETS_OBSERVED" | "PUBLISH_TARGET_ANCESTOR_CHAINS" | "PUBLISH_CLICK_SURFACE_DIAGNOSTICS" | "PUBLISH_HIT_TEST_OBSERVED" | "PUBLISH_EVENT_LISTENERS_OBSERVED" | "PUBLISH_NOTE_SURFACE_RESOLVED" | "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED" | "PUBLISH_NOTE_NAVIGATION_CLICK_STARTED" | "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED" | "POST_PUBLISH_NOTE_STATE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_STARTED" | "IMAGE_EDITOR_READINESS_SAMPLE" | "IMAGE_EDITOR_SHELL_READY" | "IMAGE_EDITOR_SHELL_NOT_READY" | "IMAGE_EDITOR_SHELL_TIMEOUT" | "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED" | "IMAGE_EDITOR_CONTROLS_DISCOVERED" | "IMAGE_EDITOR_PHASE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_COMPLETED" | "IMAGE_EDITOR_INSPECTION_FAILED" | "PRE_UPLOAD_GATE_INSPECTION_STARTED" | "PRE_UPLOAD_GATE_RESULT" | "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED" | "IMAGE_UPLOAD_STARTED" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED" | "POST_UPLOAD_EDITOR_READINESS_STARTED" | "POST_UPLOAD_EDITOR_READINESS_SAMPLE" | "POST_UPLOAD_EDITOR_SEMANTIC_INVENTORY_OBSERVED" | "POST_UPLOAD_EDITOR_INTERACTIVE_TOPOLOGY_OBSERVED" | "POST_UPLOAD_EDITOR_MEDIA_PREVIEW_OBSERVED" | "POST_UPLOAD_EDITOR_MODAL_STATE_OBSERVED" | "POST_UPLOAD_EDITOR_PHASE_OBSERVED" | "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED" | "POST_UPLOAD_EDITOR_INSPECTION_FAILED" | "POST_UPLOAD_EDITOR_INSPECTION_COMPLETED";
+  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED" | "PUBLISH_EXACT_TARGETS_OBSERVED" | "PUBLISH_TARGET_ANCESTOR_CHAINS" | "PUBLISH_CLICK_SURFACE_DIAGNOSTICS" | "PUBLISH_HIT_TEST_OBSERVED" | "PUBLISH_EVENT_LISTENERS_OBSERVED" | "PUBLISH_NOTE_SURFACE_RESOLVED" | "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED" | "PUBLISH_NOTE_NAVIGATION_CLICK_STARTED" | "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED" | "POST_PUBLISH_NOTE_STATE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_STARTED" | "IMAGE_EDITOR_READINESS_SAMPLE" | "IMAGE_EDITOR_SHELL_READY" | "IMAGE_EDITOR_SHELL_NOT_READY" | "IMAGE_EDITOR_SHELL_TIMEOUT" | "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED" | "IMAGE_EDITOR_CONTROLS_DISCOVERED" | "IMAGE_EDITOR_PHASE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_COMPLETED" | "IMAGE_EDITOR_INSPECTION_FAILED" | "PRE_UPLOAD_GATE_INSPECTION_STARTED" | "PRE_UPLOAD_GATE_RESULT" | "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED" | "IMAGE_UPLOAD_STARTED" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED" | "POST_UPLOAD_EDITOR_READINESS_STARTED" | "POST_UPLOAD_EDITOR_READINESS_SAMPLE" | "POST_UPLOAD_EDITOR_SEMANTIC_INVENTORY_OBSERVED" | "POST_UPLOAD_EDITOR_INTERACTIVE_TOPOLOGY_OBSERVED" | "POST_UPLOAD_EDITOR_MEDIA_PREVIEW_OBSERVED" | "POST_UPLOAD_EDITOR_MODAL_STATE_OBSERVED" | "POST_UPLOAD_EDITOR_PHASE_OBSERVED" | "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED" | "POST_UPLOAD_EDITOR_INSPECTION_FAILED" | "POST_UPLOAD_EDITOR_INSPECTION_COMPLETED" | "XHS_PUBLISH_FLOW_TIMELINE" | "XHS_PUBLISH_FLOW_COMPLETED" | "XHS_PUBLISH_FLOW_BLOCKED" | "XHS_PUBLISH_FLOW_INTERMEDIATE_ACTION";
   timestamp: string;
   operationId: string;
   platformKey: "xiaohongshu";
@@ -385,9 +394,9 @@ export interface XiaohongshuEditorEntryDiagnostic {
   gateContentMutationCount?: 0;
   gateUploadCount?: 0;
   gateFinalSubmitCount?: 0;
-  finalSubmitCount?: 0;
+  finalSubmitCount?: number;
   navigationClickCount?: number;
-  action?: "PUBLISH_NOTE_NAVIGATION_CLICK" | "IMAGE_UPLOAD_MUTATION" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED";
+  action?: "PUBLISH_NOTE_NAVIGATION_CLICK" | "IMAGE_UPLOAD_MUTATION" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED" | "XHS_PUBLISH_FLOW_INTERMEDIATE_ACTION";
   status?: string;
   revalidated?: boolean;
   exactSemanticText?: string;
@@ -430,6 +439,8 @@ export interface XiaohongshuEditorEntryDiagnostic {
   mediaPreviewDiagnostics?: ImageEditorMediaPreviewDiagnostics;
   modalDiagnostics?: ImageEditorModalDiagnostics;
   intermediateActionCandidates?: readonly ImageEditorIntermediateActionCandidate[];
+  requiredValidationSignals?: readonly string[];
+  forbiddenActionSignalPresent?: boolean;
   postUploadTerminalStateReached?: boolean;
   postUploadIntermediateState?: ImageEditorPhase | null;
   postUploadReadinessDurationMs?: number;
@@ -449,8 +460,16 @@ export interface XiaohongshuEditorEntryDiagnostic {
   uploadBusy?: boolean;
   previewReady?: boolean;
   mutationType?: "IMAGE_UPLOAD_ONLY";
-  selfTestMode?: "POST_UPLOAD_DISCOVERY_ONLY";
-  uploadMutationCount?: 1;
+  selfTestMode?: "POST_UPLOAD_DISCOVERY_ONLY" | "XHS_PUBLISH_FLOW_EXPLORATION";
+  uploadMutationCount?: number;
+  uploadAttemptIndex?: number;
+  finalSubmitVisible?: boolean;
+  finalSubmitEnabled?: boolean;
+  finalSubmitHitTestValid?: boolean;
+  titleReadbackVerified?: boolean;
+  bodyReadbackVerified?: boolean;
+  intermediateActionClickCount?: number;
+  timelineEntry?: Record<string, unknown>;
   requestedCount?: number;
   previewCount?: number;
   verified?: boolean;
@@ -653,6 +672,91 @@ async function innerText(locator: Locator): Promise<string> {
 async function inputValue(locator: Locator): Promise<string> {
   const candidate = locator as unknown as { inputValue?: () => Promise<string> };
   return typeof candidate.inputValue === "function" ? candidate.inputValue().catch(() => "") : innerText(locator);
+}
+
+async function isChecked(locator: Locator): Promise<boolean> {
+  const candidate = locator as unknown as { isChecked?: () => Promise<boolean> };
+  if (typeof candidate.isChecked === "function") return candidate.isChecked().catch(() => false);
+  return (await attribute(locator, "aria-checked")) === "true" || (await attribute(locator, "checked")) !== "";
+}
+
+function emptyExplorationCounters(): PublishFlowExplorationCounters {
+  return {
+    navigationRestartCount: 0,
+    refreshCount: 0,
+    uploadAttempts: 0,
+    uploadMutationCount: 0,
+    uploadRetryCount: 0,
+    intermediateActionClickCount: 0,
+    titleMutationCount: 0,
+    bodyMutationCount: 0,
+    settingsMutationCount: 0,
+    contentMutationCount: 0,
+    finalSubmitCount: 0
+  };
+}
+
+function emptyExplorationFieldEvidence(): { attempted: boolean; mutationCount: number; strategyCount: number; readbackVerified: boolean } {
+  return { attempted: false, mutationCount: 0, strategyCount: 0, readbackVerified: false };
+}
+
+function normalizeExplorationBudgets(overrides: Partial<PublishFlowExplorationBudgets> | undefined): PublishFlowExplorationBudgets {
+  const supplied = overrides ?? {};
+  const bounded = (value: number | undefined, fallback: number): number => Number.isFinite(value) ? Math.max(0, Math.trunc(value as number)) : fallback;
+  return {
+    maxDurationMs: bounded(supplied.maxDurationMs, DEFAULT_XHS_PUBLISH_FLOW_EXPLORATION_BUDGETS.maxDurationMs),
+    maxNavigationRestarts: bounded(supplied.maxNavigationRestarts, DEFAULT_XHS_PUBLISH_FLOW_EXPLORATION_BUDGETS.maxNavigationRestarts),
+    maxUploadAttempts: bounded(supplied.maxUploadAttempts, DEFAULT_XHS_PUBLISH_FLOW_EXPLORATION_BUDGETS.maxUploadAttempts),
+    maxIntermediateActionClicks: bounded(supplied.maxIntermediateActionClicks, DEFAULT_XHS_PUBLISH_FLOW_EXPLORATION_BUDGETS.maxIntermediateActionClicks),
+    maxRefreshCount: bounded(supplied.maxRefreshCount, DEFAULT_XHS_PUBLISH_FLOW_EXPLORATION_BUDGETS.maxRefreshCount),
+    maxTitleMutations: bounded(supplied.maxTitleMutations, DEFAULT_XHS_PUBLISH_FLOW_EXPLORATION_BUDGETS.maxTitleMutations),
+    maxBodyMutations: bounded(supplied.maxBodyMutations, DEFAULT_XHS_PUBLISH_FLOW_EXPLORATION_BUDGETS.maxBodyMutations)
+  };
+}
+
+function toExplorationIntermediateCandidate(candidate: ImageEditorIntermediateActionCandidate): XhsIntermediateActionCandidate {
+  return {
+    candidateId: candidate.candidateId,
+    tagName: candidate.tagName,
+    normalizedText: candidate.normalizedText ?? candidate.semanticSignal,
+    role: candidate.role,
+    semanticSignal: candidate.semanticSignal,
+    visible: candidate.visible,
+    enabled: candidate.enabled,
+    boundingBox: candidate.boundingBox ?? null,
+    nearestInteractiveAncestorTag: candidate.nearestInteractiveAncestorTag ?? null,
+    nearestInteractiveAncestorRole: candidate.nearestInteractiveAncestorRole ?? null,
+    pointerEvents: candidate.pointerEvents ?? "unknown",
+    hitTestValid: candidate.hitTestValid === true
+  };
+}
+
+function boxesOverlap(left: ImageEditorBoundingBox, right: ImageEditorBoundingBox): boolean {
+  return left.x < right.x + right.width
+    && left.x + left.width > right.x
+    && left.y < right.y + right.height
+    && left.y + left.height > right.y;
+}
+
+async function locatorBoundingBox(locator: Locator): Promise<ImageEditorBoundingBox | null> {
+  const candidate = locator as unknown as { boundingBox?: () => Promise<ImageEditorBoundingBox | null> };
+  if (typeof candidate.boundingBox !== "function") return null;
+  return candidate.boundingBox().catch(() => null);
+}
+
+async function locatorHitTestValid(locator: Locator, box: ImageEditorBoundingBox | null): Promise<boolean> {
+  if (!box) return false;
+  const candidate = locator as unknown as { evaluate?: (pageFunction: (element: unknown, point: { x: number; y: number }) => unknown, arg: { x: number; y: number }) => Promise<unknown> };
+  if (typeof candidate.evaluate !== "function") return true;
+  try {
+    return await candidate.evaluate((element, point) => {
+      if (!(element instanceof Element)) return false;
+      const hit = document.elementFromPoint(point.x, point.y);
+      return hit === element || Boolean(hit && (element.contains(hit) || hit.contains(element)));
+    }, { x: box.x + box.width / 2, y: box.y + box.height / 2 }) === true;
+  } catch {
+    return false;
+  }
 }
 
 export function normalizeXiaohongshuEditorText(value: string): string {
@@ -1313,11 +1417,457 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     }
   }
 
+  /**
+   * Bounded end-to-end exploration. This is deliberately separate from
+   * preparePublish: it may fill only explicit test content and can discover the
+   * final submit surface, but it never invokes or simulates submission.
+   */
+  async runPublishFlowExploration(ctx: AccountContext, input: PublishFlowExplorationInput): Promise<PublishFlowExplorationResult> {
+    const operationId = randomUUID();
+    return this.accountOperationMutex.run(
+      `${this.platformKey}:${ctx.accountId}`,
+      () => this.runPublishFlowExplorationOnCanonicalPage(ctx, input, operationId),
+      "publishFlowExploration"
+    );
+  }
+
+  private async runPublishFlowExplorationOnCanonicalPage(
+    ctx: AccountContext,
+    input: PublishFlowExplorationInput,
+    operationId: ReturnType<typeof randomUUID>
+  ): Promise<PublishFlowExplorationResult> {
+    const startedAt = Date.now();
+    const budgets = normalizeExplorationBudgets(input.budgets);
+    let counters = emptyExplorationCounters();
+    const timeline: Array<{ timestamp: string; url: string; phase: string; action: string; result: string }> = [];
+    const states: Array<Record<string, unknown>> = [];
+    const actions: Array<Record<string, unknown>> = [];
+    const selectors: Array<Record<string, unknown>> = [];
+    let titleEvidence = emptyExplorationFieldEvidence();
+    let bodyEvidence = emptyExplorationFieldEvidence();
+    let requiredSettings: { status: string; mutations: readonly Record<string, unknown>[] } = { status: "NOT_REQUIRED", mutations: [] };
+    let finalSubmit: { status: string; visible: boolean; enabled: boolean; hitTestValid: boolean; label?: string } = { status: "NOT_DISCOVERED", visible: false, enabled: false, hitTestValid: false };
+    let forbiddenMutationObserved = false;
+    let blocker: string | null = null;
+    let canonical = await this.activeCanonicalPage(ctx).catch(() => null);
+    const initialCanonical = canonical;
+    const sameInitialPage = Boolean(canonical && this.pageContextMatchesSession(canonical.session, canonical.page));
+
+    const addTimeline = (phase: string, action: string, result: string, page: Page | null = canonical?.page ?? null): void => {
+      const entry = { timestamp: new Date().toISOString(), url: page ? sanitizePageUrl(page) : "about:blank", phase, action, result };
+      timeline.push(entry);
+      this.emitEditorEntryDiagnostic({
+        code: "XHS_PUBLISH_FLOW_TIMELINE",
+        timestamp: entry.timestamp,
+        operationId,
+        platformKey: "xiaohongshu",
+        accountId: ctx.accountId,
+        ...(canonical ? { contextDebugId: canonical.session.contextDebugId ?? "unknown-context", pageDebugId: canonical.pageDebugId, pageRole: "CANONICAL_AUTHENTICATED" as const, pageSource: "EXISTING_CANONICAL_PAGE" as const } : {}),
+        createdNewPage: false,
+        timelineEntry: entry,
+        status: result,
+        sanitizedUrl: entry.url,
+        finalSubmitCount: counters.finalSubmitCount,
+        intermediateActionClickCount: counters.intermediateActionClickCount
+      });
+    };
+
+    const buildResult = (status: PublishFlowExplorationResult["status"]): PublishFlowExplorationResult => {
+      const result: PublishFlowExplorationResult = {
+        mode: "XHS_PUBLISH_FLOW_EXPLORATION",
+        status,
+        operationId,
+        platformKey: this.platformKey,
+        accountId: ctx.accountId,
+        imageSource: input.imageSource,
+        sameCanonicalPage: Boolean(initialCanonical && canonical && initialCanonical.page === canonical.page),
+        sameContext: Boolean(initialCanonical && canonical && initialCanonical.session.context === canonical.session.context),
+        timeline,
+        states,
+        actions,
+        selectors,
+        counters,
+        uploadAttempts: counters.uploadAttempts,
+        uploadMutationCount: counters.uploadMutationCount,
+        uploadRetryCount: counters.uploadRetryCount,
+        intermediateActionClickCount: counters.intermediateActionClickCount,
+        titleMutationCount: counters.titleMutationCount,
+        bodyMutationCount: counters.bodyMutationCount,
+        settingsMutationCount: counters.settingsMutationCount,
+        contentMutationCount: counters.contentMutationCount,
+        finalSubmitCount: 0,
+        budgets,
+        title: titleEvidence,
+        titleReadbackVerified: titleEvidence.readbackVerified,
+        body: bodyEvidence,
+        bodyReadbackVerified: bodyEvidence.readbackVerified,
+        requiredSettings,
+        finalSubmit,
+        forbiddenMutationObserved,
+        blocker,
+        ...(blocker ? { failureCode: blocker, failureStage: "EXPLORATION", missingSignal: blocker } : {}),
+        readyForFinalSubmit: status === "PASS_READY_FOR_FINAL_SUBMIT",
+        evidence: {
+          runtimeAuthState: this.getBrowserRuntimeState(ctx).state,
+          canonicalContextMatch: sameInitialPage,
+          canonicalPageMatch: Boolean(initialCanonical && canonical && initialCanonical.page === canonical.page),
+          canonicalPageSurvivesUpload: Boolean(canonical && !this.isCanonicalPageClosed(canonical.page)),
+          preUploadState: states[0] ?? null,
+          postUploadStates: states.slice(1),
+          selectors,
+          actions,
+          forbiddenMutationObserved
+        }
+      };
+      try {
+        assertExplorationSafety(result);
+      } catch {
+        result.status = "SAFETY_BOUNDARY_VIOLATION";
+        result.readyForFinalSubmit = false;
+      }
+      if (canonical) {
+        this.emitCanonicalPageOperation(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "COMPLETED", result.sameContext, undefined, "XHS_PUBLISH_FLOW_EXPLORATION", result.failureCode ? { failureCode: result.failureCode as PreSubmitGateFailureCode, failureStage: result.failureStage as PreSubmitGateFailureStage, missingSignal: result.missingSignal } : undefined);
+      }
+      this.emitEditorEntryDiagnostic({
+        code: result.status === "PASS_READY_FOR_FINAL_SUBMIT" ? "XHS_PUBLISH_FLOW_COMPLETED" : "XHS_PUBLISH_FLOW_BLOCKED",
+        timestamp: new Date().toISOString(),
+        operationId,
+        platformKey: "xiaohongshu",
+        accountId: ctx.accountId,
+        ...(canonical ? { contextDebugId: canonical.session.contextDebugId ?? "unknown-context", pageDebugId: canonical.pageDebugId, pageRole: "CANONICAL_AUTHENTICATED" as const, pageSource: "EXISTING_CANONICAL_PAGE" as const } : {}),
+        createdNewPage: false,
+        sanitizedUrl: canonical ? sanitizePageUrl(canonical.page) : "about:blank",
+        status: result.status,
+        finalSubmitCount: 0,
+        intermediateActionClickCount: counters.intermediateActionClickCount,
+        titleReadbackVerified: result.titleReadbackVerified,
+        bodyReadbackVerified: result.bodyReadbackVerified,
+        uploadMutationCount: counters.uploadMutationCount,
+        timelineEntry: { blocker: result.blocker, elapsedMs: Date.now() - startedAt }
+      });
+      return result;
+    };
+
+    addTimeline("AUTHENTICATED", "AUTH_CHECK", sameInitialPage && this.getBrowserRuntimeState(ctx).state === "AUTHENTICATED" ? "PASS" : "BLOCKED");
+    if (!canonical || !sameInitialPage) {
+      blocker = "CANONICAL_PAGE_OWNERSHIP_FAILURE";
+      return buildResult("BLOCKED");
+    }
+    if (this.getBrowserRuntimeState(ctx).state !== "AUTHENTICATED") {
+      blocker = "AUTH_REQUIRED";
+      return buildResult("BLOCKED");
+    }
+    if (input.imageSource !== "SAFE_TEST_FIXTURE") {
+      blocker = "UNAPPROVED_IMAGE_SOURCE";
+      return buildResult("BLOCKED");
+    }
+    addTimeline("CREATOR_HOME", "PUBLISH_FLOW_START", "OBSERVE");
+
+    const preUploadGate = await this.inspectPublishEditorOnCanonicalPage(
+      ctx,
+      operationId,
+      false,
+      "XHS_PUBLISH_FLOW_EXPLORATION",
+      { readinessWindowMs: 10_000, readinessSampleIntervalMs: 80 }
+    );
+    canonical = await this.activeCanonicalPage(ctx).catch(() => null);
+    const sameAfterNavigation = Boolean(initialCanonical && canonical && initialCanonical.page === canonical.page && initialCanonical.session.context === canonical.session.context);
+    states.push({
+      phase: preUploadGate.imageEditorPhase ?? "IMAGE_POST_UNKNOWN",
+      status: preUploadGate.status,
+      preUploadGateStatus: preUploadGate.preUploadGateStatus ?? "FAIL",
+      contentType: preUploadGate.contentType,
+      contentTypeReady: preUploadGate.contentTypeReady,
+      uploadCapabilityPresent: preUploadGate.uploadCapabilityPresent ?? false,
+      sanitizedUrl: preUploadGate.sanitizedUrl
+    });
+    addTimeline("IMAGE_POST_PRE_UPLOAD", "PUBLISH_NOTE_NAVIGATION", preUploadGate.status === "ready" && sameAfterNavigation ? "PASS" : "BLOCKED");
+    if (!canonical || !sameAfterNavigation) {
+      blocker = "CANONICAL_PAGE_OWNERSHIP_FAILURE";
+      return buildResult("BLOCKED");
+    }
+    if (preUploadGate.status !== "ready" || preUploadGate.preUploadGateStatus !== "PASS" || preUploadGate.imageEditorPhase !== "IMAGE_POST_PRE_UPLOAD" || preUploadGate.uploadCapabilityPresent !== true) {
+      blocker = preUploadGate.failureCode ?? "PRE_UPLOAD_PHASE_NOT_READY";
+      return buildResult("BLOCKED");
+    }
+    if (Date.now() - startedAt > budgets.maxDurationMs) {
+      blocker = "EXPLORATION_TIMEOUT";
+      return buildResult("BLOCKED");
+    }
+
+    const metadata = {
+      operationId,
+      platformKey: "xiaohongshu" as const,
+      accountId: ctx.accountId,
+      contextDebugId: canonical.session.contextDebugId ?? "unknown-context",
+      pageDebugId: canonical.pageDebugId
+    };
+    this.emitStagedEditorDiagnostic(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED", {
+      expectedPhase: "IMAGE_POST_PRE_UPLOAD",
+      observedPhase: "IMAGE_POST_PRE_UPLOAD",
+      phase: "IMAGE_POST_PRE_UPLOAD",
+      preSubmitGatePhase: "PRE_UPLOAD",
+      preUploadGateStatus: "PASS",
+      preUploadMutationRevalidated: true,
+      postUploadControlsStatus: "NOT_APPLICABLE_BEFORE_UPLOAD",
+      preSubmitGatePassMeaning: "SAFE_TO_ENTER_IMAGE_UPLOAD_ONLY_EXPLORATION_STAGE",
+      uploadCapabilityPresent: true,
+      mutationType: "IMAGE_UPLOAD_ONLY",
+      selfTestMode: "XHS_PUBLISH_FLOW_EXPLORATION",
+      sanitizedUrl: sanitizePageUrl(canonical.page)
+    });
+
+    let uploadCompleted = false;
+    while (!uploadCompleted) {
+      if (!canSpendBudget(counters, budgets, "uploadAttempts")) {
+        blocker = "MAX_SAFE_IMAGE_UPLOAD_ATTEMPTS_EXCEEDED";
+        return buildResult("BLOCKED");
+      }
+      const uploadCanonical = await this.activeCanonicalPage(ctx).catch(() => null);
+      if (!uploadCanonical || uploadCanonical.page !== canonical.page || uploadCanonical.session.context !== canonical.session.context) {
+        blocker = "CANONICAL_PAGE_OWNERSHIP_FAILURE";
+        return buildResult("BLOCKED");
+      }
+      counters = recordBudgetUse(counters, "uploadAttempts");
+      const uploadAttemptIndex = counters.uploadAttempts;
+      addTimeline("IMAGE_UPLOAD", `UPLOAD_ATTEMPT_${counters.uploadAttempts}`, "STARTED");
+      try {
+        const imageEvidence = await this.uploadImages(canonical.page, [input.imagePath], { ctx, session: canonical.session, metadata, selfTestMode: "XHS_PUBLISH_FLOW_EXPLORATION", uploadAttemptIndex, onMutationStarted: () => { counters = { ...counters, uploadMutationCount: counters.uploadMutationCount + 1 }; } });
+        states.push({ phase: "IMAGE_UPLOAD", ...imageEvidence });
+        uploadCompleted = imageEvidence.verified === true;
+        counters = { ...counters, uploadRetryCount: Math.max(0, counters.uploadAttempts - 1) };
+        addTimeline("IMAGE_UPLOAD", `UPLOAD_ATTEMPT_${counters.uploadAttempts}`, uploadCompleted ? "COMPLETED" : "FAILED");
+      } catch (error) {
+        counters = { ...counters, uploadRetryCount: Math.max(0, counters.uploadAttempts - 1) };
+        addTimeline("IMAGE_UPLOAD", `UPLOAD_ATTEMPT_${counters.uploadAttempts}`, "FAILED");
+        if (!canSpendBudget(counters, budgets, "uploadAttempts")) {
+          blocker = error instanceof Error ? error.message : "IMAGE_UPLOAD_FAILED";
+          return buildResult("BLOCKED");
+        }
+      }
+    }
+    if (!uploadCompleted) {
+      blocker = "UPLOAD_COMPLETION_NOT_OBSERVED";
+      return buildResult("BLOCKED");
+    }
+
+    let postUploadInspection = await inspectPostUploadImageEditor(canonical.page, metadata, {
+      readinessWindowMs: Math.max(0, Math.min(10_000, budgets.maxDurationMs - (Date.now() - startedAt))),
+      readinessSampleIntervalMs: 80,
+      emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic)
+    });
+    states.push(postUploadInspection as unknown as Record<string, unknown>);
+    if (postUploadInspection.forbiddenActionSignalPresent === true) {
+      forbiddenMutationObserved = true;
+      blocker = "FORBIDDEN_DESTRUCTIVE_ACTION_SIGNAL";
+      return buildResult("SAFETY_BOUNDARY_VIOLATION");
+    }
+    const intermediateActions: Array<Record<string, unknown>> = [];
+    let intermediateActionCount = 0;
+    while (postUploadInspection.intermediateState !== "NONE") {
+      const phase = postUploadInspection.phase;
+      const candidates = (postUploadInspection.intermediateActionCandidates ?? []).map(toExplorationIntermediateCandidate);
+      const resolution = selectSafeIntermediateAction(candidates, phase);
+      if (resolution.status !== "FOUND_UNIQUE" || !resolution.candidate) {
+        blocker = resolution.status === "AMBIGUOUS" ? "INTERMEDIATE_ACTION_AMBIGUOUS" : "INTERMEDIATE_ACTION_NOT_FOUND";
+        break;
+      }
+      if (!canSpendBudget(counters, budgets, "intermediateActionClickCount")) {
+        blocker = "MAX_INTERMEDIATE_ACTION_CLICKS_EXCEEDED";
+        break;
+      }
+      const actionLocator = await this.resolveIntermediateActionLocator(canonical.page, resolution.candidate);
+      const latestCanonical = await this.activeCanonicalPage(ctx).catch(() => null);
+      if (!latestCanonical || latestCanonical.page !== canonical.page || latestCanonical.session.context !== canonical.session.context) {
+        blocker = "CANONICAL_PAGE_OWNERSHIP_FAILURE";
+        break;
+      }
+      if (!actionLocator) {
+        blocker = "INTERMEDIATE_ACTION_SELECTOR_DRIFT";
+        break;
+      }
+      counters = recordBudgetUse(counters, "intermediateActionClickCount");
+      const actionBefore = { stateBefore: phase, semanticText: resolution.candidate.normalizedText, candidateStatus: resolution.status, candidateId: resolution.candidate.candidateId };
+      try {
+        await actionLocator.click();
+        intermediateActionCount += 1;
+        addTimeline(phase, `INTERMEDIATE_ACTION_${intermediateActionCount}`, "CLICKED");
+        const actionEntry = { index: intermediateActionCount, ...actionBefore, clickResult: "CLICKED" };
+        intermediateActions.push(actionEntry);
+        actions.push(actionEntry);
+        this.emitEditorEntryDiagnostic({ code: "XHS_PUBLISH_FLOW_INTERMEDIATE_ACTION", timestamp: new Date().toISOString(), operationId, platformKey: "xiaohongshu", accountId: ctx.accountId, contextDebugId: canonical.session.contextDebugId ?? "unknown-context", pageDebugId: canonical.pageDebugId, pageRole: "CANONICAL_AUTHENTICATED", pageSource: "EXISTING_CANONICAL_PAGE", createdNewPage: false, action: "XHS_PUBLISH_FLOW_INTERMEDIATE_ACTION", status: "CLICKED", phase, intermediateActionClickCount: counters.intermediateActionClickCount, finalSubmitCount: 0 });
+        postUploadInspection = await inspectPostUploadImageEditor(canonical.page, metadata, { readinessWindowMs: Math.max(0, Math.min(10_000, budgets.maxDurationMs - (Date.now() - startedAt))), readinessSampleIntervalMs: 80, emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
+        states.push(postUploadInspection as unknown as Record<string, unknown>);
+        if (postUploadInspection.forbiddenActionSignalPresent === true) {
+          forbiddenMutationObserved = true;
+          blocker = "FORBIDDEN_DESTRUCTIVE_ACTION_SIGNAL";
+          break;
+        }
+        const after = intermediateActions[intermediateActions.length - 1];
+        if (after) after.stateAfter = postUploadInspection.phase;
+      } catch (error) {
+        const actionEntry = { index: intermediateActionCount + 1, ...actionBefore, clickResult: "FAILED", error: error instanceof Error ? error.message : String(error) };
+        intermediateActions.push(actionEntry);
+        actions.push(actionEntry);
+        blocker = "INTERMEDIATE_ACTION_FAILED";
+        break;
+      }
+      if (Date.now() - startedAt > budgets.maxDurationMs) {
+        blocker = "EXPLORATION_TIMEOUT";
+        break;
+      }
+    }
+    if (intermediateActionCount !== counters.intermediateActionClickCount) counters = { ...counters, intermediateActionClickCount: intermediateActionCount };
+    addTimeline("POST_UPLOAD_INTERMEDIATE_STEPS", "SAFE_FLOW_ACTIONS", blocker ? "BLOCKED" : "PASS");
+    if (blocker || postUploadInspection.phase !== "IMAGE_POST_POST_UPLOAD_EDITOR") return buildResult("BLOCKED");
+
+    const title = await this.exploreEditorField(canonical.page, "title", input.title, budgets.maxTitleMutations);
+    counters = { ...counters, titleMutationCount: title.mutationCount, contentMutationCount: counters.contentMutationCount + title.mutationCount };
+    titleEvidence = title.evidence;
+    selectors.push({ field: "title", status: title.status, strategyCount: title.evidence.strategyCount });
+    addTimeline("TITLE", "TEST_CONTENT_FILL_AND_READBACK", title.evidence.readbackVerified ? "PASS" : "BLOCKED");
+    if (!title.evidence.readbackVerified) {
+      blocker = title.status;
+      return buildResult("BLOCKED");
+    }
+
+    const body = await this.exploreEditorField(canonical.page, "body", input.body, budgets.maxBodyMutations);
+    counters = { ...counters, bodyMutationCount: body.mutationCount, contentMutationCount: counters.contentMutationCount + body.mutationCount };
+    bodyEvidence = body.evidence;
+    selectors.push({ field: "body", status: body.status, strategyCount: body.evidence.strategyCount });
+    addTimeline("BODY", "TEST_CONTENT_FILL_AND_READBACK", body.evidence.readbackVerified ? "PASS" : "BLOCKED");
+    if (!body.evidence.readbackVerified) {
+      blocker = body.status;
+      return buildResult("BLOCKED");
+    }
+
+    const requiredFields = await this.inspectRequiredFields(canonical.page);
+    const missingRequiredFields = requiredFields.filter((field) => field.empty);
+    if (missingRequiredFields.length > 0) {
+      const requiredSettingResult = await this.satisfyRequiredSettings(canonical.page, 3);
+      requiredSettings = requiredSettingResult;
+      counters = { ...counters, settingsMutationCount: requiredSettingResult.mutations.length };
+      const remainingRequiredFields = await this.inspectRequiredFields(canonical.page);
+      if (requiredSettingResult.status !== "PASS" || remainingRequiredFields.some((field) => field.empty)) {
+        blocker = "REQUIRED_FIELDS_NOT_VERIFIED";
+        return buildResult("BLOCKED");
+      }
+    } else {
+      requiredSettings = { status: "PASS_NO_REQUIRED_MUTATION", mutations: [] };
+    }
+    addTimeline("REQUIRED_FIELDS", "READ_ONLY_VALIDATION", "PASS");
+    const settings = await this.inspectPublishSettings(canonical.page);
+    selectors.push({ field: "settings", status: classifyXiaohongshuPublishSettings(settings), requiredCount: settings.filter((setting) => setting.required).length });
+
+    finalSubmit = await this.inspectFinalSubmitForExploration(canonical.page);
+    selectors.push({ field: "finalSubmit", ...finalSubmit });
+    addTimeline("FINAL_SUBMIT_READY", "READ_ONLY_CONTROL_DISCOVERY", finalSubmit.status === "FOUND_UNIQUE" && finalSubmit.visible && finalSubmit.enabled && finalSubmit.hitTestValid ? "PASS" : "BLOCKED");
+    if (finalSubmit.status !== "FOUND_UNIQUE" || !finalSubmit.visible || !finalSubmit.enabled || !finalSubmit.hitTestValid) {
+      blocker = ["DISABLED", "NOT_VISIBLE", "HITTEST_INVALID"].includes(finalSubmit.status)
+        ? "FINAL_SUBMIT_NOT_READY"
+        : finalSubmit.status === "AMBIGUOUS" ? "FINAL_SUBMIT_CONTROL_AMBIGUOUS" : "FINAL_SUBMIT_CONTROL_NOT_FOUND";
+      return buildResult("BLOCKED");
+    }
+    blocker = null;
+    return buildResult("PASS_READY_FOR_FINAL_SUBMIT");
+  }
+
+  private async resolveIntermediateActionLocator(page: Page, candidate: XhsIntermediateActionCandidate): Promise<Locator | null> {
+    const controls = page.locator("button, [role=\"button\"], a, [role=\"tab\"]");
+    for (let index = 0; index < await locatorCount(controls); index += 1) {
+      const control = locatorAt(controls, index);
+      if (!(await isVisible(control)) || !(await isEnabled(control))) continue;
+      const label = normalizeXiaohongshuEditorText((await innerText(control)) || (await attribute(control, "aria-label")) || (await attribute(control, "title")));
+      if (!label || !(label === candidate.normalizedText || label.includes(candidate.normalizedText) || candidate.normalizedText.includes(label))) continue;
+      const box = await locatorBoundingBox(control);
+      if (!box || !candidate.boundingBox || !boxesOverlap(box, candidate.boundingBox)) continue;
+      const hitTestValid = await locatorHitTestValid(control, box);
+      if (!hitTestValid) continue;
+      const pointerEvents = await attribute(control, "data-pointer-events");
+      if (pointerEvents === "none") continue;
+      return control;
+    }
+    return null;
+  }
+
+  private async exploreEditorField(page: Page, field: "title" | "body", value: string, maxMutations: number): Promise<{ status: string; mutationCount: number; evidence: { attempted: boolean; mutationCount: number; strategyCount: number; readbackVerified: boolean; readbackLength?: number } }> {
+    const limit = Math.max(0, maxMutations);
+    let mutationCount = 0;
+    let strategyCount = 0;
+    while (mutationCount < limit) {
+      strategyCount += 1;
+      try {
+        const editor = await this.discoverUniqueEditor(page, field);
+        mutationCount += 1;
+        await editor.fill(value);
+        const readback = await readEditor(editor, field);
+        const verified = readback === normalizeXiaohongshuEditorText(value);
+        if (verified) return { status: "FOUND_UNIQUE", mutationCount, evidence: { attempted: true, mutationCount, strategyCount, readbackVerified: true, readbackLength: readback.length } };
+      } catch (error) {
+        return { status: error instanceof XiaohongshuGateError ? error.gateCode : `${field.toUpperCase()}_WRITE_FAILED`, mutationCount, evidence: { attempted: mutationCount > 0, mutationCount, strategyCount, readbackVerified: false } };
+      }
+    }
+    return { status: `${field.toUpperCase()}_READBACK_FAILED`, mutationCount, evidence: { attempted: mutationCount > 0, mutationCount, strategyCount, readbackVerified: false } };
+  }
+
+  private async inspectFinalSubmitForExploration(page: Page): Promise<{ status: string; visible: boolean; enabled: boolean; hitTestValid: boolean; label?: string }> {
+    const controls = page.locator(XIAOHONGSHU_FINAL_SUBMIT_SELECTOR);
+    const matches: Array<{ label: string; visible: boolean; enabled: boolean; hitTestValid: boolean }> = [];
+    for (let index = 0; index < await locatorCount(controls); index += 1) {
+      const control = locatorAt(controls, index);
+      const label = normalizeXiaohongshuEditorText((await innerText(control)) || (await attribute(control, "aria-label")) || (await attribute(control, "title")));
+      if (!XIAOHONGSHU_FINAL_SUBMIT_PATTERN.test(label) || XIAOHONGSHU_VIDEO_PATTERN.test(label)) continue;
+      const visible = await isVisible(control);
+      const enabled = await isEnabled(control);
+      const box = await locatorBoundingBox(control);
+      const hitTestValid = visible && box !== null && await locatorHitTestValid(control, box);
+      matches.push({ label, visible, enabled, hitTestValid });
+    }
+    if (matches.length === 0) return { status: "NOT_FOUND", visible: false, enabled: false, hitTestValid: false };
+    if (matches.length > 1) return { status: "AMBIGUOUS", visible: false, enabled: false, hitTestValid: false };
+    const match = matches[0]!;
+    if (!match.visible) return { status: "NOT_VISIBLE", ...match };
+    if (!match.enabled) return { status: "DISABLED", ...match };
+    if (!match.hitTestValid) return { status: "HITTEST_INVALID", ...match };
+    return { status: "FOUND_UNIQUE", ...match };
+  }
+
+  private async satisfyRequiredSettings(page: Page, mutationBudget: number): Promise<{ status: string; mutations: readonly Record<string, unknown>[] }> {
+    const required = page.locator(XIAOHONGSHU_REQUIRED_SELECTOR);
+    const mutations: Array<Record<string, unknown>> = [];
+    for (let index = 0; index < await locatorCount(required); index += 1) {
+      const field = locatorAt(required, index);
+      if (!(await isVisible(field)) || !(await isEnabled(field))) continue;
+      const label = normalizeXiaohongshuEditorText((await attribute(field, "aria-label")) || (await attribute(field, "placeholder")) || (await innerText(field)));
+      const role = (await attribute(field, "role")).toLowerCase();
+      const type = (await attribute(field, "type")).toLowerCase();
+      const checked = await isChecked(field);
+      if (mutations.length >= mutationBudget) return { status: "MUTATION_BUDGET_EXCEEDED", mutations };
+      if (type === "checkbox" || type === "radio" || role === "checkbox" || role === "radio") {
+        if (checked) continue;
+        const clickable = field as unknown as { click?: () => Promise<void> };
+        if (typeof clickable.click !== "function") return { status: "REQUIRED_SETTING_NOT_INTERACTIVE", mutations };
+        await clickable.click();
+        mutations.push({ index, label, action: "CHECK_REQUIRED_SETTING" });
+        continue;
+      }
+      if (!/话题|tag|topic/iu.test(label)) return { status: "REQUIRED_SETTING_NEEDS_OWNER_INPUT", mutations };
+      const fillable = field as unknown as { fill?: (value: string) => Promise<void> };
+      if (typeof fillable.fill !== "function") return { status: "REQUIRED_SETTING_NOT_INTERACTIVE", mutations };
+      await fillable.fill("#自动化测试");
+      const readback = normalizeXiaohongshuEditorText(await inputValue(field));
+      if (readback !== "#自动化测试") return { status: "REQUIRED_SETTING_READBACK_FAILED", mutations };
+      mutations.push({ index, label, action: "FILL_REQUIRED_TOPIC", readbackVerified: true });
+    }
+    return { status: "PASS", mutations };
+  }
+
   private async inspectPublishEditorOnCanonicalPage(
     ctx: AccountContext,
     operationId: ReturnType<typeof randomUUID> = randomUUID(),
     completeOperation = true,
-    operationAction: "PRE_SUBMIT_GATE" | "CONTROLLED_POST_UPLOAD_DISCOVERY" = "PRE_SUBMIT_GATE"
+    operationAction: "PRE_SUBMIT_GATE" | "CONTROLLED_POST_UPLOAD_DISCOVERY" | "XHS_PUBLISH_FLOW_EXPLORATION" = "PRE_SUBMIT_GATE",
+    inspectionOptions: { readinessWindowMs?: number; readinessSampleIntervalMs?: number } = {}
   ): Promise<PreSubmitGateResult> {
     const key = `${this.platformKey}:${ctx.accountId}`;
     let canonical: Awaited<ReturnType<typeof this.activeCanonicalPage>> = null;
@@ -1442,7 +1992,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         accountId: ctx.accountId,
         contextDebugId: canonical.session.contextDebugId ?? "unknown-context",
         pageDebugId: canonical.pageDebugId
-      }, { emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
+      }, { ...inspectionOptions, emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
       const preUploadContract = assertPreUploadImageEditorContract(editorPhaseInspection);
       this.emitStagedEditorDiagnostic(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "PRE_UPLOAD_GATE_RESULT", {
         expectedPhase: preUploadContract.expectedPhase,
@@ -1641,6 +2191,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       mutationType: diagnostic.mutationType,
       selfTestMode: diagnostic.selfTestMode,
       uploadMutationCount: diagnostic.uploadMutationCount,
+      uploadAttemptIndex: diagnostic.uploadAttemptIndex,
       uploadBusy: diagnostic.uploadBusy,
       previewReady: diagnostic.previewReady,
       contentType: diagnostic.contentType,
@@ -1668,6 +2219,8 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       postUploadIntermediateState: diagnostic.postUploadIntermediateState,
       postUploadReadinessDurationMs: diagnostic.postUploadReadinessDurationMs,
       postUploadReadinessSampleCount: diagnostic.postUploadReadinessSampleCount,
+      requiredValidationSignals: diagnostic.requiredValidationSignals,
+      forbiddenActionSignalPresent: diagnostic.forbiddenActionSignalPresent,
       imageEditorStatus: diagnostic.status,
       failureCode: diagnostic.failureCode,
       failureStage: diagnostic.failureStage,
@@ -2049,7 +2602,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     this.onLoginEvaluation({ phase, ...(operationId ? { operationId } : {}), timestamp: new Date().toISOString(), platformKey: this.platformKey, accountId: ctx.accountId, pageIsClosed, pageUrl, pageTitle, creatorDomain: login.creatorHost, creatorHomePath: login.creatorHomePath, publishNoteVisible: login.publishNoteVisible, noteManagementVisible: login.noteManagementVisible, dataDashboardVisible: login.dataDashboardVisible, accountStatusVisible: login.accountStatusVisible, profileAreaVisible: login.profileAreaVisible, visibleLoginForm: login.visibleLoginForm, visibleQrLogin: login.visibleQrLogin, visibleSmsVerification: login.visibleSmsVerification, visibleCaptcha: login.visibleCaptcha, visibleSlider: login.visibleSlider, visibleSecurityModal: login.visibleSecurityModal, positiveSignalCount: new Set(login.positiveSignals).size, blockingSignalCount: blockers.filter(Boolean).length, loginClassification: decision, stableObservationWindowMs, stableObservationSamples, stableObservationPassed });
   }
 
-  private emitCanonicalPageOperation(ctx: AccountContext, session: BrowserSession, page: Page, pageDebugId: string, operationId: string, phase: XiaohongshuCanonicalPageOperationPhase, pageContextMatchesSession: boolean, finalStatus?: LoginStatus | PreSubmitGateStatus, action: "CHECK_LOGIN" | "PRE_SUBMIT_GATE" | "CONTROLLED_POST_UPLOAD_DISCOVERY" = "CHECK_LOGIN", result?: Pick<PreSubmitGateResult, "failureCode" | "failureStage" | "missingSignal">): void {
+  private emitCanonicalPageOperation(ctx: AccountContext, session: BrowserSession, page: Page, pageDebugId: string, operationId: string, phase: XiaohongshuCanonicalPageOperationPhase, pageContextMatchesSession: boolean, finalStatus?: LoginStatus | PreSubmitGateStatus, action: "CHECK_LOGIN" | "PRE_SUBMIT_GATE" | "CONTROLLED_POST_UPLOAD_DISCOVERY" | "XHS_PUBLISH_FLOW_EXPLORATION" = "CHECK_LOGIN", result?: Pick<PreSubmitGateResult, "failureCode" | "failureStage" | "missingSignal">): void {
     if (!this.onCanonicalPageOperation) return;
     const key = `${this.platformKey}:${ctx.accountId}`;
     const mutex = this.accountOperationMutex.getState(key);
@@ -2824,7 +3377,9 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       ctx: AccountContext;
       session: BrowserSession;
       metadata: { operationId: string; platformKey: "xiaohongshu"; accountId: string; contextDebugId: string; pageDebugId: string };
-      selfTestMode?: "POST_UPLOAD_DISCOVERY_ONLY";
+      selfTestMode?: "POST_UPLOAD_DISCOVERY_ONLY" | "XHS_PUBLISH_FLOW_EXPLORATION";
+      uploadAttemptIndex?: number;
+      onMutationStarted?: () => void;
     }
   ): Promise<Record<string, unknown>> {
     const input = page.locator(XIAOHONGSHU_FILE_SELECTOR);
@@ -2844,10 +3399,12 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         mutationType: "IMAGE_UPLOAD_ONLY",
         ...(diagnosticContext.selfTestMode ? { selfTestMode: diagnosticContext.selfTestMode } : {}),
         uploadMutationCount: 1,
+        ...(diagnosticContext.uploadAttemptIndex === undefined ? {} : { uploadAttemptIndex: diagnosticContext.uploadAttemptIndex }),
         requestedCount: images.length
       });
     }
     try {
+      diagnosticContext?.onMutationStarted?.();
       await input.setInputFiles(images);
       for (let attempt = 0; attempt < 8; attempt += 1) {
         const pageContent = await bodyText(page);
@@ -2869,6 +3426,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
               action: "IMAGE_UPLOAD_COMPLETED",
               mutationType: "IMAGE_UPLOAD_ONLY",
               ...(diagnosticContext.selfTestMode ? { selfTestMode: diagnosticContext.selfTestMode } : {}),
+              ...(diagnosticContext.uploadAttemptIndex === undefined ? {} : { uploadAttemptIndex: diagnosticContext.uploadAttemptIndex }),
               requestedCount: images.length,
               previewCount,
               verified: true
@@ -2892,6 +3450,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
           action: "IMAGE_UPLOAD_FAILED",
           mutationType: "IMAGE_UPLOAD_ONLY",
           ...(diagnosticContext.selfTestMode ? { selfTestMode: diagnosticContext.selfTestMode } : {}),
+          ...(diagnosticContext.uploadAttemptIndex === undefined ? {} : { uploadAttemptIndex: diagnosticContext.uploadAttemptIndex }),
           requestedCount: images.length,
           uploadFailureCode: error instanceof XiaohongshuGateError ? error.gateCode : "IMAGE_UPLOAD_NOT_VERIFIED"
         });
@@ -2912,6 +3471,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         action: "IMAGE_UPLOAD_FAILED",
         mutationType: "IMAGE_UPLOAD_ONLY",
         ...(diagnosticContext.selfTestMode ? { selfTestMode: diagnosticContext.selfTestMode } : {}),
+        ...(diagnosticContext.uploadAttemptIndex === undefined ? {} : { uploadAttemptIndex: diagnosticContext.uploadAttemptIndex }),
         requestedCount: images.length,
         uploadFailureCode: "IMAGE_UPLOAD_NOT_VERIFIED"
       });
@@ -2938,10 +3498,13 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       const value = await inputValue(field);
       const label = normalizeXiaohongshuEditorText((await attribute(field, "aria-label")) || (await attribute(field, "placeholder")) || (await innerText(field)));
       const checked = await attribute(field, "aria-checked");
+      const type = (await attribute(field, "type")).toLowerCase();
+      const role = (await attribute(field, "role")).toLowerCase();
       const visible = await isVisible(field);
       const enabled = await isEnabled(field);
       if (!visible || !enabled) continue;
-      fields.push({ label, empty: !value.trim() && checked !== "true", visible, enabled });
+      const toggle = type === "checkbox" || type === "radio" || role === "checkbox" || role === "radio";
+      fields.push({ label, empty: toggle ? !(checked === "true" || await isChecked(field)) : !value.trim(), visible, enabled });
     }
     return fields;
   }

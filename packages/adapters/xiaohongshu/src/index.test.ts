@@ -8,7 +8,7 @@ describe("Xiaohongshu BrowserAutomation adapter", () => {
     const adapter = new XiaohongshuAdapter({ sessionManager: { hasStoredSession: vi.fn(() => false), open: vi.fn(), save: vi.fn(), close: vi.fn(), clear: vi.fn() } as never });
     expect(adapter).toBeInstanceOf(XiaohongshuBrowserAdapter);
     expect(adapter.manifest).toMatchObject({ platformKey: "xiaohongshu", status: "WaitingForUser", transport: "browser", integrationMode: "BrowserAutomation", supportsArticle: true, supportsVideo: false });
-    expect(adapter.getCapabilities().controlledSelfTestModes).toEqual(["POST_UPLOAD_DISCOVERY_ONLY"]);
+    expect(adapter.getCapabilities().controlledSelfTestModes).toEqual(["POST_UPLOAD_DISCOVERY_ONLY", "XHS_PUBLISH_FLOW_EXPLORATION"]);
   });
   it("validates image-post input before any browser operation", async () => {
     const adapter = new XiaohongshuAdapter({ sessionManager: { hasStoredSession: vi.fn(() => false), open: vi.fn(), save: vi.fn(), close: vi.fn(), clear: vi.fn() } as never });
