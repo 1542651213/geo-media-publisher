@@ -415,6 +415,42 @@ export interface Account {
   archivedAt?: string | null;
 }
 
+export type CreatorIdentityProofSource = "CREATOR_PROFILE_LINK" | "CREATOR_STRUCTURED_DATA" | "CREATOR_ACCOUNT_SURFACE";
+
+export interface CreatorIdentityProof {
+  platformKey: "xiaohongshu";
+  externalCreatorId: string | null;
+  displayName: string | null;
+  profileUrl: string | null;
+  source: CreatorIdentityProofSource;
+  stable: boolean;
+}
+
+export interface PlatformAccountIdentityBinding {
+  platformKey: string;
+  accountId: string;
+  externalCreatorId: string;
+  displayName: string | null;
+  profileUrl: string | null;
+  bindingSource: "LEGACY_ACCOUNT_EXTERNAL_ID_MATCH" | "OWNER_APPROVED_CREATOR_IDENTITY_BINDING";
+  boundAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreatorIdentityVerificationResult {
+  expectedExternalCreatorId: string | null;
+  observed: CreatorIdentityProof;
+  verified: boolean;
+  mismatch: boolean;
+  canonicalContextId: string;
+  canonicalPageId: string;
+  canonicalPageUrl: string;
+  domLocationHref: string;
+  pageUrlConsistency: "PASS" | "FAIL";
+  routeClass: "CREATOR_HOME" | "PUBLISH_EDITOR" | "CREATOR_CONTENT" | "OTHER_CREATOR_PAGE" | "LOGIN" | "SECURITY_VERIFICATION" | "UNKNOWN";
+}
+
 export type PlatformAccount = Account;
 
 export interface PlatformSelfTestStep {
@@ -639,7 +675,7 @@ export const OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH = "OWNER_AUTHORIZED_ONE_SHOT
 export const ONE_SHOT_REAL_PUBLISH_ACCEPTANCE = "ONE_SHOT_REAL_PUBLISH_ACCEPTANCE" as const;
 export const XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID = "54b390ac-d81e-440a-baeb-d00f9f346cc3" as const;
 
-export type OneShotPublicationAuthorizationState = "NOT_AUTHORIZED" | "AUTHORIZED_UNUSED" | "CONSUMED";
+export type OneShotPublicationAuthorizationState = "NOT_AUTHORIZED" | "AUTHORIZED_UNUSED" | "CONSUMED" | "SUPERSEDED_UNUSED";
 
 export interface OneShotPublicationAuthorization {
   authorization: typeof OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH;
@@ -657,6 +693,13 @@ export interface OneShotPublicationAuthorization {
   createdAt?: string;
   updatedAt?: string;
   consumedAt?: string | null;
+}
+
+export interface OneShotAuthorizationConvergenceResult {
+  reusableOperationId: string | null;
+  supersededOperationIds: string[];
+  activeUnusedAuthorizationCount: number;
+  mutationCount: number;
 }
 
 export interface FailedOneShotConfirmationIdentity {
