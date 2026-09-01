@@ -23,10 +23,85 @@ export interface AutomationPrepareResult {
   response: Record<string, unknown>;
 }
 
-export type ControlledSelfTestMode = "POST_UPLOAD_DISCOVERY_ONLY";
+export type ControlledSelfTestMode = "POST_UPLOAD_DISCOVERY_ONLY" | "XHS_PUBLISH_FLOW_EXPLORATION";
+
+export interface PublishFlowExplorationInput {
+  imagePath: string;
+  imageSource: "SAFE_TEST_FIXTURE";
+  title: string;
+  body: string;
+  budgets?: Partial<PublishFlowExplorationBudgets>;
+}
+
+export interface PublishFlowExplorationBudgets {
+  maxDurationMs: number;
+  maxNavigationRestarts: number;
+  maxUploadAttempts: number;
+  maxIntermediateActionClicks: number;
+  maxRefreshCount: number;
+  maxTitleMutations: number;
+  maxBodyMutations: number;
+}
+
+export interface PublishFlowExplorationCounters {
+  navigationRestartCount: number;
+  refreshCount: number;
+  uploadAttempts: number;
+  uploadMutationCount: number;
+  uploadRetryCount: number;
+  intermediateActionClickCount: number;
+  titleMutationCount: number;
+  bodyMutationCount: number;
+  settingsMutationCount: number;
+  contentMutationCount: number;
+  finalSubmitCount: number;
+}
+
+export interface PublishFlowExplorationTimelineEntry {
+  timestamp: string;
+  url: string;
+  phase: string;
+  action: string;
+  result: string;
+}
+
+export interface PublishFlowFieldEvidence {
+  attempted: boolean;
+  mutationCount: number;
+  strategyCount: number;
+  readbackVerified: boolean;
+  readbackLength?: number;
+  readbackHash?: string;
+}
+
+export interface PublishFlowExplorationResult {
+  mode: "XHS_PUBLISH_FLOW_EXPLORATION";
+  status: "PASS_READY_FOR_FINAL_SUBMIT" | "BLOCKED" | "SAFETY_BOUNDARY_VIOLATION";
+  operationId: string;
+  platformKey: string;
+  accountId: string;
+  imageSource: "SAFE_TEST_FIXTURE";
+  sameCanonicalPage: boolean;
+  sameContext: boolean;
+  timeline: readonly PublishFlowExplorationTimelineEntry[];
+  states: readonly Record<string, unknown>[];
+  actions: readonly Record<string, unknown>[];
+  selectors: readonly Record<string, unknown>[];
+  counters: PublishFlowExplorationCounters;
+  budgets: PublishFlowExplorationBudgets;
+  title: PublishFlowFieldEvidence;
+  body: PublishFlowFieldEvidence;
+  requiredSettings: { status: string; mutations: readonly Record<string, unknown>[] };
+  finalSubmit: { status: string; visible: boolean; enabled: boolean; hitTestValid: boolean; label?: string };
+  forbiddenMutationObserved: boolean;
+  blocker: string | null;
+  readyForFinalSubmit: boolean;
+  database?: { before: Record<string, number>; after: Record<string, number> };
+  evidence: Record<string, unknown>;
+}
 
 export interface ControlledPostUploadDiscoveryResult {
-  mode: ControlledSelfTestMode;
+  mode: "POST_UPLOAD_DISCOVERY_ONLY";
   status: "PASS" | "FAIL";
   operationId: string;
   platformKey: string;
@@ -186,6 +261,8 @@ export interface AutomationAdapter extends PlatformAdapter {
   inspectPublishEditor?(ctx: AccountContext): Promise<PreSubmitGateResult>;
   /** Optional controlled upload-only self-test. It may upload exactly one approved fixture, then must stop before content mutation or final submit. */
   runControlledPostUploadDiscovery?(ctx: AccountContext, input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE" }): Promise<ControlledPostUploadDiscoveryResult>;
+  /** Optional bounded XHS exploration. It must never activate final publication. */
+  runPublishFlowExploration?(ctx: AccountContext, input: PublishFlowExplorationInput): Promise<PublishFlowExplorationResult>;
   preparePublish(ctx: AccountContext, article: PublishArticleInput): Promise<AutomationPrepareResult>;
   verifyPublish(ctx: AccountContext, externalId?: string): Promise<PublishStatusResult>;
   logout(ctx: AccountContext): Promise<void>;
