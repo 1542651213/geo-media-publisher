@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS one_shot_publication_authorizations (
   final_submit_action_started INTEGER NOT NULL DEFAULT 0,
   final_submit_action_completed INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
   consumed_at TEXT
 );
 

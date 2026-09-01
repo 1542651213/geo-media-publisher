@@ -4,6 +4,7 @@ import type { ControlledPostUploadDiscoveryResult, PublishFlowExplorationResult 
 import type { Platform, PlatformSelfTestResult, PlatformSelfTestRun, PlatformSelfTestStep } from "@publisher/domain";
 import type { PlatformSelfTestAccountView } from "../shared/api";
 import { CONTROLLED_SELF_TEST_CONFIRMATION, ONE_SHOT_REAL_PUBLISH_ACCEPTANCE_CONFIRMATION, PUBLISH_FLOW_EXPLORATION_CONFIRMATION, ControlledSelfTestEntryGuard, buildControlledSelfTestRequest, buildOneShotRealPublishRequest, buildPublishFlowExplorationRequest, controlledSelfTestResultMessage, publishFlowExplorationResultMessage, supportsControlledPostUploadDiscovery, supportsOneShotRealPublishAcceptance, supportsPublishFlowExploration } from "../shared/controlled-self-test-entry";
+import { OneShotConfirmationUiGuard, oneShotConfirmationErrorMessage } from "./one-shot-confirmation-ui";
 
 const resultLabel: Record<PlatformSelfTestResult, string> = {
   NOT_TESTED: "未测试",
@@ -62,11 +63,13 @@ export function PlatformSelfTestCenter({ onNavigate }: { onNavigate: (route: "ac
   const [message, setMessage] = useState("");
   const [confirmRun, setConfirmRun] = useState<PlatformSelfTestRun | null>(null);
   const [oneShotConfirmRun, setOneShotConfirmRun] = useState<PlatformSelfTestRun | null>(null);
+  const [oneShotConfirmationError, setOneShotConfirmationError] = useState("");
   const [detailRun, setDetailRun] = useState<PlatformSelfTestRun | null>(null);
   const [testVideoPath, setTestVideoPath] = useState("");
   const [controlledResults, setControlledResults] = useState<Record<string, ControlledPostUploadDiscoveryResult>>({});
   const [explorationResults, setExplorationResults] = useState<Record<string, PublishFlowExplorationResult>>({});
   const controlledEntryGuard = useRef(new ControlledSelfTestEntryGuard()).current;
+  const oneShotConfirmationGuard = useRef(new OneShotConfirmationUiGuard()).current;
   const load = useCallback((): void => { void Promise.all([window.publisherAPI.platformSelfTest.list(), window.publisherAPI.platforms.list()]).then(([nextAccounts, nextPlatforms]) => { setAccounts(nextAccounts); setPlatforms(nextPlatforms); }); }, []);
   useEffect(load, [load]);
   const platformByKey = useMemo(() => new Map(platforms.map((platform) => [platform.platformKey, platform])), [platforms]);
@@ -123,7 +126,7 @@ export function PlatformSelfTestCenter({ onNavigate }: { onNavigate: (route: "ac
     const request = platform ? buildOneShotRealPublishRequest({ account: view.account, platform, connected, busy: Boolean(busy), confirmed: true }) : null;
     if (!request || busy) return;
     setBusy(`${key}:one-shot-publish`); setMessage("");
-    try { const run = await window.publisherAPI.platformSelfTest.requestOneShotPublish(request.platformAccountId); setOneShotConfirmRun(run); load(); }
+    try { const run = await window.publisherAPI.platformSelfTest.requestOneShotPublish(request.platformAccountId); setOneShotConfirmationError(""); setOneShotConfirmRun(run); load(); }
     catch (error) { setMessage(error instanceof Error ? error.message : "无法创建一次性真实发布确认"); }
     finally { setBusy(""); }
   };
@@ -166,14 +169,15 @@ export function PlatformSelfTestCenter({ onNavigate }: { onNavigate: (route: "ac
 
   const confirmOneShotPublish = async (): Promise<void> => {
     if (!oneShotConfirmRun) return;
+    if (!oneShotConfirmationGuard.tryAcquire()) return;
     const id = oneShotConfirmRun.testRunId;
     setBusy(id);
     try {
       const run = await window.publisherAPI.platformSelfTest.confirmOneShotPublish(id);
       setMessage(run.overallResult === "PASSED" ? `一次性测试发布与回查通过：${run.externalUrl ?? "未返回 URL"}` : "一次性真实发布测试已按当前证据停止；请查看步骤中的等待/失败原因。只允许一次提交，不会自动重试。");
-      setOneShotConfirmRun(null); load();
-    } catch (error) { setMessage(error instanceof Error ? error.message : "一次性真实发布测试失败"); }
-    finally { setBusy(""); }
+      setOneShotConfirmationError(""); setOneShotConfirmRun(null); load();
+    } catch (error) { const message = oneShotConfirmationErrorMessage(error); setOneShotConfirmationError(message); setMessage(message); }
+    finally { oneShotConfirmationGuard.release(); setBusy(""); }
   };
 
   const cancelOneShotPublish = async (): Promise<void> => {
@@ -203,6 +207,6 @@ export function PlatformSelfTestCenter({ onNavigate }: { onNavigate: (route: "ac
     })}{rows.length === 0 && <div className="empty-state"><h3>还没有平台账号</h3><p>先到账号中心添加账号，再逐账号执行自测。</p></div>}</div></section>
     {detailRun && <div className="drawer-backdrop" onClick={() => setDetailRun(null)}><aside className="drawer v11-drawer self-test-detail-drawer" onClick={(event) => event.stopPropagation()}><div className="drawer-head"><div><span className="eyebrow">技术证据</span><h2>{platformByKey.get(detailRun.platformKey)?.displayName ?? detailRun.platformKey} · {detailRun.platformAccountId}</h2></div><button className="icon-button" onClick={() => setDetailRun(null)}>×</button></div><div className="self-test-detail-summary"><span>最终结果：<b className={resultTone(detailRun.overallResult)}>{resultLabel[detailRun.overallResult]}</b></span><span>测试时间：{new Date(detailRun.lastTestedAt).toLocaleString("zh-CN")}</span><span>External ID：{detailRun.externalId ?? "未取得"}</span><span>External URL：{detailRun.externalUrl ? <a href={detailRun.externalUrl} target="_blank" rel="noreferrer">{detailRun.externalUrl}</a> : "未取得"}</span></div><div className="self-test-evidence-list">{detailRun.steps.map((item) => <div className="self-test-evidence" key={item.id}><div><strong>{item.testLevel}</strong><span>{item.stepKey}</span><b className={resultTone(item.result)}>{resultIcon[item.result]} {resultLabel[item.result]}</b></div><p>{item.message ?? "暂无说明"}</p>{item.errorCode && <small>errorCode：{item.errorCode}</small>}{item.verificationSignal && <code>verificationSignal：{item.verificationSignal}</code>}{item.externalId && <small>External ID：{item.externalId}</small>}{item.externalUrl && <a href={item.externalUrl} target="_blank" rel="noreferrer">External URL：{item.externalUrl}</a>}</div>)}</div><div className="drawer-footer"><button className="primary-button" onClick={() => setDetailRun(null)}>关闭</button></div></aside></div>}
     {confirmRun && <div className="drawer-backdrop" onClick={() => void cancelPublish()}><aside className="drawer v11-drawer self-test-confirm" onClick={(event) => event.stopPropagation()}><div className="drawer-head"><div><span className="eyebrow">真实发布确认</span><h2>确认测试发布</h2></div><button className="icon-button" onClick={() => void cancelPublish()}>×</button></div><div className="notice warning"><strong>{step(confirmRun, "PUBLISH_CONFIRMATION")?.message ?? "即将真实发布一条透明测试内容，是否继续？"}</strong><span>每个平台/账号本次最多 1 条；不会批量选择列举网账号。</span></div><section className="panel self-test-content-preview"><strong>Geo Media Publisher 发布链路测试</strong><p>本内容用于公司内部 Geo Media Publisher 发布系统功能验证，用于确认账号登录、编辑器填充和发布回查是否正常。无商业推广用途，可忽略。</p></section>{["douyin", "tiktok", "youtube", "bilibili"].includes(confirmRun.platformKey) && <label>本地测试视频（可选）<div className="row-actions"><input readOnly value={testVideoPath} placeholder="未选择时将标记 WAITING_FOR_TEST_MEDIA" /><button className="secondary-button" onClick={() => void window.publisherAPI.videoAssets.pickVideo().then((path) => setTestVideoPath(path ?? ""))}>选择测试视频</button><button className="mini-button" onClick={() => onNavigate("assets")}>视频素材中心</button></div></label>}<div className="drawer-footer"><button className="secondary-button" disabled={busy === confirmRun.testRunId} onClick={() => void cancelPublish()}>取消</button><button className="primary-button" disabled={busy === confirmRun.testRunId} onClick={() => void confirmPublish()}>{busy === confirmRun.testRunId ? "执行中…" : "确认测试发布"}</button></div></aside></div>}
-    {oneShotConfirmRun && <div className="drawer-backdrop" onClick={() => void cancelOneShotPublish()}><aside className="drawer v11-drawer self-test-confirm" onClick={(event) => event.stopPropagation()}><div className="drawer-head"><div><span className="eyebrow">Owner 授权的一次性测试</span><h2>确认小红书真实发布</h2></div><button className="icon-button" onClick={() => void cancelOneShotPublish()}>×</button></div><div className="notice warning"><strong>{ONE_SHOT_REAL_PUBLISH_ACCEPTANCE_CONFIRMATION}</strong><span>仅限指定小红书测试账号；最多提交一次。第一次提交开始后即消费授权，失败或结果不明确也不会重试。</span></div><section className="panel self-test-content-preview"><strong>自动化发布测试｜请忽略</strong><p>这是一条小红书图文发布流程自动化测试内容，仅用于验证发布功能，请忽略。</p><small>图片：内置 SAFE_TEST_FIXTURE</small></section><div className="drawer-footer"><button className="secondary-button" disabled={busy === oneShotConfirmRun.testRunId} onClick={() => void cancelOneShotPublish()}>取消</button><button className="primary-button" disabled={busy === oneShotConfirmRun.testRunId} onClick={() => void confirmOneShotPublish()}>{busy === oneShotConfirmRun.testRunId ? "执行中…" : "确认并最多发布一次"}</button></div></aside></div>}
+    {oneShotConfirmRun && <div className="drawer-backdrop" onClick={() => { if (!busy) void cancelOneShotPublish(); }}><aside className="drawer v11-drawer self-test-confirm" onClick={(event) => event.stopPropagation()}><div className="drawer-head"><div><span className="eyebrow">Owner 授权的一次性测试</span><h2>确认小红书真实发布</h2></div><button className="icon-button" disabled={Boolean(busy)} onClick={() => void cancelOneShotPublish()}>×</button></div><div className="notice warning"><strong>{ONE_SHOT_REAL_PUBLISH_ACCEPTANCE_CONFIRMATION}</strong><span>仅限指定小红书测试账号；最多提交一次。第一次提交开始后即消费授权，失败或结果不明确也不会重试。</span></div>{oneShotConfirmationError && <div className="notice error" role="alert"><strong>{oneShotConfirmationError}</strong></div>}<section className="panel self-test-content-preview"><strong>自动化发布测试｜请忽略</strong><p>这是一条小红书图文发布流程自动化测试内容，仅用于验证发布功能，请忽略。</p><small>图片：内置 SAFE_TEST_FIXTURE</small></section><div className="drawer-footer"><button className="secondary-button" disabled={Boolean(busy)} onClick={() => void cancelOneShotPublish()}>取消</button><button className="primary-button" disabled={Boolean(busy)} onClick={() => void confirmOneShotPublish()}>{busy === oneShotConfirmRun.testRunId ? "确认中…" : "确认并最多发布一次"}</button></div></aside></div>}
   </>;
 }

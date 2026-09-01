@@ -654,6 +654,8 @@ export interface OneShotPublicationAuthorization {
   finalSubmitRetryCount: number;
   finalSubmitActionStarted: boolean;
   finalSubmitActionCompleted: boolean;
+  createdAt?: string;
+  updatedAt?: string;
   consumedAt?: string | null;
 }
 

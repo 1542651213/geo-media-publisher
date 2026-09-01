@@ -33,12 +33,12 @@ async function createWindow(): Promise<void> {
   const csvPath = firstExisting([join(app.getAppPath(), "PLATFORMS.csv"), join(process.resourcesPath, "PLATFORMS.csv"), join(process.cwd(), "PLATFORMS.csv")]);
   const dataDirectory = join(app.getPath("userData"), app.isPackaged || process.env.PUBLISHER_DATA_MODE === "production" ? "production-data" : "development-data");
   const databasePath = join(dataDirectory, "publisher.db");
-  const database = openDatabase(databasePath, migrationsDir);
+  const appLogPath = join(dataDirectory, "logs", "app.log");
+  const logger = createFileLogger(appLogPath);
+  const database = openDatabase(databasePath, migrationsDir, (event) => logger.info("DATABASE", event.code, "数据库迁移生命周期事件", { migrationId: event.migrationId, discoveredMigrationCount: event.discoveredMigrationCount, appliedMigrationCount: event.appliedMigrationCount, latestMigrationId: event.latestMigrationId, productionSchemaVersion: event.productionSchemaVersion, authTablePresent: event.authTablePresent }));
   const isDevelopment = isDevelopmentEnvironment(app.isPackaged);
   if (isDevelopment) database.repository.seedDevelopment(csvPath);
   else database.repository.seedPlatformCatalog(csvPath);
-  const appLogPath = join(dataDirectory, "logs", "app.log");
-  const logger = createFileLogger(appLogPath);
   recordAppStartup(logger, { pid: process.pid, packaged: app.isPackaged, userDataPath: app.getPath("userData"), productionDataPath: dataDirectory, appLogPath });
   const credentials = new SafeStorageCredentialStore(join(dataDirectory, "credentials.enc"), safeStorage);
   const registry = createRuntimeAdapterRegistry(credentials, isDevelopment, logger, join(app.getPath("userData"), "browser-profiles"), join(dataDirectory, "credentials.enc"));

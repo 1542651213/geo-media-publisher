@@ -8,6 +8,7 @@ import type { AutomationPrepareResult, ControlledPostUploadDiscoveryResult, Publ
 import type { Logger } from "@publisher/logger";
 import type { PublisherService } from "@publisher/publisher";
 import type { Account, AccountContext, BackgroundAutomationStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PublishArticleInput } from "@publisher/domain";
+import { OneShotConfirmationCoordinator } from "./one-shot-confirmation";
 
 const ARTICLE_TEST_TITLE = "Geo Media Publisher 发布链路测试";
 const ZHIHU_TEST_TITLE_PREFIX = "Geo Media Publisher 知乎发布测试";
@@ -132,6 +133,7 @@ function selfTestError(error: unknown): { result: PlatformSelfTestResult; errorC
 
 export class PlatformSelfTestService {
   private readonly controlledOperations = new Set<string>();
+  private readonly oneShotConfirmations = new OneShotConfirmationCoordinator();
 
   constructor(private readonly options: PlatformSelfTestServiceOptions) {}
 
@@ -253,18 +255,44 @@ export class PlatformSelfTestService {
     return this.options.repository.finishPlatformSelfTestRun(testRunId, "NOT_TESTED");
   }
 
-  async confirmOneShotPublish(testRunId: string): Promise<PlatformSelfTestRun> {
+  confirmOneShotPublish(testRunId: string): Promise<PlatformSelfTestRun> {
+    if (this.oneShotConfirmations.has(testRunId)) this.options.logger?.info("PLATFORM_SELF_TEST", "ONE_SHOT_CONFIRM_DUPLICATE_SUPPRESSED", "同一一次性确认正在处理中；复用原确认请求", { testRunId });
+    return this.oneShotConfirmations.run(testRunId, () => this.confirmOneShotPublishOnce(testRunId));
+  }
+
+  private async confirmOneShotPublishOnce(testRunId: string): Promise<PlatformSelfTestRun> {
     let run = this.mustOneShotRun(testRunId);
     if (run.publishJobId) throw new Error("ONE_SHOT_PUBLICATION_ALREADY_STARTED");
     const account = this.account(run);
     if (account.id !== XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID || account.platformKey !== "xiaohongshu") throw new Error("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH");
     const adapter = this.options.registry.getForContent("xiaohongshu", "article");
     if (!isAutomationAdapter(adapter) || typeof adapter.finalSubmit !== "function") throw new Error("当前小红书 Adapter 未提供一次性真实发布能力");
+    if (run.publishConfirmedAt) {
+      let existing: ReturnType<AppRepository["getOneShotPublicationAuthorization"]>;
+      try { existing = this.options.repository.getOneShotPublicationAuthorization(run.testRunId); }
+      catch (error) { throw this.oneShotConfirmationSetupError(error); }
+      if (!existing) throw Object.assign(new Error("一次性发布确认状态不完整，尚未进入发布流程；请先完成正式取证处理。"), { code: "ONE_SHOT_CONFIRMATION_PARTIAL_STATE" });
+      if (existing.authorization !== OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH || existing.platformKey !== account.platformKey || existing.accountId !== account.id || existing.operationId !== run.testRunId || existing.mode !== ONE_SHOT_REAL_PUBLISH_ACCEPTANCE) throw new Error("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH");
+      this.options.logger?.info("PLATFORM_SELF_TEST", "ONE_SHOT_CONFIRM_DUPLICATE_SUPPRESSED", "已存在同一一次性确认授权；不重复启动操作", { testRunId, operationId: existing.operationId, state: existing.state });
+      return this.options.repository.getPlatformSelfTestRun(testRunId) as PlatformSelfTestRun;
+    }
     if (this.controlledOperations.has(account.id)) throw new Error("XHS_ONE_SHOT_OPERATION_ALREADY_RUNNING");
-    run = this.options.repository.confirmPlatformSelfTestPublish(testRunId);
-    const operationId = randomUUID();
+    const operationId = testRunId;
     const authorization = createOwnerAuthorizedOneShotPublication({ operationId, platformKey: account.platformKey, accountId: account.id, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE });
-    this.options.repository.createOneShotPublicationAuthorization(authorization);
+    this.options.logger?.info("PLATFORM_SELF_TEST", "ONE_SHOT_CONFIRM_STARTED", "开始原子创建一次性发布确认与授权", { testRunId, platformKey: account.platformKey, platformAccountId: run.platformAccountId, operationId });
+    let persisted: ReturnType<AppRepository["confirmPlatformSelfTestOneShotAtomically"]>;
+    try {
+      persisted = this.options.repository.confirmPlatformSelfTestOneShotAtomically(testRunId, authorization);
+    } catch (error) {
+      this.options.logger?.warn("PLATFORM_SELF_TEST", "ONE_SHOT_CONFIRM_ROLLED_BACK", "一次性发布确认未提交；授权和确认状态已回滚", { testRunId, operationId, errorType: error instanceof Error ? error.name : "UnknownError", failureMessage: error instanceof Error ? error.message : "unknown" });
+      throw this.oneShotConfirmationSetupError(error);
+    }
+    run = this.options.repository.getPlatformSelfTestRun(testRunId) as PlatformSelfTestRun;
+    if (!persisted.created) {
+      this.options.logger?.info("PLATFORM_SELF_TEST", "ONE_SHOT_CONFIRM_DUPLICATE_SUPPRESSED", "同一一次性确认已存在；不创建第二授权或操作", { testRunId, operationId: persisted.authorization.operationId, state: persisted.authorization.state });
+      return run;
+    }
+    this.options.logger?.info("PLATFORM_SELF_TEST", "ONE_SHOT_CONFIRM_COMMITTED", "一次性发布确认与未消费授权已原子提交", { testRunId, platformKey: account.platformKey, platformAccountId: run.platformAccountId, operationId, state: persisted.authorization.state });
     this.step(run, "L5_PUBLISH", "PUBLISH_CONFIRMATION", "PASSED", null, XHS_ONE_SHOT_CONFIRMATION, `authorization:${authorization.authorization}:state:${authorization.state}:operation:${authorization.operationId}`);
     this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_ONE_SHOT_AUTHORIZED", "Owner 已确认一次性真实发布；授权已绑定小红书测试账号并保持未消费", { platformKey: account.platformKey, accountId: account.id, operationId, mode: authorization.mode, maxPublicationTransactions: 1, maxFinalSubmitAttempts: 1, finalSubmitRetryCount: 0 });
     this.controlledOperations.add(account.id);
@@ -323,6 +351,10 @@ export class PlatformSelfTestService {
     } finally {
       this.controlledOperations.delete(account.id);
     }
+  }
+
+  private oneShotConfirmationSetupError(error: unknown): Error {
+    return Object.assign(new Error("一次性发布授权创建失败，尚未进入发布流程。"), { code: "ONE_SHOT_CONFIRMATION_SETUP_FAILED", cause: error });
   }
 
   async continue(testRunId: string): Promise<PlatformSelfTestRun> {

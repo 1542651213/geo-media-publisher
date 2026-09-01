@@ -565,4 +565,33 @@ describe("Task 10A evidence analyzer", () => {
       failureCode: "TITLE_EDITOR_NOT_FOUND_POST_UPLOAD"
     });
   });
+
+  it("reports Task10T confirmation lifecycle without treating IPC errors as final submits", () => {
+    const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
+    const events = [
+      ...gateEvents(),
+      event("2026-08-30T08:00:01.020Z", "MIGRATION_DISCOVERY", { ...shared, latestMigrationId: "0023_v150_one_shot_publication_authorization.sql", maxDiscoveredVersion: "0023" }),
+      event("2026-08-30T08:00:01.021Z", "TASK10S_SCHEMA_READY", { ...shared, productionSchemaVersion: "0023", authTablePresent: true }),
+      event("2026-08-30T08:00:01.022Z", "CONFIRM_IPC_ATTEMPT", { ...shared, channel: "platform-self-test:confirm-one-shot-publish" }),
+      event("2026-08-30T08:00:01.023Z", "CONFIRM_IPC_ATTEMPT", { ...shared, channel: "platform-self-test:confirm-one-shot-publish" }),
+      event("2026-08-30T08:00:01.024Z", "IPC_HANDLER_ERROR", { ...shared, channel: "platform-self-test:confirm-one-shot-publish" }, "FINAL_SUBMIT failed while handling confirmation"),
+      event("2026-08-30T08:00:01.025Z", "ONE_SHOT_CONFIRM_STARTED", { ...shared }),
+      event("2026-08-30T08:00:01.026Z", "ONE_SHOT_CONFIRM_ROLLED_BACK", { ...shared, authorizationCreated: false, operationCreated: false }),
+      event("2026-08-30T08:00:01.027Z", "ONE_SHOT_CONFIRM_DUPLICATE_SUPPRESSED", { ...shared })
+    ];
+
+    const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
+
+    expect(result).toMatchObject({
+      productionSchemaVersion: "0023",
+      task10sAuthTablePresent: true,
+      confirmIpcAttemptCount: 3,
+      confirmDuplicateSuppressedCount: 1,
+      confirmTransactionStatus: "ROLLED_BACK",
+      authorizationCreated: "NO",
+      operationCreated: "NO",
+      publicationTransactionCount: 0,
+      sideEffectSummary: { finalSubmitCount: 0 }
+    });
+  });
 });

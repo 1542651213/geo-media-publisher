@@ -138,6 +138,14 @@ export type Task10AEvidenceSummary = {
   publishSettingsAreaStatus: string | null;
   finalSubmitCandidates: unknown[];
   finalSubmitControlStatus: string | null;
+  productionSchemaVersion: string | null;
+  task10sAuthTablePresent: boolean | null;
+  confirmIpcAttemptCount: number;
+  confirmDuplicateSuppressedCount: number;
+  confirmTransactionStatus: "NOT_STARTED" | "STARTED" | "COMMITTED" | "ROLLED_BACK" | "DUPLICATE_SUPPRESSED";
+  authorizationCreated: "YES" | "NO" | "UNKNOWN";
+  operationCreated: "YES" | "NO" | "UNKNOWN";
+  publicationTransactionCount: number;
   editorDiscoveryFailureCode: string | null;
   editorDiscoveryFailureStage: string | null;
   editorDiscoveryMissingSignal: string | null;
@@ -330,6 +338,14 @@ function emptySummary(input: AnalyzeTask10AEvidenceInput, gateResult: string): T
     publishSettingsAreaStatus: null,
     finalSubmitCandidates: [],
     finalSubmitControlStatus: null,
+    productionSchemaVersion: null,
+    task10sAuthTablePresent: null,
+    confirmIpcAttemptCount: 0,
+    confirmDuplicateSuppressedCount: 0,
+    confirmTransactionStatus: "NOT_STARTED",
+    authorizationCreated: "UNKNOWN",
+    operationCreated: "UNKNOWN",
+    publicationTransactionCount: 0,
     editorDiscoveryFailureCode: null,
     editorDiscoveryFailureStage: null,
     editorDiscoveryMissingSignal: null,
@@ -367,6 +383,8 @@ function countOccurrences(events: EvidenceLogEvent[], patterns: RegExp[]): numbe
 const FINAL_SUBMIT_MARKERS = new Set(["FINAL_SUBMIT_ATTEMPTED", "FINAL_SUBMIT_CLICKED", "SUBMIT_COMMITTED"]);
 const PREPARE_PUBLISH_MARKERS = new Set(["PREPARE_PUBLISH_STARTED"]);
 const UPLOAD_MUTATION_MARKERS = new Set(["IMAGE_UPLOAD_STARTED", "SET_INPUT_FILES_CALLED", "UPLOAD_MUTATION_EXECUTED"]);
+const CONFIRM_IPC_ATTEMPT_MARKERS = new Set(["CONFIRM_IPC_ATTEMPT", "CONFIRM_IPC_REQUEST_STARTED"]);
+const CONFIRM_DUPLICATE_MARKER = "ONE_SHOT_CONFIRM_DUPLICATE_SUPPRESSED";
 
 function isFinalSubmitMarker(event: EvidenceLogEvent): boolean {
   if (FINAL_SUBMIT_MARKERS.has(event.code)) return true;
@@ -392,6 +410,53 @@ function isUploadMutationMarker(event: EvidenceLogEvent): boolean {
 
 function countUploadMutations(events: EvidenceLogEvent[]): number {
   return events.reduce((count, event) => count + (isUploadMutationMarker(event) ? 1 : 0), 0);
+}
+
+function isConfirmIpcAttempt(event: EvidenceLogEvent): boolean {
+  if (CONFIRM_IPC_ATTEMPT_MARKERS.has(event.code)) return true;
+  return event.code === "IPC_HANDLER_ERROR" && event.context.channel === "platform-self-test:confirm-one-shot-publish";
+}
+
+function latestBoolean(events: EvidenceLogEvent[], key: string): boolean | null {
+  for (const event of [...events].reverse()) {
+    const value = booleanValue(event.context[key]);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
+function confirmationStatus(events: EvidenceLogEvent[]): Task10AEvidenceSummary["confirmTransactionStatus"] {
+  if (events.some((event) => event.code === "ONE_SHOT_CONFIRM_ROLLED_BACK")) return "ROLLED_BACK";
+  if (events.some((event) => event.code === "ONE_SHOT_CONFIRM_COMMITTED")) return "COMMITTED";
+  if (events.some((event) => event.code === "ONE_SHOT_CONFIRM_STARTED")) return "STARTED";
+  if (events.some((event) => event.code === CONFIRM_DUPLICATE_MARKER)) return "DUPLICATE_SUPPRESSED";
+  return "NOT_STARTED";
+}
+
+function authorizationCreated(events: EvidenceLogEvent[], status: Task10AEvidenceSummary["confirmTransactionStatus"]): Task10AEvidenceSummary["authorizationCreated"] {
+  const explicit = latestBoolean(events, "authorizationCreated");
+  if (explicit !== null) return explicit ? "YES" : "NO";
+  if (status === "COMMITTED" || status === "DUPLICATE_SUPPRESSED") return "YES";
+  if (status === "ROLLED_BACK") return "NO";
+  return "UNKNOWN";
+}
+
+function operationCreated(events: EvidenceLogEvent[], status: Task10AEvidenceSummary["confirmTransactionStatus"]): Task10AEvidenceSummary["operationCreated"] {
+  const explicit = latestBoolean(events, "operationCreated");
+  if (explicit !== null) return explicit ? "YES" : "NO";
+  if (events.some((event) => event.code === "XHS_ONE_SHOT_OPERATION_CREATED")) return "YES";
+  if (status === "ROLLED_BACK" || status === "COMMITTED" || status === "DUPLICATE_SUPPRESSED") return "NO";
+  return "UNKNOWN";
+}
+
+function publicationTransactionCount(events: EvidenceLogEvent[]): number {
+  let count = 0;
+  for (const event of events) {
+    const value = numberValue(event.context.publicationTransactionCount);
+    if (value !== null) count = Math.max(count, value);
+    if (event.code === "PUBLICATION_TRANSACTION_STARTED" && value === null) count = Math.max(count, 1);
+  }
+  return count;
 }
 
 function numberValue(value: unknown): number | null {
@@ -514,6 +579,16 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
     : missingSignal;
   const imageEditorControl = (field: string): Record<string, unknown> => isRecord(imageEditorControlsContext[field]) ? imageEditorControlsContext[field] : {};
   const imageEditorCandidates = (field: string): unknown[] => Array.isArray(imageEditorControl(field).candidates) ? imageEditorControl(field).candidates as unknown[] : [];
+  const schemaReadyEvent = [...gateEvents].reverse().find((event) => event.code === "TASK10S_SCHEMA_READY");
+  const schemaVersionEvent = [...gateEvents].reverse().find((event) => event.code === "MIGRATION_DISCOVERY" || event.code === "MIGRATION_APPLY_COMPLETED");
+  const productionSchemaVersion = stringValue(schemaReadyEvent?.context.productionSchemaVersion)
+    ?? stringValue(schemaReadyEvent?.context.schemaVersion)
+    ?? (schemaReadyEvent ? "0023" : null)
+    ?? stringValue(schemaVersionEvent?.context.productionSchemaVersion)
+    ?? stringValue(schemaVersionEvent?.context.schemaVersion);
+  const task10sAuthTablePresent = booleanValue(schemaReadyEvent?.context.authTablePresent) ?? (schemaReadyEvent ? true : null);
+  const confirmEvents = gateEvents.filter((event) => event.code === "CONFIRM_IPC_ATTEMPT" || event.code === "CONFIRM_IPC_REQUEST_STARTED" || event.code === "IPC_HANDLER_ERROR" || event.code === "ONE_SHOT_CONFIRM_STARTED" || event.code === "ONE_SHOT_CONFIRM_COMMITTED" || event.code === "ONE_SHOT_CONFIRM_ROLLED_BACK" || event.code === CONFIRM_DUPLICATE_MARKER);
+  const confirmStatus = confirmationStatus(confirmEvents);
   const result: Task10AEvidenceSummary = {
     ...emptySummary(input, gateResult),
     evidenceAmbiguous: "NO",
@@ -625,6 +700,14 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
     publishSettingsAreaStatus: stringValue(imageEditorControl("publishSettingsArea").status),
     finalSubmitCandidates: imageEditorCandidates("finalSubmitControl"),
     finalSubmitControlStatus: stringValue(imageEditorControl("finalSubmitControl").status),
+    productionSchemaVersion,
+    task10sAuthTablePresent,
+    confirmIpcAttemptCount: confirmEvents.filter(isConfirmIpcAttempt).length,
+    confirmDuplicateSuppressedCount: confirmEvents.filter((event) => event.code === CONFIRM_DUPLICATE_MARKER).length,
+    confirmTransactionStatus: confirmStatus,
+    authorizationCreated: authorizationCreated(confirmEvents, confirmStatus),
+    operationCreated: operationCreated(confirmEvents, confirmStatus),
+    publicationTransactionCount: publicationTransactionCount(gateEvents),
     editorDiscoveryFailureCode: postUploadPhaseFailureCode ?? stringValue(imageEditorFailureEvent?.context.failureCode) ?? (effectiveFailureStage === "EDITOR_DISCOVERY" ? effectiveFailureCode : null),
     editorDiscoveryFailureStage: postUploadPhaseFailureCode ? "EDITOR_DISCOVERY" : stringValue(imageEditorFailureEvent?.context.failureStage) ?? (effectiveFailureStage === "EDITOR_DISCOVERY" ? effectiveFailureStage : null),
     editorDiscoveryMissingSignal: postUploadPhaseFailureCode ? effectiveMissingSignal : stringValue(imageEditorFailureEvent?.context.missingSignal) ?? (effectiveFailureStage === "EDITOR_DISCOVERY" ? effectiveMissingSignal : null),

@@ -72,4 +72,35 @@ describe("Task10O controlled self-test dispatch", () => {
     await expect(instance.runPostUploadDiscovery("platform-account-1", "POST_UPLOAD_DISCOVERY_ONLY")).rejects.toThrow("小红书受控上传自测账号不可用");
     expect(runControlledPostUploadDiscovery).not.toHaveBeenCalled();
   });
+
+  it("coalesces duplicate Task10S confirmations before any browser call", async () => {
+    const testRunId = "task10t-confirmation-run";
+    const run = { testRunId, platformKey: "xiaohongshu", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", requestedLevel: "L5_PUBLISH", publishJobId: null, publishConfirmedAt: null, steps: [{ stepKey: "PUBLISH_CONFIRMATION", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] };
+    const account = { id: "54b390ac-d81e-440a-baeb-d00f9f346cc3", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", platformKey: "xiaohongshu", accountAlias: "XHS", name: "XHS", enabled: true, archivedAt: null };
+    const confirmAtomic = vi.fn(() => { throw Object.assign(new Error("forced database failure"), { code: "DB_ERROR" }); });
+    const repository = { listAccounts: () => [account], getPlatformSelfTestRun: () => run, confirmPlatformSelfTestOneShotAtomically: confirmAtomic };
+    const adapter = { connectAccount: vi.fn(), checkSession: vi.fn(), preparePublish: vi.fn(), finalSubmit: vi.fn() };
+    const instance = new PlatformSelfTestService({ repository: repository as never, registry: { getForContent: vi.fn(() => adapter) } as never, publisher: {} as never, resolveAccountSecrets: vi.fn(() => ({})) });
+
+    const results = await Promise.allSettled(Array.from({ length: 7 }, () => instance.confirmOneShotPublish(testRunId)));
+
+    expect(confirmAtomic).toHaveBeenCalledTimes(1);
+    expect(results.every((result) => result.status === "rejected")).toBe(true);
+    expect(adapter.connectAccount).not.toHaveBeenCalled();
+    expect(adapter.preparePublish).not.toHaveBeenCalled();
+  });
+
+  it("blocks a previously partial confirmation until formal reconciliation", async () => {
+    const testRunId = "task10t-partial-run";
+    const run = { testRunId, platformKey: "xiaohongshu", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", requestedLevel: "L5_PUBLISH", publishJobId: null, publishConfirmedAt: "2026-09-01T04:00:10.700Z", steps: [{ stepKey: "PUBLISH_CONFIRMATION", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] };
+    const account = { id: "54b390ac-d81e-440a-baeb-d00f9f346cc3", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", platformKey: "xiaohongshu", accountAlias: "XHS", name: "XHS", enabled: true, archivedAt: null };
+    const confirmAtomic = vi.fn();
+    const repository = { listAccounts: () => [account], getPlatformSelfTestRun: () => run, getOneShotPublicationAuthorization: () => null, confirmPlatformSelfTestOneShotAtomically: confirmAtomic };
+    const adapter = { connectAccount: vi.fn(), checkSession: vi.fn(), preparePublish: vi.fn(), finalSubmit: vi.fn() };
+    const instance = new PlatformSelfTestService({ repository: repository as never, registry: { getForContent: vi.fn(() => adapter) } as never, publisher: {} as never, resolveAccountSecrets: vi.fn(() => ({})) });
+
+    await expect(instance.confirmOneShotPublish(testRunId)).rejects.toMatchObject({ code: "ONE_SHOT_CONFIRMATION_PARTIAL_STATE" });
+    expect(confirmAtomic).not.toHaveBeenCalled();
+    expect(adapter.connectAccount).not.toHaveBeenCalled();
+  });
 });

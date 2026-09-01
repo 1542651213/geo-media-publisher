@@ -9,6 +9,11 @@ type Row = Record<string, unknown>;
 
 export type StoredVideoAssetStatus = "Draft" | "Ready" | "DryRun" | "Published" | "Failed";
 
+export interface OneShotConfirmationPersistenceResult {
+  authorization: OneShotPublicationAuthorization;
+  created: boolean;
+}
+
 export interface StoredVideoAsset extends VideoAsset {
   brandId: string | null;
   title: string;
@@ -2012,6 +2017,37 @@ export class AppRepository {
     return this.getPlatformSelfTestRun(testRunId) as PlatformSelfTestRun;
   }
 
+  confirmPlatformSelfTestOneShotAtomically(testRunId: string, authorization: OneShotPublicationAuthorization): OneShotConfirmationPersistenceResult {
+    if (authorization.operationId !== testRunId) throw new Error("ONE_SHOT_OPERATION_BINDING_MISMATCH");
+    const transaction = this.db.transaction(() => {
+      const existing = this.getOneShotPublicationAuthorization(authorization.operationId);
+      if (existing) {
+        const sameIdentity = existing.authorization === authorization.authorization
+          && existing.platformKey === authorization.platformKey
+          && existing.accountId === authorization.accountId
+          && existing.operationId === authorization.operationId
+          && existing.mode === authorization.mode;
+        if (!sameIdentity) throw new Error("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH");
+        return { authorization: existing, created: false };
+      }
+      const timestamp = now();
+      const update = this.db.prepare("UPDATE platform_self_test_runs SET publish_confirmed_at=COALESCE(publish_confirmed_at,?),updated_at=? WHERE test_run_id=? AND requested_level='L5_PUBLISH'").run(timestamp, timestamp, testRunId);
+      if (update.changes === 0) throw new Error("当前运行不是可确认的真实发布测试");
+      this.db.prepare(`INSERT INTO one_shot_publication_authorizations (
+        id,authorization,platform_key,account_id,operation_id,mode,state,publication_transaction_count,
+        publication_commit_action_count,final_submit_attempt_count,final_submit_retry_count,
+        final_submit_action_started,final_submit_action_completed,created_at,updated_at,consumed_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        randomUUID(), authorization.authorization, authorization.platformKey, authorization.accountId, authorization.operationId,
+        authorization.mode, authorization.state, authorization.publicationTransactionCount, authorization.publicationCommitActionCount,
+        authorization.finalSubmitAttemptCount, authorization.finalSubmitRetryCount, authorization.finalSubmitActionStarted ? 1 : 0,
+        authorization.finalSubmitActionCompleted ? 1 : 0, timestamp, timestamp, authorization.consumedAt ?? null
+      );
+      return { authorization: this.getOneShotPublicationAuthorization(authorization.operationId) as OneShotPublicationAuthorization, created: true };
+    });
+    return transaction();
+  }
+
   confirmPlatformSelfTestPublish(testRunId: string): PlatformSelfTestRun {
     const timestamp = now();
     const update = this.db.prepare("UPDATE platform_self_test_runs SET publish_confirmed_at=?,updated_at=? WHERE test_run_id=? AND requested_level='L5_PUBLISH'").run(timestamp, timestamp, testRunId);
@@ -2386,12 +2422,12 @@ export class AppRepository {
     this.db.prepare(`INSERT INTO one_shot_publication_authorizations (
       id,authorization,platform_key,account_id,operation_id,mode,state,publication_transaction_count,
       publication_commit_action_count,final_submit_attempt_count,final_submit_retry_count,
-      final_submit_action_started,final_submit_action_completed,created_at,consumed_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      final_submit_action_started,final_submit_action_completed,created_at,updated_at,consumed_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       randomUUID(), authorization.authorization, authorization.platformKey, authorization.accountId, authorization.operationId,
       authorization.mode, authorization.state, authorization.publicationTransactionCount, authorization.publicationCommitActionCount,
       authorization.finalSubmitAttemptCount, authorization.finalSubmitRetryCount, authorization.finalSubmitActionStarted ? 1 : 0,
-      authorization.finalSubmitActionCompleted ? 1 : 0, timestamp, authorization.consumedAt ?? null
+      authorization.finalSubmitActionCompleted ? 1 : 0, timestamp, timestamp, authorization.consumedAt ?? null
     );
     return this.getOneShotPublicationAuthorization(authorization.operationId) as OneShotPublicationAuthorization;
   }
@@ -2412,6 +2448,8 @@ export class AppRepository {
       finalSubmitRetryCount: intValue(row.final_submit_retry_count),
       finalSubmitActionStarted: boolValue(row.final_submit_action_started),
       finalSubmitActionCompleted: boolValue(row.final_submit_action_completed),
+      createdAt: textValue(row.created_at),
+      updatedAt: textValue(row.updated_at),
       consumedAt: typeof row.consumed_at === "string" ? row.consumed_at : null
     };
   }
@@ -2421,22 +2459,22 @@ export class AppRepository {
     const result = this.db.prepare(`UPDATE one_shot_publication_authorizations SET
       state='CONSUMED', publication_transaction_count=1, publication_commit_action_count=1,
       final_submit_attempt_count=1, final_submit_retry_count=0, final_submit_action_started=1,
-      consumed_at=? WHERE operation_id=? AND account_id=? AND platform_key=? AND authorization='OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH'
+      consumed_at=?, updated_at=? WHERE operation_id=? AND account_id=? AND platform_key=? AND authorization='OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH'
       AND mode='ONE_SHOT_REAL_PUBLISH_ACCEPTANCE' AND state='AUTHORIZED_UNUSED'
       AND publication_transaction_count=0 AND publication_commit_action_count=0
-      AND final_submit_attempt_count=0 AND final_submit_retry_count=0`).run(timestamp, operationId, accountId, platformKey);
+      AND final_submit_attempt_count=0 AND final_submit_retry_count=0`).run(timestamp, timestamp, operationId, accountId, platformKey);
     return result.changes === 1;
   }
 
   recordOneShotPublicationConfirmationAction(operationId: string): boolean {
-    const result = this.db.prepare(`UPDATE one_shot_publication_authorizations SET publication_commit_action_count=2
+    const result = this.db.prepare(`UPDATE one_shot_publication_authorizations SET publication_commit_action_count=2, updated_at=?
       WHERE operation_id=? AND state='CONSUMED' AND publication_transaction_count=1
-      AND final_submit_attempt_count=1 AND publication_commit_action_count=1`).run(operationId);
+      AND final_submit_attempt_count=1 AND publication_commit_action_count=1`).run(now(), operationId);
     return result.changes === 1;
   }
 
   completeOneShotPublicationAuthorization(operationId: string): boolean {
-    const result = this.db.prepare("UPDATE one_shot_publication_authorizations SET final_submit_action_completed=1 WHERE operation_id=? AND state='CONSUMED' AND final_submit_attempt_count=1").run(operationId);
+    const result = this.db.prepare("UPDATE one_shot_publication_authorizations SET final_submit_action_completed=1, updated_at=? WHERE operation_id=? AND state='CONSUMED' AND final_submit_attempt_count=1").run(now(), operationId);
     return result.changes === 1;
   }
 

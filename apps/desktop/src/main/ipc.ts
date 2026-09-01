@@ -762,7 +762,20 @@ export function registerIpc(deps: IpcDependencies): void {
   register("platform-self-test:confirm-publish", async (_event, payload) => { const input = z.object({ testRunId: idSchema, testVideoPath: z.string().max(8192).optional() }).parse(payload); return platformSelfTests.confirmPublish(input.testRunId, input.testVideoPath); });
   register("platform-self-test:cancel-publish", (_event, payload) => platformSelfTests.cancelPublish(z.object({ testRunId: idSchema }).parse(payload).testRunId));
   register("platform-self-test:request-one-shot-publish", (_event, payload) => platformSelfTests.requestOneShotPublish(z.object({ platformAccountId: idSchema }).parse(payload).platformAccountId));
-  register("platform-self-test:confirm-one-shot-publish", async (_event, payload) => platformSelfTests.confirmOneShotPublish(z.object({ testRunId: idSchema }).parse(payload).testRunId));
+  register("platform-self-test:confirm-one-shot-publish", async (_event, payload) => {
+    const input = z.object({ testRunId: idSchema }).parse(payload);
+    const run = repository.getPlatformSelfTestRun(input.testRunId);
+    const account = run ? repository.listAccounts().find((item) => (item.platformAccountId ?? item.id) === run.platformAccountId && item.platformKey === run.platformKey) : undefined;
+    logger.info("PLATFORM_SELF_TEST", "CONFIRM_IPC_ATTEMPT", "收到一次性发布确认 IPC 请求", {
+      testRunId: input.testRunId,
+      operationId: input.testRunId,
+      platformKey: run?.platformKey,
+      accountId: account?.id,
+      platformAccountId: run?.platformAccountId,
+      channel: "platform-self-test:confirm-one-shot-publish"
+    });
+    return platformSelfTests.confirmOneShotPublish(input.testRunId);
+  });
   register("platform-self-test:cancel-one-shot-publish", (_event, payload) => platformSelfTests.cancelOneShotPublish(z.object({ testRunId: idSchema }).parse(payload).testRunId));
   register("platform-self-test:confirm-delete", async (_event, payload) => platformSelfTests.confirmDelete(z.object({ testRunId: idSchema }).parse(payload).testRunId));
 
