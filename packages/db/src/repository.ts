@@ -2292,6 +2292,15 @@ export class AppRepository {
     return (this.db.prepare("SELECT * FROM publish_jobs ORDER BY scheduled_at DESC").all() as Row[]).map(toJob);
   }
 
+  /** Read-only counts used by bounded platform exploration evidence. */
+  getPublishDomainCounts(): { publishJobs: number; submissionIntents: number; publishRecords: number } {
+    const count = (table: "publish_jobs" | "submission_intents" | "publish_records"): number => {
+      const row = this.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as Row;
+      return intValue(row.count);
+    };
+    return { publishJobs: count("publish_jobs"), submissionIntents: count("submission_intents"), publishRecords: count("publish_records") };
+  }
+
   listDueJobs(currentTime = new Date().toISOString(), limit = 50): PublishJob[] {
     const boundedLimit = Math.min(500, Math.max(1, Math.floor(limit)));
     return (this.db.prepare("SELECT * FROM publish_jobs WHERE status IN ('Pending','Scheduled','Retry') AND scheduled_at <= ? AND (next_retry_at IS NULL OR next_retry_at <= ?) ORDER BY scheduled_at ASC, platform_key ASC, account_id ASC LIMIT ?").all(currentTime, currentTime, boundedLimit) as Row[]).map(toJob);
