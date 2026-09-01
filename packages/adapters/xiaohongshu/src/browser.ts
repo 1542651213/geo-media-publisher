@@ -1,4 +1,4 @@
-import type { AccountContext, AccountProfile, LoginSession, LoginStatus, PublishArticleInput, PublishResult, PublishStatusResult, ValidationResult } from "@publisher/domain";
+import type { AccountContext, AccountProfile, CreatorIdentityProof, LoginSession, LoginStatus, PublishArticleInput, PublishResult, PublishStatusResult, ValidationResult } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
 import { classifyOneShotPostSubmitObservation, reconcileOneShotPublication, type AutomationPrepareResult, type BrowserPublishAttemptContext, type BrowserPublishReconciliationInput, type BrowserPublishReconciliationResult, type BrowserRuntimeAuthState, type BrowserSession, type BrowserSessionRuntimeSnapshot, type ControlledPostUploadDiscoveryResult, OneShotPublicationGuardError, type OneShotConfirmationCandidate, type OneShotFinalSubmitPreflight, type OneShotPublicationGuard, type OneShotPostSubmitObservation, type OneShotRealPublishAcceptanceInput, type OneShotRealPublishAcceptanceResult, type PreSubmitGateFailureCode, type PreSubmitGateFailureStage, type PreSubmitGateResult, type PreSubmitGateStatus, type PublishFlowExplorationBudgets, type PublishFlowExplorationCounters, type PublishFlowExplorationInput, type PublishFlowExplorationResult } from "@publisher/adapters-core";
 import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomationAdapterOptions, type BrowserPlatformDefinition, type BrowserSessionScopeEvidence } from "@publisher/adapters-browser";
@@ -210,6 +210,21 @@ export interface XiaohongshuAccountIdentityEvidence {
   externalAccountId: string | null;
   displayName: string | null;
   profileUrl: string | null;
+}
+
+export type XiaohongshuCreatorIdentityRouteClass = "CREATOR_HOME" | "PUBLISH_EDITOR" | "CREATOR_CONTENT" | "OTHER_CREATOR_PAGE" | "LOGIN" | "SECURITY_VERIFICATION" | "UNKNOWN";
+
+export interface XiaohongshuCreatorIdentityObservation {
+  canonicalContextId: string;
+  canonicalPageId: string;
+  canonicalPageUrl: string;
+  domLocationHref: string;
+  pageUrlConsistency: "PASS" | "FAIL";
+  routeClass: XiaohongshuCreatorIdentityRouteClass;
+  runtimeAuthState: BrowserRuntimeAuthState;
+  browserConnected: boolean;
+  pageClosed: boolean;
+  proof: CreatorIdentityProof;
 }
 
 export interface XiaohongshuLoginEvidence {
@@ -1010,11 +1025,51 @@ function emptyPageEvidence(page: XhsDocument): XiaohongshuPageEvidence {
 }
 
 function sanitizePageUrl(page: Page): string {
+  return sanitizeUrlString(page.url());
+}
+
+function sanitizeUrlString(value: string): string {
   try {
-    const parsed = new URL(page.url());
+    const parsed = new URL(value);
     return `${parsed.origin}${parsed.pathname}`;
   } catch {
     return "about:blank";
+  }
+}
+
+function sameUrlOriginAndPath(first: string, second: string): boolean {
+  try {
+    const left = new URL(first);
+    const right = new URL(second);
+    return left.origin === right.origin && left.pathname === right.pathname;
+  } catch {
+    return false;
+  }
+}
+
+function sanitizePublicProfileUrl(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const parsed = new URL(value, XIAOHONGSHU_CREATOR_HOME);
+    const id = stableExternalAccountId(parsed.toString());
+    return id ? `${parsed.origin}${parsed.pathname}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function classifyXiaohongshuCreatorIdentityRoute(url: string, login: boolean, verification: boolean): XiaohongshuCreatorIdentityRouteClass {
+  if (login) return "LOGIN";
+  if (verification) return "SECURITY_VERIFICATION";
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== "creator.xiaohongshu.com") return "UNKNOWN";
+    if (/^\/publish\/publish(?:[/?#]|$)/iu.test(parsed.pathname)) return "PUBLISH_EDITOR";
+    if (/\/(?:publish\/manage|content|note|notes)(?:[/?#]|$)/iu.test(parsed.pathname)) return "CREATOR_CONTENT";
+    if (/^\/(?:new\/home)?$/iu.test(parsed.pathname)) return "CREATOR_HOME";
+    return "OTHER_CREATOR_PAGE";
+  } catch {
+    return "UNKNOWN";
   }
 }
 
@@ -1262,6 +1317,56 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         this.recordCompletedCheckLoginOperation(identity.accountId, operationId);
       }
     }, "checkLogin");
+  }
+
+  /**
+   * Read-only identity proof on the retained canonical Page. This deliberately
+   * does not navigate, open an operation Page, or mutate the XHS editor.
+   */
+  async readCanonicalCreatorIdentity(ctx: AccountContext, operationId = randomUUID()): Promise<XiaohongshuCreatorIdentityObservation> {
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
+      const canonical = await this.activeCanonicalPage(ctx);
+      if (!canonical) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书 canonical authenticated Page 不可用；未创建替代 Page");
+
+      const { session, page, pageDebugId } = canonical;
+      const pageContextMatchesSession = this.pageContextMatchesSession(session, page)
+        && (typeof session.context.pages !== "function" || session.context.pages().includes(page));
+      if (!pageContextMatchesSession) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书 canonical Page 不属于当前 authenticated Context");
+
+      const rawPageUrl = page.url();
+      const evaluatePage = page as unknown as { evaluate?: <T>(pageFunction: () => T) => Promise<T> };
+      const rawDomLocationHref = typeof evaluatePage.evaluate === "function"
+        ? await evaluatePage.evaluate(() => location.href)
+        : rawPageUrl;
+      const canonicalPageUrl = sanitizeUrlString(rawPageUrl);
+      const domLocationHref = sanitizeUrlString(String(rawDomLocationHref));
+      const pageUrlConsistency = sameUrlOriginAndPath(rawPageUrl, String(rawDomLocationHref)) ? "PASS" : "FAIL";
+      const routeClass = classifyXiaohongshuCreatorIdentityRoute(rawPageUrl, this.isLoginPage(rawPageUrl), this.isVerificationUrl(rawPageUrl));
+      const evidence = await readXiaohongshuPageEvidence(page);
+      const identity = evidence.identity;
+      const stable = identity.externalAccountId !== null && identity.externalAccountIdCandidates.length === 1;
+      const proof: CreatorIdentityProof = {
+        platformKey: "xiaohongshu",
+        externalCreatorId: identity.externalAccountId,
+        displayName: identity.displayName,
+        profileUrl: sanitizePublicProfileUrl(identity.profileUrl),
+        source: identity.profileUrl ? "CREATOR_PROFILE_LINK" : identity.externalAccountId ? "CREATOR_ACCOUNT_SURFACE" : "CREATOR_ACCOUNT_SURFACE",
+        stable
+      };
+
+      return {
+        canonicalContextId: session.contextDebugId ?? "unknown-context",
+        canonicalPageId: pageDebugId,
+        canonicalPageUrl,
+        domLocationHref,
+        pageUrlConsistency,
+        routeClass,
+        runtimeAuthState: this.getBrowserRuntimeState(ctx).state,
+        browserConnected: this.isBrowserConnected(session),
+        pageClosed: this.isCanonicalPageClosed(page),
+        proof
+      };
+    }, "readCanonicalCreatorIdentity");
   }
 
   /** Diagnostic correlation for the main-process CONNECTION_TEST log; it never changes checkLogin behavior. */

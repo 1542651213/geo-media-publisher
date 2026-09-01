@@ -428,6 +428,7 @@ function installPageEvidence(fixture: Fixture, options: {
 }): void {
   (fixture.page as unknown as { evaluate: (pageFunction: () => unknown) => Promise<unknown> }).evaluate = vi.fn(async (pageFunction?: () => unknown) => {
     if (typeof pageFunction === "function" && String(pageFunction).includes("phaseTopology")) return fixture.phaseSnapshot();
+    if (typeof pageFunction === "function" && /^\(\)\s*=>\s*location\.href\s*$/u.test(String(pageFunction).trim())) return fixture.page.url();
     return ({
     available: true,
     bodyPresent: true,
@@ -1032,6 +1033,27 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(profile).toMatchObject({ accountId: "65abc123", accountName: "XHS owner" });
     expect(fixture.operationPageDebugIds).toHaveLength(0);
     expect(fixture.manager.closeOperationPage).not.toHaveBeenCalled();
+  });
+
+  it("reads canonical URL and stable Creator identity from the existing Page", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], externalAccountId: "960803317", displayName: "测试账号", profileUrl: "https://creator.xiaohongshu.com/user/profile/960803317" });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    const result = await (adapter as unknown as { readCanonicalCreatorIdentity: (value: AccountContext, operationId?: string) => Promise<Record<string, unknown>> }).readCanonicalCreatorIdentity(ctx, "task10v-proof");
+
+    expect(result).toMatchObject({
+      canonicalContextId: "context-debug-id",
+      canonicalPageId: "canonical-page-debug-id",
+      canonicalPageUrl: "https://creator.xiaohongshu.com/new/home",
+      domLocationHref: "https://creator.xiaohongshu.com/new/home",
+      pageUrlConsistency: "PASS",
+      routeClass: "CREATOR_HOME",
+      proof: { externalCreatorId: "960803317", stable: true }
+    });
+    expect(fixture.manager.openOperationPage).not.toHaveBeenCalled();
   });
 
   it("opens XHS backend on the canonical Page and leaves it open for the owner", async () => {
