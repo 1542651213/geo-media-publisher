@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type Database from "better-sqlite3";
 import { CONTENT_STUDIO_PLATFORM_KEYS, CORE_AI_FABRICATION_RULES, conservativePlatformContentRules, expandKeywords, normalizeContentReviewMode } from "@publisher/domain";
-import type { Account, ActivityLog, AdapterManifest, AIProviderProfile, AIUsage, Article, ArticleVariant, BackgroundAutomationStatus, Brand, BrandAsset, BrandDifferentiationMetrics, BrandKnowledgeCategory, BrandKnowledgeEntry, CityRegion, ContentGoal, ContentIntent, ContentQualityCheckResult, ContentQualityContentType, ContentQualityIssue, ContentQualityStatus, ContentQualityTrigger, ContentReviewMode, ContentSource, ContentStudioContent, ContentStudioPlatformKey, ContentStudioTopicPlan, DashboardStats, ExcelArticleRowInput, ExcelImportDiagnostic, ExcelImportDiagnosticCode, ExcelImportPreview, ExcelImportPreviewRow, ExcelImportResult, ExcelImportSheetCandidate, FailedOneShotConfirmationIdentity, FinalPublishMode, ImageAsset, ImageSelectionMode, KnowledgeSnapshot, KeywordItem, KeywordTemplate, LoginStatus, Notification, OneShotConfirmationReconciliationResult, OneShotConfirmationReconciliationSnapshot, OneShotPublicationAuthorization, Platform, PlatformCapability, PlatformCapabilities, PlatformContentRules, PlatformProfile, PlatformSelfTestCleanupStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PlatformSelfTestStep, PromotionStrength, PublishJob, PublishPlan, PublishRecord, SearchIntent, VideoAsset } from "@publisher/domain";
+import type { Account, ActivityLog, AdapterManifest, AIProviderProfile, AIUsage, Article, ArticleVariant, BackgroundAutomationStatus, Brand, BrandAsset, BrandDifferentiationMetrics, BrandKnowledgeCategory, BrandKnowledgeEntry, CityRegion, ContentGoal, ContentIntent, ContentQualityCheckResult, ContentQualityContentType, ContentQualityIssue, ContentQualityStatus, ContentQualityTrigger, ContentReviewMode, ContentSource, ContentStudioContent, ContentStudioPlatformKey, ContentStudioTopicPlan, DashboardStats, ExcelArticleRowInput, ExcelImportDiagnostic, ExcelImportDiagnosticCode, ExcelImportPreview, ExcelImportPreviewRow, ExcelImportResult, ExcelImportSheetCandidate, FailedOneShotConfirmationIdentity, FinalPublishMode, ImageAsset, ImageSelectionMode, KnowledgeSnapshot, KeywordItem, KeywordTemplate, LoginStatus, Notification, OneShotAuthorizationConvergenceResult, OneShotConfirmationReconciliationResult, OneShotConfirmationReconciliationSnapshot, OneShotPublicationAuthorization, Platform, PlatformAccountIdentityBinding, PlatformCapability, PlatformCapabilities, PlatformContentRules, PlatformProfile, PlatformSelfTestCleanupStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PlatformSelfTestStep, PromotionStrength, PublishJob, PublishPlan, PublishRecord, SearchIntent, VideoAsset } from "@publisher/domain";
 
 type SqlValue = string | number | null;
 type Row = Record<string, unknown>;
@@ -1897,6 +1897,43 @@ export class AppRepository {
     return row ? toAccount(row) : null;
   }
 
+  getPlatformAccountIdentityBinding(platformKey: string, accountId: string): PlatformAccountIdentityBinding | null {
+    const row = this.db.prepare("SELECT * FROM platform_account_identity_bindings WHERE platform_key=? AND account_id=?").get(platformKey, accountId) as Row | undefined;
+    return row ? toPlatformAccountIdentityBinding(row) : null;
+  }
+
+  bindPlatformAccountIdentity(input: {
+    platformKey: "xiaohongshu";
+    accountId: string;
+    externalCreatorId: string;
+    displayName?: string | null;
+    profileUrl?: string | null;
+    bindingSource: PlatformAccountIdentityBinding["bindingSource"];
+  }): PlatformAccountIdentityBinding {
+    const transaction = this.db.transaction(() => {
+      const account = this.db.prepare("SELECT id FROM accounts WHERE id=? AND platform_key=? AND archived_at IS NULL").get(input.accountId, input.platformKey) as Row | undefined;
+      if (!account) throw new Error("身份绑定账号不存在或已归档");
+      const existing = this.db.prepare("SELECT * FROM platform_account_identity_bindings WHERE platform_key=? AND account_id=?").get(input.platformKey, input.accountId) as Row | undefined;
+      if (existing) {
+        if (textValue(existing.external_creator_id) !== input.externalCreatorId) throw new Error("当前账号已有不同的小红书 Creator 身份绑定，拒绝覆盖");
+        return toPlatformAccountIdentityBinding(existing);
+      }
+      const conflict = this.db.prepare("SELECT account_id FROM platform_account_identity_bindings WHERE platform_key=? AND external_creator_id=?").get(input.platformKey, input.externalCreatorId) as Row | undefined;
+      if (conflict && textValue(conflict.account_id) !== input.accountId) throw new Error("小红书 Creator 身份已绑定到其他内部账号");
+      const timestamp = now();
+      const id = randomUUID();
+      this.db.prepare(`INSERT INTO platform_account_identity_bindings (
+        id, platform_key, account_id, external_creator_id, display_name, profile_url,
+        binding_source, bound_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        id, input.platformKey, input.accountId, input.externalCreatorId, input.displayName ?? null, input.profileUrl ?? null,
+        input.bindingSource, timestamp, timestamp, timestamp
+      );
+      return toPlatformAccountIdentityBinding(this.db.prepare("SELECT * FROM platform_account_identity_bindings WHERE id=?").get(id) as Row);
+    });
+    return transaction();
+  }
+
   findArchivedAccountByExternalIdForConnection(accountId: string, platformKey: string, externalAccountId: string): Account | null {
     const current = this.getAccountById(accountId, platformKey);
     if (!current) throw new Error("账号不存在");
@@ -2517,6 +2554,40 @@ export class AppRepository {
     return { id: textValue(row.id), jobId: textValue(row.job_id), state: textValue(row.state), externalId: typeof row.external_id === "string" ? row.external_id : null, attempt: intValue(row.attempt), finalSubmitCount: intValue(row.final_submit_count), errorCode: typeof row.error_code === "string" ? row.error_code : null, updatedAt: textValue(row.updated_at) };
   }
 
+  listReusableOneShotPublicationAuthorizations(input: { platformKey: "xiaohongshu"; accountId: string; mode: "ONE_SHOT_REAL_PUBLISH_ACCEPTANCE" }): OneShotPublicationAuthorization[] {
+    const rows = this.db.prepare(`SELECT auth.* FROM one_shot_publication_authorizations auth
+      INNER JOIN platform_self_test_runs run ON run.test_run_id=auth.operation_id
+      WHERE auth.platform_key=? AND auth.account_id=? AND auth.mode=? AND auth.state='AUTHORIZED_UNUSED'
+        AND auth.publication_transaction_count=0 AND auth.publication_commit_action_count=0
+        AND auth.final_submit_attempt_count=0 AND auth.final_submit_retry_count=0
+        AND auth.final_submit_action_started=0 AND auth.final_submit_action_completed=0
+        AND run.platform_key=? AND run.platform_account_id=? AND run.publish_job_id IS NULL
+      ORDER BY auth.created_at DESC, auth.operation_id DESC`).all(
+      input.platformKey, input.accountId, input.mode, input.platformKey, input.accountId
+    ) as Row[];
+    return rows.map((row) => toOneShotPublicationAuthorization(row));
+  }
+
+  convergeUnusedOneShotAuthorization(input: { platformKey: "xiaohongshu"; accountId: string; mode: "ONE_SHOT_REAL_PUBLISH_ACCEPTANCE" }): OneShotAuthorizationConvergenceResult {
+    const transaction = this.db.transaction(() => {
+      const candidates = this.listReusableOneShotPublicationAuthorizations(input);
+      const winner = candidates[0] ?? null;
+      if (!winner) return { reusableOperationId: null, supersededOperationIds: [], activeUnusedAuthorizationCount: 0, mutationCount: 0 } satisfies OneShotAuthorizationConvergenceResult;
+      const supersededOperationIds: string[] = [];
+      const update = this.db.prepare(`UPDATE one_shot_publication_authorizations SET state='SUPERSEDED_UNUSED', updated_at=?
+        WHERE operation_id=? AND platform_key=? AND account_id=? AND mode=? AND state='AUTHORIZED_UNUSED'
+          AND publication_transaction_count=0 AND publication_commit_action_count=0
+          AND final_submit_attempt_count=0 AND final_submit_retry_count=0
+          AND final_submit_action_started=0 AND final_submit_action_completed=0`);
+      for (const candidate of candidates.slice(1)) {
+        const result = update.run(now(), candidate.operationId, input.platformKey, input.accountId, input.mode);
+        if (result.changes === 1) supersededOperationIds.push(candidate.operationId);
+      }
+      return { reusableOperationId: winner.operationId, supersededOperationIds, activeUnusedAuthorizationCount: 1, mutationCount: supersededOperationIds.length } satisfies OneShotAuthorizationConvergenceResult;
+    });
+    return transaction();
+  }
+
   createOneShotPublicationAuthorization(authorization: OneShotPublicationAuthorization): OneShotPublicationAuthorization {
     const timestamp = now();
     this.db.prepare(`INSERT INTO one_shot_publication_authorizations (
@@ -3065,6 +3136,39 @@ function toContentQualityReview(row: Row): ContentQualityReviewView { return { i
 function toContentQualityAudit(row: Row): ContentQualityAuditView { return { id: textValue(row.id), contentType: textValue(row.content_type) as ContentQualityContentType, contentId: textValue(row.content_id), operatorType: row.operator_type === "human" ? "human" : "system", previousStatus: textValue(row.previous_status) as ContentQualityStatus, newStatus: textValue(row.new_status) as ContentQualityStatus, reason: textValue(row.reason), timestamp: textValue(row.timestamp), contentHash: textValue(row.content_hash) }; }
 function toPlatformContentRules(row: Row): PlatformContentRules { const contentType = ["article", "video_script", "mixed"].includes(textValue(row.content_type)) ? textValue(row.content_type) as PlatformContentRules["contentType"] : "article"; return { platformKey: textValue(row.platform_key), titleMinLength: intValue(row.title_min_length), titleMaxLength: intValue(row.title_max_length), bodyMinLength: intValue(row.body_min_length), bodyMaxLength: intValue(row.body_max_length), summaryMaxLength: intValue(row.summary_max_length), maxTags: intValue(row.max_tags), maxImages: intValue(row.max_images), supportsLinks: boolValue(row.supports_links), supportsMarkdown: boolValue(row.supports_markdown), supportsHtml: boolValue(row.supports_html), contentType, source: typeof row.source === "string" ? row.source : null, lastVerifiedAt: typeof row.last_verified_at === "string" ? row.last_verified_at : null, verificationStatus: row.verification_status === "verified" ? "verified" : "unverified" }; }
 function toPlatformProfile(row: Row): PlatformProfile { return { platformKey: textValue(row.platform_key), style: textValue(row.style), titleLimit: intValue(row.title_limit), preferredMinWords: intValue(row.preferred_min_words), preferredMaxWords: intValue(row.preferred_max_words), minBodyLength: intValue(row.min_body_length), maxBodyLength: intValue(row.max_body_length), supportsCover: boolValue(row.supports_cover), coverRequired: boolValue(row.cover_required), coverSizes: stringArray(row.cover_sizes_json), maxImages: intValue(row.max_images) || 1, supportsTags: boolValue(row.supports_tags), maxTags: intValue(row.max_tags), supportsMarkdown: boolValue(row.supports_markdown), supportsHtml: boolValue(row.supports_html), supportsRichText: boolValue(row.supports_rich_text), sourceUrl: textValue(row.source_url), researchStatus: row.research_status as PlatformProfile["researchStatus"], lastVerifiedAt: typeof row.last_verified_at === "string" ? row.last_verified_at : null }; }
+function toPlatformAccountIdentityBinding(row: Row): PlatformAccountIdentityBinding {
+  return {
+    id: textValue(row.id),
+    platformKey: textValue(row.platform_key),
+    accountId: textValue(row.account_id),
+    externalCreatorId: textValue(row.external_creator_id),
+    displayName: typeof row.display_name === "string" ? row.display_name : null,
+    profileUrl: typeof row.profile_url === "string" ? row.profile_url : null,
+    bindingSource: textValue(row.binding_source) as PlatformAccountIdentityBinding["bindingSource"],
+    boundAt: textValue(row.bound_at),
+    createdAt: textValue(row.created_at),
+    updatedAt: textValue(row.updated_at)
+  };
+}
+function toOneShotPublicationAuthorization(row: Row): OneShotPublicationAuthorization {
+  return {
+    authorization: textValue(row.authorization) as OneShotPublicationAuthorization["authorization"],
+    state: textValue(row.state) as OneShotPublicationAuthorization["state"],
+    platformKey: textValue(row.platform_key) as OneShotPublicationAuthorization["platformKey"],
+    accountId: textValue(row.account_id) as OneShotPublicationAuthorization["accountId"],
+    operationId: textValue(row.operation_id),
+    mode: textValue(row.mode) as OneShotPublicationAuthorization["mode"],
+    publicationTransactionCount: intValue(row.publication_transaction_count),
+    publicationCommitActionCount: intValue(row.publication_commit_action_count),
+    finalSubmitAttemptCount: intValue(row.final_submit_attempt_count),
+    finalSubmitRetryCount: intValue(row.final_submit_retry_count),
+    finalSubmitActionStarted: boolValue(row.final_submit_action_started),
+    finalSubmitActionCompleted: boolValue(row.final_submit_action_completed),
+    createdAt: textValue(row.created_at),
+    updatedAt: textValue(row.updated_at),
+    consumedAt: typeof row.consumed_at === "string" ? row.consumed_at : null
+  };
+}
 function toPlatform(row: Row): Platform {
   const lifecycle = textValue(row.verification_status);
   const transport = (textValue(row.transport) || "manual") as Platform["transport"];

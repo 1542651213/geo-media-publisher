@@ -427,6 +427,7 @@ export interface CreatorIdentityProof {
 }
 
 export interface PlatformAccountIdentityBinding {
+  id: string;
   platformKey: string;
   accountId: string;
   externalCreatorId: string;
