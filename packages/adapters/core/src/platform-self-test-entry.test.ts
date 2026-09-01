@@ -79,7 +79,7 @@ describe("Task10O controlled self-test dispatch", () => {
     const run = { testRunId, platformKey: "xiaohongshu", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", requestedLevel: "L5_PUBLISH", publishJobId: null, publishConfirmedAt: null, steps: [{ stepKey: "PUBLISH_CONFIRMATION", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] };
     const account = { id: "54b390ac-d81e-440a-baeb-d00f9f346cc3", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", platformKey: "xiaohongshu", accountAlias: "XHS", name: "XHS", enabled: true, archivedAt: null };
     const confirmAtomic = vi.fn(() => { throw Object.assign(new Error("forced database failure"), { code: "DB_ERROR" }); });
-    const repository = { listAccounts: () => [account], getPlatformSelfTestRun: () => run, confirmPlatformSelfTestOneShotAtomically: confirmAtomic };
+    const repository = { listAccounts: () => [account], getPlatformSelfTestRun: () => run, getOneShotPublicationAuthorization: () => null, confirmPlatformSelfTestOneShotAtomically: confirmAtomic };
     const adapter = { connectAccount: vi.fn(), checkSession: vi.fn(), preparePublish: vi.fn(), finalSubmit: vi.fn() };
     const instance = new PlatformSelfTestService({ repository: repository as never, registry: { getForContent: vi.fn(() => adapter) } as never, publisher: {} as never, resolveAccountSecrets: vi.fn(() => ({})) });
 

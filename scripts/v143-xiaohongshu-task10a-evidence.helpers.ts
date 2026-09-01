@@ -140,6 +140,13 @@ export type Task10AEvidenceSummary = {
   finalSubmitControlStatus: string | null;
   productionSchemaVersion: string | null;
   task10sAuthTablePresent: boolean | null;
+  expectedCreatorIdentity: unknown;
+  observedCreatorIdentity: unknown;
+  accountIdentityVerified: boolean | null;
+  accountIdentityMismatch: boolean | null;
+  activeUnusedAuthorizationCount: number | null;
+  reusableOneShotOperationId: string | null;
+  supersededUnusedAuthorizationCount: number | null;
   confirmIpcAttemptCount: number;
   confirmDuplicateSuppressedCount: number;
   confirmTransactionStatus: "NOT_STARTED" | "STARTED" | "COMMITTED" | "ROLLED_BACK" | "DUPLICATE_SUPPRESSED";
@@ -176,7 +183,7 @@ export type AnalyzeTask10AEvidenceInput = {
   publishDomainCounts?: PublishDomainCounts;
 };
 
-const GATE_START_CODES = new Set(["PRE_SUBMIT_GATE_INSPECTION_STARTED", "XHS_CANONICAL_PAGE_OPERATION_STARTED", "PARTIAL_CONFIRMATION_STATE_DETECTED"]);
+const GATE_START_CODES = new Set(["PRE_SUBMIT_GATE_INSPECTION_STARTED", "XHS_CANONICAL_PAGE_OPERATION_STARTED", "PARTIAL_CONFIRMATION_STATE_DETECTED", "XHS_CREATOR_IDENTITY_PROOF"]);
 const HEARTBEAT_CODE = "CANONICAL_SESSION_HEARTBEAT";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -347,6 +354,13 @@ function emptySummary(input: AnalyzeTask10AEvidenceInput, gateResult: string): T
     finalSubmitControlStatus: null,
     productionSchemaVersion: null,
     task10sAuthTablePresent: null,
+    expectedCreatorIdentity: null,
+    observedCreatorIdentity: null,
+    accountIdentityVerified: null,
+    accountIdentityMismatch: null,
+    activeUnusedAuthorizationCount: null,
+    reusableOneShotOperationId: null,
+    supersededUnusedAuthorizationCount: null,
     confirmIpcAttemptCount: 0,
     confirmDuplicateSuppressedCount: 0,
     confirmTransactionStatus: "NOT_STARTED",
@@ -377,6 +391,7 @@ function isGateStart(event: EvidenceLogEvent): boolean {
   if (!GATE_START_CODES.has(event.code)) return false;
   if (event.code === "PARTIAL_CONFIRMATION_STATE_DETECTED") return true;
   if (event.code === "PRE_SUBMIT_GATE_INSPECTION_STARTED") return true;
+  if (event.code === "XHS_CREATOR_IDENTITY_PROOF") return true;
   return event.context.action === "PRE_SUBMIT_GATE";
 }
 
@@ -609,6 +624,8 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
     ?? stringValue(schemaVersionEvent?.context.productionSchemaVersion)
     ?? stringValue(schemaVersionEvent?.context.schemaVersion);
   const task10sAuthTablePresent = booleanValue(schemaReadyEvent?.context.authTablePresent) ?? (schemaReadyEvent ? true : null);
+  const identityProofEvent = [...gateEvents].reverse().find((event) => event.code === "XHS_CREATOR_IDENTITY_PROOF");
+  const identityConvergenceEvent = [...gateEvents].reverse().find((event) => event.code === "XHS_IDENTITY_AUTHORIZATION_CONVERGED");
   const confirmEvents = gateEvents.filter((event) => event.code === "CONFIRM_IPC_ATTEMPT" || event.code === "CONFIRM_IPC_REQUEST_STARTED" || event.code === "IPC_HANDLER_ERROR" || event.code === "ONE_SHOT_CONFIRM_STARTED" || event.code === "ONE_SHOT_CONFIRM_COMMITTED" || event.code === "ONE_SHOT_CONFIRM_ROLLED_BACK" || event.code === CONFIRM_DUPLICATE_MARKER);
   const reconciliationEvents = gateEvents.filter((event) => PARTIAL_CONFIRMATION_MARKERS.has(event.code));
   const reconciliationResultEvent = [...reconciliationEvents].reverse().find((event) => event.code === "PARTIAL_CONFIRM_RECONCILIATION_RESULT");
@@ -727,6 +744,13 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
     finalSubmitControlStatus: stringValue(imageEditorControl("finalSubmitControl").status),
     productionSchemaVersion,
     task10sAuthTablePresent,
+    expectedCreatorIdentity: identityProofEvent?.context.EXPECTED_CREATOR_IDENTITY ?? null,
+    observedCreatorIdentity: identityProofEvent?.context.OBSERVED_CREATOR_IDENTITY ?? null,
+    accountIdentityVerified: booleanValue(identityConvergenceEvent?.context.ACCOUNT_IDENTITY_VERIFIED) ?? booleanValue(identityProofEvent?.context.ACCOUNT_IDENTITY_VERIFIED),
+    accountIdentityMismatch: booleanValue(identityProofEvent?.context.ACCOUNT_IDENTITY_MISMATCH),
+    activeUnusedAuthorizationCount: numberValue(identityConvergenceEvent?.context.ACTIVE_UNUSED_AUTHORIZATION_COUNT),
+    reusableOneShotOperationId: stringValue(identityConvergenceEvent?.context.REUSABLE_ONE_SHOT_OPERATION_ID),
+    supersededUnusedAuthorizationCount: numberValue(identityConvergenceEvent?.context.SUPERSEDED_UNUSED_AUTHORIZATION_COUNT),
     confirmIpcAttemptCount: confirmEvents.filter(isConfirmIpcAttempt).length,
     confirmDuplicateSuppressedCount: confirmEvents.filter((event) => event.code === CONFIRM_DUPLICATE_MARKER).length,
     confirmTransactionStatus: confirmStatus,

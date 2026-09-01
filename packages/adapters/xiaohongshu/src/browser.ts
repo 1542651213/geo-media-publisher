@@ -1323,7 +1323,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
    * Read-only identity proof on the retained canonical Page. This deliberately
    * does not navigate, open an operation Page, or mutate the XHS editor.
    */
-  async readCanonicalCreatorIdentity(ctx: AccountContext, operationId = randomUUID()): Promise<XiaohongshuCreatorIdentityObservation> {
+  async readCanonicalCreatorIdentity(ctx: AccountContext): Promise<XiaohongshuCreatorIdentityObservation> {
     return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
       const canonical = await this.activeCanonicalPage(ctx);
       if (!canonical) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书 canonical authenticated Page 不可用；未创建替代 Page");

@@ -703,6 +703,12 @@ export interface OneShotAuthorizationConvergenceResult {
   mutationCount: number;
 }
 
+export interface XhsIdentityAcceptance {
+  verification: CreatorIdentityVerificationResult;
+  binding: PlatformAccountIdentityBinding | null;
+  convergence: OneShotAuthorizationConvergenceResult;
+}
+
 export interface FailedOneShotConfirmationIdentity {
   testRunId: string;
   platformKey: "xiaohongshu";

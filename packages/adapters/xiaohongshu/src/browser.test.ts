@@ -425,10 +425,11 @@ function installPageEvidence(fixture: Fixture, options: {
   displayName?: string | null;
   externalAccountId?: string | null;
   profileUrl?: string | null;
+  domLocationHref?: string;
 }): void {
   (fixture.page as unknown as { evaluate: (pageFunction: () => unknown) => Promise<unknown> }).evaluate = vi.fn(async (pageFunction?: () => unknown) => {
     if (typeof pageFunction === "function" && String(pageFunction).includes("phaseTopology")) return fixture.phaseSnapshot();
-    if (typeof pageFunction === "function" && /^\(\)\s*=>\s*location\.href\s*$/u.test(String(pageFunction).trim())) return fixture.page.url();
+    if (typeof pageFunction === "function" && /^\(\)\s*=>\s*location\.href\s*$/u.test(String(pageFunction).trim())) return options.domLocationHref ?? fixture.page.url();
     return ({
     available: true,
     bodyPresent: true,
@@ -1053,6 +1054,21 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
       routeClass: "CREATOR_HOME",
       proof: { externalCreatorId: "960803317", stable: true }
     });
+    expect(fixture.manager.openOperationPage).not.toHaveBeenCalled();
+  });
+
+  it("reports canonical URL disagreement without navigating or opening a replacement Page", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], externalAccountId: "960803317", domLocationHref: "https://creator.xiaohongshu.com/publish/publish" });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    (fixture.page.goto as unknown as { mockClear: () => void }).mockClear();
+    const result = await (adapter as unknown as { readCanonicalCreatorIdentity: (value: AccountContext, operationId?: string) => Promise<Record<string, unknown>> }).readCanonicalCreatorIdentity(ctx, "task10v-url-mismatch");
+
+    expect(result).toMatchObject({ pageUrlConsistency: "FAIL", proof: { externalCreatorId: "960803317" } });
+    expect(fixture.page.goto).not.toHaveBeenCalled();
     expect(fixture.manager.openOperationPage).not.toHaveBeenCalled();
   });
 

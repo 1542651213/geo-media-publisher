@@ -10,7 +10,8 @@ import type { PublisherService } from "@publisher/publisher";
 import type { Account, AccountContext, BackgroundAutomationStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PublishArticleInput } from "@publisher/domain";
 import { OneShotConfirmationCoordinator } from "./one-shot-confirmation";
 import { OneShotConfirmationReconciliationService } from "./one-shot-reconciliation";
-import type { FailedOneShotConfirmationIdentity, OneShotConfirmationReconciliationResult } from "@publisher/domain";
+import { XhsIdentityService } from "./xhs-identity";
+import type { CreatorIdentityVerificationResult, FailedOneShotConfirmationIdentity, OneShotConfirmationReconciliationResult, XhsIdentityAcceptance } from "@publisher/domain";
 
 const ARTICLE_TEST_TITLE = "Geo Media Publisher 发布链路测试";
 const ZHIHU_TEST_TITLE_PREFIX = "Geo Media Publisher 知乎发布测试";
@@ -137,9 +138,11 @@ export class PlatformSelfTestService {
   private readonly controlledOperations = new Set<string>();
   private readonly oneShotConfirmations = new OneShotConfirmationCoordinator();
   private readonly oneShotReconciliation: OneShotConfirmationReconciliationService;
+  private readonly xhsIdentity: XhsIdentityService;
 
   constructor(private readonly options: PlatformSelfTestServiceOptions) {
     this.oneShotReconciliation = new OneShotConfirmationReconciliationService({ repository: options.repository, logger: options.logger });
+    this.xhsIdentity = new XhsIdentityService({ repository: options.repository, registry: options.registry, logger: options.logger });
   }
 
   listAccounts(): PlatformSelfTestAccountView[] {
@@ -249,6 +252,13 @@ export class PlatformSelfTestService {
   requestOneShotPublish(platformAccountId: string): PlatformSelfTestRun {
     const account = this.options.repository.listAccounts().find((item) => (item.id === platformAccountId || (item.platformAccountId ?? item.id) === platformAccountId) && item.platformKey === "xiaohongshu");
     if (!account || account.id !== XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID || !account.enabled || account.archivedAt) throw new Error("小红书一次性真实发布测试账号不可用或未绑定到授权账号");
+    const convergence = this.options.repository.convergeUnusedOneShotAuthorization({ platformKey: "xiaohongshu", accountId: account.id, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE });
+    if (convergence.reusableOperationId) {
+      const existing = this.options.repository.getPlatformSelfTestRun(convergence.reusableOperationId);
+      if (!existing) throw new Error("存在未关联自测运行的一次性授权；拒绝创建第三个授权");
+      this.options.logger?.info("PLATFORM_SELF_TEST", "ONE_SHOT_REUSABLE_AUTHORIZATION_REUSED", "复用现有一次性未消费授权，不创建新的授权", { platformKey: account.platformKey, accountId: account.id, operationId: convergence.reusableOperationId, activeUnusedAuthorizationCount: convergence.activeUnusedAuthorizationCount, supersededCount: convergence.supersededOperationIds.length });
+      return existing;
+    }
     const run = this.options.repository.createPlatformSelfTestRun({ platformAccountId: account.platformAccountId ?? account.id, requestedLevel: "L5_PUBLISH" });
     this.step(run, "L5_PUBLISH", "PUBLISH_CONFIRMATION", "WAITING_FOR_USER", "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED", XHS_ONE_SHOT_CONFIRMATION, `authorization:${OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH}:state:NOT_AUTHORIZED`);
     return this.options.repository.finishPlatformSelfTestRun(run.testRunId, "WAITING_FOR_USER");
@@ -264,6 +274,14 @@ export class PlatformSelfTestService {
     return this.oneShotReconciliation.reconcileFailedOneShotConfirmation(identity);
   }
 
+  verifyAndConvergeXhsIdentity(accountId: string, ownerApproved = false): Promise<XhsIdentityAcceptance> {
+    return this.xhsIdentity.verifyAndConverge(accountId, { ownerApproved });
+  }
+
+  verifyXhsCreatorIdentity(accountId: string): Promise<CreatorIdentityVerificationResult> {
+    return this.xhsIdentity.verifyCreatorIdentity(accountId);
+  }
+
   confirmOneShotPublish(testRunId: string): Promise<PlatformSelfTestRun> {
     if (this.oneShotConfirmations.has(testRunId)) this.options.logger?.info("PLATFORM_SELF_TEST", "ONE_SHOT_CONFIRM_DUPLICATE_SUPPRESSED", "同一一次性确认正在处理中；复用原确认请求", { testRunId });
     return this.oneShotConfirmations.run(testRunId, () => this.confirmOneShotPublishOnce(testRunId));
@@ -276,37 +294,66 @@ export class PlatformSelfTestService {
     if (account.id !== XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID || account.platformKey !== "xiaohongshu") throw new Error("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH");
     const adapter = this.options.registry.getForContent("xiaohongshu", "article");
     if (!isAutomationAdapter(adapter) || typeof adapter.finalSubmit !== "function") throw new Error("当前小红书 Adapter 未提供一次性真实发布能力");
-    if (run.publishConfirmedAt) {
-      let existing: ReturnType<AppRepository["getOneShotPublicationAuthorization"]>;
-      try { existing = this.options.repository.getOneShotPublicationAuthorization(run.testRunId); }
-      catch (error) { throw this.oneShotConfirmationSetupError(error); }
-      if (!existing) throw Object.assign(new Error("一次性发布确认状态不完整，尚未进入发布流程；请先完成正式取证处理。"), { code: "ONE_SHOT_CONFIRMATION_PARTIAL_STATE" });
-      if (existing.authorization !== OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH || existing.platformKey !== account.platformKey || existing.accountId !== account.id || existing.operationId !== run.testRunId || existing.mode !== ONE_SHOT_REAL_PUBLISH_ACCEPTANCE) throw new Error("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH");
+    let existing: ReturnType<AppRepository["getOneShotPublicationAuthorization"]>;
+    try { existing = this.options.repository.getOneShotPublicationAuthorization(run.testRunId); }
+    catch (error) { throw this.oneShotConfirmationSetupError(error); }
+    const existingMatches = existing
+      && existing.authorization === OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH
+      && existing.platformKey === account.platformKey
+      && existing.accountId === account.id
+      && existing.operationId === run.testRunId
+      && existing.mode === ONE_SHOT_REAL_PUBLISH_ACCEPTANCE;
+    const resumableExisting = Boolean(existingMatches
+      && existing?.state === "AUTHORIZED_UNUSED"
+      && existing.publicationTransactionCount === 0
+      && existing.publicationCommitActionCount === 0
+      && existing.finalSubmitAttemptCount === 0
+      && existing.finalSubmitRetryCount === 0
+      && !existing.finalSubmitActionStarted
+      && !existing.finalSubmitActionCompleted
+      && run.steps.some((item) => item.errorCode === "ONE_SHOT_PREPUBLISH_EVIDENCE_INCOMPLETE"));
+    if (existing && !existingMatches) throw new Error("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH");
+    if (existing && !resumableExisting) {
+      if (!run.publishConfirmedAt) throw new Error("ONE_SHOT_AUTHORIZATION_NOT_RESUMABLE");
       this.options.logger?.info("PLATFORM_SELF_TEST", "ONE_SHOT_CONFIRM_DUPLICATE_SUPPRESSED", "已存在同一一次性确认授权；不重复启动操作", { testRunId, operationId: existing.operationId, state: existing.state });
       return this.options.repository.getPlatformSelfTestRun(testRunId) as PlatformSelfTestRun;
     }
+    if (!existing && run.publishConfirmedAt) throw Object.assign(new Error("一次性发布确认状态不完整，尚未进入发布流程；请先完成正式取证处理。"), { code: "ONE_SHOT_CONFIRMATION_PARTIAL_STATE" });
     if (this.controlledOperations.has(account.id)) throw new Error("XHS_ONE_SHOT_OPERATION_ALREADY_RUNNING");
     const operationId = testRunId;
     const authorization = createOwnerAuthorizedOneShotPublication({ operationId, platformKey: account.platformKey, accountId: account.id, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE });
-    this.options.logger?.info("PLATFORM_SELF_TEST", "ONE_SHOT_CONFIRM_STARTED", "开始原子创建一次性发布确认与授权", { testRunId, platformKey: account.platformKey, platformAccountId: run.platformAccountId, operationId });
-    let persisted: ReturnType<AppRepository["confirmPlatformSelfTestOneShotAtomically"]>;
-    try {
-      persisted = this.options.repository.confirmPlatformSelfTestOneShotAtomically(testRunId, authorization);
-    } catch (error) {
-      this.options.logger?.warn("PLATFORM_SELF_TEST", "ONE_SHOT_CONFIRM_ROLLED_BACK", "一次性发布确认未提交；授权和确认状态已回滚", { testRunId, operationId, errorType: error instanceof Error ? error.name : "UnknownError", failureMessage: error instanceof Error ? error.message : "unknown" });
-      throw this.oneShotConfirmationSetupError(error);
+    let persisted: ReturnType<AppRepository["confirmPlatformSelfTestOneShotAtomically"]> | null = null;
+    if (!existing) {
+      this.options.logger?.info("PLATFORM_SELF_TEST", "ONE_SHOT_CONFIRM_STARTED", "开始原子创建一次性发布确认与授权", { testRunId, platformKey: account.platformKey, platformAccountId: run.platformAccountId, operationId });
+      try {
+        persisted = this.options.repository.confirmPlatformSelfTestOneShotAtomically(testRunId, authorization);
+      } catch (error) {
+        this.options.logger?.warn("PLATFORM_SELF_TEST", "ONE_SHOT_CONFIRM_ROLLED_BACK", "一次性发布确认未提交；授权和确认状态已回滚", { testRunId, operationId, errorType: error instanceof Error ? error.name : "UnknownError", failureMessage: error instanceof Error ? error.message : "unknown" });
+        throw this.oneShotConfirmationSetupError(error);
+      }
+      run = this.options.repository.getPlatformSelfTestRun(testRunId) as PlatformSelfTestRun;
+      if (!persisted.created) {
+        this.options.logger?.info("PLATFORM_SELF_TEST", "ONE_SHOT_CONFIRM_DUPLICATE_SUPPRESSED", "同一一次性确认已存在；不创建第二授权或操作", { testRunId, operationId: persisted.authorization.operationId, state: persisted.authorization.state });
+        return run;
+      }
+      this.options.logger?.info("PLATFORM_SELF_TEST", "ONE_SHOT_CONFIRM_COMMITTED", "一次性发布确认与未消费授权已原子提交", { testRunId, platformKey: account.platformKey, platformAccountId: run.platformAccountId, operationId, state: persisted.authorization.state });
+      this.step(run, "L5_PUBLISH", "PUBLISH_CONFIRMATION", "PASSED", null, XHS_ONE_SHOT_CONFIRMATION, `authorization:${authorization.authorization}:state:${authorization.state}:operation:${authorization.operationId}`);
+      this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_ONE_SHOT_AUTHORIZED", "Owner 已确认一次性真实发布；授权已绑定小红书测试账号并保持未消费", { platformKey: account.platformKey, accountId: account.id, operationId, mode: authorization.mode, maxPublicationTransactions: 1, maxFinalSubmitAttempts: 1, finalSubmitRetryCount: 0 });
+    } else {
+      run = this.options.repository.getPlatformSelfTestRun(testRunId) as PlatformSelfTestRun;
+      this.options.logger?.info("PLATFORM_SELF_TEST", "ONE_SHOT_REUSABLE_AUTHORIZATION_RESUMED", "恢复既有一次性未消费授权的预发布流程；不创建新授权", { testRunId, operationId: existing.operationId, state: existing.state });
     }
-    run = this.options.repository.getPlatformSelfTestRun(testRunId) as PlatformSelfTestRun;
-    if (!persisted.created) {
-      this.options.logger?.info("PLATFORM_SELF_TEST", "ONE_SHOT_CONFIRM_DUPLICATE_SUPPRESSED", "同一一次性确认已存在；不创建第二授权或操作", { testRunId, operationId: persisted.authorization.operationId, state: persisted.authorization.state });
-      return run;
-    }
-    this.options.logger?.info("PLATFORM_SELF_TEST", "ONE_SHOT_CONFIRM_COMMITTED", "一次性发布确认与未消费授权已原子提交", { testRunId, platformKey: account.platformKey, platformAccountId: run.platformAccountId, operationId, state: persisted.authorization.state });
-    this.step(run, "L5_PUBLISH", "PUBLISH_CONFIRMATION", "PASSED", null, XHS_ONE_SHOT_CONFIRMATION, `authorization:${authorization.authorization}:state:${authorization.state}:operation:${authorization.operationId}`);
-    this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_ONE_SHOT_AUTHORIZED", "Owner 已确认一次性真实发布；授权已绑定小红书测试账号并保持未消费", { platformKey: account.platformKey, accountId: account.id, operationId, mode: authorization.mode, maxPublicationTransactions: 1, maxFinalSubmitAttempts: 1, finalSubmitRetryCount: 0 });
     this.controlledOperations.add(account.id);
     try {
       if (!await this.runLogin(run, account, adapter, "VISIBLE")) return this.finish(run.testRunId);
+      try {
+        const identity = await this.xhsIdentity.verifyAndConverge(account.id);
+        if (!identity.verification.verified) throw Object.assign(new Error("小红书 Creator 身份未验证；尚未进入上传流程"), { code: "ACCOUNT_IDENTITY_UNVERIFIED" });
+      } catch (error) {
+        const failure = selfTestError(error);
+        this.step(run, "L5_PUBLISH", "PUBLISH_SUBMIT", failure.result, failure.errorCode === "UNKNOWN" ? "ACCOUNT_IDENTITY_UNVERIFIED" : failure.errorCode, "小红书 Creator 账号身份未通过正向 external ID 证明；尚未上传或创建发布任务。", `identity_verification:FAILED:${failure.message}`);
+        return this.finish(run.testRunId);
+      }
       const safeImage = this.ensureSafeTestImage();
       const content: PublishArticleInput = { articleId: `task10s-${run.testRunId}`, title: XHS_ONE_SHOT_TITLE, body: XHS_ONE_SHOT_BODY, summary: "自动化发布测试", tags: ["测试"], ...(safeImage && adapter.getCapabilities().maxImageCount > 0 ? { images: [safeImage.filePath] } : {}) };
       const preparedContent = await this.runEditorAndContent(run, account, adapter, "VISIBLE", content);
@@ -807,7 +854,18 @@ export class PlatformSelfTestService {
 
   private mustOneShotRun(testRunId: string): PlatformSelfTestRun {
     const run = this.mustRun(testRunId, "L5_PUBLISH");
-    if (run.platformKey !== "xiaohongshu" || !run.steps.some((item) => item.stepKey === "PUBLISH_CONFIRMATION" && item.errorCode === "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED")) throw new Error("当前运行不是 Task10S 一次性真实发布测试");
+    const confirmationRequired = run.steps.some((item) => item.stepKey === "PUBLISH_CONFIRMATION" && item.errorCode === "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED");
+    const authorization = run.platformKey === "xiaohongshu" ? this.options.repository.getOneShotPublicationAuthorization(testRunId) : null;
+    const resumable = Boolean(authorization
+      && authorization.state === "AUTHORIZED_UNUSED"
+      && authorization.platformKey === "xiaohongshu"
+      && authorization.accountId === XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID
+      && authorization.mode === ONE_SHOT_REAL_PUBLISH_ACCEPTANCE
+      && authorization.publicationTransactionCount === 0
+      && authorization.finalSubmitAttemptCount === 0
+      && authorization.finalSubmitRetryCount === 0
+      && run.steps.some((item) => item.errorCode === "ONE_SHOT_PREPUBLISH_EVIDENCE_INCOMPLETE"));
+    if (run.platformKey !== "xiaohongshu" || (!confirmationRequired && !resumable)) throw new Error("当前运行不是 Task10S 一次性真实发布测试");
     return run;
   }
 

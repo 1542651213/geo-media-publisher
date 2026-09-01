@@ -256,6 +256,42 @@ describe("Task 10A evidence analyzer", () => {
     expect(result.sideEffectSummary.finalSubmitCount).toBe(1);
   });
 
+  it("maps structured Task10V identity proof and authorization convergence fields", () => {
+    const shared = { operationId: "task10v-proof", platformKey, accountId: accountA, contextDebugId: "context-v", pageDebugId: "page-v" };
+    const result = analyzeTask10AEvidence({
+      logText: logText([
+        event("2026-08-30T08:00:00.000Z", "XHS_CREATOR_IDENTITY_PROOF", {
+          ...shared,
+          EXPECTED_CREATOR_IDENTITY: "960803317",
+          OBSERVED_CREATOR_IDENTITY: { externalCreatorId: "960803317", stable: true },
+          ACCOUNT_IDENTITY_VERIFIED: true,
+          ACCOUNT_IDENTITY_MISMATCH: false
+        }),
+        event("2026-08-30T08:00:00.001Z", "XHS_IDENTITY_AUTHORIZATION_CONVERGED", {
+          ...shared,
+          ACCOUNT_IDENTITY_VERIFIED: true,
+          ACTIVE_UNUSED_AUTHORIZATION_COUNT: 1,
+          REUSABLE_ONE_SHOT_OPERATION_ID: "run-newest",
+          SUPERSEDED_UNUSED_AUTHORIZATION_COUNT: 1
+        })
+      ]),
+      platformKey,
+      accountId: accountA,
+      operationId: "task10v-proof",
+      publishDomainCounts: counts
+    });
+
+    expect(result).toMatchObject({
+      expectedCreatorIdentity: "960803317",
+      observedCreatorIdentity: { externalCreatorId: "960803317", stable: true },
+      accountIdentityVerified: true,
+      accountIdentityMismatch: false,
+      activeUnusedAuthorizationCount: 1,
+      reusableOneShotOperationId: "run-newest",
+      supersededUnusedAuthorizationCount: 1
+    });
+  });
+
   it("keeps clickable-surface diagnostics at zero final submits without an explicit submit marker", () => {
     const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
     const events = [

@@ -47,8 +47,8 @@ function indexExists(database: Database.Database, name: string): boolean {
   return Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?").get(name));
 }
 
-describe("Task10T migration activation", () => {
-  it("upgrades an exact 0022 database to 0023 once without losing domain rows", () => {
+describe("Task10V migration activation", () => {
+  it("upgrades an exact 0022 database through 0024 once without losing domain rows", () => {
     const fixture = createMigrationFixtureThrough0022();
     const database = new Database(fixture.databasePath);
     databases.push(database);
@@ -62,8 +62,13 @@ describe("Task10T migration activation", () => {
     runMigrations(database, migrationDir, (event) => events.push(event));
     const appliedAfterSecondRun = database.prepare("SELECT id FROM migrations WHERE id='0023_v150_one_shot_publication_authorization.sql'").all();
 
-    expect(appliedAfterFirstRun.at(-1)?.id).toBe("0023_v150_one_shot_publication_authorization.sql");
+    expect(appliedAfterFirstRun.at(-1)?.id).toBe("0024_v151_platform_account_identity_binding.sql");
+    expect(appliedAfterFirstRun.map((migration) => migration.id)).toEqual(expect.arrayContaining([
+      "0023_v150_one_shot_publication_authorization.sql",
+      "0024_v151_platform_account_identity_binding.sql"
+    ]));
     expect(tableExists(database, "one_shot_publication_authorizations")).toBe(true);
+    expect(tableExists(database, "platform_account_identity_bindings")).toBe(true);
     expect(indexExists(database, "idx_one_shot_publication_authorizations_account_state")).toBe(true);
     const columns = database.prepare("PRAGMA table_info(one_shot_publication_authorizations)").all() as Array<{ name: string }>;
     expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining([

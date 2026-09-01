@@ -782,6 +782,16 @@ export function registerIpc(deps: IpcDependencies): void {
     logger.info("PLATFORM_SELF_TEST", "PARTIAL_CONFIRM_RECONCILIATION_IPC_ATTEMPT", "收到指定一次性确认 partial state reconciliation 请求", { testRunId: input.testRunId, platformKey: input.platformKey, accountId: input.accountId, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE });
     return platformSelfTests.reconcileFailedOneShotConfirmation(input);
   });
+  register("platform-self-test:verify-xhs-creator-identity", async (_event, payload) => {
+    const input = z.object({ accountId: z.literal(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID) }).parse(payload);
+    logger.info("PLATFORM_SELF_TEST", "XHS_CREATOR_IDENTITY_PROOF_STARTED", "开始只读读取现有 canonical Page 的小红书 Creator 身份", { platformKey: "xiaohongshu", accountId: input.accountId });
+    return platformSelfTests.verifyXhsCreatorIdentity(input.accountId);
+  });
+  register("platform-self-test:verify-and-converge-xhs-identity", async (_event, payload) => {
+    const input = z.object({ accountId: z.literal(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID), ownerApproved: z.boolean().optional() }).parse(payload);
+    logger.info("PLATFORM_SELF_TEST", "XHS_IDENTITY_CONVERGENCE_STARTED", "开始小红书 Creator 身份证明与未消费一次性授权收敛", { platformKey: "xiaohongshu", accountId: input.accountId, ownerApproved: input.ownerApproved === true });
+    return platformSelfTests.verifyAndConvergeXhsIdentity(input.accountId, input.ownerApproved === true);
+  });
   register("platform-self-test:confirm-delete", async (_event, payload) => platformSelfTests.confirmDelete(z.object({ testRunId: idSchema }).parse(payload).testRunId));
 
   register("plans:list", () => repository.listPlans());
