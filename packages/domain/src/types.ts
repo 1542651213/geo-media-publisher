@@ -659,6 +659,33 @@ export interface OneShotPublicationAuthorization {
   consumedAt?: string | null;
 }
 
+export interface FailedOneShotConfirmationIdentity {
+  testRunId: string;
+  platformKey: "xiaohongshu";
+  accountId: typeof XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID;
+}
+
+export interface OneShotConfirmationReconciliationSnapshot {
+  identity: FailedOneShotConfirmationIdentity;
+  run: PlatformSelfTestRun;
+  authorizationCount: number;
+  operationCount: number;
+  publicationTransactionCount: number;
+  finalSubmitAttemptCount: number;
+  externalPublicationEvidence: boolean;
+  needsReconciliation: boolean;
+  publishedOrVerified: boolean;
+}
+
+export type OneShotConfirmationReconciliationStatus = "RECONCILED_RETRYABLE" | "ALREADY_RECONCILED";
+
+export interface OneShotConfirmationReconciliationResult {
+  status: OneShotConfirmationReconciliationStatus;
+  testRunId: string;
+  mutationCount: 0 | 1;
+  retryEligible: true;
+}
+
 export const EXCEL_TEMPLATE_VERSION = "1.0";
 export const EXCEL_SIMPLE_ARTICLE_HEADERS = ["标题", "内容"] as const;
 export const EXCEL_ADVANCED_ARTICLE_HEADERS = [

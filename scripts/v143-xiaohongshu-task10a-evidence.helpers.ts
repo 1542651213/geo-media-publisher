@@ -146,6 +146,13 @@ export type Task10AEvidenceSummary = {
   authorizationCreated: "YES" | "NO" | "UNKNOWN";
   operationCreated: "YES" | "NO" | "UNKNOWN";
   publicationTransactionCount: number;
+  partialConfirmationStateDetected: boolean;
+  partialConfirmReconciliationStarted: boolean;
+  partialConfirmReconciliationCommitted: boolean;
+  partialConfirmReconciliationRolledBack: boolean;
+  partialConfirmReconciliationResult: string | null;
+  oneShotConfirmRetryEligible: boolean | null;
+  reconciliationMutationCount: number;
   editorDiscoveryFailureCode: string | null;
   editorDiscoveryFailureStage: string | null;
   editorDiscoveryMissingSignal: string | null;
@@ -169,7 +176,7 @@ export type AnalyzeTask10AEvidenceInput = {
   publishDomainCounts?: PublishDomainCounts;
 };
 
-const GATE_START_CODES = new Set(["PRE_SUBMIT_GATE_INSPECTION_STARTED", "XHS_CANONICAL_PAGE_OPERATION_STARTED"]);
+const GATE_START_CODES = new Set(["PRE_SUBMIT_GATE_INSPECTION_STARTED", "XHS_CANONICAL_PAGE_OPERATION_STARTED", "PARTIAL_CONFIRMATION_STATE_DETECTED"]);
 const HEARTBEAT_CODE = "CANONICAL_SESSION_HEARTBEAT";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -346,6 +353,13 @@ function emptySummary(input: AnalyzeTask10AEvidenceInput, gateResult: string): T
     authorizationCreated: "UNKNOWN",
     operationCreated: "UNKNOWN",
     publicationTransactionCount: 0,
+    partialConfirmationStateDetected: false,
+    partialConfirmReconciliationStarted: false,
+    partialConfirmReconciliationCommitted: false,
+    partialConfirmReconciliationRolledBack: false,
+    partialConfirmReconciliationResult: null,
+    oneShotConfirmRetryEligible: null,
+    reconciliationMutationCount: 0,
     editorDiscoveryFailureCode: null,
     editorDiscoveryFailureStage: null,
     editorDiscoveryMissingSignal: null,
@@ -361,6 +375,7 @@ function operationIdFor(event: EvidenceLogEvent): string | null {
 
 function isGateStart(event: EvidenceLogEvent): boolean {
   if (!GATE_START_CODES.has(event.code)) return false;
+  if (event.code === "PARTIAL_CONFIRMATION_STATE_DETECTED") return true;
   if (event.code === "PRE_SUBMIT_GATE_INSPECTION_STARTED") return true;
   return event.context.action === "PRE_SUBMIT_GATE";
 }
@@ -385,6 +400,13 @@ const PREPARE_PUBLISH_MARKERS = new Set(["PREPARE_PUBLISH_STARTED"]);
 const UPLOAD_MUTATION_MARKERS = new Set(["IMAGE_UPLOAD_STARTED", "SET_INPUT_FILES_CALLED", "UPLOAD_MUTATION_EXECUTED"]);
 const CONFIRM_IPC_ATTEMPT_MARKERS = new Set(["CONFIRM_IPC_ATTEMPT", "CONFIRM_IPC_REQUEST_STARTED"]);
 const CONFIRM_DUPLICATE_MARKER = "ONE_SHOT_CONFIRM_DUPLICATE_SUPPRESSED";
+const PARTIAL_CONFIRMATION_MARKERS = new Set([
+  "PARTIAL_CONFIRMATION_STATE_DETECTED",
+  "PARTIAL_CONFIRM_RECONCILIATION_STARTED",
+  "PARTIAL_CONFIRM_RECONCILIATION_COMMITTED",
+  "PARTIAL_CONFIRM_RECONCILIATION_ROLLED_BACK",
+  "PARTIAL_CONFIRM_RECONCILIATION_RESULT"
+]);
 
 function isFinalSubmitMarker(event: EvidenceLogEvent): boolean {
   if (FINAL_SUBMIT_MARKERS.has(event.code)) return true;
@@ -588,6 +610,9 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
     ?? stringValue(schemaVersionEvent?.context.schemaVersion);
   const task10sAuthTablePresent = booleanValue(schemaReadyEvent?.context.authTablePresent) ?? (schemaReadyEvent ? true : null);
   const confirmEvents = gateEvents.filter((event) => event.code === "CONFIRM_IPC_ATTEMPT" || event.code === "CONFIRM_IPC_REQUEST_STARTED" || event.code === "IPC_HANDLER_ERROR" || event.code === "ONE_SHOT_CONFIRM_STARTED" || event.code === "ONE_SHOT_CONFIRM_COMMITTED" || event.code === "ONE_SHOT_CONFIRM_ROLLED_BACK" || event.code === CONFIRM_DUPLICATE_MARKER);
+  const reconciliationEvents = gateEvents.filter((event) => PARTIAL_CONFIRMATION_MARKERS.has(event.code));
+  const reconciliationResultEvent = [...reconciliationEvents].reverse().find((event) => event.code === "PARTIAL_CONFIRM_RECONCILIATION_RESULT");
+  const reconciliationMutationCount = reconciliationEvents.reduce((count, event) => Math.max(count, numberValue(event.context.mutationCount) ?? numberValue(event.context.reconciliationMutationCount) ?? 0), 0);
   const confirmStatus = confirmationStatus(confirmEvents);
   const result: Task10AEvidenceSummary = {
     ...emptySummary(input, gateResult),
@@ -708,6 +733,13 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
     authorizationCreated: authorizationCreated(confirmEvents, confirmStatus),
     operationCreated: operationCreated(confirmEvents, confirmStatus),
     publicationTransactionCount: publicationTransactionCount(gateEvents),
+    partialConfirmationStateDetected: reconciliationEvents.some((event) => event.code === "PARTIAL_CONFIRMATION_STATE_DETECTED"),
+    partialConfirmReconciliationStarted: reconciliationEvents.some((event) => event.code === "PARTIAL_CONFIRM_RECONCILIATION_STARTED"),
+    partialConfirmReconciliationCommitted: reconciliationEvents.some((event) => event.code === "PARTIAL_CONFIRM_RECONCILIATION_COMMITTED"),
+    partialConfirmReconciliationRolledBack: reconciliationEvents.some((event) => event.code === "PARTIAL_CONFIRM_RECONCILIATION_ROLLED_BACK"),
+    partialConfirmReconciliationResult: stringValue(reconciliationResultEvent?.context.status) ?? stringValue(reconciliationResultEvent?.context.result),
+    oneShotConfirmRetryEligible: latestBoolean(reconciliationEvents, "retryEligible") ?? latestBoolean(reconciliationEvents, "oneShotConfirmRetryEligible"),
+    reconciliationMutationCount,
     editorDiscoveryFailureCode: postUploadPhaseFailureCode ?? stringValue(imageEditorFailureEvent?.context.failureCode) ?? (effectiveFailureStage === "EDITOR_DISCOVERY" ? effectiveFailureCode : null),
     editorDiscoveryFailureStage: postUploadPhaseFailureCode ? "EDITOR_DISCOVERY" : stringValue(imageEditorFailureEvent?.context.failureStage) ?? (effectiveFailureStage === "EDITOR_DISCOVERY" ? effectiveFailureStage : null),
     editorDiscoveryMissingSignal: postUploadPhaseFailureCode ? effectiveMissingSignal : stringValue(imageEditorFailureEvent?.context.missingSignal) ?? (effectiveFailureStage === "EDITOR_DISCOVERY" ? effectiveMissingSignal : null),

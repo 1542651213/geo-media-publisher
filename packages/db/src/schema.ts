@@ -90,5 +90,6 @@ export const oneShotPublicationAuthorizations = sqliteTable("one_shot_publicatio
   finalSubmitActionStarted: integer("final_submit_action_started").notNull(),
   finalSubmitActionCompleted: integer("final_submit_action_completed").notNull(),
   createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
   consumedAt: text("consumed_at")
 });

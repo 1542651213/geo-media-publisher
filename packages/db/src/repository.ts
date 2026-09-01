@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type Database from "better-sqlite3";
 import { CONTENT_STUDIO_PLATFORM_KEYS, CORE_AI_FABRICATION_RULES, conservativePlatformContentRules, expandKeywords, normalizeContentReviewMode } from "@publisher/domain";
-import type { Account, ActivityLog, AdapterManifest, AIProviderProfile, AIUsage, Article, ArticleVariant, BackgroundAutomationStatus, Brand, BrandAsset, BrandDifferentiationMetrics, BrandKnowledgeCategory, BrandKnowledgeEntry, CityRegion, ContentGoal, ContentIntent, ContentQualityCheckResult, ContentQualityContentType, ContentQualityIssue, ContentQualityStatus, ContentQualityTrigger, ContentReviewMode, ContentSource, ContentStudioContent, ContentStudioPlatformKey, ContentStudioTopicPlan, DashboardStats, ExcelArticleRowInput, ExcelImportDiagnostic, ExcelImportDiagnosticCode, ExcelImportPreview, ExcelImportPreviewRow, ExcelImportResult, ExcelImportSheetCandidate, FinalPublishMode, ImageAsset, ImageSelectionMode, KnowledgeSnapshot, KeywordItem, KeywordTemplate, LoginStatus, Notification, OneShotPublicationAuthorization, Platform, PlatformCapability, PlatformCapabilities, PlatformContentRules, PlatformProfile, PlatformSelfTestCleanupStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PlatformSelfTestStep, PromotionStrength, PublishJob, PublishPlan, PublishRecord, SearchIntent, VideoAsset } from "@publisher/domain";
+import type { Account, ActivityLog, AdapterManifest, AIProviderProfile, AIUsage, Article, ArticleVariant, BackgroundAutomationStatus, Brand, BrandAsset, BrandDifferentiationMetrics, BrandKnowledgeCategory, BrandKnowledgeEntry, CityRegion, ContentGoal, ContentIntent, ContentQualityCheckResult, ContentQualityContentType, ContentQualityIssue, ContentQualityStatus, ContentQualityTrigger, ContentReviewMode, ContentSource, ContentStudioContent, ContentStudioPlatformKey, ContentStudioTopicPlan, DashboardStats, ExcelArticleRowInput, ExcelImportDiagnostic, ExcelImportDiagnosticCode, ExcelImportPreview, ExcelImportPreviewRow, ExcelImportResult, ExcelImportSheetCandidate, FailedOneShotConfirmationIdentity, FinalPublishMode, ImageAsset, ImageSelectionMode, KnowledgeSnapshot, KeywordItem, KeywordTemplate, LoginStatus, Notification, OneShotConfirmationReconciliationResult, OneShotConfirmationReconciliationSnapshot, OneShotPublicationAuthorization, Platform, PlatformCapability, PlatformCapabilities, PlatformContentRules, PlatformProfile, PlatformSelfTestCleanupStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PlatformSelfTestStep, PromotionStrength, PublishJob, PublishPlan, PublishRecord, SearchIntent, VideoAsset } from "@publisher/domain";
 
 type SqlValue = string | number | null;
 type Row = Record<string, unknown>;
@@ -12,6 +12,47 @@ export type StoredVideoAssetStatus = "Draft" | "Ready" | "DryRun" | "Published" 
 export interface OneShotConfirmationPersistenceResult {
   authorization: OneShotPublicationAuthorization;
   created: boolean;
+}
+
+const ONE_SHOT_CONFIRMATION_ERROR = "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED";
+const ONE_SHOT_CONFIRMATION_STEP = "PUBLISH_CONFIRMATION";
+
+function reconciliationFailure(snapshot: OneShotConfirmationReconciliationSnapshot): string | null {
+  const step = snapshot.run.steps.find((item) => item.stepKey === ONE_SHOT_CONFIRMATION_STEP);
+  if (snapshot.identity.platformKey !== "xiaohongshu") return "ONE_SHOT_RECONCILIATION_PLATFORM_MISMATCH";
+  if (snapshot.run.platformKey !== snapshot.identity.platformKey || snapshot.run.platformAccountId !== snapshot.identity.accountId) return "ONE_SHOT_RECONCILIATION_ACCOUNT_MISMATCH";
+  if (snapshot.run.requestedLevel !== "L5_PUBLISH" || snapshot.run.overallResult !== "WAITING_FOR_USER") return "ONE_SHOT_RECONCILIATION_STATE_MISMATCH";
+  if (!snapshot.run.publishConfirmedAt) return "ONE_SHOT_RECONCILIATION_NOT_PARTIAL";
+  if (snapshot.authorizationCount !== 0) return "ONE_SHOT_RECONCILIATION_AUTHORIZATION_EXISTS";
+  if (snapshot.operationCount !== 0) return "ONE_SHOT_RECONCILIATION_OPERATION_EXISTS";
+  if (snapshot.publicationTransactionCount !== 0) return "ONE_SHOT_RECONCILIATION_PUBLICATION_STARTED";
+  if (snapshot.finalSubmitAttemptCount !== 0) return "ONE_SHOT_RECONCILIATION_FINAL_SUBMIT_STARTED";
+  if (snapshot.externalPublicationEvidence) return "ONE_SHOT_RECONCILIATION_EXTERNAL_EVIDENCE_EXISTS";
+  if (snapshot.needsReconciliation) return "ONE_SHOT_RECONCILIATION_NEEDS_RECONCILIATION";
+  if (snapshot.publishedOrVerified) return "ONE_SHOT_RECONCILIATION_ALREADY_PUBLISHED";
+  if (!step || step.result !== "WAITING_FOR_USER" || step.errorCode !== ONE_SHOT_CONFIRMATION_ERROR) return "ONE_SHOT_RECONCILIATION_CONFIRMATION_STEP_MISMATCH";
+  return null;
+}
+
+function isCanonicalRetryable(snapshot: OneShotConfirmationReconciliationSnapshot): boolean {
+  const step = snapshot.run.steps.find((item) => item.stepKey === ONE_SHOT_CONFIRMATION_STEP);
+  return snapshot.run.platformKey === snapshot.identity.platformKey
+    && snapshot.run.platformAccountId === snapshot.identity.accountId
+    && snapshot.run.requestedLevel === "L5_PUBLISH"
+    && snapshot.run.overallResult === "WAITING_FOR_USER"
+    && snapshot.run.publishConfirmedAt === null
+    && snapshot.run.publishJobId === null
+    && snapshot.run.publishRecordId === null
+    && snapshot.run.testArticleId === null
+    && snapshot.authorizationCount === 0
+    && snapshot.operationCount === 0
+    && snapshot.publicationTransactionCount === 0
+    && snapshot.finalSubmitAttemptCount === 0
+    && !snapshot.externalPublicationEvidence
+    && !snapshot.needsReconciliation
+    && !snapshot.publishedOrVerified
+    && step?.result === "WAITING_FOR_USER"
+    && step.errorCode === ONE_SHOT_CONFIRMATION_ERROR;
 }
 
 export interface StoredVideoAsset extends VideoAsset {
@@ -1969,6 +2010,65 @@ export class AppRepository {
     if (!row) return null;
     const steps = (this.db.prepare("SELECT * FROM platform_self_test_steps WHERE test_run_id=? ORDER BY started_at, step_key").all(textValue(row.test_run_id)) as Row[]).map(toPlatformSelfTestStep);
     return toPlatformSelfTestRun(row, steps);
+  }
+
+  getOneShotConfirmationReconciliationSnapshot(identity: FailedOneShotConfirmationIdentity): OneShotConfirmationReconciliationSnapshot {
+    const runRows = this.db.prepare("SELECT * FROM platform_self_test_runs WHERE test_run_id=?").all(identity.testRunId) as Row[];
+    if (runRows.length !== 1) throw new Error(runRows.length === 0 ? "ONE_SHOT_RECONCILIATION_IDENTITY_NOT_FOUND" : "ONE_SHOT_RECONCILIATION_IDENTITY_AMBIGUOUS");
+    const run = this.getPlatformSelfTestRun(identity.testRunId);
+    if (!run) throw new Error("ONE_SHOT_RECONCILIATION_IDENTITY_NOT_FOUND");
+    if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='one_shot_publication_authorizations'").get()) throw new Error("ONE_SHOT_RECONCILIATION_AUTHORIZATION_TABLE_MISSING");
+    const authorizationRows = this.db.prepare("SELECT publication_transaction_count,final_submit_attempt_count FROM one_shot_publication_authorizations WHERE operation_id=?").all(identity.testRunId) as Row[];
+    const jobRows = run.publishJobId
+      ? this.db.prepare("SELECT status,external_id FROM publish_jobs WHERE id=?").all(run.publishJobId) as Row[]
+      : [];
+    const recordRows = run.publishRecordId
+      ? this.db.prepare("SELECT status,verification_status,published_external_id,published_url FROM publish_records WHERE id=?").all(run.publishRecordId) as Row[]
+      : [];
+    const operationStepCount = run.steps.filter((step) => step.stepKey !== ONE_SHOT_CONFIRMATION_STEP).length;
+    const operationCount = operationStepCount + (run.testArticleId ? 1 : 0) + (run.publishJobId ? 1 : 0) + (run.publishRecordId ? 1 : 0) + jobRows.length + recordRows.length;
+    const externalPublicationEvidence = Boolean(run.externalId || run.externalUrl)
+      || run.steps.some((step) => Boolean(step.externalId || step.externalUrl))
+      || jobRows.some((row) => Boolean(row.external_id))
+      || recordRows.some((row) => Boolean(row.published_external_id || row.published_url));
+    const needsReconciliation = jobRows.some((row) => textValue(row.status) === "NeedsReconciliation") || recordRows.some((row) => textValue(row.status) === "NeedsReconciliation");
+    const publishedOrVerified = jobRows.some((row) => textValue(row.status) === "Published")
+      || recordRows.some((row) => textValue(row.status) === "Published" || textValue(row.verification_status) === "Verified");
+    return {
+      identity,
+      run,
+      authorizationCount: authorizationRows.length,
+      operationCount,
+      publicationTransactionCount: authorizationRows.reduce((total, row) => total + intValue(row.publication_transaction_count), 0),
+      finalSubmitAttemptCount: authorizationRows.reduce((total, row) => total + intValue(row.final_submit_attempt_count), 0),
+      externalPublicationEvidence,
+      needsReconciliation,
+      publishedOrVerified
+    };
+  }
+
+  reconcileFailedOneShotConfirmation(identity: FailedOneShotConfirmationIdentity): OneShotConfirmationReconciliationResult {
+    const transaction = this.db.transaction(() => {
+      const snapshot = this.getOneShotConfirmationReconciliationSnapshot(identity);
+      if (isCanonicalRetryable(snapshot)) return { status: "ALREADY_RECONCILED" as const, testRunId: identity.testRunId, mutationCount: 0 as const, retryEligible: true as const };
+      const failure = reconciliationFailure(snapshot);
+      if (failure) throw Object.assign(new Error(failure), { code: failure });
+      const timestamp = now();
+      const runUpdate = this.db.prepare("UPDATE platform_self_test_runs SET publish_confirmed_at=NULL,updated_at=? WHERE test_run_id=? AND publish_confirmed_at IS NOT NULL").run(timestamp, identity.testRunId);
+      if (runUpdate.changes !== 1) throw new Error("ONE_SHOT_RECONCILIATION_STATE_CHANGED");
+      const stepUpdate = this.db.prepare(`UPDATE platform_self_test_steps SET
+        result='WAITING_FOR_USER',error_code=?,message=?,verification_signal=?
+        WHERE test_run_id=? AND step_key=?`).run(
+        ONE_SHOT_CONFIRMATION_ERROR,
+        "一次性真实发布测试需要 Owner 确认",
+        "authorization:OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH:state:NOT_AUTHORIZED",
+        identity.testRunId,
+        ONE_SHOT_CONFIRMATION_STEP
+      );
+      if (stepUpdate.changes !== 1) throw new Error("ONE_SHOT_RECONCILIATION_CONFIRMATION_STEP_MISSING");
+      return { status: "RECONCILED_RETRYABLE" as const, testRunId: identity.testRunId, mutationCount: 1 as const, retryEligible: true as const };
+    });
+    return transaction();
   }
 
   listPlatformSelfTestRuns(platformAccountId?: string): PlatformSelfTestRun[] {

@@ -594,4 +594,29 @@ describe("Task 10A evidence analyzer", () => {
       sideEffectSummary: { finalSubmitCount: 0 }
     });
   });
+
+  it("reports Task10U reconciliation markers without counting them as publication activity", () => {
+    const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
+    const events = [
+      ...gateEvents(),
+      event("2026-08-30T08:00:01.020Z", "PARTIAL_CONFIRMATION_STATE_DETECTED", { ...shared, testRunId: "orphan-1", authorizationCount: 0, operationCount: 0 }),
+      event("2026-08-30T08:00:01.021Z", "PARTIAL_CONFIRM_RECONCILIATION_STARTED", { ...shared, testRunId: "orphan-1" }),
+      event("2026-08-30T08:00:01.022Z", "PARTIAL_CONFIRM_RECONCILIATION_COMMITTED", { ...shared, testRunId: "orphan-1", mutationCount: 1, retryEligible: true, authorizationCreated: false, operationCreated: false, publicationTransactionCount: 0, finalSubmitCount: 0 }),
+      event("2026-08-30T08:00:01.023Z", "PARTIAL_CONFIRM_RECONCILIATION_RESULT", { ...shared, testRunId: "orphan-1", status: "RECONCILED_RETRYABLE", mutationCount: 1, retryEligible: true })
+    ];
+
+    const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
+
+    expect(result).toMatchObject({
+      partialConfirmationStateDetected: true,
+      partialConfirmReconciliationStarted: true,
+      partialConfirmReconciliationCommitted: true,
+      partialConfirmReconciliationRolledBack: false,
+      partialConfirmReconciliationResult: "RECONCILED_RETRYABLE",
+      oneShotConfirmRetryEligible: true,
+      reconciliationMutationCount: 1,
+      publicationTransactionCount: 0,
+      sideEffectSummary: { uploadCount: 0, contentMutationCount: 0, finalSubmitCount: 0 }
+    });
+  });
 });

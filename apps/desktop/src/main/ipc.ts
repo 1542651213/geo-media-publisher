@@ -10,7 +10,7 @@ import { AIProviderError, DeepSeekErrorMapper, DeepSeekProvider, FallbackAIProvi
 import { MockImageProvider, OpenAICompatibleImageProvider, persistGeneratedImage, type ImageProvider } from "@publisher/image";
 import { exportLogBundle } from "@publisher/logger";
 import { CredentialDecryptError, type CredentialStatus, type CredentialStore } from "@publisher/security";
-import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STUDIO_PLATFORM_KEYS, EXCEL_ADVANCED_ARTICLE_HEADERS, EXCEL_SIMPLE_ARTICLE_HEADERS, PROMOTION_STRENGTHS, SEARCH_INTENTS, checkGeneratedArticleQuality, selectRelevantBrandFacts, type AccountContext, type AccountProfile, type AccountStatus, type AIUsage, type CredentialField, type ContentStudioPlatformKey, type ExcelImportPreview, type ImageAsset } from "@publisher/domain";
+import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STUDIO_PLATFORM_KEYS, EXCEL_ADVANCED_ARTICLE_HEADERS, EXCEL_SIMPLE_ARTICLE_HEADERS, ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, PROMOTION_STRENGTHS, SEARCH_INTENTS, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, checkGeneratedArticleQuality, selectRelevantBrandFacts, type AccountContext, type AccountProfile, type AccountStatus, type AIUsage, type CredentialField, type ContentStudioPlatformKey, type ExcelImportPreview, type ImageAsset } from "@publisher/domain";
 import { BrowserRuntimeError, assertExternalLaunchAllowed, browserSessionCredentialKey, browserSessionIdHash, isAutomationAdapter, type AdapterRegistry, type AutomationAdapter, type ExternalLaunchTriggerSource, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
 import type { PublisherService, PersistentScheduler } from "@publisher/publisher";
@@ -777,6 +777,11 @@ export function registerIpc(deps: IpcDependencies): void {
     return platformSelfTests.confirmOneShotPublish(input.testRunId);
   });
   register("platform-self-test:cancel-one-shot-publish", (_event, payload) => platformSelfTests.cancelOneShotPublish(z.object({ testRunId: idSchema }).parse(payload).testRunId));
+  register("platform-self-test:reconcile-failed-one-shot-confirmation", (_event, payload) => {
+    const input = z.object({ testRunId: idSchema, platformKey: z.literal("xiaohongshu"), accountId: z.literal(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID) }).parse(payload);
+    logger.info("PLATFORM_SELF_TEST", "PARTIAL_CONFIRM_RECONCILIATION_IPC_ATTEMPT", "收到指定一次性确认 partial state reconciliation 请求", { testRunId: input.testRunId, platformKey: input.platformKey, accountId: input.accountId, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE });
+    return platformSelfTests.reconcileFailedOneShotConfirmation(input);
+  });
   register("platform-self-test:confirm-delete", async (_event, payload) => platformSelfTests.confirmDelete(z.object({ testRunId: idSchema }).parse(payload).testRunId));
 
   register("plans:list", () => repository.listPlans());

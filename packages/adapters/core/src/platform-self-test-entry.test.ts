@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ControlledPostUploadDiscoveryResult } from "./automation";
 import { PlatformSelfTestService } from "../../../../apps/desktop/src/main/platform-self-test";
+import { evaluateStrictFailedOneShotConfirmation } from "../../../../apps/desktop/src/main/one-shot-reconciliation";
 
 const account = { id: "account-1", platformAccountId: "platform-account-1", platformKey: "xiaohongshu", accountAlias: "XHS", name: "XHS", enabled: true, archivedAt: null } as Record<string, unknown>;
 const result: ControlledPostUploadDiscoveryResult = {
@@ -102,5 +103,76 @@ describe("Task10O controlled self-test dispatch", () => {
     await expect(instance.confirmOneShotPublish(testRunId)).rejects.toMatchObject({ code: "ONE_SHOT_CONFIRMATION_PARTIAL_STATE" });
     expect(confirmAtomic).not.toHaveBeenCalled();
     expect(adapter.connectAccount).not.toHaveBeenCalled();
+  });
+
+  it("reconciles only the exact XHS orphan through the formal service and never calls a browser adapter", () => {
+    const testRunId = "task10u-exact-orphan";
+    const reconcile = vi.fn(() => ({ status: "RECONCILED_RETRYABLE", testRunId, mutationCount: 1, retryEligible: true }));
+    const snapshot = {
+      identity: { testRunId, platformKey: "xiaohongshu", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3" },
+      run: { testRunId, platformKey: "xiaohongshu", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", requestedLevel: "L5_PUBLISH", overallResult: "WAITING_FOR_USER", publishConfirmedAt: "2026-09-01T04:00:10.700Z", publishJobId: null, publishRecordId: null, testArticleId: null, externalId: null, externalUrl: null, steps: [{ stepKey: "PUBLISH_CONFIRMATION", result: "WAITING_FOR_USER", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] },
+      authorizationCount: 0,
+      operationCount: 0,
+      publicationTransactionCount: 0,
+      finalSubmitAttemptCount: 0,
+      externalPublicationEvidence: false,
+      needsReconciliation: false,
+      publishedOrVerified: false
+    };
+    const adapter = { connectAccount: vi.fn(), checkSession: vi.fn(), preparePublish: vi.fn(), finalSubmit: vi.fn() };
+    const repository = { getOneShotConfirmationReconciliationSnapshot: vi.fn(() => snapshot), reconcileFailedOneShotConfirmation: reconcile };
+    const instance = new PlatformSelfTestService({ repository: repository as never, registry: { getForContent: vi.fn(() => adapter) } as never, publisher: {} as never, resolveAccountSecrets: vi.fn(() => ({})) });
+
+    expect(instance.reconcileFailedOneShotConfirmation(snapshot.identity as never)).toEqual({ status: "RECONCILED_RETRYABLE", testRunId, mutationCount: 1, retryEligible: true });
+    expect(repository.getOneShotConfirmationReconciliationSnapshot).toHaveBeenCalledWith(snapshot.identity);
+    expect(reconcile).toHaveBeenCalledWith(snapshot.identity);
+    expect(adapter.connectAccount).not.toHaveBeenCalled();
+    expect(adapter.finalSubmit).not.toHaveBeenCalled();
+  });
+
+  it("rejects a wrong one-shot identity before repository access", () => {
+    const snapshot = { testRunId: "task10u-wrong", platformKey: "xiaohongshu", accountId: "wrong-account" };
+    const repository = { getOneShotConfirmationReconciliationSnapshot: vi.fn(), reconcileFailedOneShotConfirmation: vi.fn() };
+    const instance = new PlatformSelfTestService({ repository: repository as never, registry: {} as never, publisher: {} as never, resolveAccountSecrets: vi.fn(() => ({})) });
+
+    expect(() => instance.reconcileFailedOneShotConfirmation(snapshot as never)).toThrow("ONE_SHOT_RECONCILIATION_IDENTITY_MISMATCH");
+    expect(repository.getOneShotConfirmationReconciliationSnapshot).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["authorization exists", { authorizationCount: 1 }, "ONE_SHOT_RECONCILIATION_AUTHORIZATION_EXISTS"],
+    ["operation exists", { operationCount: 1 }, "ONE_SHOT_RECONCILIATION_OPERATION_EXISTS"],
+    ["publication started", { publicationTransactionCount: 1 }, "ONE_SHOT_RECONCILIATION_PUBLICATION_STARTED"],
+    ["final submit started", { finalSubmitAttemptCount: 1 }, "ONE_SHOT_RECONCILIATION_FINAL_SUBMIT_STARTED"],
+    ["external evidence exists", { externalPublicationEvidence: true }, "ONE_SHOT_RECONCILIATION_EXTERNAL_EVIDENCE_EXISTS"],
+    ["needs reconciliation", { needsReconciliation: true }, "ONE_SHOT_RECONCILIATION_NEEDS_RECONCILIATION"],
+    ["published or verified", { publishedOrVerified: true }, "ONE_SHOT_RECONCILIATION_ALREADY_PUBLISHED"],
+    ["wrong platform", { identity: { testRunId: "x", platformKey: "weibo", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3" } }, "ONE_SHOT_RECONCILIATION_PLATFORM_MISMATCH"],
+    ["wrong account", { identity: { testRunId: "x", platformKey: "xiaohongshu", accountId: "wrong" } }, "ONE_SHOT_RECONCILIATION_ACCOUNT_MISMATCH"]
+  ])("fail-closes %s", (_label, override, reason) => {
+    const base = {
+      identity: { testRunId: "x", platformKey: "xiaohongshu", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3" },
+      run: { platformKey: "xiaohongshu", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", requestedLevel: "L5_PUBLISH", overallResult: "WAITING_FOR_USER", publishConfirmedAt: "2026-09-01T04:00:10.700Z", steps: [{ stepKey: "PUBLISH_CONFIRMATION", result: "WAITING_FOR_USER", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] },
+      authorizationCount: 0,
+      operationCount: 0,
+      publicationTransactionCount: 0,
+      finalSubmitAttemptCount: 0,
+      externalPublicationEvidence: false,
+      needsReconciliation: false,
+      publishedOrVerified: false
+    };
+    const candidate = { ...base, ...override, identity: { ...base.identity, ...((override as { identity?: Record<string, string> }).identity ?? {}) } };
+    const decision = evaluateStrictFailedOneShotConfirmation(candidate as never);
+    expect(decision).toMatchObject({ allowed: false, alreadyReconciled: false, reason });
+  });
+
+  it("accepts only a confirmed orphan and treats the canonical pre-confirm state as already reconciled", () => {
+    const base = {
+      identity: { testRunId: "x", platformKey: "xiaohongshu", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3" },
+      run: { platformKey: "xiaohongshu", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", requestedLevel: "L5_PUBLISH", overallResult: "WAITING_FOR_USER", publishConfirmedAt: "2026-09-01T04:00:10.700Z", steps: [{ stepKey: "PUBLISH_CONFIRMATION", result: "WAITING_FOR_USER", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] },
+      authorizationCount: 0, operationCount: 0, publicationTransactionCount: 0, finalSubmitAttemptCount: 0, externalPublicationEvidence: false, needsReconciliation: false, publishedOrVerified: false
+    };
+    expect(evaluateStrictFailedOneShotConfirmation(base as never)).toEqual({ allowed: true, alreadyReconciled: false, reason: null });
+    expect(evaluateStrictFailedOneShotConfirmation({ ...base, run: { ...base.run, publishConfirmedAt: null } } as never)).toEqual({ allowed: true, alreadyReconciled: true, reason: null });
   });
 });

@@ -9,6 +9,8 @@ import type { Logger } from "@publisher/logger";
 import type { PublisherService } from "@publisher/publisher";
 import type { Account, AccountContext, BackgroundAutomationStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PublishArticleInput } from "@publisher/domain";
 import { OneShotConfirmationCoordinator } from "./one-shot-confirmation";
+import { OneShotConfirmationReconciliationService } from "./one-shot-reconciliation";
+import type { FailedOneShotConfirmationIdentity, OneShotConfirmationReconciliationResult } from "@publisher/domain";
 
 const ARTICLE_TEST_TITLE = "Geo Media Publisher 发布链路测试";
 const ZHIHU_TEST_TITLE_PREFIX = "Geo Media Publisher 知乎发布测试";
@@ -134,8 +136,11 @@ function selfTestError(error: unknown): { result: PlatformSelfTestResult; errorC
 export class PlatformSelfTestService {
   private readonly controlledOperations = new Set<string>();
   private readonly oneShotConfirmations = new OneShotConfirmationCoordinator();
+  private readonly oneShotReconciliation: OneShotConfirmationReconciliationService;
 
-  constructor(private readonly options: PlatformSelfTestServiceOptions) {}
+  constructor(private readonly options: PlatformSelfTestServiceOptions) {
+    this.oneShotReconciliation = new OneShotConfirmationReconciliationService({ repository: options.repository, logger: options.logger });
+  }
 
   listAccounts(): PlatformSelfTestAccountView[] {
     const latestByAccount = new Map<string, PlatformSelfTestRun>();
@@ -253,6 +258,10 @@ export class PlatformSelfTestService {
     const run = this.mustOneShotRun(testRunId);
     this.step(run, "L5_PUBLISH", "PUBLISH_CONFIRMATION", "NOT_TESTED", "ONE_SHOT_PUBLISH_CANCELLED", "用户取消了一次性真实发布测试，未生成授权、未创建发布任务");
     return this.options.repository.finishPlatformSelfTestRun(testRunId, "NOT_TESTED");
+  }
+
+  reconcileFailedOneShotConfirmation(identity: FailedOneShotConfirmationIdentity): OneShotConfirmationReconciliationResult {
+    return this.oneShotReconciliation.reconcileFailedOneShotConfirmation(identity);
   }
 
   confirmOneShotPublish(testRunId: string): Promise<PlatformSelfTestRun> {
