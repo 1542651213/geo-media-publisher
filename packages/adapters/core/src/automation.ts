@@ -88,13 +88,28 @@ export interface PublishFlowExplorationResult {
   actions: readonly Record<string, unknown>[];
   selectors: readonly Record<string, unknown>[];
   counters: PublishFlowExplorationCounters;
+  /** Flattened safety counters are kept for audit consumers that do not unpack nested evidence. */
+  uploadAttempts: number;
+  uploadMutationCount: number;
+  uploadRetryCount: number;
+  intermediateActionClickCount: number;
+  titleMutationCount: number;
+  bodyMutationCount: number;
+  settingsMutationCount: number;
+  contentMutationCount: number;
+  finalSubmitCount: 0;
   budgets: PublishFlowExplorationBudgets;
   title: PublishFlowFieldEvidence;
+  titleReadbackVerified: boolean;
   body: PublishFlowFieldEvidence;
+  bodyReadbackVerified: boolean;
   requiredSettings: { status: string; mutations: readonly Record<string, unknown>[] };
   finalSubmit: { status: string; visible: boolean; enabled: boolean; hitTestValid: boolean; label?: string };
   forbiddenMutationObserved: boolean;
   blocker: string | null;
+  failureCode?: string | null;
+  failureStage?: string | null;
+  missingSignal?: string | null;
   readyForFinalSubmit: boolean;
   database?: { before: Record<string, number>; after: Record<string, number> };
   evidence: Record<string, unknown>;

@@ -224,6 +224,7 @@ export interface ImageEditorDomSnapshot {
   forbiddenActionSignalPresent?: boolean;
   mediaPreviewSignalPresent?: boolean;
   mediaEditingSignalPresent?: boolean;
+  phaseTopology?: ImageEditorPhaseTopology;
   uploadBusy?: boolean;
   previewReady?: boolean;
 }
@@ -347,7 +348,8 @@ export interface ImageEditorDiagnostic {
   action?: "IMAGE_UPLOAD_MUTATION" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED";
   mutationType?: "IMAGE_UPLOAD_ONLY";
   selfTestMode?: "POST_UPLOAD_DISCOVERY_ONLY";
-  uploadMutationCount?: 1;
+  uploadMutationCount?: number;
+  uploadAttemptIndex?: number;
 }
 
 export interface ImagePostEditorInspectionResult {
@@ -1114,14 +1116,96 @@ async function readSnapshotFromLocators(page: Page, fallbackUrl: string): Promis
       hitTestValid: visible && boundingBox !== null
     });
   }
+  const intermediateActionCandidates: ImageEditorIntermediateActionCandidate[] = [];
+  const interactive = page.locator('button, [role="button"], a, [role="tab"]');
+  for (let index = 0; index < await locatorCount(interactive); index += 1) {
+    const item = locatorAt(interactive, index);
+    const label = (await locatorText(item) || await locatorAttribute(item, "aria-label") || await locatorAttribute(item, "title")).normalize("NFKC").replace(/[\s]+/gu, " ").trim();
+    if (!/完成|确认|下一步|继续|编辑图片|编辑照片|裁剪完成|返回编辑|done|confirm|next|continue|edit\s*(?:image|photo)|crop(?:ping)?\s*done|back\s*to\s*edit/iu.test(label)) continue;
+    const visible = await locatorVisible(item);
+    const enabled = await locatorEnabled(item);
+    const boundingBox = await locatorBoundingBox(item);
+    intermediateActionCandidates.push({
+      candidateId: (await locatorAttribute(item, "data-testid")) || `intermediate-action-${index}`,
+      tagName: (await locatorAttribute(item, "tagName")).toUpperCase() || "BUTTON",
+      role: (await locatorAttribute(item, "role")) || "button",
+      semanticSignal: "intermediate-action",
+      normalizedText: label.slice(0, 120),
+      visible,
+      enabled,
+      boundingBox,
+      nearestInteractiveAncestorTag: "BUTTON",
+      nearestInteractiveAncestorRole: "button",
+      pointerEvents: "auto",
+      hitTestValid: visible && enabled && boundingBox !== null
+    });
+  }
   const contentTypeSignal: ImageEditorContentType = /视频|video/iu.test(bodyText) && uploadCandidates.length === 0 ? "VIDEO" : uploadCandidates.length > 0 || /图文|图片|image/iu.test(bodyText) ? "IMAGE_POST" : "UNKNOWN";
   const shellSignal = EDITOR_ROUTE_PATTERN.test(currentUrl) && !loginPagePresent && !securityVerificationPresent;
   const shellFingerprint = JSON.stringify({ title: titleCandidates.length, body: bodyCandidates.length, upload: uploadCandidates.length, settings: publishSettingsCandidates.length, finalSubmit: finalSubmitCandidates.length });
   const busy = page.locator('[aria-busy="true"], [class*="loading" i], [class*="uploading" i], progress');
   const preview = page.locator('img[class*="preview" i], img[src*="xhscdn" i], [class*="preview" i], [data-testid*="upload-result" i], [class*="uploaded" i]');
   const uploadBusy = await locatorCount(busy) > 0;
-  const previewReady = await locatorCount(preview) > 0 && await locatorVisible(locatorAt(preview, 0));
-  return { currentUrl, readyState: "complete", shellSignal, shellFingerprint, contentTypeSignal, securityVerificationPresent, loginPagePresent, titleCandidates, bodyCandidates, uploadCandidates, publishSettingsCandidates, finalSubmitCandidates, requiredValidationSignals: [], forbiddenActionSignalPresent: false, uploadBusy, previewReady };
+  const previewCount = await locatorCount(preview);
+  const previewGeometry: ImageEditorBoundingBox[] = [];
+  for (let index = 0; index < previewCount; index += 1) {
+    const box = await locatorBoundingBox(locatorAt(preview, index));
+    if (box) previewGeometry.push(box);
+  }
+  const previewReady = previewCount > 0 && await locatorVisible(locatorAt(preview, 0));
+  const interactiveTopology: ImageEditorInteractiveTopology = {
+    buttonCount: 0,
+    roleButtonCount: 0,
+    dialogCount: 0,
+    modalSignalCount: 0,
+    fileInputCount: uploadCandidates.length,
+    contenteditableCount: 0,
+    textareaCount: 0,
+    textInputCount: titleCandidates.length,
+    titleCandidateCount: titleCandidates.length,
+    bodyCandidateCount: bodyCandidates.length,
+    finalSubmitCandidateCount: finalSubmitCandidates.length
+  };
+  const phaseTopology: ImageEditorPhaseTopology = {
+    titleCandidateCount: titleCandidates.length,
+    bodyCandidateCount: bodyCandidates.length,
+    uploadCandidateCount: uploadCandidates.length,
+    finalSubmitCandidateCount: finalSubmitCandidates.length,
+    contenteditableCount: 0,
+    textareaCount: 0,
+    textInputCount: titleCandidates.length,
+    fileInputCount: uploadCandidates.length,
+    buttonCount: intermediateActionCandidates.length + finalSubmitCandidates.length,
+    roleButtonCount: intermediateActionCandidates.length + finalSubmitCandidates.length,
+    semanticSignals: intermediateActionCandidates.map((candidate) => candidate.normalizedText ?? candidate.semanticSignal),
+    stable: false
+  };
+  return {
+    currentUrl,
+    readyState: "complete",
+    shellSignal,
+    shellFingerprint,
+    contentTypeSignal,
+    securityVerificationPresent,
+    loginPagePresent,
+    titleCandidates,
+    bodyCandidates,
+    uploadCandidates,
+    publishSettingsCandidates,
+    finalSubmitCandidates,
+    postUploadSemanticNodes: intermediateActionCandidates.map((candidate) => ({ tagName: candidate.tagName, normalizedText: candidate.normalizedText ?? candidate.semanticSignal, role: candidate.role, visible: candidate.visible, enabled: candidate.enabled, boundingBox: candidate.boundingBox ?? null, nearestInteractiveAncestorTag: candidate.nearestInteractiveAncestorTag ?? null, nearestInteractiveAncestorRole: candidate.nearestInteractiveAncestorRole ?? null })),
+    interactiveTopology,
+    mediaPreviewDiagnostics: { previewCount, previewVisible: previewReady, previewGeometry, deleteReplaceEditSignals: [], associatedSemanticText: previewReady ? ["预览"] : [] },
+    modalDiagnostics: emptyModalDiagnostics(),
+    intermediateActionCandidates,
+    requiredValidationSignals: [],
+    forbiddenActionSignalPresent: false,
+    mediaPreviewSignalPresent: previewReady || intermediateActionCandidates.length > 0,
+    mediaEditingSignalPresent: intermediateActionCandidates.some((candidate) => /编辑|裁剪|edit|crop/iu.test(candidate.normalizedText ?? "")),
+    phaseTopology,
+    uploadBusy,
+    previewReady
+  };
 }
 
 async function readSnapshot(page: Page): Promise<ImageEditorDomSnapshot> {
@@ -1993,7 +2077,8 @@ export async function inspectImagePostEditorPhase(page: Page, metadata: ImageEdi
       bodyCandidateCount: lastSnapshot.bodyCandidateCount,
       finalSubmitCandidateCount: lastSnapshot.finalSubmitCandidateCount
     });
-    if (lastClassification.phase === "LOGIN" || lastClassification.phase === "SECURITY_VERIFICATION" || lastSnapshot.domStable) {
+    const terminalPhase = lastClassification.phase === "IMAGE_POST_PRE_UPLOAD" || lastClassification.phase === "IMAGE_POST_POST_UPLOAD_EDITOR";
+    if (lastClassification.phase === "LOGIN" || lastClassification.phase === "SECURITY_VERIFICATION" || terminalPhase) {
       emit(options, metadata, "IMAGE_EDITOR_PHASE_OBSERVED", {
         ...phaseDiagnosticFields(lastSnapshot),
         phase: lastClassification.phase,
