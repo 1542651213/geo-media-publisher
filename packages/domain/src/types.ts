@@ -635,6 +635,28 @@ export interface PublishResult {
   bodyFilled?: boolean;
 }
 
+export const OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH = "OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH" as const;
+export const ONE_SHOT_REAL_PUBLISH_ACCEPTANCE = "ONE_SHOT_REAL_PUBLISH_ACCEPTANCE" as const;
+export const XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID = "54b390ac-d81e-440a-baeb-d00f9f346cc3" as const;
+
+export type OneShotPublicationAuthorizationState = "NOT_AUTHORIZED" | "AUTHORIZED_UNUSED" | "CONSUMED";
+
+export interface OneShotPublicationAuthorization {
+  authorization: typeof OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH;
+  state: OneShotPublicationAuthorizationState;
+  platformKey: "xiaohongshu";
+  accountId: typeof XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID;
+  operationId: string;
+  mode: typeof ONE_SHOT_REAL_PUBLISH_ACCEPTANCE;
+  publicationTransactionCount: number;
+  publicationCommitActionCount: number;
+  finalSubmitAttemptCount: number;
+  finalSubmitRetryCount: number;
+  finalSubmitActionStarted: boolean;
+  finalSubmitActionCompleted: boolean;
+  consumedAt?: string | null;
+}
+
 export const EXCEL_TEMPLATE_VERSION = "1.0";
 export const EXCEL_SIMPLE_ARTICLE_HEADERS = ["标题", "内容"] as const;
 export const EXCEL_ADVANCED_ARTICLE_HEADERS = [

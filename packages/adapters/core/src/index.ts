@@ -15,6 +15,8 @@ import type {
   ValidationResult
 } from "@publisher/domain";
 import { isAutomationAdapter, type AutomationAdapter } from "./automation";
+import type { OneShotPublicationGuard } from "./one-shot-publication";
+export * from "./one-shot-publication";
 
 export type BrowserPublishReconciliationStatus = "FOUND_PUBLISHED" | "CONFIRMED_NOT_PUBLISHED" | "STILL_UNCERTAIN";
 
@@ -24,6 +26,8 @@ export interface BrowserPublishAttemptContext {
   attempt: number;
   /** Called immediately before the adapter triggers the real final-submit side effect. */
   markSubmissionSideEffect?: () => void;
+  /** Present only for the explicitly owner-authorized, XHS one-shot publish path. */
+  oneShotPublicationGuard?: OneShotPublicationGuard;
 }
 
 export interface BrowserPublishPreflightResult {

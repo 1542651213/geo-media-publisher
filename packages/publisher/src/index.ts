@@ -1,4 +1,4 @@
-import { isAutomationAdapter, withUserInitiatedActionSettings, type AdapterRegistry, type BrowserExecutionMode, type BrowserPublishAttemptContext, type UserInitiatedAction } from "@publisher/adapters-core";
+import { isAutomationAdapter, OneShotPublicationGuard, withUserInitiatedActionSettings, type AdapterRegistry, type BrowserExecutionMode, type BrowserPublishAttemptContext, type OneShotPublicationAuthorization, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
 import { canReuseArticle, decideFailure, validatePlatformArticle, type Account, type AdapterManifest, type ErrorCode, type PlatformCapability, type PublishJob, type PublishMode, type PublishResult, type PublishVideoInput } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
@@ -211,7 +211,7 @@ export class PublisherService {
     return { job: this.repository.getJob(job.id) as PublishJob, record, message: prepared.message };
   }
 
-  async executeJob(jobId: string, action?: UserInitiatedAction, browserExecutionMode?: BrowserExecutionMode): Promise<PublishExecutionResult> {
+  async executeJob(jobId: string, action?: UserInitiatedAction, browserExecutionMode?: BrowserExecutionMode, oneShotAuthorization?: OneShotPublicationAuthorization): Promise<PublishExecutionResult> {
     const existing = this.repository.getJob(jobId);
     if (!existing) throw new Error("Publish job not found");
     if (existing.status === "NeedsReconciliation") return { job: existing, message: "Submission result is unknown; reconcile before retry" };
@@ -221,6 +221,9 @@ export class PublisherService {
     const account = this.repository.listAccounts().find((item) => item.id === job.accountId);
     const article = this.repository.getArticle(job.articleId);
     if (!account || !article) return this.fail(job, "UNKNOWN", "Associated account or article not found");
+    if (oneShotAuthorization && (job.platformKey !== "xiaohongshu" || oneShotAuthorization.platformKey !== "xiaohongshu" || oneShotAuthorization.accountId !== account.id || oneShotAuthorization.mode !== "ONE_SHOT_REAL_PUBLISH_ACCEPTANCE")) {
+      throw Object.assign(new Error("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH"), { code: "USER_ACTION_REQUIRED" });
+    }
     const records = this.repository.getPublishRecords(article.id);
     if (!canReuseArticle({ article, platformKey: job.platformKey, accountId: account.id, records })) return this.fail(job, "CONTENT_REJECTED", "Article reuse policy does not allow another publish");
 
@@ -229,14 +232,27 @@ export class PublisherService {
     let platformFinalSubmitPath = false;
     try {
       const adapter = this.adapters.getForContent(job.platformKey, job.contentKind ?? "article");
+      const oneShotOperationId = oneShotAuthorization?.operationId;
+      const oneShotGuard = oneShotAuthorization
+        ? new OneShotPublicationGuard(oneShotAuthorization, {
+          onConsumed: (authorization) => this.repository.consumeOneShotPublicationAuthorization(authorization.operationId, authorization.accountId, authorization.platformKey),
+          onConfirmationCommit: (authorization) => this.repository.recordOneShotPublicationConfirmationAction(authorization.operationId)
+        })
+        : undefined;
+      if (oneShotAuthorization && (job.dryRun || !isAutomationAdapter(adapter) || typeof adapter.finalSubmit !== "function")) throw Object.assign(new Error("ONE_SHOT_FINAL_SUBMIT_PATH_REQUIRED"), { code: "USER_ACTION_REQUIRED" });
       if (!job.dryRun && job.manualConfirmationRequired) throw Object.assign(new Error("Formal publishing requires user confirmation"), { code: "USER_ACTION_REQUIRED" });
       if (!job.dryRun && account.lastPublishAt && account.minimumIntervalSeconds > 0) {
         const nextAllowedAt = new Date(new Date(account.lastPublishAt).getTime() + account.minimumIntervalSeconds * 1000);
         if (nextAllowedAt.getTime() > Date.now()) throw Object.assign(new Error("Account publish rate limit has not elapsed"), { code: "RATE_LIMITED" });
       }
       const effectiveBrowserExecutionMode = this.resolveBrowserExecutionMode(job.platformKey, browserExecutionMode, job.contentKind ?? "article");
-      const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: job.dryRun, manualConfirmationRequired: job.manualConfirmationRequired }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
+      const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({
+        dryRun: job.dryRun,
+        manualConfirmationRequired: job.manualConfirmationRequired,
+        ...(oneShotAuthorization ? { oneShotImageSource: "SAFE_TEST_FIXTURE", oneShotOperationId: oneShotAuthorization.operationId } : {})
+      }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
       const preparedRecord = this.repository.getPublishRecordByJob(job.id);
+      if (preparedRecord?.response.OWNER_FINAL_SUBMIT_AUTHORIZATION === "OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH" && !oneShotAuthorization) throw Object.assign(new Error("ONE_SHOT_AUTHORIZATION_REQUIRED"), { code: "USER_ACTION_REQUIRED" });
       const usePlatformFinalSubmit = !job.dryRun && typeof adapter.finalSubmit === "function" && preparedRecord?.status === "Prepared";
       platformFinalSubmitPath = usePlatformFinalSubmit;
       if (!usePlatformFinalSubmit) {
@@ -291,10 +307,16 @@ export class PublisherService {
             jobId: job.id,
             submissionIntentId: claimedAttempt.id,
             attempt: claimedAttempt.attempt,
-            markSubmissionSideEffect: () => { finalSubmitSideEffectTriggered = true; }
+            markSubmissionSideEffect: () => { finalSubmitSideEffectTriggered = true; },
+            ...(oneShotGuard ? { oneShotPublicationGuard: oneShotGuard } : {})
           };
           try {
-            result = await withTimeout(adapter.finalSubmit(ctx, input, attempt), this.options.operationTimeoutMs ?? 120_000, "Platform final submit").then(async (submitted) => {
+            result = await withTimeout(adapter.finalSubmit(ctx, input, attempt), this.options.operationTimeoutMs ?? 120_000, "Platform final submit");
+            if (oneShotGuard) {
+              oneShotGuard.markFinalSubmitCompleted();
+              if (oneShotOperationId) this.repository.completeOneShotPublicationAuthorization(oneShotOperationId);
+            }
+            result = await (async (submitted) => {
               let collected = submitted;
               if (adapter.collectPublishResult) collected = await withTimeout(adapter.collectPublishResult(ctx, input, attempt), this.options.operationTimeoutMs ?? 120_000, "Platform publish result collection");
               if (!collected.externalId || !collected.publishedUrl) throw Object.assign(new Error("Platform final submit did not return a verifiable External ID and URL"), { code: "EXTERNAL_EVIDENCE_INCOMPLETE" });
@@ -302,7 +324,7 @@ export class PublisherService {
               const verification = await withTimeout(adapter.verifyPublished(ctx, input, { externalId: collected.externalId, publishedUrl: collected.publishedUrl }), this.options.operationTimeoutMs ?? 120_000, "Platform publish verification");
               if (verification.status !== "published" || !verification.externalId || !verification.publishedUrl) throw Object.assign(new Error(verification.errorMessage ?? "Platform publish verification did not pass"), { code: verification.errorCode ?? "RECONCILIATION_UNCERTAIN" });
               return { ...collected, externalId: verification.externalId, publishedUrl: verification.publishedUrl, status: "published" as const, response: { ...collected.response, verification: verification.response, verificationStatus: "Verified" } };
-            });
+            })(result);
           } catch (error) {
             if (isAutomationAdapter(adapter) && errorCode(error) !== "USER_ACTION_REQUIRED") await adapter.releaseOperationSession?.(ctx).catch(() => undefined);
             throw error;

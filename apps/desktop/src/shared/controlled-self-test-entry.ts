@@ -1,13 +1,16 @@
 import type { ControlledPostUploadDiscoveryResult, ControlledSelfTestMode, PublishFlowExplorationResult } from "@publisher/adapters-core";
 import type { Account, Platform } from "@publisher/domain";
+import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
 
 export const CONTROLLED_POST_UPLOAD_DISCOVERY_MODE = "POST_UPLOAD_DISCOVERY_ONLY" as const;
 export const PUBLISH_FLOW_EXPLORATION_MODE = "XHS_PUBLISH_FLOW_EXPLORATION" as const;
+export const ONE_SHOT_REAL_PUBLISH_ACCEPTANCE_MODE = "ONE_SHOT_REAL_PUBLISH_ACCEPTANCE" as const;
+export const ONE_SHOT_REAL_PUBLISH_ACCEPTANCE_CONFIRMATION = "本次会真实发布 1 条测试笔记，最多提交一次。";
 export const CONTROLLED_SELF_TEST_CONFIRMATION = "仅上传一张内置安全测试图片，完成上传后只读发现编辑器控件；不会填写标题或正文、不会修改设置、不会保存草稿、不会发布。确认继续？";
 export const PUBLISH_FLOW_EXPLORATION_CONFIRMATION = "将使用一张内置安全测试图片，并填写测试标题“小红书发布流程测试-请勿发布”和测试正文；只操作发布流程内部的必要控件，不会点击最终发布、不会保存正式草稿、不会创建发布记录。确认开始探索？";
 
-type ControlledEntryAccount = Pick<Account, "id" | "platformAccountId" | "enabled" | "archivedAt">;
-type ControlledEntryPlatform = Pick<Platform, "capabilities">;
+type ControlledEntryAccount = Pick<Account, "id" | "platformAccountId" | "enabled" | "archivedAt"> & Partial<Pick<Account, "platformKey">>;
+type ControlledEntryPlatform = Pick<Platform, "capabilities"> & Partial<Pick<Platform, "platformKey">>;
 
 export function supportsControlledPostUploadDiscovery(platform: ControlledEntryPlatform, account: ControlledEntryAccount): boolean {
   return account.enabled
@@ -72,4 +75,23 @@ export function publishFlowExplorationResultMessage(result: Pick<PublishFlowExpl
   return result.readyForFinalSubmit
     ? "小红书发布流程已探索到最终发布控件可用；未点击发布。"
     : `小红书发布流程已安全停止：${result.blocker ?? "未知阻塞"}`;
+}
+
+export function supportsOneShotRealPublishAcceptance(platform: ControlledEntryPlatform, account: ControlledEntryAccount): boolean {
+  return platform.platformKey === "xiaohongshu"
+    && account.platformKey === "xiaohongshu"
+    && account.id === XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID
+    && account.enabled
+    && !account.archivedAt;
+}
+
+export function buildOneShotRealPublishRequest(input: {
+  account: ControlledEntryAccount;
+  platform: ControlledEntryPlatform;
+  connected: boolean;
+  busy: boolean;
+  confirmed: boolean;
+}): { platformAccountId: string; mode: typeof ONE_SHOT_REAL_PUBLISH_ACCEPTANCE_MODE } | null {
+  if (!supportsOneShotRealPublishAcceptance(input.platform, input.account) || !input.connected || input.busy || !input.confirmed) return null;
+  return { platformAccountId: input.account.platformAccountId ?? input.account.id, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE_MODE };
 }

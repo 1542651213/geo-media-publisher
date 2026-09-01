@@ -74,3 +74,21 @@ export const aiProviderProfiles = sqliteTable("ai_provider_profiles", {
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull()
 });
+
+export const oneShotPublicationAuthorizations = sqliteTable("one_shot_publication_authorizations", {
+  id: text("id").primaryKey(),
+  authorization: text("authorization").notNull(),
+  platformKey: text("platform_key").notNull(),
+  accountId: text("account_id").notNull(),
+  operationId: text("operation_id").notNull().unique(),
+  mode: text("mode").notNull(),
+  state: text("state").notNull(),
+  publicationTransactionCount: integer("publication_transaction_count").notNull(),
+  publicationCommitActionCount: integer("publication_commit_action_count").notNull(),
+  finalSubmitAttemptCount: integer("final_submit_attempt_count").notNull(),
+  finalSubmitRetryCount: integer("final_submit_retry_count").notNull(),
+  finalSubmitActionStarted: integer("final_submit_action_started").notNull(),
+  finalSubmitActionCompleted: integer("final_submit_action_completed").notNull(),
+  createdAt: text("created_at").notNull(),
+  consumedAt: text("consumed_at")
+});

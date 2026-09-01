@@ -1,6 +1,6 @@
-import type { AccountContext, AccountProfile, LoginSession, LoginStatus, PublishArticleInput, ValidationResult } from "@publisher/domain";
+import type { AccountContext, AccountProfile, LoginSession, LoginStatus, PublishArticleInput, PublishResult, PublishStatusResult, ValidationResult } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
-import { type AutomationPrepareResult, type BrowserRuntimeAuthState, type BrowserSession, type BrowserSessionRuntimeSnapshot, type ControlledPostUploadDiscoveryResult, type PreSubmitGateFailureCode, type PreSubmitGateFailureStage, type PreSubmitGateResult, type PreSubmitGateStatus, type PublishFlowExplorationBudgets, type PublishFlowExplorationCounters, type PublishFlowExplorationInput, type PublishFlowExplorationResult } from "@publisher/adapters-core";
+import { classifyOneShotPostSubmitObservation, reconcileOneShotPublication, type AutomationPrepareResult, type BrowserPublishAttemptContext, type BrowserPublishReconciliationInput, type BrowserPublishReconciliationResult, type BrowserRuntimeAuthState, type BrowserSession, type BrowserSessionRuntimeSnapshot, type ControlledPostUploadDiscoveryResult, OneShotPublicationGuardError, type OneShotConfirmationCandidate, type OneShotFinalSubmitPreflight, type OneShotPublicationGuard, type OneShotPostSubmitObservation, type OneShotRealPublishAcceptanceInput, type OneShotRealPublishAcceptanceResult, type PreSubmitGateFailureCode, type PreSubmitGateFailureStage, type PreSubmitGateResult, type PreSubmitGateStatus, type PublishFlowExplorationBudgets, type PublishFlowExplorationCounters, type PublishFlowExplorationInput, type PublishFlowExplorationResult } from "@publisher/adapters-core";
 import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomationAdapterOptions, type BrowserPlatformDefinition, type BrowserSessionScopeEvidence } from "@publisher/adapters-browser";
 import type { Locator, Page } from "playwright-core";
 import { collectXhsAuthStateMetadata, collectXhsPreNavigationAuthStateMetadata, createXhsDiagnosticFingerprintKey, type XhsAuthStateMetadata } from "./auth-state-diagnostics";
@@ -1423,7 +1423,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
    * final submit surface, but it never invokes or simulates submission.
    */
   async runPublishFlowExploration(ctx: AccountContext, input: PublishFlowExplorationInput): Promise<PublishFlowExplorationResult> {
-    const operationId = randomUUID();
+    const operationId = input.operationId?.trim() || randomUUID();
     return this.accountOperationMutex.run(
       `${this.platformKey}:${ctx.accountId}`,
       () => this.runPublishFlowExplorationOnCanonicalPage(ctx, input, operationId),
@@ -1431,10 +1431,87 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     );
   }
 
+  /**
+   * Explicit Task10S adapter boundary. Callers must still create the formal
+   * Job/SubmissionIntent/PublishRecord lifecycle; this low-level method only
+   * exists for adapter contract tests and owner-approved orchestration.
+   */
+  async runOneShotRealPublishAcceptance(ctx: AccountContext, input: OneShotRealPublishAcceptanceInput & { oneShotPublicationGuard: OneShotPublicationGuard }): Promise<OneShotRealPublishAcceptanceResult> {
+    const operationId = input.authorization.operationId;
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
+      const exploration = await this.runPublishFlowExplorationOnCanonicalPage(ctx, { ...input, operationId }, operationId);
+      const base = input.oneShotPublicationGuard.authorization;
+      if (exploration.status !== "PASS_READY_FOR_FINAL_SUBMIT") {
+        return {
+          operationId,
+          status: "BLOCKED",
+          authorizationState: base.state === "CONSUMED" ? "CONSUMED" : "AUTHORIZED_UNUSED",
+          publicationTransactionCount: base.publicationTransactionCount,
+          publicationCommitActionCount: base.publicationCommitActionCount,
+          finalSubmitAttemptCount: base.finalSubmitAttemptCount,
+          finalSubmitRetryCount: 0,
+          finalSubmitActionStarted: base.finalSubmitActionStarted,
+          finalSubmitActionCompleted: base.finalSubmitActionCompleted,
+          postSubmitObservation: { status: "NOT_STARTED", blocker: exploration.blocker },
+          publicationReconciled: false,
+          externalId: null,
+          externalUrl: null,
+          publicPageVerified: false,
+          response: { exploration }
+        };
+      }
+      const article: PublishArticleInput = { articleId: operationId, title: input.title, body: input.body, summary: "", tags: [], images: [input.imagePath] };
+      try {
+        const submitted = await this.performOneShotFinalSubmit(ctx, article, input.oneShotPublicationGuard, {
+          jobId: operationId,
+          submissionIntentId: operationId,
+          attempt: 1
+        });
+        const auth = input.oneShotPublicationGuard.markFinalSubmitCompleted();
+        return {
+          operationId,
+          status: "PUBLISHED_VERIFIED",
+          authorizationState: "CONSUMED",
+          publicationTransactionCount: auth.publicationTransactionCount,
+          publicationCommitActionCount: auth.publicationCommitActionCount,
+          finalSubmitAttemptCount: auth.finalSubmitAttemptCount,
+          finalSubmitRetryCount: 0,
+          finalSubmitActionStarted: auth.finalSubmitActionStarted,
+          finalSubmitActionCompleted: auth.finalSubmitActionCompleted,
+          postSubmitObservation: submitted.response.postSubmitObservation as Record<string, unknown>,
+          publicationReconciled: submitted.response.publicPageVerified === true,
+          externalId: submitted.externalId ?? null,
+          externalUrl: submitted.publishedUrl ?? null,
+          publicPageVerified: submitted.response.publicPageVerified === true,
+          response: submitted.response
+        };
+      } catch (error) {
+        const auth = input.oneShotPublicationGuard.authorization;
+        return {
+          operationId,
+          status: error instanceof BrowserAutomationError && error.code === "CONTENT_REJECTED" ? "PLATFORM_REJECTED" : auth.finalSubmitActionStarted ? "NEEDS_RECONCILIATION" : "BLOCKED",
+          authorizationState: auth.state === "CONSUMED" ? "CONSUMED" : "AUTHORIZED_UNUSED",
+          publicationTransactionCount: auth.publicationTransactionCount,
+          publicationCommitActionCount: auth.publicationCommitActionCount,
+          finalSubmitAttemptCount: auth.finalSubmitAttemptCount,
+          finalSubmitRetryCount: 0,
+          finalSubmitActionStarted: auth.finalSubmitActionStarted,
+          finalSubmitActionCompleted: auth.finalSubmitActionCompleted,
+          postSubmitObservation: { status: "ERROR", message: error instanceof Error ? error.message : String(error) },
+          publicationReconciled: false,
+          externalId: null,
+          externalUrl: null,
+          publicPageVerified: false,
+          response: { error: error instanceof Error ? error.message : String(error) }
+        };
+      }
+    }, "oneShotRealPublishAcceptance");
+  }
+
   private async runPublishFlowExplorationOnCanonicalPage(
     ctx: AccountContext,
     input: PublishFlowExplorationInput,
-    operationId: ReturnType<typeof randomUUID>
+    operationId: string
   ): Promise<PublishFlowExplorationResult> {
     const startedAt = Date.now();
     const budgets = normalizeExplorationBudgets(input.budgets);
@@ -1864,7 +1941,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
 
   private async inspectPublishEditorOnCanonicalPage(
     ctx: AccountContext,
-    operationId: ReturnType<typeof randomUUID> = randomUUID(),
+    operationId: string = randomUUID(),
     completeOperation = true,
     operationAction: "PRE_SUBMIT_GATE" | "CONTROLLED_POST_UPLOAD_DISCOVERY" | "XHS_PUBLISH_FLOW_EXPLORATION" = "PRE_SUBMIT_GATE",
     inspectionOptions: { readinessWindowMs?: number; readinessSampleIntervalMs?: number } = {}
@@ -2377,6 +2454,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         login: "PASS",
         imagePostEntry: "verified",
         imageUploaded: true,
+        events: ["IMAGE_UPLOAD_STARTED", "IMAGE_UPLOAD_PASSED"],
         imageUploadEvidence: imageEvidence,
         titleEditor: "verified",
         titleReadback: true,
@@ -2398,6 +2476,228 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         publishRecordCreated: false
       }
     };
+  }
+
+  async finalSubmit(ctx: AccountContext, article: PublishArticleInput, attempt: BrowserPublishAttemptContext): Promise<PublishResult> {
+    const guard = attempt.oneShotPublicationGuard;
+    if (!guard) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书最终发布只允许通过 OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH guard；探索路径不会提交");
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, () => this.performOneShotFinalSubmit(ctx, article, guard, attempt), "oneShotFinalSubmit");
+  }
+
+  async verifyPublished(ctx: AccountContext, article: PublishArticleInput, result: Pick<PublishResult, "externalId" | "publishedUrl">): Promise<PublishStatusResult> {
+    const externalId = result.externalId?.trim() ?? "";
+    const publishedUrl = result.publishedUrl?.trim() ?? "";
+    if (!externalId || !publishedUrl) return { status: "failed", externalId: externalId || undefined, publishedUrl: publishedUrl || undefined, response: { publicPageVerified: false, titleMatch: false, bodyMatch: false }, errorCode: "EXTERNAL_EVIDENCE_INCOMPLETE", errorMessage: "小红书真实发布缺少 External ID 或 URL" };
+    const canonical = await this.activeCanonicalPage(ctx);
+    if (!canonical) return { status: "failed", externalId, publishedUrl, response: { publicPageVerified: false, titleMatch: false, bodyMatch: false }, errorCode: "RECONCILIATION_UNCERTAIN", errorMessage: "小红书公开结果验证需要当前 canonical Page" };
+    try {
+      await canonical.page.goto(publishedUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      await waitForProbe(canonical.page);
+      const pageText = await bodyText(canonical.page);
+      const titleMatch = pageText.includes(article.title);
+      const bodyMatch = pageText.includes(article.body);
+      const publicPageVerified = this.publicResultFromUrl(canonical.page.url())?.externalId === externalId && titleMatch && bodyMatch;
+      return { status: publicPageVerified ? "published" : "failed", externalId, publishedUrl: canonical.page.url(), response: { publicPageVerified, titleMatch, bodyMatch, pageUrl: sanitizePageUrl(canonical.page) }, ...(publicPageVerified ? {} : { errorCode: "RECONCILIATION_UNCERTAIN" as const, errorMessage: "小红书公开页未同时证明 External ID、标题和正文" }) };
+    } catch (error) {
+      return { status: "failed", externalId, publishedUrl, response: { publicPageVerified: false, titleMatch: false, bodyMatch: false }, errorCode: "RECONCILIATION_UNCERTAIN", errorMessage: error instanceof Error ? error.message : "小红书公开结果验证失败" };
+    }
+  }
+
+  async reconcile(ctx: AccountContext, input: BrowserPublishReconciliationInput): Promise<BrowserPublishReconciliationResult> {
+    const canonical = await this.activeCanonicalPage(ctx);
+    if (!canonical) return { status: "STILL_UNCERTAIN", titleMatch: false, accountMatch: false, timeWindowMatch: false, response: { adapter: this.platformKey, readOnly: true, evidence: "canonical_page_unavailable" }, message: "当前没有可用于小红书只读回查的 canonical Page" };
+    try {
+      const pageText = await bodyText(canonical.page);
+      const publicResult = this.publicResultFromUrl(canonical.page.url());
+      const titleMatch = pageText.includes(input.title);
+      const accountMatch = pageText.includes(input.accountName);
+      const timeWindowMatch = input.waitWindowSatisfied === true || input.submissionIntentState === "Submitted";
+      const thumbnailMatch = Boolean(publicResult);
+      const result = reconcileOneShotPublication({ titleMatch, accountMatch, timeWindowMatch, thumbnailMatch, externalId: publicResult?.externalId ?? input.expectedExternalId ?? undefined, publishedUrl: publicResult?.publishedUrl ?? input.expectedPublishedUrl ?? undefined });
+      if (result.reconciled && result.externalId && result.publishedUrl) return { status: "FOUND_PUBLISHED", externalId: result.externalId, publishedUrl: result.publishedUrl, titleMatch, accountMatch, timeWindowMatch, response: { adapter: this.platformKey, readOnly: true, publicationReconciled: true, publicPageVerified: true }, message: "小红书只读回查取得了标题、账号、时间窗口和缩略图信号" };
+      return { status: "STILL_UNCERTAIN", titleMatch, accountMatch, timeWindowMatch, response: { adapter: this.platformKey, readOnly: true, publicationReconciled: false, publicPageVerified: false }, message: "小红书只读回查证据不足，保持 NeedsReconciliation" };
+    } catch (error) {
+      return { status: "STILL_UNCERTAIN", titleMatch: false, accountMatch: false, timeWindowMatch: false, response: { adapter: this.platformKey, readOnly: true, error: error instanceof Error ? error.message : String(error) }, message: "小红书只读回查失败，保持 NeedsReconciliation" };
+    }
+  }
+
+  private async performOneShotFinalSubmit(ctx: AccountContext, article: PublishArticleInput, guard: OneShotPublicationGuard, attempt: BrowserPublishAttemptContext): Promise<PublishResult> {
+    const canonical = await this.activeCanonicalPage(ctx);
+    if (!canonical || this.isCanonicalPageClosed(canonical.page) || !this.pageContextMatchesSession(canonical.session, canonical.page)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书 canonical Context/Page 不可用，未执行最终发布");
+    const preflight = await this.buildOneShotFinalSubmitPreflight(ctx, article, canonical, guard);
+    const finalControl = await this.inspectOneShotFinalSubmitControl(canonical.page);
+    const beforeUrl = canonical.page.url();
+    try {
+      await guard.startFinalSubmit(preflight, async () => {
+        attempt.markSubmissionSideEffect?.();
+        try {
+          await finalControl.locator.click();
+        } catch (error) {
+          throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", `小红书最终发布 action 已开始但 click 未正常返回：${error instanceof Error ? error.message : String(error)}`);
+        }
+      });
+    } catch (error) {
+      if (error instanceof OneShotPublicationGuardError) throw new BrowserAutomationError("USER_ACTION_REQUIRED", `${error.code}: 未执行小红书最终发布`);
+      throw error;
+    }
+
+    const confirmation = await this.inspectOneShotConfirmationControl(canonical.page);
+    if (confirmation.status === "AMBIGUOUS") throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "小红书发布后出现多个确认 modal 候选，未盲点");
+    if (confirmation.status === "FOUND_UNIQUE" && confirmation.candidate) {
+      try {
+        await guard.confirmModal(confirmation.candidate, async () => confirmation.locator.click());
+      } catch (error) {
+        if (error instanceof OneShotPublicationGuardError) throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", `${error.code}: 小红书确认 modal 未通过安全校验`);
+        throw error;
+      }
+    }
+
+    const observation = await this.observeOneShotPostSubmit(canonical.page, beforeUrl);
+    const observationStatus = classifyOneShotPostSubmitObservation(observation);
+    if (observationStatus === "PLATFORM_REJECTED") throw new BrowserAutomationError("CONTENT_REJECTED", `小红书平台拒绝了测试发布：${observation.platformError ?? "未提供原因"}`);
+    if (observationStatus !== "PUBLISHED_VERIFIED") throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "小红书提交结果不明确；只允许进入只读 reconciliation，不得重试");
+    const publicResult = this.publicResultFromUrl(canonical.page.url());
+    if (!publicResult) throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "小红书提交后未取得可靠 External ID/URL；禁止再次提交");
+    guard.markFinalSubmitCompleted();
+    return {
+      success: true,
+      status: "published",
+      externalId: publicResult.externalId,
+      publishedUrl: publicResult.publishedUrl,
+      response: {
+        adapter: this.platformKey,
+        stage: "one_shot_final_submitted",
+        ownerFinalSubmitAuthorization: "OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH",
+        finalSubmitAuthorizationState: guard.authorization.state,
+        finalSubmitPreflight: preflight,
+        publicationTransactionCount: guard.authorization.publicationTransactionCount,
+        publicationCommitActionCount: guard.authorization.publicationCommitActionCount,
+        finalSubmitAttemptCount: guard.authorization.finalSubmitAttemptCount,
+        finalSubmitRetryCount: 0,
+        finalSubmitActionStarted: guard.authorization.finalSubmitActionStarted,
+        finalSubmitActionCompleted: guard.authorization.finalSubmitActionCompleted,
+        postSubmitObservation: observation,
+        publicationReconciled: true,
+        externalId: publicResult.externalId,
+        externalUrl: publicResult.publishedUrl,
+        publicPageVerified: true,
+        OWNER_FINAL_SUBMIT_AUTHORIZATION: "OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH",
+        FINAL_SUBMIT_AUTHORIZATION_STATE: guard.authorization.state,
+        FINAL_SUBMIT_PREFLIGHT: "PASS",
+        PUBLICATION_TRANSACTION_COUNT: guard.authorization.publicationTransactionCount,
+        PUBLICATION_COMMIT_ACTION_COUNT: guard.authorization.publicationCommitActionCount,
+        FINAL_SUBMIT_ATTEMPT_COUNT: guard.authorization.finalSubmitAttemptCount,
+        FINAL_SUBMIT_RETRY_COUNT: 0,
+        FINAL_SUBMIT_ACTION_STARTED: guard.authorization.finalSubmitActionStarted,
+        FINAL_SUBMIT_ACTION_COMPLETED: guard.authorization.finalSubmitActionCompleted,
+        POST_SUBMIT_OBSERVATION: observation,
+        PUBLICATION_RECONCILED: true,
+        EXTERNAL_ID: publicResult.externalId,
+        EXTERNAL_URL: publicResult.publishedUrl,
+        PUBLIC_PAGE_VERIFIED: true,
+        beforeUrl,
+        afterUrl: canonical.page.url(),
+        finalSubmitCount: 1
+      }
+    };
+  }
+
+  private async buildOneShotFinalSubmitPreflight(ctx: AccountContext, article: PublishArticleInput, canonical: { session: BrowserSession; page: Page }, guard: OneShotPublicationGuard): Promise<OneShotFinalSubmitPreflight> {
+    const authorization = guard.authorization;
+    const metadata = { operationId: authorization.operationId, platformKey: "xiaohongshu" as const, accountId: ctx.accountId, contextDebugId: canonical.session.contextDebugId ?? "unknown-context", pageDebugId: canonical.session.pageDebugId ?? "unknown-page" };
+    const inspection = await inspectPostUploadImageEditor(canonical.page, metadata, { emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
+    const titleEditor = await this.discoverUniqueEditor(canonical.page, "title");
+    const bodyEditor = await this.discoverUniqueEditor(canonical.page, "body");
+    const titleReadbackVerified = await readEditor(titleEditor, "title") === normalizeXiaohongshuEditorText(article.title);
+    const bodyReadbackVerified = await readEditor(bodyEditor, "body") === normalizeXiaohongshuEditorText(article.body);
+    const requiredFieldsPass = !(await this.inspectRequiredFields(canonical.page)).some((field) => field.empty);
+    const finalControl = await this.inspectOneShotFinalSubmitControl(canonical.page);
+    return {
+      authorization: authorization.authorization,
+      authorizationState: authorization.state,
+      platformKey: "xiaohongshu",
+      accountId: authorization.accountId,
+      operationId: authorization.operationId,
+      mode: authorization.mode,
+      authenticated: this.getBrowserRuntimeState(ctx).state === "AUTHENTICATED",
+      sameCanonicalContext: this.pageContextMatchesSession(canonical.session, canonical.page),
+      sameCanonicalPage: canonical.session.page === canonical.page,
+      mutexOwned: this.accountOperationMutex.getState(`${this.platformKey}:${ctx.accountId}`).operationInProgress,
+      editorPhase: inspection.phase as "IMAGE_POST_POST_UPLOAD_EDITOR",
+      safeFixtureUploaded: article.images?.length === 1 && ctx.settings.oneShotImageSource === "SAFE_TEST_FIXTURE",
+      titleReadbackVerified,
+      bodyReadbackVerified,
+      requiredFieldsPass,
+      loginPagePresent: this.isLoginPage(canonical.page.url()),
+      securityVerificationPresent: this.isVerificationUrl(canonical.page.url()),
+      finalSubmitControl: { status: finalControl.status, visible: finalControl.visible, enabled: finalControl.enabled, hitTestValid: finalControl.hitTestValid, label: finalControl.label }
+    };
+  }
+
+  private async inspectOneShotFinalSubmitControl(page: Page): Promise<{ locator: Locator; status: "FOUND_UNIQUE" | "NOT_FOUND" | "AMBIGUOUS" | "NOT_VISIBLE" | "DISABLED" | "HITTEST_INVALID"; visible: boolean; enabled: boolean; hitTestValid: boolean; label?: string }> {
+    const controls = page.locator(XIAOHONGSHU_FINAL_SUBMIT_SELECTOR);
+    const matches: Array<{ locator: Locator; label: string; visible: boolean; enabled: boolean; hitTestValid: boolean }> = [];
+    for (let index = 0; index < await locatorCount(controls); index += 1) {
+      const locator = locatorAt(controls, index);
+      const label = normalizeXiaohongshuEditorText((await innerText(locator)) || (await attribute(locator, "aria-label")) || (await attribute(locator, "title")));
+      if (!XIAOHONGSHU_FINAL_SUBMIT_PATTERN.test(label) || XIAOHONGSHU_VIDEO_PATTERN.test(label)) continue;
+      const visible = await isVisible(locator);
+      const enabled = await isEnabled(locator);
+      const box = await locatorBoundingBox(locator);
+      matches.push({ locator, label, visible, enabled, hitTestValid: visible && box !== null && await locatorHitTestValid(locator, box) });
+    }
+    if (matches.length === 0) return { locator: controls, status: "NOT_FOUND", visible: false, enabled: false, hitTestValid: false };
+    if (matches.length > 1) return { locator: matches[0]!.locator, status: "AMBIGUOUS", visible: false, enabled: false, hitTestValid: false };
+    const match = matches[0]!;
+    if (!match.visible) return { ...match, status: "NOT_VISIBLE" };
+    if (!match.enabled) return { ...match, status: "DISABLED" };
+    if (!match.hitTestValid) return { ...match, status: "HITTEST_INVALID" };
+    return { ...match, status: "FOUND_UNIQUE" };
+  }
+
+  private async inspectOneShotConfirmationControl(page: Page): Promise<{ status: "NONE" | "FOUND_UNIQUE" | "AMBIGUOUS"; locator: Locator; candidate?: OneShotConfirmationCandidate }> {
+    const modals = page.locator('[role="dialog"], [aria-modal="true"], [class*="modal" i], [class*="dialog" i]');
+    const matches: Array<{ locator: Locator; candidate: OneShotConfirmationCandidate }> = [];
+    for (let modalIndex = 0; modalIndex < await locatorCount(modals); modalIndex += 1) {
+      const modal = locatorAt(modals, modalIndex);
+      if (!(await isVisible(modal))) continue;
+      const controls = modal.locator('button, [role="button"]');
+      for (let controlIndex = 0; controlIndex < await locatorCount(controls); controlIndex += 1) {
+        const locator = locatorAt(controls, controlIndex);
+        const semanticIntent = normalizeXiaohongshuEditorText((await innerText(locator)) || (await attribute(locator, "aria-label")) || (await attribute(locator, "title")));
+        if (!/确认发布|继续发布|confirm\s*publish/iu.test(semanticIntent)) continue;
+        const visible = await isVisible(locator);
+        const enabled = await isEnabled(locator);
+        const box = await locatorBoundingBox(locator);
+        matches.push({ locator, candidate: { candidateId: `modal-${modalIndex}-control-${controlIndex}`, modalId: `modal-${modalIndex}`, semanticIntent, sameModal: true, unique: true, visible, enabled, hitTestValid: visible && enabled && box !== null && await locatorHitTestValid(locator, box) } });
+      }
+    }
+    if (matches.length === 0) return { status: "NONE", locator: page.locator("body") };
+    if (matches.length !== 1) return { status: "AMBIGUOUS", locator: matches[0]!.locator };
+    return { status: "FOUND_UNIQUE", locator: matches[0]!.locator, candidate: matches[0]!.candidate };
+  }
+
+  private async observeOneShotPostSubmit(page: Page, beforeUrl: string): Promise<OneShotPostSubmitObservation> {
+    const startedAt = Date.now();
+    let observation: OneShotPostSubmitObservation = { urlChanged: false, successToast: false, editorExited: false, successPage: false, creatorContentMatched: "UNKNOWN", platformError: null };
+    while (Date.now() - startedAt <= 10_000) {
+      const currentUrl = page.url();
+      const text = await bodyText(page);
+      const urlChanged = currentUrl !== beforeUrl;
+      const successToast = /发布成功|提交成功|发布完成|successfully published/iu.test(text);
+      const editorExited = !this.isEditorRoute(currentUrl);
+      const successPage = /\/explore\/|\/discovery\/item\/|success|published/iu.test(currentUrl);
+      const platformError = /发布失败|提交失败|审核拒绝|publish failed|rejected/iu.exec(text)?.[0] ?? null;
+      observation = { urlChanged, successToast, editorExited, successPage, creatorContentMatched: "UNKNOWN", platformError };
+      if (platformError || (urlChanged && successPage) || (successToast && editorExited)) return observation;
+      await waitForProbe(page, 250);
+    }
+    return observation;
+  }
+
+  private publicResultFromUrl(url: string): { externalId: string; publishedUrl: string } | null {
+    const match = /^https:\/\/(?:www\.)?xiaohongshu\.com\/(?:explore|discovery\/item)\/([^/?#]+)/iu.exec(url);
+    return match?.[1] ? { externalId: match[1], publishedUrl: `${new URL(url).origin}${new URL(url).pathname}` } : null;
   }
 
   protected override async openBackendPage(ctx: AccountContext, url = XIAOHONGSHU_CREATOR_HOME): Promise<{ page: Page; session: BrowserSession; backendUrl: string }> {
@@ -2990,7 +3290,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     }
   }
 
-  private async navigateToImagePostEditor(page: Page, operationId = randomUUID(), accountId = "unknown-account", identity: { context?: object; contextDebugId?: string; pageDebugId?: string } = {}, policy: XiaohongshuEditorNavigationPolicy = "PREPARE_PUBLISH"): Promise<XiaohongshuEditorEntryResult> {
+  private async navigateToImagePostEditor(page: Page, operationId: string = randomUUID(), accountId = "unknown-account", identity: { context?: object; contextDebugId?: string; pageDebugId?: string } = {}, policy: XiaohongshuEditorNavigationPolicy = "PREPARE_PUBLISH"): Promise<XiaohongshuEditorEntryResult> {
     const startedAt = Date.now();
     const startUrl = sanitizePageUrl(page);
     if (this.isEditorRoute(page.url())) {

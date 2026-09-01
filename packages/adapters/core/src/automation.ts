@@ -10,6 +10,8 @@ import type {
 } from "@publisher/domain";
 import type { BrowserSessionRuntimeSnapshot, BrowserSessionRuntimeState } from "./browser";
 import type { PlatformAdapter } from "./index";
+import type { OneShotPublicationAuthorization, OneShotPublicationGuard } from "./one-shot-publication";
+export type { OneShotPublicationAuthorization, OneShotPublicationGuard } from "./one-shot-publication";
 
 export interface AutomationPrepareResult {
   prepared: boolean;
@@ -30,7 +32,30 @@ export interface PublishFlowExplorationInput {
   imageSource: "SAFE_TEST_FIXTURE";
   title: string;
   body: string;
+  operationId?: string;
   budgets?: Partial<PublishFlowExplorationBudgets>;
+}
+
+export interface OneShotRealPublishAcceptanceInput extends PublishFlowExplorationInput {
+  authorization: OneShotPublicationAuthorization;
+}
+
+export interface OneShotRealPublishAcceptanceResult {
+  operationId: string;
+  status: "PUBLISHED_VERIFIED" | "NEEDS_RECONCILIATION" | "PLATFORM_REJECTED" | "BLOCKED";
+  authorizationState: "AUTHORIZED_UNUSED" | "CONSUMED";
+  publicationTransactionCount: number;
+  publicationCommitActionCount: number;
+  finalSubmitAttemptCount: number;
+  finalSubmitRetryCount: 0;
+  finalSubmitActionStarted: boolean;
+  finalSubmitActionCompleted: boolean;
+  postSubmitObservation: Record<string, unknown>;
+  publicationReconciled: boolean;
+  externalId: string | null;
+  externalUrl: string | null;
+  publicPageVerified: boolean;
+  response: Record<string, unknown>;
 }
 
 export interface PublishFlowExplorationBudgets {
@@ -278,6 +303,8 @@ export interface AutomationAdapter extends PlatformAdapter {
   runControlledPostUploadDiscovery?(ctx: AccountContext, input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE" }): Promise<ControlledPostUploadDiscoveryResult>;
   /** Optional bounded XHS exploration. It must never activate final publication. */
   runPublishFlowExploration?(ctx: AccountContext, input: PublishFlowExplorationInput): Promise<PublishFlowExplorationResult>;
+  /** Explicit Task10S path. It must be XHS/account/operation scoped and use the supplied guard for the only real submit. */
+  runOneShotRealPublishAcceptance?(ctx: AccountContext, input: OneShotRealPublishAcceptanceInput & { oneShotPublicationGuard: OneShotPublicationGuard }): Promise<OneShotRealPublishAcceptanceResult>;
   preparePublish(ctx: AccountContext, article: PublishArticleInput): Promise<AutomationPrepareResult>;
   verifyPublish(ctx: AccountContext, externalId?: string): Promise<PublishStatusResult>;
   logout(ctx: AccountContext): Promise<void>;

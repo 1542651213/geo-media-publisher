@@ -5,14 +5,22 @@ import type {
 } from "@publisher/adapters-core";
 import type { ImageEditorBoundingBox, ImageEditorPhase } from "./image-editor-discovery";
 
+export const MAX_EXPLORATION_DURATION_MS = 900_000 as const;
+export const MAX_NAVIGATION_RESTARTS = 2 as const;
+export const MAX_SAFE_IMAGE_UPLOAD_ATTEMPTS = 3 as const;
+export const MAX_INTERMEDIATE_ACTION_CLICKS = 12 as const;
+export const MAX_REFRESH_COUNT = 1 as const;
+export const MAX_TITLE_MUTATIONS = 3 as const;
+export const MAX_BODY_MUTATIONS = 3 as const;
+
 export const DEFAULT_XHS_PUBLISH_FLOW_EXPLORATION_BUDGETS: PublishFlowExplorationBudgets = {
-  maxDurationMs: 15 * 60 * 1000,
-  maxNavigationRestarts: 2,
-  maxUploadAttempts: 3,
-  maxIntermediateActionClicks: 12,
-  maxRefreshCount: 1,
-  maxTitleMutations: 3,
-  maxBodyMutations: 3
+  maxDurationMs: MAX_EXPLORATION_DURATION_MS,
+  maxNavigationRestarts: MAX_NAVIGATION_RESTARTS,
+  maxUploadAttempts: MAX_SAFE_IMAGE_UPLOAD_ATTEMPTS,
+  maxIntermediateActionClicks: MAX_INTERMEDIATE_ACTION_CLICKS,
+  maxRefreshCount: MAX_REFRESH_COUNT,
+  maxTitleMutations: MAX_TITLE_MUTATIONS,
+  maxBodyMutations: MAX_BODY_MUTATIONS
 };
 
 export interface XhsIntermediateActionCandidate {

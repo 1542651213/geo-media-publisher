@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type Database from "better-sqlite3";
 import { CONTENT_STUDIO_PLATFORM_KEYS, CORE_AI_FABRICATION_RULES, conservativePlatformContentRules, expandKeywords, normalizeContentReviewMode } from "@publisher/domain";
-import type { Account, ActivityLog, AdapterManifest, AIProviderProfile, AIUsage, Article, ArticleVariant, BackgroundAutomationStatus, Brand, BrandAsset, BrandDifferentiationMetrics, BrandKnowledgeCategory, BrandKnowledgeEntry, CityRegion, ContentGoal, ContentIntent, ContentQualityCheckResult, ContentQualityContentType, ContentQualityIssue, ContentQualityStatus, ContentQualityTrigger, ContentReviewMode, ContentSource, ContentStudioContent, ContentStudioPlatformKey, ContentStudioTopicPlan, DashboardStats, ExcelArticleRowInput, ExcelImportDiagnostic, ExcelImportDiagnosticCode, ExcelImportPreview, ExcelImportPreviewRow, ExcelImportResult, ExcelImportSheetCandidate, FinalPublishMode, ImageAsset, ImageSelectionMode, KnowledgeSnapshot, KeywordItem, KeywordTemplate, LoginStatus, Notification, Platform, PlatformCapability, PlatformCapabilities, PlatformContentRules, PlatformProfile, PlatformSelfTestCleanupStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PlatformSelfTestStep, PromotionStrength, PublishJob, PublishPlan, PublishRecord, SearchIntent, VideoAsset } from "@publisher/domain";
+import type { Account, ActivityLog, AdapterManifest, AIProviderProfile, AIUsage, Article, ArticleVariant, BackgroundAutomationStatus, Brand, BrandAsset, BrandDifferentiationMetrics, BrandKnowledgeCategory, BrandKnowledgeEntry, CityRegion, ContentGoal, ContentIntent, ContentQualityCheckResult, ContentQualityContentType, ContentQualityIssue, ContentQualityStatus, ContentQualityTrigger, ContentReviewMode, ContentSource, ContentStudioContent, ContentStudioPlatformKey, ContentStudioTopicPlan, DashboardStats, ExcelArticleRowInput, ExcelImportDiagnostic, ExcelImportDiagnosticCode, ExcelImportPreview, ExcelImportPreviewRow, ExcelImportResult, ExcelImportSheetCandidate, FinalPublishMode, ImageAsset, ImageSelectionMode, KnowledgeSnapshot, KeywordItem, KeywordTemplate, LoginStatus, Notification, OneShotPublicationAuthorization, Platform, PlatformCapability, PlatformCapabilities, PlatformContentRules, PlatformProfile, PlatformSelfTestCleanupStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PlatformSelfTestStep, PromotionStrength, PublishJob, PublishPlan, PublishRecord, SearchIntent, VideoAsset } from "@publisher/domain";
 
 type SqlValue = string | number | null;
 type Row = Record<string, unknown>;
@@ -2379,6 +2379,65 @@ export class AppRepository {
     const row = this.db.prepare("SELECT id,job_id,state,external_id,attempt,final_submit_count,error_code,updated_at FROM submission_intents WHERE job_id=? ORDER BY created_at DESC LIMIT 1").get(jobId) as Row | undefined;
     if (!row) return null;
     return { id: textValue(row.id), jobId: textValue(row.job_id), state: textValue(row.state), externalId: typeof row.external_id === "string" ? row.external_id : null, attempt: intValue(row.attempt), finalSubmitCount: intValue(row.final_submit_count), errorCode: typeof row.error_code === "string" ? row.error_code : null, updatedAt: textValue(row.updated_at) };
+  }
+
+  createOneShotPublicationAuthorization(authorization: OneShotPublicationAuthorization): OneShotPublicationAuthorization {
+    const timestamp = now();
+    this.db.prepare(`INSERT INTO one_shot_publication_authorizations (
+      id,authorization,platform_key,account_id,operation_id,mode,state,publication_transaction_count,
+      publication_commit_action_count,final_submit_attempt_count,final_submit_retry_count,
+      final_submit_action_started,final_submit_action_completed,created_at,consumed_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      randomUUID(), authorization.authorization, authorization.platformKey, authorization.accountId, authorization.operationId,
+      authorization.mode, authorization.state, authorization.publicationTransactionCount, authorization.publicationCommitActionCount,
+      authorization.finalSubmitAttemptCount, authorization.finalSubmitRetryCount, authorization.finalSubmitActionStarted ? 1 : 0,
+      authorization.finalSubmitActionCompleted ? 1 : 0, timestamp, authorization.consumedAt ?? null
+    );
+    return this.getOneShotPublicationAuthorization(authorization.operationId) as OneShotPublicationAuthorization;
+  }
+
+  getOneShotPublicationAuthorization(operationId: string): OneShotPublicationAuthorization | null {
+    const row = this.db.prepare("SELECT * FROM one_shot_publication_authorizations WHERE operation_id=?").get(operationId) as Row | undefined;
+    if (!row) return null;
+    return {
+      authorization: textValue(row.authorization) as OneShotPublicationAuthorization["authorization"],
+      state: textValue(row.state) as OneShotPublicationAuthorization["state"],
+      platformKey: textValue(row.platform_key) as OneShotPublicationAuthorization["platformKey"],
+      accountId: textValue(row.account_id) as OneShotPublicationAuthorization["accountId"],
+      operationId: textValue(row.operation_id),
+      mode: textValue(row.mode) as OneShotPublicationAuthorization["mode"],
+      publicationTransactionCount: intValue(row.publication_transaction_count),
+      publicationCommitActionCount: intValue(row.publication_commit_action_count),
+      finalSubmitAttemptCount: intValue(row.final_submit_attempt_count),
+      finalSubmitRetryCount: intValue(row.final_submit_retry_count),
+      finalSubmitActionStarted: boolValue(row.final_submit_action_started),
+      finalSubmitActionCompleted: boolValue(row.final_submit_action_completed),
+      consumedAt: typeof row.consumed_at === "string" ? row.consumed_at : null
+    };
+  }
+
+  consumeOneShotPublicationAuthorization(operationId: string, accountId: string, platformKey: string): boolean {
+    const timestamp = now();
+    const result = this.db.prepare(`UPDATE one_shot_publication_authorizations SET
+      state='CONSUMED', publication_transaction_count=1, publication_commit_action_count=1,
+      final_submit_attempt_count=1, final_submit_retry_count=0, final_submit_action_started=1,
+      consumed_at=? WHERE operation_id=? AND account_id=? AND platform_key=? AND authorization='OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH'
+      AND mode='ONE_SHOT_REAL_PUBLISH_ACCEPTANCE' AND state='AUTHORIZED_UNUSED'
+      AND publication_transaction_count=0 AND publication_commit_action_count=0
+      AND final_submit_attempt_count=0 AND final_submit_retry_count=0`).run(timestamp, operationId, accountId, platformKey);
+    return result.changes === 1;
+  }
+
+  recordOneShotPublicationConfirmationAction(operationId: string): boolean {
+    const result = this.db.prepare(`UPDATE one_shot_publication_authorizations SET publication_commit_action_count=2
+      WHERE operation_id=? AND state='CONSUMED' AND publication_transaction_count=1
+      AND final_submit_attempt_count=1 AND publication_commit_action_count=1`).run(operationId);
+    return result.changes === 1;
+  }
+
+  completeOneShotPublicationAuthorization(operationId: string): boolean {
+    const result = this.db.prepare("UPDATE one_shot_publication_authorizations SET final_submit_action_completed=1 WHERE operation_id=? AND state='CONSUMED' AND final_submit_attempt_count=1").run(operationId);
+    return result.changes === 1;
   }
 
   claimFinalSubmitAttempt(intentId: string): { id: string; jobId: string; attempt: number } {

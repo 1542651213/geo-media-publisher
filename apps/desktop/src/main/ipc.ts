@@ -761,6 +761,9 @@ export function registerIpc(deps: IpcDependencies): void {
   register("platform-self-test:request-publish", (_event, payload) => platformSelfTests.requestPublish(z.object({ platformAccountId: idSchema }).parse(payload).platformAccountId));
   register("platform-self-test:confirm-publish", async (_event, payload) => { const input = z.object({ testRunId: idSchema, testVideoPath: z.string().max(8192).optional() }).parse(payload); return platformSelfTests.confirmPublish(input.testRunId, input.testVideoPath); });
   register("platform-self-test:cancel-publish", (_event, payload) => platformSelfTests.cancelPublish(z.object({ testRunId: idSchema }).parse(payload).testRunId));
+  register("platform-self-test:request-one-shot-publish", (_event, payload) => platformSelfTests.requestOneShotPublish(z.object({ platformAccountId: idSchema }).parse(payload).platformAccountId));
+  register("platform-self-test:confirm-one-shot-publish", async (_event, payload) => platformSelfTests.confirmOneShotPublish(z.object({ testRunId: idSchema }).parse(payload).testRunId));
+  register("platform-self-test:cancel-one-shot-publish", (_event, payload) => platformSelfTests.cancelOneShotPublish(z.object({ testRunId: idSchema }).parse(payload).testRunId));
   register("platform-self-test:confirm-delete", async (_event, payload) => platformSelfTests.confirmDelete(z.object({ testRunId: idSchema }).parse(payload).testRunId));
 
   register("plans:list", () => repository.listPlans());

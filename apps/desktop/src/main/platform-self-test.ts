@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AppRepository } from "@publisher/db";
-import { isAutomationAdapter, type AdapterRegistry, type AutomationAdapter, type ControlledSelfTestMode, type PlatformAdapter, type UserInitiatedAction } from "@publisher/adapters-core";
+import { createOwnerAuthorizedOneShotPublication, isAutomationAdapter, ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type AdapterRegistry, type AutomationAdapter, type ControlledSelfTestMode, type PlatformAdapter, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { AutomationPrepareResult, ControlledPostUploadDiscoveryResult, PublishFlowExplorationResult } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
 import type { PublisherService } from "@publisher/publisher";
@@ -30,6 +30,9 @@ function safeSelfTestImagePath(fileName = "task10n-safe-test.png"): string {
 
 const XHS_EXPLORATION_TITLE = "小红书发布流程测试-请勿发布";
 const XHS_EXPLORATION_BODY = "自动化发布流程验证，仅用于本地测试，不执行最终发布。";
+const XHS_ONE_SHOT_TITLE = "自动化发布测试｜请忽略";
+const XHS_ONE_SHOT_BODY = "这是一条小红书图文发布流程自动化测试内容，仅用于验证发布功能，请忽略。";
+const XHS_ONE_SHOT_CONFIRMATION = "本次会真实发布 1 条测试笔记，最多提交一次。";
 const XHS_EXPLORATION_EVIDENCE_FILE = "xiaohongshu-task10r-publish-flow-exploration.json";
 function publishDomainCountsEqual(left: { publishJobs: number; submissionIntents: number; publishRecords: number }, right: { publishJobs: number; submissionIntents: number; publishRecords: number }): boolean {
   return left.publishJobs === right.publishJobs && left.submissionIntents === right.submissionIntents && left.publishRecords === right.publishRecords;
@@ -192,7 +195,7 @@ export class PlatformSelfTestService {
    * creates a Job, SubmissionIntent, or PublishRecord.
    */
   async runPublishFlowExploration(platformAccountId: string, mode: "XHS_PUBLISH_FLOW_EXPLORATION"): Promise<PublishFlowExplorationResult> {
-    const account = this.options.repository.listAccounts().find((item) => (item.platformAccountId ?? item.id) === platformAccountId && item.platformKey === "xiaohongshu");
+    const account = this.options.repository.listAccounts().find((item) => (item.id === platformAccountId || (item.platformAccountId ?? item.id) === platformAccountId) && item.platformKey === "xiaohongshu");
     if (!account || !account.enabled || account.archivedAt) throw new Error("小红书发布流程探索账号不可用");
     if (mode !== "XHS_PUBLISH_FLOW_EXPLORATION") throw new Error("不支持的小红书发布流程探索模式");
     if (this.controlledOperations.has(account.id)) throw new Error("PUBLISH_FLOW_EXPLORATION_ALREADY_RUNNING");
@@ -236,9 +239,99 @@ export class PlatformSelfTestService {
     }
   }
 
+  requestOneShotPublish(platformAccountId: string): PlatformSelfTestRun {
+    const account = this.options.repository.listAccounts().find((item) => (item.id === platformAccountId || (item.platformAccountId ?? item.id) === platformAccountId) && item.platformKey === "xiaohongshu");
+    if (!account || account.id !== XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID || !account.enabled || account.archivedAt) throw new Error("小红书一次性真实发布测试账号不可用或未绑定到授权账号");
+    const run = this.options.repository.createPlatformSelfTestRun({ platformAccountId: account.platformAccountId ?? account.id, requestedLevel: "L5_PUBLISH" });
+    this.step(run, "L5_PUBLISH", "PUBLISH_CONFIRMATION", "WAITING_FOR_USER", "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED", XHS_ONE_SHOT_CONFIRMATION, `authorization:${OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH}:state:NOT_AUTHORIZED`);
+    return this.options.repository.finishPlatformSelfTestRun(run.testRunId, "WAITING_FOR_USER");
+  }
+
+  cancelOneShotPublish(testRunId: string): PlatformSelfTestRun {
+    const run = this.mustOneShotRun(testRunId);
+    this.step(run, "L5_PUBLISH", "PUBLISH_CONFIRMATION", "NOT_TESTED", "ONE_SHOT_PUBLISH_CANCELLED", "用户取消了一次性真实发布测试，未生成授权、未创建发布任务");
+    return this.options.repository.finishPlatformSelfTestRun(testRunId, "NOT_TESTED");
+  }
+
+  async confirmOneShotPublish(testRunId: string): Promise<PlatformSelfTestRun> {
+    let run = this.mustOneShotRun(testRunId);
+    if (run.publishJobId) throw new Error("ONE_SHOT_PUBLICATION_ALREADY_STARTED");
+    const account = this.account(run);
+    if (account.id !== XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID || account.platformKey !== "xiaohongshu") throw new Error("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH");
+    const adapter = this.options.registry.getForContent("xiaohongshu", "article");
+    if (!isAutomationAdapter(adapter) || typeof adapter.finalSubmit !== "function") throw new Error("当前小红书 Adapter 未提供一次性真实发布能力");
+    if (this.controlledOperations.has(account.id)) throw new Error("XHS_ONE_SHOT_OPERATION_ALREADY_RUNNING");
+    run = this.options.repository.confirmPlatformSelfTestPublish(testRunId);
+    const operationId = randomUUID();
+    const authorization = createOwnerAuthorizedOneShotPublication({ operationId, platformKey: account.platformKey, accountId: account.id, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE });
+    this.options.repository.createOneShotPublicationAuthorization(authorization);
+    this.step(run, "L5_PUBLISH", "PUBLISH_CONFIRMATION", "PASSED", null, XHS_ONE_SHOT_CONFIRMATION, `authorization:${authorization.authorization}:state:${authorization.state}:operation:${authorization.operationId}`);
+    this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_ONE_SHOT_AUTHORIZED", "Owner 已确认一次性真实发布；授权已绑定小红书测试账号并保持未消费", { platformKey: account.platformKey, accountId: account.id, operationId, mode: authorization.mode, maxPublicationTransactions: 1, maxFinalSubmitAttempts: 1, finalSubmitRetryCount: 0 });
+    this.controlledOperations.add(account.id);
+    try {
+      if (!await this.runLogin(run, account, adapter, "VISIBLE")) return this.finish(run.testRunId);
+      const safeImage = this.ensureSafeTestImage();
+      const content: PublishArticleInput = { articleId: `task10s-${run.testRunId}`, title: XHS_ONE_SHOT_TITLE, body: XHS_ONE_SHOT_BODY, summary: "自动化发布测试", tags: ["测试"], ...(safeImage && adapter.getCapabilities().maxImageCount > 0 ? { images: [safeImage.filePath] } : {}) };
+      const preparedContent = await this.runEditorAndContent(run, account, adapter, "VISIBLE", content);
+      const preparedRun = this.options.repository.getPlatformSelfTestRun(run.testRunId) as PlatformSelfTestRun;
+      const imageStep = preparedRun.steps.find((item) => item.stepKey === "IMAGE_FILL");
+      if (!preparedContent.prepared || preparedContent.imageAssetId === null || imageStep?.result !== "PASSED") {
+        this.step(run, "L5_PUBLISH", "PUBLISH_SUBMIT", "FAILED", "ONE_SHOT_PREPUBLISH_EVIDENCE_INCOMPLETE", "一次性真实发布要求 safe fixture 图片、编辑器、标题和正文都取得实际回读证据；未创建发布任务", "authorization_state:AUTHORIZED_UNUSED");
+        return this.finish(run.testRunId);
+      }
+      const preparedResponse = {
+        ...preparedContent.prepared.response,
+        OWNER_FINAL_SUBMIT_AUTHORIZATION: authorization.authorization,
+        FINAL_SUBMIT_AUTHORIZATION_STATE: authorization.state,
+        FINAL_SUBMIT_PREFLIGHT: "PENDING",
+        PUBLICATION_TRANSACTION_COUNT: authorization.publicationTransactionCount,
+        PUBLICATION_COMMIT_ACTION_COUNT: authorization.publicationCommitActionCount,
+        FINAL_SUBMIT_ATTEMPT_COUNT: authorization.finalSubmitAttemptCount,
+        FINAL_SUBMIT_RETRY_COUNT: authorization.finalSubmitRetryCount,
+        FINAL_SUBMIT_ACTION_STARTED: authorization.finalSubmitActionStarted,
+        FINAL_SUBMIT_ACTION_COMPLETED: authorization.finalSubmitActionCompleted,
+        POST_SUBMIT_OBSERVATION: "PENDING",
+        PUBLICATION_RECONCILED: false,
+        EXTERNAL_ID: null,
+        EXTERNAL_URL: null,
+        PUBLIC_PAGE_VERIFIED: false,
+        imageSource: "SAFE_TEST_FIXTURE"
+      };
+      const job = this.options.repository.createPlatformSelfTestPublishJob({ testRunId: run.testRunId, title: content.title, body: content.body, dryRun: false, selectedImageAssetId: preparedContent.imageAssetId });
+      this.options.repository.insertPublishRecord({ jobId: job.id, accountId: account.id, platformAccountId: account.platformAccountId, platformKey: account.platformKey, articleId: job.articleId, publishedUrl: null, publishedExternalId: null, success: false, response: preparedResponse, dryRun: false, status: "Prepared", publishMode: "ASSISTED", automationType: adapter.automationType, browserSessionIdHash: preparedContent.prepared.sessionIdHash ?? account.browserSessionId, operator: process.env.USERNAME?.trim() || process.env.USER?.trim() || "desktop-user", verificationStatus: "WaitingUser", editorOpenedAt: preparedContent.prepared.editorOpenedAt ?? null, titleFilled: true, bodyFilled: true, selectedImageAssetId: preparedContent.imageAssetId, imageSelectionMode: "manual" });
+      this.options.repository.confirmJob(job.id, false);
+      const execution = await this.options.publisher.executeJob(job.id, { userActionId: operationId, triggerSource: "RUN_SELF_TEST" }, "VISIBLE", authorization);
+      const completedJob = this.options.repository.getJob(job.id);
+      const record = this.options.repository.getPublishRecordByJob(job.id);
+      const currentAuthorization = this.options.repository.getOneShotPublicationAuthorization(operationId);
+      const finalSubmitCount = currentAuthorization?.finalSubmitAttemptCount ?? 0;
+      if (!record || !completedJob || !["Success", "Publishing", "Published"].includes(completedJob.status)) {
+        const waiting = completedJob?.status === "NeedsUserAction" || completedJob?.status === "NeedsReconciliation" || /reconciliation|user|确认|官方页面/iu.test(execution.message);
+        this.step(run, "L5_PUBLISH", "PUBLISH_SUBMIT", waiting ? "WAITING_FOR_USER" : "FAILED", completedJob?.lastErrorCode ?? (waiting ? "NEEDS_RECONCILIATION" : "UNKNOWN"), execution.message, `authorization_state:${currentAuthorization?.state ?? "UNKNOWN"}:final_submit_count:${String(finalSubmitCount)}`);
+        return this.finish(run.testRunId);
+      }
+      run = this.options.repository.linkPlatformSelfTestPublishEvidence(run.testRunId, record.id);
+      this.step(run, "L5_PUBLISH", "PUBLISH_SUBMIT", "PASSED", null, "一次性真实发布提交已通过统一 guard；未执行第二次提交", `authorization_state:${currentAuthorization?.state ?? "UNKNOWN"}:final_submit_count:${String(finalSubmitCount)}`, record.publishedExternalId, record.publishedUrl);
+      this.step(run, "L5_PUBLISH", "EXTERNAL_EVIDENCE", record.publishedExternalId && record.publishedUrl ? "PASSED" : "PARTIAL_PASSED", record.publishedExternalId && record.publishedUrl ? null : "EXTERNAL_EVIDENCE_INCOMPLETE", record.publishedExternalId && record.publishedUrl ? "已保存 External ID 与 URL" : "提交完成但外部证据不完整；不得重试提交", `final_submit_count:${String(finalSubmitCount)}`, record.publishedExternalId, record.publishedUrl);
+      if (record.publishedExternalId && record.publishedUrl) await this.reconcile(run, account, adapter, record.publishedExternalId);
+      return this.finish(run.testRunId);
+    } catch (error) {
+      const failure = selfTestError(error);
+      const currentAuthorization = this.options.repository.getOneShotPublicationAuthorization(operationId);
+      this.step(run, "L5_PUBLISH", "PUBLISH_SUBMIT", failure.result, failure.errorCode, failure.message, `authorization_state:${currentAuthorization?.state ?? "UNKNOWN"}:final_submit_count:${String(currentAuthorization?.finalSubmitAttemptCount ?? 0)}`);
+      return this.finish(run.testRunId);
+    } finally {
+      this.controlledOperations.delete(account.id);
+    }
+  }
+
   async continue(testRunId: string): Promise<PlatformSelfTestRun> {
     const run = this.options.repository.getPlatformSelfTestRun(testRunId);
     if (!run || run.overallResult !== "WAITING_FOR_USER") throw new Error("只有等待用户处理的自测才能继续");
+    if (run.platformKey === "xiaohongshu" && run.steps.some((item) => item.errorCode === "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED")) {
+      if (run.publishJobId) throw new Error("ONE_SHOT_RECONCILIATION_REQUIRED");
+      return this.confirmOneShotPublish(testRunId);
+    }
     const account = this.account(run);
     const adapter = this.options.registry.getForContent(run.platformKey, selfTestContentKind(run.platformKey));
     if (run.requestedLevel === "L5_PUBLISH") {
@@ -494,17 +587,17 @@ export class PlatformSelfTestService {
     }
   }
 
-  private async runEditorAndContent(run: PlatformSelfTestRun, account: Account, adapter: PlatformAdapter, executionMode: BrowserSelfTestMode): Promise<PreparedEditorRun> {
+  private async runEditorAndContent(run: PlatformSelfTestRun, account: Account, adapter: PlatformAdapter, executionMode: BrowserSelfTestMode, contentOverride?: PublishArticleInput): Promise<PreparedEditorRun> {
     const startedAt = new Date().toISOString();
     if (!isAutomationAdapter(adapter)) {
       this.step(run, "L2_EDITOR", "EDITOR_OPEN", "NOT_SUPPORTED", "API_NO_BROWSER_EDITOR", "官方 API / OAuth 平台没有需要打开的浏览器编辑器", "adapter_transport_api", null, null, startedAt);
       this.step(run, "L3_CONTENT_FILL", "TITLE_FILL", "NOT_SUPPORTED", "API_PAYLOAD_ONLY", "API 平台不会在浏览器编辑器中填写标题", null, null, null, startedAt);
       this.step(run, "L3_CONTENT_FILL", "BODY_FILL", "NOT_SUPPORTED", "API_PAYLOAD_ONLY", "API 平台不会在浏览器编辑器中填写正文", null, null, null, startedAt);
       this.step(run, "L3_CONTENT_FILL", "IMAGE_FILL", "NOT_SUPPORTED", "API_PAYLOAD_ONLY", "图片能力需在 L4/L5 的真实草稿或发布响应中验证", null, null, null, startedAt);
-      return { input: transparentSelfTestContent(run.platformKey, this.options.repository.listPlatforms().find((item) => item.platformKey === run.platformKey)?.displayName ?? run.platformKey), imageAssetId: null, prepared: null };
+      return { input: contentOverride ?? transparentSelfTestContent(run.platformKey, this.options.repository.listPlatforms().find((item) => item.platformKey === run.platformKey)?.displayName ?? run.platformKey), imageAssetId: null, prepared: null };
     }
     const platform = this.options.repository.listPlatforms().find((item) => item.platformKey === run.platformKey);
-    const content = transparentSelfTestContent(run.platformKey, platform?.displayName ?? run.platformKey);
+    const content = contentOverride ?? transparentSelfTestContent(run.platformKey, platform?.displayName ?? run.platformKey);
     // V1.1.8 Lieju acceptance starts without an image. The live adapter must
     // prove whether the platform actually requires one before submitting.
     const image = run.requestedLevel === "L5_PUBLISH" && run.platformKey === "lieju" ? null : this.findTestImage();
@@ -615,6 +708,14 @@ export class PlatformSelfTestService {
     return this.options.repository.listImageAssets(undefined, true).find((image) => image.universal || [...image.usage, ...image.tags].some((label) => /^(测试|通用)$/u.test(label.trim()))) ?? null;
   }
 
+  private ensureSafeTestImage() {
+    const existing = this.options.repository.listImageAssets(undefined, true).find((image) => /task10[rs]-safe-test\.png$/iu.test(image.originalFileName) || /task10[rs]-safe-test\.png$/iu.test(image.filePath));
+    if (existing) return existing;
+    const imagePath = safeSelfTestImagePath("task10s-safe-test.png");
+    const brandId = this.options.repository.listBrands()[0]?.id ?? null;
+    return this.options.repository.createImageAsset({ brandId, name: "Task10S SAFE_TEST_FIXTURE", filePath: imagePath, originalFileName: "task10s-safe-test.png", mimeType: "image/png", size: SAFE_TEST_IMAGE_BYTES.byteLength, tags: ["测试"], usage: ["测试"], platform: ["xiaohongshu"], universal: true });
+  }
+
   private backgroundEvidence(run: PlatformSelfTestRun, adapter: PlatformAdapter): BackgroundEvidence {
     const stored = this.options.repository.getPlatformSelfTestRun(run.testRunId) as PlatformSelfTestRun;
     const capabilities = adapter.getCapabilities();
@@ -660,6 +761,12 @@ export class PlatformSelfTestService {
   private mustRun(testRunId: string, level: PlatformSelfTestLevel): PlatformSelfTestRun {
     const run = this.options.repository.getPlatformSelfTestRun(testRunId);
     if (!run || run.requestedLevel !== level) throw new Error("平台自测运行不存在或等级不匹配");
+    return run;
+  }
+
+  private mustOneShotRun(testRunId: string): PlatformSelfTestRun {
+    const run = this.mustRun(testRunId, "L5_PUBLISH");
+    if (run.platformKey !== "xiaohongshu" || !run.steps.some((item) => item.stepKey === "PUBLISH_CONFIRMATION" && item.errorCode === "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED")) throw new Error("当前运行不是 Task10S 一次性真实发布测试");
     return run;
   }
 
