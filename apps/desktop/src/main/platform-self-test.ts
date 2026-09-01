@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AppRepository } from "@publisher/db";
 import { isAutomationAdapter, type AdapterRegistry, type AutomationAdapter, type ControlledSelfTestMode, type PlatformAdapter, type UserInitiatedAction } from "@publisher/adapters-core";
-import type { AutomationPrepareResult, ControlledPostUploadDiscoveryResult } from "@publisher/adapters-core";
+import type { AutomationPrepareResult, ControlledPostUploadDiscoveryResult, PublishFlowExplorationResult } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
 import type { PublisherService } from "@publisher/publisher";
 import type { Account, AccountContext, BackgroundAutomationStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PublishArticleInput } from "@publisher/domain";
@@ -20,12 +20,19 @@ const SELF_TEST_LEVEL_ORDER: PlatformSelfTestLevel[] = ["L1_LOGIN", "L2_EDITOR",
 const SECURITY_OR_LOGIN_CODES = new Set(["AUTH_REQUIRED", "LOGIN_EXPIRED", "USER_ACTION_REQUIRED", "CAPTCHA", "SECURITY_CHECK", "SMS_REQUIRED", "QR_LOGIN", "RISK_CONTROL"]);
 const SAFE_TEST_IMAGE_BYTES = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAQAAACoE2KBAAAADUlEQVR42mNk+M/wHwAF/gL+J1Q6WQAAAABJRU5ErkJggg==", "base64");
 
-function safeSelfTestImagePath(): string {
+function safeSelfTestImagePath(fileName = "task10n-safe-test.png"): string {
   const directory = join(tmpdir(), "geo-media-publisher-safe-fixtures");
-  const imagePath = join(directory, "task10n-safe-test.png");
+  const imagePath = join(directory, fileName);
   mkdirSync(directory, { recursive: true });
   if (!existsSync(imagePath) || statSync(imagePath).size !== SAFE_TEST_IMAGE_BYTES.byteLength) writeFileSync(imagePath, SAFE_TEST_IMAGE_BYTES, { flag: "w" });
   return imagePath;
+}
+
+const XHS_EXPLORATION_TITLE = "小红书发布流程测试-请勿发布";
+const XHS_EXPLORATION_BODY = "自动化发布流程验证，仅用于本地测试，不执行最终发布。";
+const XHS_EXPLORATION_EVIDENCE_FILE = "xiaohongshu-task10r-publish-flow-exploration.json";
+function publishDomainCountsEqual(left: { publishJobs: number; submissionIntents: number; publishRecords: number }, right: { publishJobs: number; submissionIntents: number; publishRecords: number }): boolean {
+  return left.publishJobs === right.publishJobs && left.submissionIntents === right.submissionIntents && left.publishRecords === right.publishRecords;
 }
 function realPublishTestBatchConfirmed(): boolean {
   return ["1", "true", "yes"].includes((process.env.REAL_PUBLISH_TEST_BATCH_CONFIRMED ?? "").trim().toLowerCase());
@@ -174,6 +181,56 @@ export class PlatformSelfTestService {
       const result = await adapter.runControlledPostUploadDiscovery(context, { imagePath, imageSource: "SAFE_TEST_FIXTURE" });
       this.options.logger?.info("PLATFORM_SELF_TEST", "CONTROLLED_POST_UPLOAD_DISCOVERY_COMPLETED", "小红书受控首次上传后发现已停止在标题/正文/最终发布之前", { platformKey: "xiaohongshu", platformAccountId, mode: result.mode, status: result.status, operationId: result.operationId, uploadMutationCount: result.uploadMutationCount, contentMutationCount: result.contentMutationCount, finalSubmitCount: result.finalSubmitCount });
       return result;
+    } finally {
+      this.controlledOperations.delete(account.id);
+    }
+  }
+
+  /**
+   * Runs the owner-authorized XHS flow exploration against the existing visible
+   * account session. It is intentionally outside PlatformSelfTestRun and never
+   * creates a Job, SubmissionIntent, or PublishRecord.
+   */
+  async runPublishFlowExploration(platformAccountId: string, mode: "XHS_PUBLISH_FLOW_EXPLORATION"): Promise<PublishFlowExplorationResult> {
+    const account = this.options.repository.listAccounts().find((item) => (item.platformAccountId ?? item.id) === platformAccountId && item.platformKey === "xiaohongshu");
+    if (!account || !account.enabled || account.archivedAt) throw new Error("小红书发布流程探索账号不可用");
+    if (mode !== "XHS_PUBLISH_FLOW_EXPLORATION") throw new Error("不支持的小红书发布流程探索模式");
+    if (this.controlledOperations.has(account.id)) throw new Error("PUBLISH_FLOW_EXPLORATION_ALREADY_RUNNING");
+    const adapter = this.options.registry.getForContent("xiaohongshu", "article");
+    if (!isAutomationAdapter(adapter) || typeof adapter.runPublishFlowExploration !== "function") throw new Error("当前小红书 Adapter 未提供发布流程探索能力");
+    const requestId = randomUUID();
+    this.controlledOperations.add(account.id);
+    const before = this.options.repository.getPublishDomainCounts();
+    try {
+      const context: AccountContext = {
+        accountId: account.id,
+        accountName: account.accountAlias || account.name,
+        platformKey: "xiaohongshu",
+        settings: { userActionId: requestId, triggerSource: "CONTROLLED_SELF_TEST", controlledSelfTestMode: mode, browserExecutionMode: "VISIBLE" },
+        secrets: this.options.resolveAccountSecrets(account.id, account.platformKey)
+      };
+      const imagePath = safeSelfTestImagePath("task10r-safe-test.png");
+      this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_PUBLISH_FLOW_EXPLORATION_STARTED", "开始小红书端到端发布流程探索；最终发布按钮只读发现，不执行发布", { platformKey: "xiaohongshu", platformAccountId, mode: "XHS_PUBLISH_FLOW_EXPLORATION", imageSource: "SAFE_TEST_FIXTURE" });
+      const result = await adapter.runPublishFlowExploration(context, { imagePath, imageSource: "SAFE_TEST_FIXTURE", title: XHS_EXPLORATION_TITLE, body: XHS_EXPLORATION_BODY });
+      const after = this.options.repository.getPublishDomainCounts();
+      const publishDomainUnchanged = publishDomainCountsEqual(before, after);
+      const persistedResult: PublishFlowExplorationResult = publishDomainUnchanged
+        ? result
+        : { ...result, status: "SAFETY_BOUNDARY_VIOLATION", blocker: "TASK10R_DB_CHANGED", failureCode: "TASK10R_DB_CHANGED", readyForFinalSubmit: false };
+      const persisted = {
+        task: "TASK_10R" as const,
+        operation: { operationId: persistedResult.operationId, platformKey: persistedResult.platformKey, accountId: persistedResult.accountId, mode: persistedResult.mode },
+        canonical: { sameContext: persistedResult.sameContext, samePage: persistedResult.sameCanonicalPage, pageSurvivesUpload: Boolean(persistedResult.evidence.canonicalPageSurvivesUpload) },
+        ...persistedResult,
+        database: { before, after },
+        evidence: { ...persistedResult.evidence, databaseBefore: before, databaseAfter: after, publishDomainUnchanged },
+        safety: { finalSubmitCount: persistedResult.finalSubmitCount, uploadMutationCount: persistedResult.uploadMutationCount, uploadRetryCount: persistedResult.uploadRetryCount, intermediateActionClickCount: persistedResult.intermediateActionClickCount, titleMutationCount: persistedResult.titleMutationCount, bodyMutationCount: persistedResult.bodyMutationCount, settingsMutationCount: persistedResult.settingsMutationCount, contentMutationCount: persistedResult.contentMutationCount, jobCreated: false, intentCreated: false, publishRecordCreated: false }
+      };
+      const outputDirectory = join(process.cwd(), "output");
+      mkdirSync(outputDirectory, { recursive: true });
+      writeFileSync(join(outputDirectory, XHS_EXPLORATION_EVIDENCE_FILE), JSON.stringify(persisted, null, 2), "utf8");
+      this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_PUBLISH_FLOW_EXPLORATION_COMPLETED", "小红书发布流程探索完成；未执行最终发布", { platformKey: "xiaohongshu", platformAccountId, operationId: persistedResult.operationId, status: persistedResult.status, readyForFinalSubmit: persistedResult.readyForFinalSubmit, finalSubmitCount: persistedResult.finalSubmitCount, output: XHS_EXPLORATION_EVIDENCE_FILE, publishDomainUnchanged });
+      return persisted;
     } finally {
       this.controlledOperations.delete(account.id);
     }

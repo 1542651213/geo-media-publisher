@@ -754,6 +754,7 @@ export function registerIpc(deps: IpcDependencies): void {
   register("platform-self-test:get", (_event, payload) => repository.getPlatformSelfTestRun(z.object({ testRunId: idSchema }).parse(payload).testRunId));
   register("platform-self-test:run-safe", async (_event, payload) => platformSelfTests.runSafe(z.object({ platformAccountId: idSchema }).parse(payload).platformAccountId));
   register("platform-self-test:run-post-upload-discovery", async (_event, payload) => { const input = z.object({ platformAccountId: idSchema, mode: z.literal("POST_UPLOAD_DISCOVERY_ONLY") }).parse(payload); return platformSelfTests.runPostUploadDiscovery(input.platformAccountId, input.mode); });
+  register("platform-self-test:run-publish-flow-exploration", async (_event, payload) => { const input = z.object({ platformAccountId: idSchema, mode: z.literal("XHS_PUBLISH_FLOW_EXPLORATION") }).parse(payload); return platformSelfTests.runPublishFlowExploration(input.platformAccountId, input.mode); });
   register("platform-self-test:continue", async (_event, payload) => platformSelfTests.continue(z.object({ testRunId: idSchema }).parse(payload).testRunId));
   register("platform-self-test:run-level", async (_event, payload) => { const input = z.object({ platformAccountId: idSchema, level: z.enum(["L1_LOGIN", "L2_EDITOR", "L3_CONTENT_FILL", "L4_DRAFT", "L5_PUBLISH"]) }).parse(payload); return platformSelfTests.runLevel(input.platformAccountId, input.level); });
   register("platform-self-test:health-check", async () => platformSelfTests.healthCheckConnectedAccounts());
