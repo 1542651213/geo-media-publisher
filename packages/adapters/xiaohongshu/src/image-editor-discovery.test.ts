@@ -601,4 +601,64 @@ describe("Xiaohongshu image editor discovery", () => {
     expect(result.phase).toBe("IMAGE_POST_POST_UPLOAD_EDITOR");
     expect(result.postUploadControlsStatus).toBe("READY");
   });
+
+  it("preserves safe action geometry, hit-test evidence, validation signals and final-submit geometry", async () => {
+    const intermediateAction = {
+      candidateId: "confirm-0",
+      tagName: "BUTTON",
+      role: "button",
+      semanticSignal: "intermediate-action",
+      normalizedText: "确认",
+      visible: true,
+      enabled: true,
+      boundingBox: { x: 20, y: 30, width: 90, height: 36 },
+      nearestInteractiveAncestorTag: "BUTTON",
+      nearestInteractiveAncestorRole: "button",
+      pointerEvents: "auto",
+      hitTestValid: true
+    };
+    const finalSubmit = {
+      candidateId: "submit-0",
+      tagName: "BUTTON",
+      role: "button",
+      semanticSignal: "final-submit-label",
+      visible: true,
+      enabled: false,
+      boundingBox: { x: 300, y: 30, width: 90, height: 36 },
+      hitTestValid: false
+    };
+    const result = await inspectPostUploadImageEditor(pageFor([
+      snapshot({
+        titleCandidates: [],
+        bodyCandidates: [],
+        finalSubmitCandidates: [],
+        requiredValidationSignals: ["必须选择声明"],
+        intermediateActionCandidates: [intermediateAction],
+        mediaPreviewSignalPresent: true,
+        modalDiagnostics: { dialogCount: 0, modalSignalCount: 0, maskCount: 0, overlayCount: 0, drawerCount: 0, visible: false, ariaModalCount: 0 }
+      }),
+      snapshot({
+        requiredValidationSignals: ["必须选择声明"],
+        finalSubmitCandidates: [finalSubmit],
+        intermediateActionCandidates: [intermediateAction],
+        mediaPreviewSignalPresent: false
+      })
+    ]), metadata, {
+      readinessWindowMs: 160,
+      readinessSampleIntervalMs: 0,
+      stableSampleCount: 2
+    });
+
+    expect(result.requiredValidationSignals).toEqual(["必须选择声明"]);
+    expect(result.intermediateActionCandidates?.[0]).toMatchObject({
+      normalizedText: "确认",
+      boundingBox: { x: 20, y: 30, width: 90, height: 36 },
+      pointerEvents: "auto",
+      hitTestValid: true
+    });
+    expect(result.finalSubmitControl.candidates[0]).toMatchObject({
+      boundingBox: { x: 300, y: 30, width: 90, height: 36 },
+      hitTestValid: false
+    });
+  });
 });

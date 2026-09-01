@@ -107,6 +107,12 @@ export interface ImageEditorIntermediateActionCandidate {
   semanticSignal: string;
   visible: boolean;
   enabled: boolean;
+  normalizedText?: string;
+  boundingBox?: ImageEditorBoundingBox | null;
+  nearestInteractiveAncestorTag?: string | null;
+  nearestInteractiveAncestorRole?: string | null;
+  pointerEvents?: string;
+  hitTestValid?: boolean;
 }
 
 export interface ImageEditorPhaseEvidence {
@@ -154,6 +160,8 @@ interface ImageEditorPhaseDomSnapshot {
   mediaPreviewDiagnostics: ImageEditorMediaPreviewDiagnostics;
   modalDiagnostics: ImageEditorModalDiagnostics;
   intermediateActionCandidates: readonly ImageEditorIntermediateActionCandidate[];
+  requiredValidationSignals: readonly string[];
+  forbiddenActionSignalPresent: boolean;
   mediaPreviewSignalPresent: boolean;
   mediaEditingSignalPresent: boolean;
   uploadBusy?: boolean;
@@ -176,6 +184,9 @@ export interface ImageEditorControlCandidate {
   semanticSignal: string;
   visible: boolean;
   enabled: boolean;
+  boundingBox?: ImageEditorBoundingBox | null;
+  hitTestValid?: boolean;
+  normalizedText?: string;
 }
 
 export interface ImageEditorControlDiscovery {
@@ -209,6 +220,8 @@ export interface ImageEditorDomSnapshot {
   mediaPreviewDiagnostics?: ImageEditorMediaPreviewDiagnostics;
   modalDiagnostics?: ImageEditorModalDiagnostics;
   intermediateActionCandidates?: readonly ImageEditorIntermediateActionCandidate[];
+  requiredValidationSignals?: readonly string[];
+  forbiddenActionSignalPresent?: boolean;
   mediaPreviewSignalPresent?: boolean;
   mediaEditingSignalPresent?: boolean;
   uploadBusy?: boolean;
@@ -312,6 +325,8 @@ export interface ImageEditorDiagnostic {
   mediaPreviewDiagnostics?: ImageEditorMediaPreviewDiagnostics;
   modalDiagnostics?: ImageEditorModalDiagnostics;
   intermediateActionCandidates?: readonly ImageEditorIntermediateActionCandidate[];
+  requiredValidationSignals?: readonly string[];
+  forbiddenActionSignalPresent?: boolean;
   postUploadTerminalStateReached?: boolean;
   postUploadIntermediateState?: ImageEditorPhase | null;
   postUploadReadinessDurationMs?: number;
@@ -362,6 +377,8 @@ export interface ImagePostEditorInspectionResult {
   mediaPreviewDiagnostics?: ImageEditorMediaPreviewDiagnostics;
   modalDiagnostics?: ImageEditorModalDiagnostics;
   intermediateActionCandidates?: readonly ImageEditorIntermediateActionCandidate[];
+  requiredValidationSignals?: readonly string[];
+  forbiddenActionSignalPresent?: boolean;
 }
 
 export interface ImagePostUploadEditorInspectionResult extends ImagePostEditorInspectionResult {
@@ -390,6 +407,8 @@ export interface PreUploadImageEditorContractResult {
 export interface ImageEditorInspectionOptions {
   maxWaitMs?: number;
   probeIntervalMs?: number;
+  readinessWindowMs?: number;
+  readinessSampleIntervalMs?: number;
   stableSampleCount?: number;
   requiredControls?: readonly ImageEditorControlKind[];
   postUploadReadiness?: boolean;
@@ -440,6 +459,8 @@ export interface ImagePostEditorPhaseInspectionResult {
   mediaPreviewDiagnostics?: ImageEditorMediaPreviewDiagnostics;
   modalDiagnostics?: ImageEditorModalDiagnostics;
   intermediateActionCandidates?: readonly ImageEditorIntermediateActionCandidate[];
+  requiredValidationSignals?: readonly string[];
+  forbiddenActionSignalPresent?: boolean;
   mediaPreviewSignalPresent?: boolean;
   mediaEditingSignalPresent?: boolean;
   securityVerificationPresent: boolean;
@@ -450,6 +471,7 @@ export interface ImagePostEditorPhaseInspectionResult {
 const DEFAULT_MAX_WAIT_MS = 3_000;
 const DEFAULT_PROBE_INTERVAL_MS = 80;
 const DEFAULT_STABLE_SAMPLE_COUNT = 2;
+const MAX_READINESS_WINDOW_MS = 60_000;
 const EDITOR_ROUTE_PATTERN = /^https:\/\/creator\.xiaohongshu\.com\/publish\/publish(?:[/?#]|$)/iu;
 const TITLE_SELECTOR = 'input[placeholder*="标题"], input[aria-label*="标题"], input[name*="title" i], input[id*="title" i], [data-testid*="title" i]';
 const TITLE_TEXTAREA_SELECTOR = 'textarea[placeholder*="标题"], textarea[aria-label*="标题"]';
@@ -705,7 +727,10 @@ function normalizeCandidate(value: unknown): ImageEditorControlCandidate | null 
     role: typeof record.role === "string" ? record.role : null,
     semanticSignal: record.semanticSignal,
     visible: record.visible,
-    enabled: record.enabled
+    enabled: record.enabled,
+    boundingBox: normalizeBoundingBox(record.boundingBox),
+    hitTestValid: record.hitTestValid === true,
+    normalizedText: typeof record.normalizedText === "string" ? record.normalizedText.slice(0, 120) : undefined
   };
 }
 
@@ -741,6 +766,8 @@ function normalizeSnapshot(value: unknown, fallbackUrl: string): ImageEditorDomS
     mediaPreviewDiagnostics: normalizeMediaPreviewDiagnostics(record.mediaPreviewDiagnostics),
     modalDiagnostics: normalizeModalDiagnostics(record.modalDiagnostics),
     intermediateActionCandidates: normalizeIntermediateActionCandidates(record.intermediateActionCandidates),
+    requiredValidationSignals: Array.isArray(record.requiredValidationSignals) ? record.requiredValidationSignals.filter((signal): signal is string => typeof signal === "string").map((signal) => signal.slice(0, 120)).slice(0, 12) : [],
+    forbiddenActionSignalPresent: record.forbiddenActionSignalPresent === true,
     mediaPreviewSignalPresent: record.mediaPreviewSignalPresent === true,
     mediaEditingSignalPresent: record.mediaEditingSignalPresent === true,
     ...(typeof record.uploadBusy === "boolean" ? { uploadBusy: record.uploadBusy } : {}),
@@ -894,7 +921,13 @@ function normalizeIntermediateActionCandidates(value: unknown): readonly ImageEd
       role: typeof record.role === "string" ? record.role : null,
       semanticSignal: record.semanticSignal.slice(0, 80),
       visible: record.visible,
-      enabled: record.enabled
+      enabled: record.enabled,
+      normalizedText: typeof record.normalizedText === "string" ? record.normalizedText.slice(0, 120) : record.semanticSignal.slice(0, 120),
+      boundingBox: normalizeBoundingBox(record.boundingBox),
+      nearestInteractiveAncestorTag: typeof record.nearestInteractiveAncestorTag === "string" ? record.nearestInteractiveAncestorTag : null,
+      nearestInteractiveAncestorRole: typeof record.nearestInteractiveAncestorRole === "string" ? record.nearestInteractiveAncestorRole : null,
+      pointerEvents: typeof record.pointerEvents === "string" ? record.pointerEvents : "unknown",
+      hitTestValid: record.hitTestValid === true
     };
   }).filter((item): item is ImageEditorIntermediateActionCandidate => Boolean(item)).slice(0, 20);
 }
@@ -924,6 +957,8 @@ function emptyPhaseSnapshot(fallbackUrl: string): ImageEditorPhaseDomSnapshot {
     mediaPreviewDiagnostics: emptyMediaPreviewDiagnostics(),
     modalDiagnostics: emptyModalDiagnostics(),
     intermediateActionCandidates: [],
+    requiredValidationSignals: [],
+    forbiddenActionSignalPresent: false,
     mediaPreviewSignalPresent: false,
     mediaEditingSignalPresent: false,
     uploadBusy: false,
@@ -960,6 +995,8 @@ function normalizePhaseSnapshot(value: unknown, fallbackUrl: string): ImageEdito
     mediaPreviewDiagnostics: normalizeMediaPreviewDiagnostics(record.mediaPreviewDiagnostics),
     modalDiagnostics: normalizeModalDiagnostics(record.modalDiagnostics),
     intermediateActionCandidates: normalizeIntermediateActionCandidates(record.intermediateActionCandidates),
+    requiredValidationSignals: Array.isArray(record.requiredValidationSignals) ? record.requiredValidationSignals.filter((signal): signal is string => typeof signal === "string").map((signal) => signal.slice(0, 120)).slice(0, 12) : [],
+    forbiddenActionSignalPresent: record.forbiddenActionSignalPresent === true,
     mediaPreviewSignalPresent: record.mediaPreviewSignalPresent === true,
     mediaEditingSignalPresent: record.mediaEditingSignalPresent === true,
     phaseTopology: topology,
@@ -1009,19 +1046,30 @@ async function locatorEnabled(locator: Locator): Promise<boolean> {
   return typeof candidate.isEnabled === "function" ? candidate.isEnabled().catch(() => false) : true;
 }
 
+async function locatorBoundingBox(locator: Locator): Promise<ImageEditorBoundingBox | null> {
+  const candidate = locator as unknown as { boundingBox?: () => Promise<ImageEditorBoundingBox | null> };
+  if (typeof candidate.boundingBox !== "function") return null;
+  return candidate.boundingBox().catch(() => null);
+}
+
 async function readLocatorCandidates(page: Page, selector: string, semanticSignal: string, filter: (locator: Locator) => Promise<boolean> = async () => true): Promise<readonly ImageEditorControlCandidate[]> {
   const locator = page.locator(selector);
   const candidates: ImageEditorControlCandidate[] = [];
   for (let index = 0; index < await locatorCount(locator); index += 1) {
     const item = locatorAt(locator, index);
     if (!(await filter(item))) continue;
+    const visible = await locatorVisible(item);
+    const enabled = await locatorEnabled(item);
+    const boundingBox = await locatorBoundingBox(item);
     candidates.push({
       candidateId: (await locatorAttribute(item, "data-testid")) || `${semanticSignal}-${index}`,
       tagName: (await locatorAttribute(item, "tagName")).toUpperCase() || "UNKNOWN",
       role: (await locatorAttribute(item, "role")) || null,
       semanticSignal,
-      visible: await locatorVisible(item),
-      enabled: await locatorEnabled(item)
+      visible,
+      enabled,
+      boundingBox,
+      hitTestValid: visible && enabled && boundingBox !== null
     });
   }
   return candidates;
@@ -1052,13 +1100,18 @@ async function readSnapshotFromLocators(page: Page, fallbackUrl: string): Promis
     const item = locatorAt(finalLocator, index);
     const label = (await locatorText(item) || await locatorAttribute(item, "aria-label") || await locatorAttribute(item, "title")).normalize("NFKC").replace(/[\s]+/gu, " ").trim();
     if (!/^(发布|发布笔记|发表|提交|立即发布|publish|submit)$/iu.test(label) || /视频/iu.test(label)) continue;
+    const visible = await locatorVisible(item);
+    const enabled = await locatorEnabled(item);
+    const boundingBox = await locatorBoundingBox(item);
     finalSubmitCandidates.push({
       candidateId: (await locatorAttribute(item, "data-testid")) || `final-submit-${index}`,
       tagName: (await locatorAttribute(item, "tagName")).toUpperCase() || "BUTTON",
       role: (await locatorAttribute(item, "role")) || null,
       semanticSignal: "final-submit-label",
-      visible: await locatorVisible(item),
-      enabled: await locatorEnabled(item)
+      visible,
+      enabled,
+      boundingBox,
+      hitTestValid: visible && boundingBox !== null
     });
   }
   const contentTypeSignal: ImageEditorContentType = /视频|video/iu.test(bodyText) && uploadCandidates.length === 0 ? "VIDEO" : uploadCandidates.length > 0 || /图文|图片|image/iu.test(bodyText) ? "IMAGE_POST" : "UNKNOWN";
@@ -1068,7 +1121,7 @@ async function readSnapshotFromLocators(page: Page, fallbackUrl: string): Promis
   const preview = page.locator('img[class*="preview" i], img[src*="xhscdn" i], [class*="preview" i], [data-testid*="upload-result" i], [class*="uploaded" i]');
   const uploadBusy = await locatorCount(busy) > 0;
   const previewReady = await locatorCount(preview) > 0 && await locatorVisible(locatorAt(preview, 0));
-  return { currentUrl, readyState: "complete", shellSignal, shellFingerprint, contentTypeSignal, securityVerificationPresent, loginPagePresent, titleCandidates, bodyCandidates, uploadCandidates, publishSettingsCandidates, finalSubmitCandidates, uploadBusy, previewReady };
+  return { currentUrl, readyState: "complete", shellSignal, shellFingerprint, contentTypeSignal, securityVerificationPresent, loginPagePresent, titleCandidates, bodyCandidates, uploadCandidates, publishSettingsCandidates, finalSubmitCandidates, requiredValidationSignals: [], forbiddenActionSignalPresent: false, uploadBusy, previewReady };
 }
 
 async function readSnapshot(page: Page): Promise<ImageEditorDomSnapshot> {
@@ -1077,6 +1130,11 @@ async function readSnapshot(page: Page): Promise<ImageEditorDomSnapshot> {
   try {
     raw = await page.evaluate(() => {
     const normalize = (value: string): string => value.normalize("NFKC").replace(/[\s]+/gu, " ").trim();
+    const boundingBox = (element: Element): ImageEditorBoundingBox | null => {
+      const rect = element.getBoundingClientRect();
+      if (![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) return null;
+      return { x: Math.round(rect.x * 100) / 100, y: Math.round(rect.y * 100) / 100, width: Math.round(rect.width * 100) / 100, height: Math.round(rect.height * 100) / 100 };
+    };
     const visible = (element: Element): boolean => {
       const node = element as HTMLElement;
       const style = window.getComputedStyle(node);
@@ -1087,13 +1145,29 @@ async function readSnapshot(page: Page): Promise<ImageEditorDomSnapshot> {
       const node = element as HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
       return !node.disabled && element.getAttribute("aria-disabled") !== "true";
     };
+    const isInteractive = (element: Element): boolean => ["A", "BUTTON", "INPUT", "LABEL", "SELECT", "TEXTAREA"].includes(element.tagName) || ["button", "link", "tab", "radio", "checkbox"].includes(element.getAttribute("role") ?? "");
+    const nearestInteractive = (element: Element): Element | null => {
+      let current: Element | null = element;
+      for (let depth = 0; current && depth <= 6; depth += 1, current = current.parentElement) if (isInteractive(current)) return current;
+      return null;
+    };
+    const hitTestValid = (element: Element): boolean => {
+      const box = boundingBox(element);
+      if (!box) return false;
+      const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+      const owner = nearestInteractive(element) ?? element;
+      return hit === element || Boolean(hit && (element.contains(hit) || owner.contains(hit)));
+    };
     const candidate = (element: Element, semanticSignal: string, index: number) => ({
       candidateId: element.getAttribute("data-testid")?.trim() || `${semanticSignal}-${index}`,
       tagName: element.tagName.toUpperCase(),
       role: element.getAttribute("role"),
       semanticSignal,
       visible: visible(element),
-      enabled: enabled(element)
+      enabled: enabled(element),
+      boundingBox: boundingBox(element),
+      hitTestValid: hitTestValid(element),
+      normalizedText: normalize(`${element.textContent ?? ""} ${element.getAttribute("aria-label") ?? ""} ${element.getAttribute("title") ?? ""}`).slice(0, 120)
     });
     const select = (selector: string, semanticSignal: string, filter: (element: Element) => boolean = () => true) => Array.from(document.querySelectorAll(selector)).filter(filter).map((element, index) => candidate(element, semanticSignal, index));
     const titleCandidates = select('input[placeholder*="标题"], input[aria-label*="标题"], input[name*="title" i], input[id*="title" i], textarea[placeholder*="标题"], [data-testid*="title" i]', "title-editor", (element) => ["INPUT", "TEXTAREA"].includes(element.tagName) || element.getAttribute("role") === "textbox");
@@ -1144,9 +1218,17 @@ async function readSnapshot(page: Page): Promise<ImageEditorDomSnapshot> {
       tagName: element.tagName.toUpperCase(),
       role: element.getAttribute("role"),
       semanticSignal: "intermediate-action",
+      normalizedText: semanticText(element),
       visible: true,
-      enabled: !(element as HTMLButtonElement).disabled && element.getAttribute("aria-disabled") !== "true"
+      enabled: !(element as HTMLButtonElement).disabled && element.getAttribute("aria-disabled") !== "true",
+      boundingBox: boundingBox(element),
+      nearestInteractiveAncestorTag: nearestInteractive(element)?.tagName.toUpperCase() ?? null,
+      nearestInteractiveAncestorRole: nearestInteractive(element)?.getAttribute("role") ?? null,
+      pointerEvents: window.getComputedStyle(nearestInteractive(element) ?? element).pointerEvents,
+      hitTestValid: hitTestValid(element)
     }));
+    const requiredValidationSignals = Array.from(new Set(semanticElements.map(semanticText).filter((text) => /必填|必须|不能为空|请选择|required|must\s+(?:select|choose|fill)/iu.test(text)))).slice(0, 12);
+    const forbiddenActionSignalPresent = semanticElements.some((element) => /删除账号|注销账号|退出登录|永久删除|delete\s+account|log\s*out/iu.test(semanticText(element)));
     const typedAttributes = Array.from(document.querySelectorAll("[data-content-type], [data-type]")).map((element) => `${element.getAttribute("data-content-type") ?? ""} ${element.getAttribute("data-type") ?? ""}`).join(" ").toLowerCase();
     const hasVideoSignal = /video|视频/iu.test(`${typedAttributes} ${semanticControls}`);
     const hasImageSignal = /image|图文|图片/iu.test(`${typedAttributes} ${semanticControls}`) || uploadCandidates.length > 0;
@@ -1169,7 +1251,7 @@ async function readSnapshot(page: Page): Promise<ImageEditorDomSnapshot> {
       finalSubmitCandidateCount: finalSubmitCandidates.length
     };
     const shellFingerprint = JSON.stringify({ shellCount, title: titleCandidates.length, body: bodyCandidates.length, upload: uploadCandidates.length, settings: settingsCandidates.length, finalSubmit: finalSubmitCandidates.length, previewCount: previewGeometry.length, modalSignalCount: modalDiagnostics.modalSignalCount, intermediateActionCount: intermediateActionCandidates.length });
-    return { currentUrl: window.location.href, readyState: document.readyState, shellSignal, shellFingerprint, contentTypeSignal, securityVerificationPresent, loginPagePresent, titleCandidates, bodyCandidates, uploadCandidates, publishSettingsCandidates: settingsCandidates, finalSubmitCandidates, postUploadSemanticNodes, interactiveTopology, mediaPreviewDiagnostics: { previewCount: previewGeometry.length, previewVisible: previewGeometry.length > 0, previewGeometry, deleteReplaceEditSignals: associatedSemanticText.filter((text) => /删除|替换|编辑|裁剪|重新上传|delete|replace|edit|crop|reupload/iu.test(text)).slice(0, 12), associatedSemanticText }, modalDiagnostics, intermediateActionCandidates, mediaPreviewSignalPresent, mediaEditingSignalPresent, uploadBusy, previewReady };
+    return { currentUrl: window.location.href, readyState: document.readyState, shellSignal, shellFingerprint, contentTypeSignal, securityVerificationPresent, loginPagePresent, titleCandidates, bodyCandidates, uploadCandidates, publishSettingsCandidates: settingsCandidates, finalSubmitCandidates, postUploadSemanticNodes, interactiveTopology, mediaPreviewDiagnostics: { previewCount: previewGeometry.length, previewVisible: previewGeometry.length > 0, previewGeometry, deleteReplaceEditSignals: associatedSemanticText.filter((text) => /删除|替换|编辑|裁剪|重新上传|delete|replace|edit|crop|reupload/iu.test(text)).slice(0, 12), associatedSemanticText }, modalDiagnostics, intermediateActionCandidates, requiredValidationSignals, forbiddenActionSignalPresent, mediaPreviewSignalPresent, mediaEditingSignalPresent, uploadBusy, previewReady };
     });
   } catch {
     raw = null;
@@ -1220,6 +1302,13 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
           if (isInteractive(current)) return current;
         }
         return null;
+      };
+      const hitTestValid = (element: Element): boolean => {
+        const box = boundingBox(element);
+        if (!box) return false;
+        const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+        const owner = nearestInteractive(element) ?? element;
+        return hit === element || Boolean(hit && (element.contains(hit) || owner.contains(hit)));
       };
       const semanticElements = Array.from(document.querySelectorAll("button, a, label, [role], [aria-label], [data-testid], [data-content-type], [data-type]"));
       const preUploadSemanticNodes: ImageEditorSemanticNode[] = [];
@@ -1280,6 +1369,23 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
       const finalSubmitCandidateCount = Array.from(document.querySelectorAll("button, [role=\"button\"]")).filter((element) => /^(发布|发布笔记|发表|提交|立即发布|publish|submit)$/iu.test(normalize(element.textContent ?? element.getAttribute("aria-label") ?? element.getAttribute("title") ?? "")) && !/视频/iu.test(semanticText(element))).length;
       const bodyText = normalize(document.body?.innerText ?? "");
       const semanticControls = semanticElements.map(semanticText).join(" ");
+      const intermediateActionElements = semanticElements.filter((element) => visible(element) && /完成|确认|下一步|继续|done|confirm|next|continue|编辑图片|裁剪完成|返回编辑|edit image|crop done|back to edit/iu.test(semanticText(element)));
+      const intermediateActionCandidates = intermediateActionElements.slice(0, 20).map((element, index) => ({
+        candidateId: element.getAttribute("data-testid")?.trim() || `intermediate-action-${index}`,
+        tagName: element.tagName.toUpperCase(),
+        role: element.getAttribute("role"),
+        semanticSignal: "intermediate-action",
+        normalizedText: semanticText(element),
+        visible: true,
+        enabled: enabled(element),
+        boundingBox: boundingBox(element),
+        nearestInteractiveAncestorTag: nearestInteractive(element)?.tagName.toUpperCase() ?? null,
+        nearestInteractiveAncestorRole: nearestInteractive(element)?.getAttribute("role") ?? null,
+        pointerEvents: window.getComputedStyle(nearestInteractive(element) ?? element).pointerEvents,
+        hitTestValid: hitTestValid(element)
+      }));
+      const requiredValidationSignals = Array.from(new Set(semanticElements.map(semanticText).filter((text) => /必填|必须|不能为空|请选择|required|must\s+(?:select|choose|fill)/iu.test(text)))).slice(0, 12);
+      const forbiddenActionSignalPresent = semanticElements.some((element) => /删除账号|注销账号|退出登录|永久删除|delete\s+account|log\s*out/iu.test(semanticText(element)));
       const typedAttributes = Array.from(document.querySelectorAll("[data-content-type], [data-type]")).map((element) => `${element.getAttribute("data-content-type") ?? ""} ${element.getAttribute("data-type") ?? ""}`).join(" ");
       const imageSignal = uploadInputs.length > 0 || /image|图文|图片/iu.test(`${typedAttributes} ${semanticControls} ${bodyText}`);
       const videoSignal = /video|视频/iu.test(`${typedAttributes} ${semanticControls} ${bodyText}`);
@@ -1340,7 +1446,9 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
         },
         mediaPreviewDiagnostics: { previewCount: previewReady ? 1 : 0, previewVisible: previewReady, previewGeometry: [], deleteReplaceEditSignals: [], associatedSemanticText: [] },
         modalDiagnostics: emptyModalDiagnostics(),
-        intermediateActionCandidates: [],
+        intermediateActionCandidates,
+        requiredValidationSignals,
+        forbiddenActionSignalPresent,
         mediaPreviewSignalPresent: false,
         mediaEditingSignalPresent: false,
         uploadBusy,
@@ -1410,8 +1518,9 @@ function postUploadPhaseEvidence(snapshot: ImageEditorDomSnapshot, domStable: bo
 }
 
 export async function inspectImagePostEditor(page: Page, metadata: ImageEditorInspectionMetadata, options: ImageEditorInspectionOptions = {}): Promise<ImagePostEditorInspectionResult> {
-  const maxWaitMs = Math.max(0, Math.min(DEFAULT_MAX_WAIT_MS, options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS));
-  const probeIntervalMs = Math.max(0, options.probeIntervalMs ?? DEFAULT_PROBE_INTERVAL_MS);
+  const requestedWaitMs = options.readinessWindowMs ?? options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
+  const maxWaitMs = Math.max(0, Math.min(MAX_READINESS_WINDOW_MS, requestedWaitMs));
+  const probeIntervalMs = Math.max(0, options.readinessSampleIntervalMs ?? options.probeIntervalMs ?? DEFAULT_PROBE_INTERVAL_MS);
   const stableSampleCount = Math.max(2, options.stableSampleCount ?? DEFAULT_STABLE_SAMPLE_COUNT);
   const startedAt = Date.now();
   const readinessSamples: ImageEditorReadinessSample[] = [];
@@ -1504,6 +1613,8 @@ export async function inspectImagePostEditor(page: Page, metadata: ImageEditorIn
       result.mediaPreviewDiagnostics = lastSnapshot.mediaPreviewDiagnostics;
       result.modalDiagnostics = lastSnapshot.modalDiagnostics;
       result.intermediateActionCandidates = lastSnapshot.intermediateActionCandidates;
+      result.requiredValidationSignals = lastSnapshot.requiredValidationSignals;
+      result.forbiddenActionSignalPresent = lastSnapshot.forbiddenActionSignalPresent;
       result.failureCode = postUploadClassification.intermediateState !== "NONE"
         ? (lastSnapshot.intermediateActionCandidates?.length ?? 0) > 0 ? "POST_UPLOAD_INTERMEDIATE_ACTION_REQUIRED" : "POST_UPLOAD_INTERMEDIATE_STATE"
         : "POST_UPLOAD_EDITOR_NOT_READY";
@@ -1542,6 +1653,8 @@ export async function inspectImagePostEditor(page: Page, metadata: ImageEditorIn
   result.mediaPreviewDiagnostics = lastSnapshot.mediaPreviewDiagnostics;
   result.modalDiagnostics = lastSnapshot.modalDiagnostics;
   result.intermediateActionCandidates = lastSnapshot.intermediateActionCandidates;
+  result.requiredValidationSignals = lastSnapshot.requiredValidationSignals;
+  result.forbiddenActionSignalPresent = lastSnapshot.forbiddenActionSignalPresent;
   if (failedControl) {
     result.failureCode = controlFailureCode(failedControl) ?? "EDITOR_CONTROL_AMBIGUOUS";
     result.failureStage = "EDITOR_DISCOVERY";
@@ -1693,7 +1806,9 @@ export async function inspectPostUploadImageEditor(page: Page, metadata: ImageEd
     interactiveTopology: inspected.interactiveTopology ?? emptyInteractiveTopology(),
     mediaPreviewDiagnostics: mediaPreview,
     modalDiagnostics: modal,
-    intermediateActionCandidates: inspected.intermediateActionCandidates ?? []
+    intermediateActionCandidates: inspected.intermediateActionCandidates ?? [],
+    requiredValidationSignals: inspected.requiredValidationSignals ?? [],
+    forbiddenActionSignalPresent: inspected.forbiddenActionSignalPresent === true
   };
   emit(options, metadata, "POST_UPLOAD_EDITOR_SEMANTIC_INVENTORY_OBSERVED", {
     ...markerFields,
@@ -1820,6 +1935,8 @@ function phaseResult(snapshot: ImageEditorPhaseDomSnapshot, classification: Imag
     mediaPreviewDiagnostics: snapshot.mediaPreviewDiagnostics,
     modalDiagnostics: snapshot.modalDiagnostics,
     intermediateActionCandidates: snapshot.intermediateActionCandidates,
+    requiredValidationSignals: snapshot.requiredValidationSignals,
+    forbiddenActionSignalPresent: snapshot.forbiddenActionSignalPresent,
     securityVerificationPresent: snapshot.securityVerificationPresent,
     loginPagePresent: snapshot.loginPagePresent,
     sanitizedUrl: sanitizeUrl(snapshot.currentUrl)
@@ -1827,8 +1944,9 @@ function phaseResult(snapshot: ImageEditorPhaseDomSnapshot, classification: Imag
 }
 
 export async function inspectImagePostEditorPhase(page: Page, metadata: ImageEditorInspectionMetadata, options: ImageEditorInspectionOptions = {}): Promise<ImagePostEditorPhaseInspectionResult> {
-  const maxWaitMs = Math.max(0, Math.min(DEFAULT_MAX_WAIT_MS, options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS));
-  const probeIntervalMs = Math.max(0, options.probeIntervalMs ?? DEFAULT_PROBE_INTERVAL_MS);
+  const requestedWaitMs = options.readinessWindowMs ?? options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
+  const maxWaitMs = Math.max(0, Math.min(MAX_READINESS_WINDOW_MS, requestedWaitMs));
+  const probeIntervalMs = Math.max(0, options.readinessSampleIntervalMs ?? options.probeIntervalMs ?? DEFAULT_PROBE_INTERVAL_MS);
   const stableSampleCount = Math.max(2, options.stableSampleCount ?? DEFAULT_STABLE_SAMPLE_COUNT);
   const startedAt = Date.now();
   const readinessSamples: ImageEditorReadinessSample[] = [];
