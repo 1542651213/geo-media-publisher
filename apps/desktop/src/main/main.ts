@@ -1,7 +1,7 @@
 import { app, BrowserWindow, safeStorage } from "electron";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { readFileSync as readPhysicalFileSync } from "original-fs";
+import { readFileSync as readPhysicalFileSync } from "node:original-fs";
 import { join } from "node:path";
 import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
 import type { XiaohongshuCanonicalPageRuntimeProbe } from "@publisher/adapters-xiaohongshu/browser";
