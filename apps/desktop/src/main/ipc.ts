@@ -93,7 +93,7 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
   });
 }
 
-export function registerIpc(deps: IpcDependencies): void {
+export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
   processDiagnostics = deps.processDiagnostics ?? null;
   const { repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir, logger, credentials, aiCredentials } = deps;
   const listPlatformViews = (): ReturnType<AppRepository["listPlatforms"]> => addAccountConnectionModes(repository.listPlatforms(), registry);
@@ -869,6 +869,7 @@ export function registerIpc(deps: IpcDependencies): void {
   void resumeRunningBatches(repository, logger, coverDir, aiCredentials);
   void resumeContentStudioTasks(repository, logger, { createAiProvider: () => createAiProvider(repository, aiCredentials, logger) });
   void scheduler;
+  return platformSelfTests;
 }
 
 function settingString(repository: AppRepository, key: string, fallback: string): string { const value = repository.getSettings()[key]; return typeof value === "string" ? value : fallback; }
