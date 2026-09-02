@@ -493,6 +493,33 @@ export interface PlatformSelfTestRun {
   steps: PlatformSelfTestStep[];
 }
 
+export interface Task10SPrepublishResult {
+  testRunId: string;
+  operationId: string;
+  platformKey: "xiaohongshu";
+  accountId: string;
+  status: "READY_FOR_FINAL_SUBMIT" | "BLOCKED";
+  authorizationState: "AUTHORIZED_UNUSED";
+  canonicalAuthorizationId: string;
+  accountIdentityVerified: boolean;
+  creatorId: string | null;
+  editor: { attemptCount: number; result: "PASSED" | "BLOCKED"; pageUrl: string | null; routeClass: "PUBLISH_EDITOR" | "UNKNOWN"; contextId: string | null; pageId: string | null; contextCorrelation: "PASS" | "NOT_OBSERVED"; pageCorrelation: "PASS" | "NOT_OBSERVED" };
+  safeFixture: { path: string; sha256: string | null; exists: boolean; assetId: string | null };
+  image: { attemptCount: number; result: PlatformSelfTestResult; assetId: string | null; domReadback: string | null; previewCount: number | null; error: string | null };
+  title: { attemptCount: number; expected: string; observed: string | null; readbackMatch: boolean };
+  body: { attemptCount: number; expected: string; observed: string | null; readbackMatch: boolean };
+  requiredFields: { total: number; pass: number; missing: string[]; result: "PASS" | "BLOCKED" | "NOT_OBSERVED" };
+  settings: { readOnlyCheck: "PASS" | "BLOCKED" | "NOT_OBSERVED"; mutationCount: number; values: Array<{ label: string; required: boolean; value: string }> };
+  finalSubmit: { found: boolean; enabled: boolean; text: string | null; count: number; clickCount: number | null };
+  preparedContent: { prepared: boolean; imageAssetId: string | null; response: Record<string, unknown> | null };
+  prepublishEvidence: { total: number; pass: number; missing: string[] };
+  readyToResumeExistingOneShot: boolean;
+  database: { before: Record<string, number>; after: Record<string, number> };
+  safety: { authorizationMutationCount: 0; prepublishEvidenceMutationCount: number; jobMutationCount: 0; intentMutationCount: 0; publishRecordMutationCount: 0; uploadMutationCount: number; titleMutationCount: number; bodyMutationCount: number; settingsMutationCount: 0; publicationTransactionCount: 0; finalSubmitCount: number | null };
+  evidencePath: string | null;
+  run: PlatformSelfTestRun;
+}
+
 export function defaultAccountSelection(accounts: Account[]): { selectedAccountId: string | null; requiresChoice: boolean } {
   if (accounts.length === 1) return { selectedAccountId: accounts[0]?.platformAccountId ?? accounts[0]?.id ?? null, requiresChoice: false };
   return { selectedAccountId: null, requiresChoice: accounts.length > 1 };

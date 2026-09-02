@@ -130,7 +130,7 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
     });
   };
   const oauthSessions = new OAuthSessionManager({ repository, registry, credentials, logger, accountContext });
-  const platformSelfTests = new PlatformSelfTestService({ repository, registry, publisher, resolveAccountSecrets, logger });
+  const platformSelfTests = new PlatformSelfTestService({ repository, registry, publisher, resolveAccountSecrets, evidenceDirectory: join(dataDirectory, "evidence"), logger });
   const validateVideoAsset = async (assetId: string, platformKey: string): Promise<{ asset: NonNullable<ReturnType<AppRepository["getManagedVideoAsset"]>>; validation: { valid: boolean; errors: string[]; warnings: string[] } }> => {
     const asset = repository.getManagedVideoAsset(assetId);
     if (!asset) throw new Error("视频素材不存在");
@@ -779,6 +779,7 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
   register("platform-self-test:confirm-publish", async (_event, payload) => { const input = z.object({ testRunId: idSchema, testVideoPath: z.string().max(8192).optional() }).parse(payload); return platformSelfTests.confirmPublish(input.testRunId, input.testVideoPath); });
   register("platform-self-test:cancel-publish", (_event, payload) => platformSelfTests.cancelPublish(z.object({ testRunId: idSchema }).parse(payload).testRunId));
   register("platform-self-test:request-one-shot-publish", (_event, payload) => platformSelfTests.requestOneShotPublish(z.object({ platformAccountId: idSchema }).parse(payload).platformAccountId));
+  register("platform-self-test:prepare-one-shot-prepublish", async (_event, payload) => platformSelfTests.prepareOneShotPrepublish(z.object({ testRunId: idSchema }).parse(payload).testRunId));
   register("platform-self-test:confirm-one-shot-publish", async (_event, payload) => {
     const input = z.object({ testRunId: idSchema }).parse(payload);
     const run = repository.getPlatformSelfTestRun(input.testRunId);

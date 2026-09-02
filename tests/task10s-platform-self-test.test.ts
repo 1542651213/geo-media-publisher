@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AdapterRegistry } from "@publisher/adapters-core";
+import { AdapterRegistry, createOwnerAuthorizedOneShotPublication, defaultCapabilities, ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, type PlatformAdapter } from "@publisher/adapters-core";
 import { openDatabase } from "@publisher/db";
 import { PublisherService } from "@publisher/publisher";
 import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
@@ -34,6 +34,141 @@ afterEach(() => {
 });
 
 describe("Task10S platform self-test entry", () => {
+  it("prepares the existing one-shot without creating publish-domain rows or consuming authorization", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "task10s-prepublish-only-"));
+    tempDirs.push(directory);
+    const database = openDatabase(join(directory, "publisher.db"), migrationDir);
+    databases.push(database.db);
+    database.repository.seedDevelopment(platformCsv);
+    const account = database.repository.createAccount({ platformKey: "xiaohongshu", name: "Task10S prepublish-only" });
+    database.repository.db.prepare("UPDATE accounts SET id=? WHERE id=?").run(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, account.id);
+    database.repository.updateAccount(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, { enabled: true, loginStatus: "logged_in" });
+    database.repository.syncBrowserPlatformAccount({ accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, platformKey: "xiaohongshu", externalAccountId: "960803317", browserSessionId: "session-hash", lastVerifiedAt: "2026-09-02T00:00:00.000Z" });
+    database.repository.createImageAsset({ brandId: database.repository.listBrands()[0]?.id ?? null, name: "Task10R SAFE_TEST_FIXTURE", filePath: "C:/safe/task10r-safe-test.png", originalFileName: "task10r-safe-test.png", mimeType: "image/png", size: 70, tags: ["测试"], usage: ["测试"], platform: ["xiaohongshu"], universal: true });
+    const safeFixture = database.repository.createImageAsset({ brandId: database.repository.listBrands()[0]?.id ?? null, name: "Task10S SAFE_TEST_FIXTURE", filePath: "C:/safe/task10s-safe-test.png", originalFileName: "task10s-safe-test.png", mimeType: "image/png", size: 70, tags: ["测试"], usage: ["测试"], platform: ["xiaohongshu"], universal: true });
+    let receivedInput: { images?: string[] } | null = null;
+    const adapter = {
+      platformKey: "xiaohongshu",
+      manifest: { platformKey: "xiaohongshu", displayName: "XHS fixture", category: "测试", version: "test", adapterStatus: "ready", authStrategy: "ManualSession", callbackStrategy: "ManualCodeCallback", status: "WaitingForUser", researchStatus: "partial", transport: "browser", integrationMode: "BrowserAutomation", supportsArticle: true, supportsVideo: false, officialWebsite: "https://creator.xiaohongshu.com/", credentialSchema: [], officialSources: ["https://creator.xiaohongshu.com/"] },
+      getCapabilities: () => ({ ...defaultCapabilities, imagePost: true, coverImage: false }),
+      getCredentialSchema: () => [],
+      connectAccount: async () => ({ sessionId: "session", authorizationUrl: "https://creator.xiaohongshu.com/", expiresAt: null }),
+      isConnectionPending: () => false,
+      completeConnection: async () => "logged_in" as const,
+      checkSession: async () => "logged_in" as const,
+      checkLogin: async () => "logged_in" as const,
+      getBrowserRuntimeSnapshot: () => ({ sessionExists: true, browserConnected: true, contextExists: true, canonicalPageExists: true, canonicalPageClosed: false, contextDebugId: "context", canonicalPageDebugId: "page" }),
+      preparePublish: async (_context: unknown, input: { images?: string[] }) => {
+        receivedInput = input;
+        return ({
+        prepared: true,
+        requiresUserAction: true,
+        message: "prepared",
+        sessionIdHash: "session-hash",
+        backendUrl: "https://creator.xiaohongshu.com/publish/publish",
+        editorOpenedAt: "2026-09-02T00:00:00.000Z",
+        titleFilled: true,
+        bodyFilled: true,
+        response: {
+          browserExecutionMode: "VISIBLE",
+          headless: false,
+          stage: "xiaohongshu_gate_only",
+          titleReadbackValue: "自动化发布测试｜请忽略",
+          bodyReadbackValue: "这是一条 GEO Media Publisher 小红书发布链路自动化测试内容，仅用于验证图片上传、标题正文填写及发布前状态检查。本轮不会执行最终发布。",
+          imageUploaded: true,
+          imageUploadRequired: true,
+          events: ["IMAGE_UPLOAD_STARTED", "IMAGE_UPLOAD_PASSED"],
+          imageUploadEvidence: { mechanism: "input[type=file]", requestedCount: 1, previewCount: 1, previewVisible: true, uploadBusyCount: 0, verified: true },
+          requiredFieldsStatus: "KNOWN",
+          requiredFields: [],
+          publishSettingsStatus: "KNOWN",
+          publishSettings: [],
+          finalSubmitControl: { verified: true, visible: true, enabled: true, unique: true, label: "发布", selector: "button", secondConfirmation: "absent" },
+          finalSubmitClickCount: 0,
+          finalSubmit: "discovered_but_not_clicked",
+          jobCreated: false,
+          intentCreated: false,
+          publishRecordCreated: false
+        }
+        });
+      }
+    } as unknown as PlatformAdapter;
+    const registry = { getForContent: () => adapter } as unknown as AdapterRegistry;
+    const publisher = new PublisherService(database.repository, registry, logger, { resolveSecrets: () => ({}) });
+    const service = new PlatformSelfTestService({ repository: database.repository, registry, publisher, resolveAccountSecrets: () => ({}), logger });
+    const requested = service.requestOneShotPublish(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
+    const authorization = createOwnerAuthorizedOneShotPublication({ platformKey: "xiaohongshu", accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, operationId: requested.testRunId, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE });
+    database.repository.confirmPlatformSelfTestOneShotAtomically(requested.testRunId, authorization);
+    database.repository.recordPlatformSelfTestStep({ testRunId: requested.testRunId, testLevel: "L5_PUBLISH", stepKey: "PUBLISH_SUBMIT", startedAt: new Date().toISOString(), result: "FAILED", errorCode: "ONE_SHOT_PREPUBLISH_EVIDENCE_INCOMPLETE", message: "fixture blocker" });
+
+    const prepare = (service as unknown as { prepareOneShotPrepublish?: (testRunId: string) => Promise<{ status: string; preparedContent: { prepared: boolean; imageAssetId: string | null }; finalSubmit: { clickCount: number }; readyToResumeExistingOneShot: boolean }> }).prepareOneShotPrepublish;
+    expect(typeof prepare).toBe("function");
+    if (typeof prepare !== "function") return;
+    const result = await prepare.call(service, requested.testRunId);
+
+    expect(result.status).toBe("READY_FOR_FINAL_SUBMIT");
+    expect(result.preparedContent).toMatchObject({ prepared: true, imageAssetId: expect.any(String) });
+    expect(result.finalSubmit.clickCount).toBe(0);
+    expect(result.readyToResumeExistingOneShot).toBe(true);
+    expect((receivedInput as { images?: string[] } | null)?.images).toEqual([safeFixture.filePath]);
+    expect(result.preparedContent.imageAssetId).toBe(safeFixture.id);
+    expect(database.repository.listJobs()).toHaveLength(0);
+    expect(database.repository.db.prepare("SELECT COUNT(*) AS count FROM submission_intents").get()).toMatchObject({ count: 0 });
+    expect(database.repository.getPublishRecords()).toHaveLength(0);
+    expect(database.repository.getOneShotPublicationAuthorization(requested.testRunId)).toMatchObject({ state: "AUTHORIZED_UNUSED", publicationTransactionCount: 0, finalSubmitAttemptCount: 0 });
+  });
+
+  it("accepts structured XHS image upload evidence as a passing IMAGE_FILL proof", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "task10s-image-evidence-"));
+    tempDirs.push(directory);
+    const database = openDatabase(join(directory, "publisher.db"), migrationDir);
+    databases.push(database.db);
+    database.repository.seedDevelopment(platformCsv);
+    const account = database.repository.createAccount({ platformKey: "xiaohongshu", name: "Task10S structured image evidence" });
+    database.repository.db.prepare("UPDATE accounts SET id=? WHERE id=?").run(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, account.id);
+    database.repository.updateAccount(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, { enabled: true, loginStatus: "logged_in" });
+    const image = database.repository.createImageAsset({ brandId: database.repository.listBrands()[0]?.id ?? null, name: "Task10S SAFE_TEST_FIXTURE", filePath: "C:/safe/task10s-safe-test.png", originalFileName: "task10s-safe-test.png", mimeType: "image/png", size: 70, tags: ["测试"], usage: ["测试"], platform: ["xiaohongshu"], universal: true });
+    const adapter = {
+      platformKey: "xiaohongshu",
+      manifest: { platformKey: "xiaohongshu", displayName: "XHS fixture", category: "测试", version: "test", adapterStatus: "ready", authStrategy: "ManualSession", callbackStrategy: "ManualCodeCallback", status: "WaitingForUser", researchStatus: "partial", transport: "browser", integrationMode: "BrowserAutomation", supportsArticle: true, supportsVideo: false, officialWebsite: "https://creator.xiaohongshu.com/", credentialSchema: [], officialSources: ["https://creator.xiaohongshu.com/"] },
+      getCapabilities: () => ({ ...defaultCapabilities, imagePost: true, coverImage: false }),
+      getCredentialSchema: () => [],
+      connectAccount: async () => ({ sessionId: "session", authorizationUrl: "https://creator.xiaohongshu.com/", expiresAt: null }),
+      isConnectionPending: () => false,
+      completeConnection: async () => "logged_in" as const,
+      checkSession: async () => "logged_in" as const,
+      checkLogin: async () => "logged_in" as const,
+      preparePublish: async () => ({
+        prepared: true,
+        requiresUserAction: true,
+        message: "prepared",
+        titleFilled: true,
+        bodyFilled: true,
+        response: {
+          browserExecutionMode: "VISIBLE",
+          headless: false,
+          stage: "editor_prepared",
+          imageUploaded: true,
+          imageUploadRequired: true,
+          events: ["IMAGE_UPLOAD_STARTED", "IMAGE_UPLOAD_PASSED"],
+          imageUploadEvidence: { mechanism: "input[type=file]", requestedCount: 1, previewCount: 1, previewVisible: true, uploadBusyCount: 0, verified: true }
+        }
+      })
+    } as unknown as PlatformAdapter;
+    const registry = { getForContent: () => adapter } as unknown as AdapterRegistry;
+    const publisher = new PublisherService(database.repository, registry, logger, { resolveSecrets: () => ({}) });
+    const service = new PlatformSelfTestService({ repository: database.repository, registry, publisher, resolveAccountSecrets: () => ({}), logger });
+
+    const run = await service.runLevel(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, "L3_CONTENT_FILL");
+
+    expect(run.steps.find((step) => step.stepKey === "IMAGE_FILL")?.result).toBe("PASSED");
+    expect(run.steps.find((step) => step.stepKey === "IMAGE_UPLOAD_PASSED")?.result).toBe("PASSED");
+    expect(database.repository.listJobs()).toHaveLength(0);
+    expect(database.repository.getPublishRecords()).toHaveLength(0);
+    expect(database.repository.listImageAssets(undefined, true)).toHaveLength(1);
+    expect(image.originalFileName).toBe("task10s-safe-test.png");
+  });
+
   it("does not create authorization or a publish job before owner confirmation", () => {
     const { database, service } = fixture();
     const requested = service.requestOneShotPublish(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);

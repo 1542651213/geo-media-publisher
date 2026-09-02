@@ -1,13 +1,13 @@
-import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { AppRepository } from "@publisher/db";
 import { createOwnerAuthorizedOneShotPublication, isAutomationAdapter, ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type AdapterRegistry, type AutomationAdapter, type ControlledSelfTestMode, type PlatformAdapter, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { AutomationPrepareResult, ControlledPostUploadDiscoveryResult, PublishFlowExplorationResult } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
 import type { PublisherService } from "@publisher/publisher";
-import type { Account, AccountContext, BackgroundAutomationStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PublishArticleInput } from "@publisher/domain";
+import type { Account, AccountContext, BackgroundAutomationStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PublishArticleInput, Task10SPrepublishResult } from "@publisher/domain";
 import type { XiaohongshuCanonicalPageRuntimeProbe } from "@publisher/adapters-xiaohongshu/browser";
 import { OneShotConfirmationCoordinator } from "./one-shot-confirmation";
 import { OneShotConfirmationReconciliationService } from "./one-shot-reconciliation";
@@ -36,11 +36,14 @@ function safeSelfTestImagePath(fileName = "task10n-safe-test.png"): string {
 const XHS_EXPLORATION_TITLE = "小红书发布流程测试-请勿发布";
 const XHS_EXPLORATION_BODY = "自动化发布流程验证，仅用于本地测试，不执行最终发布。";
 const XHS_ONE_SHOT_TITLE = "自动化发布测试｜请忽略";
-const XHS_ONE_SHOT_BODY = "这是一条小红书图文发布流程自动化测试内容，仅用于验证发布功能，请忽略。";
+const XHS_ONE_SHOT_BODY = "这是一条 GEO Media Publisher 小红书发布链路自动化测试内容，仅用于验证图片上传、标题正文填写及发布前状态检查。本轮不会执行最终发布。";
 const XHS_ONE_SHOT_CONFIRMATION = "本次会真实发布 1 条测试笔记，最多提交一次。";
 const XHS_EXPLORATION_EVIDENCE_FILE = "xiaohongshu-task10r-publish-flow-exploration.json";
 function publishDomainCountsEqual(left: { publishJobs: number; submissionIntents: number; publishRecords: number }, right: { publishJobs: number; submissionIntents: number; publishRecords: number }): boolean {
   return left.publishJobs === right.publishJobs && left.submissionIntents === right.submissionIntents && left.publishRecords === right.publishRecords;
+}
+function hasOneShotPrepublishState(run: PlatformSelfTestRun): boolean {
+  return run.steps.some((item) => item.errorCode === "ONE_SHOT_PREPUBLISH_EVIDENCE_INCOMPLETE" || (item.stepKey === "PREPUBLISH_READY" && item.result === "PASSED"));
 }
 function realPublishTestBatchConfirmed(): boolean {
   return ["1", "true", "yes"].includes((process.env.REAL_PUBLISH_TEST_BATCH_CONFIRMED ?? "").trim().toLowerCase());
@@ -74,6 +77,7 @@ export interface PlatformSelfTestServiceOptions {
   registry: AdapterRegistry;
   publisher: PublisherService;
   resolveAccountSecrets: (accountId: string, platformKey: string) => Record<string, string>;
+  evidenceDirectory?: string;
   logger?: Logger;
 }
 
@@ -123,6 +127,61 @@ export function summarizeSelfTestResult(run: PlatformSelfTestRun): PlatformSelfT
 
 export function isBlockingImageUploadFailure(result: PlatformSelfTestResult, imageUploadRequired: boolean | undefined): boolean {
   return result === "FAILED" && imageUploadRequired !== false;
+}
+
+function imageUploadEvidenceSummary(value: unknown): { verified: boolean; signal: string; previewCount: number | null } {
+  if (typeof value === "string") {
+    const signal = value.trim();
+    return { verified: signal.length > 0, signal, previewCount: null };
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return { verified: false, signal: "", previewCount: null };
+  const evidence = value as Record<string, unknown>;
+  const verified = evidence.verified === true;
+  const requestedCount = typeof evidence.requestedCount === "number" && Number.isInteger(evidence.requestedCount) ? evidence.requestedCount : null;
+  const previewCount = typeof evidence.previewCount === "number" && Number.isInteger(evidence.previewCount) ? evidence.previewCount : null;
+  const previewVisible = evidence.previewVisible === true;
+  const uploadBusyCount = typeof evidence.uploadBusyCount === "number" && Number.isInteger(evidence.uploadBusyCount) ? evidence.uploadBusyCount : null;
+  const sufficientPreview = requestedCount !== null && requestedCount > 0 && previewCount !== null && previewCount >= requestedCount && previewVisible && uploadBusyCount === 0;
+  return {
+    verified: verified && sufficientPreview,
+    signal: verified && sufficientPreview ? `editor_dom_preview_count:${String(previewCount)}:requested:${String(requestedCount)}:busy:${String(uploadBusyCount)}` : "",
+    previewCount
+  };
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function booleanValue(value: unknown): boolean {
+  return value === true;
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) ? value : null;
+}
+
+function requiredFieldValues(value: unknown): Array<{ label: string; empty: boolean; visible: boolean; enabled: boolean }> {
+  if (!Array.isArray(value)) return [];
+  return value.map(recordValue).filter((field): field is Record<string, unknown> => Boolean(field)).map((field) => ({
+    label: stringValue(field.label) ?? "",
+    empty: booleanValue(field.empty),
+    visible: booleanValue(field.visible),
+    enabled: booleanValue(field.enabled)
+  }));
+}
+
+function publishSettingValues(value: unknown): Array<{ label: string; required: boolean; value: string }> {
+  if (!Array.isArray(value)) return [];
+  return value.map(recordValue).filter((setting): setting is Record<string, unknown> => Boolean(setting)).map((setting) => ({
+    label: stringValue(setting.label) ?? "",
+    required: booleanValue(setting.required),
+    value: stringValue(setting.value) ?? ""
+  }));
 }
 
 function selfTestError(error: unknown): { result: PlatformSelfTestResult; errorCode: string; message: string } {
@@ -250,6 +309,121 @@ export class PlatformSelfTestService {
     }
   }
 
+  async prepareOneShotPrepublish(testRunId: string): Promise<Task10SPrepublishResult> {
+    const run = this.mustOneShotRun(testRunId);
+    const authorization = this.options.repository.getOneShotPublicationAuthorization(testRunId);
+    if (!authorization || authorization.state !== "AUTHORIZED_UNUSED" || authorization.platformKey !== "xiaohongshu" || authorization.accountId !== XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID || authorization.mode !== ONE_SHOT_REAL_PUBLISH_ACCEPTANCE || authorization.publicationTransactionCount !== 0 || authorization.finalSubmitAttemptCount !== 0 || authorization.finalSubmitRetryCount !== 0 || authorization.finalSubmitActionStarted || authorization.finalSubmitActionCompleted) {
+      throw new Error("ONE_SHOT_PREPUBLISH_AUTHORIZATION_NOT_AVAILABLE");
+    }
+    const account = this.account(run);
+    const adapter = this.options.registry.getForContent("xiaohongshu", "article");
+    if (!isAutomationAdapter(adapter)) throw new Error("当前小红书 Adapter 未提供安全预发布准备能力");
+    if (this.controlledOperations.has(account.id)) throw new Error("XHS_ONE_SHOT_OPERATION_ALREADY_RUNNING");
+    const before = this.task10sDatabaseSnapshot();
+    const fixture = this.ensureSafeTestImage();
+    const content: PublishArticleInput = {
+      articleId: `task10s-${run.testRunId}`,
+      title: XHS_ONE_SHOT_TITLE,
+      body: XHS_ONE_SHOT_BODY,
+      summary: "自动化发布测试",
+      tags: ["测试"],
+      ...(adapter.getCapabilities().maxImageCount > 0 ? { images: [fixture.filePath] } : {})
+    };
+    const context = this.context(account, run, "VISIBLE");
+    const runtimeBefore = adapter.getBrowserRuntimeSnapshot?.(context) ?? null;
+    if (!runtimeBefore?.sessionExists || runtimeBefore.browserConnected !== true || !runtimeBefore.contextExists || !runtimeBefore.canonicalPageExists || runtimeBefore.canonicalPageClosed === true) throw new Error("XHS_CANONICAL_RUNTIME_UNAVAILABLE");
+    if (!account.externalAccountId || !account.lastVerifiedAt) throw new Error("ACCOUNT_IDENTITY_UNVERIFIED");
+    this.controlledOperations.add(account.id);
+    try {
+      const preparedContent = await this.runEditorAndContent(run, account, adapter, "VISIBLE", content);
+      const preparedRun = this.options.repository.getPlatformSelfTestRun(run.testRunId) as PlatformSelfTestRun;
+      const preparedResponse = preparedContent.prepared?.response ?? null;
+      const imageStep = preparedRun.steps.find((item) => item.stepKey === "IMAGE_FILL");
+      const editorStep = preparedRun.steps.find((item) => item.stepKey === "EDITOR_OPEN");
+      const titleStep = preparedRun.steps.find((item) => item.stepKey === "TITLE_FILL");
+      const bodyStep = preparedRun.steps.find((item) => item.stepKey === "BODY_FILL");
+      const imageSummary = imageUploadEvidenceSummary(preparedResponse?.imageUploadEvidence);
+      const requiredFields = requiredFieldValues(preparedResponse?.requiredFields);
+      const requiredMissing = requiredFields.filter((field) => field.empty).map((field) => field.label || "UNNAMED_REQUIRED_FIELD");
+      const settings = publishSettingValues(preparedResponse?.publishSettings);
+      const finalControl = recordValue(preparedResponse?.finalSubmitControl);
+      const runtimeAfter = adapter.getBrowserRuntimeSnapshot?.(context) ?? null;
+      const contextCorrelation = runtimeBefore.contextDebugId && runtimeAfter?.contextDebugId ? runtimeBefore.contextDebugId === runtimeAfter.contextDebugId ? "PASS" as const : "NOT_OBSERVED" as const : "NOT_OBSERVED" as const;
+      const pageCorrelation = runtimeBefore.canonicalPageDebugId && runtimeAfter?.canonicalPageDebugId ? runtimeBefore.canonicalPageDebugId === runtimeAfter.canonicalPageDebugId ? "PASS" as const : "NOT_OBSERVED" as const : "NOT_OBSERVED" as const;
+      const editorPageUrl = preparedContent.prepared?.backendUrl ?? stringValue(preparedResponse?.pageUrl);
+      const editorPassed = editorStep?.result === "PASSED" && contextCorrelation === "PASS" && pageCorrelation === "PASS";
+      const titleObserved = stringValue(preparedResponse?.titleReadbackValue);
+      const bodyObserved = stringValue(preparedResponse?.bodyReadbackValue);
+      const titlePassed = titleStep?.result === "PASSED" && preparedContent.prepared?.titleFilled === true && titleObserved === XHS_ONE_SHOT_TITLE;
+      const bodyPassed = bodyStep?.result === "PASSED" && preparedContent.prepared?.bodyFilled === true && bodyObserved === XHS_ONE_SHOT_BODY;
+      const imagePassed = imageStep?.result === "PASSED" && preparedContent.imageAssetId !== null && imageSummary.verified;
+      const requiredPassed = preparedResponse?.requiredFieldsStatus === "KNOWN" && requiredMissing.length === 0;
+      const settingsPassed = preparedResponse?.publishSettingsStatus === "KNOWN" && Array.isArray(preparedResponse?.publishSettings);
+      const finalSubmitFound = finalControl?.verified === true && finalControl.unique === true;
+      const finalSubmitEnabled = finalControl?.enabled === true;
+      const finalSubmitVisible = finalControl?.visible === true;
+      const finalSubmitClickCount = numberValue(preparedResponse?.finalSubmitClickCount);
+      const finalSubmitPassed = finalSubmitFound && finalSubmitEnabled && finalSubmitVisible && finalSubmitClickCount === 0;
+      const missing: string[] = [];
+      if (!editorPassed) missing.push("EDITOR_OPEN");
+      if (!titlePassed) missing.push("TITLE_FILL_READBACK");
+      if (!bodyPassed) missing.push("BODY_FILL_READBACK");
+      if (!imagePassed) missing.push("IMAGE_FILL_DOM_READBACK");
+      if (!requiredPassed) missing.push("REQUIRED_FIELDS");
+      if (!settingsPassed) missing.push("PUBLISH_SETTINGS_READ_ONLY");
+      if (!finalSubmitPassed) missing.push("FINAL_SUBMIT_CONTROL_READ_ONLY");
+      const ready = missing.length === 0 && preparedContent.prepared !== null && preparedContent.prepared.prepared === true;
+      const evidenceMutationCount = 1;
+      this.step(run, "L5_PUBLISH", "PREPUBLISH_EVIDENCE", ready ? "PASSED" : "FAILED", ready ? null : "ONE_SHOT_PREPUBLISH_EVIDENCE_INCOMPLETE", ready ? "Task10S safe prepublish evidence 已完成；最终发布控件只读发现完成，未点击。" : `Task10S safe prepublish evidence 不完整：${missing.join(",")}`, `prepublish_ready:${String(ready)}:final_submit_count:${String(finalSubmitClickCount ?? "UNKNOWN")}`);
+      if (ready) {
+        this.step(run, "L5_PUBLISH", "PREPUBLISH_READY", "PASSED", null, "Task10S 已准备完成；等待 Owner 后续最终提交确认，当前未执行发布。", `authorization_state:${authorization.state}:final_submit_count:${String(finalSubmitClickCount)}`);
+        this.step(run, "L5_PUBLISH", "PUBLISH_SUBMIT", "WAITING_FOR_USER", "FINAL_SUBMIT_OWNER_ACTION_REQUIRED", "预发布证据已完成；最终发布按钮只读发现完成，未执行最终提交。", `authorization_state:${authorization.state}:final_submit_count:${String(finalSubmitClickCount)}`);
+      }
+      const after = this.task10sDatabaseSnapshot();
+      const requiredPass = [editorPassed, titlePassed, bodyPassed, imagePassed, requiredPassed, settingsPassed, finalSubmitPassed];
+      const result: Task10SPrepublishResult = {
+        testRunId: run.testRunId,
+        operationId: authorization.operationId,
+        platformKey: "xiaohongshu",
+        accountId: account.id,
+        status: ready ? "READY_FOR_FINAL_SUBMIT" : "BLOCKED",
+        authorizationState: "AUTHORIZED_UNUSED",
+        canonicalAuthorizationId: authorization.operationId,
+        accountIdentityVerified: Boolean(account.externalAccountId && account.lastVerifiedAt),
+        creatorId: account.externalAccountId ?? null,
+        editor: {
+          attemptCount: 1,
+          result: editorPassed ? "PASSED" : "BLOCKED",
+          pageUrl: editorPageUrl,
+          routeClass: editorPageUrl?.includes("/publish/") ? "PUBLISH_EDITOR" : "UNKNOWN",
+          contextId: runtimeAfter?.contextDebugId ?? null,
+          pageId: runtimeAfter?.canonicalPageDebugId ?? null,
+          contextCorrelation,
+          pageCorrelation
+        },
+        safeFixture: { path: fixture.filePath, sha256: this.fileSha256(fixture.filePath), exists: existsSync(fixture.filePath), assetId: fixture.id },
+        image: { attemptCount: imageSummary.verified ? 1 : 0, result: imagePassed ? "PASSED" : imageStep?.result ?? "NOT_TESTED", assetId: preparedContent.imageAssetId, domReadback: imageSummary.signal || null, previewCount: imageSummary.previewCount, error: imagePassed ? null : imageStep?.errorCode ?? "IMAGE_UPLOAD_NOT_VERIFIED" },
+        title: { attemptCount: titlePassed ? 1 : 0, expected: XHS_ONE_SHOT_TITLE, observed: titleObserved, readbackMatch: titlePassed },
+        body: { attemptCount: bodyPassed ? 1 : 0, expected: XHS_ONE_SHOT_BODY, observed: bodyObserved, readbackMatch: bodyPassed },
+        requiredFields: { total: requiredFields.length, pass: requiredFields.length - requiredMissing.length, missing: requiredMissing, result: requiredPassed ? "PASS" : preparedResponse ? "BLOCKED" : "NOT_OBSERVED" },
+        settings: { readOnlyCheck: settingsPassed ? "PASS" : preparedResponse ? "BLOCKED" : "NOT_OBSERVED", mutationCount: 0, values: settings },
+        finalSubmit: { found: finalSubmitFound, enabled: finalSubmitEnabled, text: stringValue(finalControl?.label), count: finalSubmitFound ? 1 : 0, clickCount: finalSubmitClickCount },
+        preparedContent: { prepared: preparedContent.prepared?.prepared === true, imageAssetId: preparedContent.imageAssetId, response: preparedResponse },
+        prepublishEvidence: { total: requiredPass.length, pass: requiredPass.filter(Boolean).length, missing },
+        readyToResumeExistingOneShot: ready,
+        database: { before, after },
+        safety: { authorizationMutationCount: 0, prepublishEvidenceMutationCount: evidenceMutationCount, jobMutationCount: 0, intentMutationCount: 0, publishRecordMutationCount: 0, uploadMutationCount: imageSummary.verified ? 1 : 0, titleMutationCount: titlePassed ? 1 : 0, bodyMutationCount: bodyPassed ? 1 : 0, settingsMutationCount: 0, publicationTransactionCount: 0, finalSubmitCount: finalSubmitClickCount },
+        evidencePath: null,
+        run: preparedRun
+      };
+      const finalRun = this.options.repository.finishPlatformSelfTestRun(run.testRunId, ready ? "WAITING_FOR_USER" : "FAILED");
+      const evidencePath = this.writeTask10sEvidence(result, finalRun);
+      return { ...result, evidencePath, run: finalRun };
+    } finally {
+      this.controlledOperations.delete(account.id);
+    }
+  }
+
   requestOneShotPublish(platformAccountId: string): PlatformSelfTestRun {
     const account = this.options.repository.listAccounts().find((item) => (item.id === platformAccountId || (item.platformAccountId ?? item.id) === platformAccountId) && item.platformKey === "xiaohongshu");
     if (!account || account.id !== XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID || !account.enabled || account.archivedAt) throw new Error("小红书一次性真实发布测试账号不可用或未绑定到授权账号");
@@ -316,7 +490,7 @@ export class PlatformSelfTestService {
       && existing.finalSubmitRetryCount === 0
       && !existing.finalSubmitActionStarted
       && !existing.finalSubmitActionCompleted
-      && run.steps.some((item) => item.errorCode === "ONE_SHOT_PREPUBLISH_EVIDENCE_INCOMPLETE"));
+      && hasOneShotPrepublishState(run));
     if (existing && !existingMatches) throw new Error("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH");
     if (existing && !resumableExisting) {
       if (!run.publishConfirmedAt) throw new Error("ONE_SHOT_AUTHORIZATION_NOT_RESUMABLE");
@@ -693,8 +867,15 @@ export class PlatformSelfTestService {
     const content = contentOverride ?? transparentSelfTestContent(run.platformKey, platform?.displayName ?? run.platformKey);
     // V1.1.8 Lieju acceptance starts without an image. The live adapter must
     // prove whether the platform actually requires one before submitting.
-    const image = run.requestedLevel === "L5_PUBLISH" && run.platformKey === "lieju" ? null : this.findTestImage();
-    const input: PublishArticleInput = { ...content, ...(image && adapter.getCapabilities().maxImageCount > 0 ? { images: [image.filePath] } : {}) };
+    const suppliedImagePath = content.images?.[0]?.trim() || null;
+    const image = run.requestedLevel === "L5_PUBLISH" && run.platformKey === "lieju"
+      ? null
+      : suppliedImagePath
+        ? this.options.repository.listImageAssets(undefined, true).find((item) => item.filePath === suppliedImagePath) ?? null
+        : this.findTestImage();
+    const input: PublishArticleInput = suppliedImagePath
+      ? content
+      : { ...content, ...(image && adapter.getCapabilities().maxImageCount > 0 ? { images: [image.filePath] } : {}) };
     try {
       const prepared = await adapter.preparePublish(this.context(account, run, executionMode), input);
       const executionModeProved = prepared.response.browserExecutionMode === executionMode
@@ -709,7 +890,8 @@ export class PlatformSelfTestService {
       const responseEvents = Array.isArray(prepared.response.events)
         ? prepared.response.events.filter((event): event is string => typeof event === "string")
         : [];
-      let imageEvidence = typeof prepared.response.imageUploadEvidence === "string" ? prepared.response.imageUploadEvidence.trim() : "";
+      const imageEvidenceSummary = imageUploadEvidenceSummary(prepared.response.imageUploadEvidence);
+      let imageEvidence = imageEvidenceSummary.signal;
       const coverUploadMethod = typeof prepared.response.coverUploadMethod === "string" ? prepared.response.coverUploadMethod.trim() : "";
       const coverUploaded = prepared.response.imageRequirement === "cover_uploaded"
         && prepared.response.coverInputVerified === true
@@ -718,7 +900,7 @@ export class PlatformSelfTestService {
       const genericImageUploaded = prepared.response.imageUploaded === true
         && imageUploadStarted
         && responseEvents.includes("IMAGE_UPLOAD_PASSED")
-        && imageEvidence.length > 0;
+        && imageEvidenceSummary.verified;
       const imageUploaded = genericImageUploaded || coverUploaded;
       if (coverUploaded && imageEvidence.length === 0) imageEvidence = `cover_upload:${coverUploadMethod}`;
       const imageUploadOptional = prepared.response.imageUploadRequired === false;
@@ -737,7 +919,7 @@ export class PlatformSelfTestService {
         this.step(run, "L3_CONTENT_FILL", "IMAGE_FILL", imageUploaded ? "PASSED" : "FAILED", imageUploaded ? null : "IMAGE_UPLOAD_FAILED", imageUploaded ? "测试图片已实际上传并由编辑器 DOM 证据确认" : "图片没有取得编辑器 DOM 上传证据，未声明成功", imageUploaded ? `image_asset:${image.id}:${imageEvidence}` : `image_asset:${image.id}:no_dom_evidence`, null, null, startedAt);
         this.step(run, "L3_CONTENT_FILL", imageUploaded ? "IMAGE_UPLOAD_PASSED" : "IMAGE_UPLOAD_FAILED", imageUploaded ? "PASSED" : "FAILED", imageUploaded ? null : "IMAGE_UPLOAD_FAILED", imageUploaded ? "编辑器图片数量增加且远程图片已加载" : "图片上传失败或未取得编辑器 DOM 证据", imageUploaded ? `image_asset:${image.id}:${imageEvidence}` : null, null, null, startedAt);
       }
-      return { input, imageAssetId: image?.id ?? null, prepared };
+      return { input, imageAssetId: imageUploaded ? image?.id ?? null : null, prepared };
     } catch (error) {
       const failure = selfTestError(error);
       this.step(run, "L2_EDITOR", "EDITOR_OPEN", failure.result, failure.errorCode, failure.message, null, null, null, startedAt);
@@ -802,7 +984,7 @@ export class PlatformSelfTestService {
   }
 
   private ensureSafeTestImage() {
-    const existing = this.options.repository.listImageAssets(undefined, true).find((image) => /task10[rs]-safe-test\.png$/iu.test(image.originalFileName) || /task10[rs]-safe-test\.png$/iu.test(image.filePath));
+    const existing = this.options.repository.listImageAssets(undefined, true).find((image) => /task10s-safe-test\.png$/iu.test(image.originalFileName) || /task10s-safe-test\.png$/iu.test(image.filePath));
     if (existing) return existing;
     const imagePath = safeSelfTestImagePath("task10s-safe-test.png");
     const brandId = this.options.repository.listBrands()[0]?.id ?? null;
@@ -845,6 +1027,34 @@ export class PlatformSelfTestService {
     if (typeof close === "function") await close.call(adapter);
   }
 
+  private task10sDatabaseSnapshot(): Record<string, number> {
+    const count = (table: string): number => Number((this.options.repository.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count);
+    return {
+      accounts: this.options.repository.listAccounts().length,
+      oneShotAuthorizations: count("one_shot_publication_authorizations"),
+      identityBindings: count("platform_account_identity_bindings"),
+      publishJobs: count("publish_jobs"),
+      submissionIntents: count("submission_intents"),
+      publishRecords: count("publish_records"),
+      mediaAssets: count("media_assets"),
+      platformSelfTestSteps: count("platform_self_test_steps")
+    };
+  }
+
+  private fileSha256(path: string): string | null {
+    try { return createHash("sha256").update(readFileSync(path)).digest("hex").toUpperCase(); } catch { return null; }
+  }
+
+  private writeTask10sEvidence(result: Task10SPrepublishResult, run: PlatformSelfTestRun): string | null {
+    if (!this.options.evidenceDirectory) return null;
+    const timestamp = new Date().toISOString().replace(/[:.]/gu, "-");
+    const evidencePath = join(this.options.evidenceDirectory, `xiaohongshu-task10s-prepublish-${timestamp}-${result.testRunId.slice(0, 8)}.json`);
+    mkdirSync(this.options.evidenceDirectory, { recursive: true });
+    writeFileSync(evidencePath, JSON.stringify({ ...result, evidencePath, run }, null, 2), "utf8");
+    this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_TASK10S_PREPUBLISH_EVIDENCE_WRITTEN", "小红书 Task10S 安全预发布证据已写入；未执行最终发布", { testRunId: result.testRunId, evidencePath, finalSubmitCount: result.safety.finalSubmitCount, authorizationState: result.authorizationState });
+    return evidencePath;
+  }
+
   private account(run: PlatformSelfTestRun): Account {
     const account = this.options.repository.listAccounts().find((item) => (item.platformAccountId ?? item.id) === run.platformAccountId && item.platformKey === run.platformKey);
     if (!account) throw new Error("平台自测账号不存在");
@@ -869,7 +1079,7 @@ export class PlatformSelfTestService {
       && authorization.publicationTransactionCount === 0
       && authorization.finalSubmitAttemptCount === 0
       && authorization.finalSubmitRetryCount === 0
-      && run.steps.some((item) => item.errorCode === "ONE_SHOT_PREPUBLISH_EVIDENCE_INCOMPLETE"));
+      && hasOneShotPrepublishState(run));
     if (run.platformKey !== "xiaohongshu" || (!confirmationRequired && !resumable)) throw new Error("当前运行不是 Task10S 一次性真实发布测试");
     return run;
   }
