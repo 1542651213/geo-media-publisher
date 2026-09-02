@@ -6,6 +6,7 @@ const browser = readFileSync("packages/adapters/xiaohongshu/src/browser.ts", "ut
 const ipc = readFileSync("apps/desktop/src/main/ipc.ts", "utf8");
 const preload = readFileSync("apps/desktop/src/main/preload.ts", "utf8");
 const api = readFileSync("apps/desktop/src/shared/api.ts", "utf8");
+const networkDiagnostic = readFileSync("packages/adapters/xiaohongshu/src/editor-network-diagnostic.ts", "utf8");
 
 describe("Task10S XHS editor load diagnostic wiring", () => {
   it("exposes one typed fixed-route diagnostic through the existing account API", () => {
@@ -28,5 +29,24 @@ describe("Task10S XHS editor load diagnostic wiring", () => {
     expect(diagnostic).not.toContain("document.documentElement.innerHTML");
     expect(diagnostic).not.toContain("localStorage");
     expect(diagnostic).not.toContain("sessionStorage");
+  });
+
+  it("exposes the deeper CDP network diagnostic without broadening browser control", () => {
+    expect(api).toContain("inspectEditorNetworkFailure(accountId: string, platformKey: string)");
+    expect(preload).toContain('inspectEditorNetworkFailure: (accountId, platformKey) => invoke("accounts:editor-network-diagnostic", { accountId, platformKey })');
+    expect(ipc).toContain('register("accounts:editor-network-diagnostic"');
+    expect(ipc).toContain('platformKey: z.literal("xiaohongshu")');
+    expect(browser).toContain("runXhsEditorNetworkFailureDiagnostic(canonical.page");
+    expect(networkDiagnostic).toContain('cdpSession.send("Network.enable")');
+    expect(networkDiagnostic).toContain('onCdp("Network.requestWillBeSent"');
+    expect(networkDiagnostic).toContain('onCdp("Network.responseReceived"');
+    expect(networkDiagnostic).toContain('onCdp("Network.loadingFailed"');
+    expect(networkDiagnostic).not.toContain("page.goto(");
+    expect(networkDiagnostic).not.toContain("page.newPage(");
+    expect(networkDiagnostic).not.toContain("context.newPage(");
+    expect(networkDiagnostic).not.toContain("headers");
+    expect(networkDiagnostic).not.toContain("postData");
+    expect(networkDiagnostic).not.toContain("localStorage");
+    expect(networkDiagnostic).not.toContain("sessionStorage");
   });
 });

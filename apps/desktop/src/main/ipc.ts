@@ -14,7 +14,7 @@ import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STU
 import { BrowserRuntimeError, assertExternalLaunchAllowed, browserSessionCredentialKey, browserSessionIdHash, isAutomationAdapter, type AdapterRegistry, type AutomationAdapter, type ExternalLaunchTriggerSource, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
 import type { PublisherService, PersistentScheduler } from "@publisher/publisher";
-import type { XhsEditorLoadDiagnosticResult } from "@publisher/adapters-xiaohongshu/browser";
+import type { XhsEditorLoadDiagnosticResult, XhsEditorNetworkDiagnosticResult } from "@publisher/adapters-xiaohongshu/browser";
 import { resumePersistentBatches, runPersistentBatchTask } from "./ai-batch";
 import { CONTENT_STUDIO_PROMPT_VERSION, resumeContentStudioTasks, runContentStudioTask } from "./content-studio";
 import { runQualityGate, runQualityGateForArticle, runQualityGateForVariant } from "./quality-gate";
@@ -513,6 +513,13 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
     if (!isAutomationAdapter(adapter) || typeof (adapter as AutomationAdapter & { inspectEditorLoad?: unknown }).inspectEditorLoad !== "function") throw new Error("小红书没有可用的 editor load diagnostic 能力");
     const loadDiagnosticAdapter = adapter as AutomationAdapter & { inspectEditorLoad: (ctx: AccountContext) => Promise<XhsEditorLoadDiagnosticResult> };
     return loadDiagnosticAdapter.inspectEditorLoad(accountContext(input.accountId, input.platformKey, createUserAction("PRE_SUBMIT_GATE")));
+  });
+  register("accounts:editor-network-diagnostic", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema, platformKey: z.literal("xiaohongshu") }).parse(payload);
+    const adapter = registry.getForConnection(input.platformKey);
+    if (!isAutomationAdapter(adapter) || typeof (adapter as AutomationAdapter & { inspectEditorNetworkFailure?: unknown }).inspectEditorNetworkFailure !== "function") throw new Error("小红书没有可用的 editor network diagnostic 能力");
+    const networkDiagnosticAdapter = adapter as AutomationAdapter & { inspectEditorNetworkFailure: (ctx: AccountContext) => Promise<XhsEditorNetworkDiagnosticResult> };
+    return networkDiagnosticAdapter.inspectEditorNetworkFailure(accountContext(input.accountId, input.platformKey, createUserAction("PRE_SUBMIT_GATE")));
   });
   const readCredentialStatus = (accountId: string, platformKey: string): { configured: boolean; expired: boolean; fields: Array<CredentialField & { configured: boolean }> } => {
     const account = repository.listAccounts().find((item) => item.id === accountId);

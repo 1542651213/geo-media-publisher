@@ -67,7 +67,9 @@ import {
 } from "./publish-flow-exploration";
 import { readXiaohongshuCreatorIdentity, type XiaohongshuIdentityDomDiagnosticMatch, type XiaohongshuCreatorIdentityCandidate } from "./identity";
 import { isExactXhsPublishEditorRoute, runXhsEditorLoadDiagnostic, type XhsEditorLoadDiagnosticResult } from "./editor-load-diagnostic";
+import { runXhsEditorNetworkFailureDiagnostic, type XhsEditorNetworkDiagnosticResult } from "./editor-network-diagnostic";
 export type { XhsEditorLoadDiagnosticResult } from "./editor-load-diagnostic";
+export type { XhsEditorNetworkDiagnosticResult } from "./editor-network-diagnostic";
 export {
   collectCreatorHomeTopology,
   collectPublishSemanticNodes,
@@ -3118,6 +3120,23 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         pageDebugId: canonical.pageDebugId
       });
     }, "editorLoadDiagnostic");
+  }
+
+  /** Read-only CDP Network diagnostics and one fixed-route reload on the existing canonical Page. */
+  async inspectEditorNetworkFailure(ctx: AccountContext): Promise<XhsEditorNetworkDiagnosticResult> {
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
+      const canonical = await this.activeCanonicalPage(ctx);
+      if (!canonical) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书当前没有可复用的 canonical Page，请先完成账号连接");
+      if (!this.isBrowserConnected(canonical.session) || this.isCanonicalPageClosed(canonical.page)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书 canonical Page 当前不可用");
+      if (!this.pageContextMatchesSession(canonical.session, canonical.page)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书 canonical Context/Page correlation 失败");
+      if (!isExactXhsPublishEditorRoute(canonical.page.url())) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书当前 canonical Page 不在固定 /publish/publish 路由");
+      return runXhsEditorNetworkFailureDiagnostic(canonical.page, {
+        operationId: randomUUID(),
+        accountId: ctx.accountId,
+        contextDebugId: canonical.session.contextDebugId ?? "unknown-context",
+        pageDebugId: canonical.pageDebugId
+      });
+    }, "editorNetworkFailureDiagnostic");
   }
 
   protected override async inspectConnectionPage(ctx: AccountContext, page: Page): Promise<LoginStatus> {
