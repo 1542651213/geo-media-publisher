@@ -4,9 +4,11 @@ import { isExactXhsPublishEditorRoute, redactXhsDiagnosticText, sanitizeXhsEdito
 const MAX_FAILED_FETCHES = 100;
 const MAX_ENDPOINT_GROUPS = 50;
 const MAX_TEXT_LENGTH = 500;
+const MAX_EXTENSION_PATH_LENGTH = 256;
 const MAX_WAIT_MS = 30_000;
 const DEFAULT_WAIT_MS = 10_000;
 const DEFAULT_RELOAD_COMMIT_TIMEOUT_MS = 15_000;
+const CHROME_EXTENSION_ID_PATTERN = /^[a-p]{32}$/u;
 
 export type XhsEditorNetworkRootCauseClass =
   | "A_CORS_OR_PREFLIGHT_FAILURE"
@@ -76,6 +78,8 @@ export interface XhsSafeFailedNetworkRequest {
   fromServiceWorker: boolean | null;
   urlScheme: XhsEditorRequestUrlScheme;
   urlClass: XhsEditorRequestUrlClass;
+  extensionId: string | null;
+  extensionPathname: string | null;
   hostPresent: boolean;
   hostCategory: XhsEditorRequestHostCategory;
   pathShape: XhsEditorRequestPathShape;
@@ -193,6 +197,8 @@ interface MutableFailedNetworkRequest {
   fromServiceWorker: boolean | null;
   failed: boolean;
   urlClassification: XhsSafeUrlClassification;
+  extensionId: string | null;
+  extensionPathname: string | null;
   initiatorSafe: XhsSafeInitiator;
 }
 
@@ -255,6 +261,26 @@ function hostCategory(hostname: string | null): XhsEditorRequestHostCategory {
   if (host === "creator.xiaohongshu.com") return "xiaohongshu_creator";
   if (host === "xiaohongshu.com" || host.endsWith(".xiaohongshu.com")) return "xiaohongshu_other";
   return "third_party";
+}
+
+export interface XhsSafeExtensionResourceIdentity {
+  extensionId: string | null;
+  pathname: string | null;
+}
+
+export function extractSafeExtensionResourceIdentity(rawUrl: string | null): XhsSafeExtensionResourceIdentity {
+  if (!rawUrl) return { extensionId: null, pathname: null };
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return { extensionId: null, pathname: null };
+  }
+  if (parsed.protocol.toLowerCase() !== "chrome-extension:") return { extensionId: null, pathname: null };
+  const extensionId = parsed.hostname.toLowerCase();
+  if (!CHROME_EXTENSION_ID_PATTERN.test(extensionId)) return { extensionId: null, pathname: null };
+  const pathname = truncateXhsDiagnosticText(redactXhsDiagnosticText(parsed.pathname || "/"), MAX_EXTENSION_PATH_LENGTH);
+  return { extensionId, pathname };
 }
 
 function pathShape(pathname: string, urlClass: XhsEditorRequestUrlClass): XhsEditorRequestPathShape {
@@ -397,6 +423,7 @@ function emptyResult(metadata: XhsEditorNetworkDiagnosticMetadata, url: string, 
 
 function newNetworkRecord(requestId: string, resourceType: "xhr" | "fetch", url: string | null, requestMethod: string | null): MutableFailedNetworkRequest {
   const urlClassification = classifyXhsEditorRequestUrl(url);
+  const extensionResourceIdentity = extractSafeExtensionResourceIdentity(url);
   return {
     requestId: safeRequestId(requestId),
     method: method(requestMethod),
@@ -412,6 +439,8 @@ function newNetworkRecord(requestId: string, resourceType: "xhr" | "fetch", url:
     fromServiceWorker: null,
     failed: false,
     urlClassification,
+    extensionId: extensionResourceIdentity.extensionId,
+    extensionPathname: extensionResourceIdentity.pathname,
     initiatorSafe: { type: "other", frames: [] }
   };
 }
@@ -578,6 +607,9 @@ export async function runXhsEditorNetworkFailureDiagnostic(page: Page, metadata:
       current.urlClassification = classifyXhsEditorRequestUrl(stringValue(request.url));
       current.origin = current.urlClassification.safeOrigin;
       current.pathname = current.urlClassification.safePathname;
+      const extensionResourceIdentity = extractSafeExtensionResourceIdentity(stringValue(request.url));
+      current.extensionId = extensionResourceIdentity.extensionId;
+      current.extensionPathname = extensionResourceIdentity.pathname;
     }
     current.initiatorSafe = readSafeInitiator(root?.initiator);
     records.set(safeId, current);

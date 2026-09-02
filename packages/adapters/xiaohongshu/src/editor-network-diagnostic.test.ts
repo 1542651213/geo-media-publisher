@@ -4,6 +4,7 @@ import {
   classifyXhsEditorBootstrapFailureClass,
   classifyXhsEditorNetworkRootCause,
   classifyXhsEditorRequestUrl,
+  extractSafeExtensionResourceIdentity,
   runXhsEditorNetworkFailureDiagnostic,
   type XhsEditorNetworkDiagnosticMetadata,
   type XhsEditorNetworkCauseEvidence
@@ -146,6 +147,34 @@ describe("Xiaohongshu editor CDP network diagnostic", () => {
     expect(classifyXhsEditorRequestUrl("about:blank")).toMatchObject({ urlScheme: "about", urlClass: "BROWSER_INTERNAL_RESOURCE", hostPresent: false, hostCategory: "none", pathShape: "blank" });
     expect(classifyXhsEditorRequestUrl("not a URL")).toEqual({ urlScheme: "other", urlClass: "MALFORMED_OR_UNPARSEABLE", hostPresent: false, hostCategory: "unknown", pathShape: "malformed", safeOrigin: null, safePathname: null });
     expect(JSON.stringify(classifyXhsEditorRequestUrl("https://creator.xiaohongshu.com/api/example?token=secret"))).not.toContain("secret");
+  });
+
+  it("extracts only a valid extension id and bounded pathname from a chrome-extension URL", () => {
+    expect(extractSafeExtensionResourceIdentity("chrome-extension://abcdefghijklmnopabcdefghijklmnop/assets/worker.js?token=secret")).toEqual({
+      extensionId: "abcdefghijklmnopabcdefghijklmnop",
+      pathname: "/assets/worker.js"
+    });
+    expect(JSON.stringify(extractSafeExtensionResourceIdentity("chrome-extension://abcdefghijklmnopabcdefghijklmnop/assets/worker.js?token=secret"))).not.toContain("secret");
+    expect(extractSafeExtensionResourceIdentity("chrome-extension://not-an-extension-id/assets/worker.js")).toEqual({ extensionId: null, pathname: null });
+    expect(extractSafeExtensionResourceIdentity("https://example.test/assets/worker.js")).toEqual({ extensionId: null, pathname: null });
+  });
+
+  it("retains the safe extension identity on failed requests without exposing the extension host or query", async () => {
+    const cdp = fakeCdp();
+    const fake = fakePage(cdp, () => {
+      cdp.emit("Network.requestWillBeSent", {
+        requestId: "req-extension",
+        type: "Fetch",
+        request: { url: "chrome-extension://abcdefghijklmnopabcdefghijklmnop/assets/worker.js?secret=body", method: "GET", postData: "do-not-retain" }
+      });
+      cdp.emit("Network.loadingFailed", { requestId: "req-extension", type: "Fetch", errorText: "net::ERR_FAILED", canceled: false });
+    });
+    const result = await runXhsEditorNetworkFailureDiagnostic(fake.page, metadata, { cdpSession: cdp.session, maxWaitMs: 0 });
+    expect(result.failedFetchesSafe[0]).toMatchObject({ extensionId: "abcdefghijklmnopabcdefghijklmnop", extensionPathname: "/assets/worker.js" });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("secret");
+    expect(serialized).not.toContain("do-not-retain");
+    expect(serialized).not.toContain("chrome-extension://");
   });
 
   it("captures bounded initiator type and at most three safe stack frames", async () => {
