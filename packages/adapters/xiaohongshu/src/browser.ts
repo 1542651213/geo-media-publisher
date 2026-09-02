@@ -1405,6 +1405,12 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     return super.connectAccount(ctx);
   }
 
+  override async completeConnection(ctx: AccountContext): Promise<LoginStatus> {
+    const status = await super.completeConnection(ctx);
+    if (status === "logged_in") this.sessionManager.setRuntimeAuthState({ platformKey: this.platformKey, accountId: ctx.accountId }, "AUTHENTICATED", null);
+    return status;
+  }
+
   override async validateArticle(article: PublishArticleInput): Promise<ValidationResult> {
     const base = await super.validateArticle(article);
     const errors = [...base.errors];

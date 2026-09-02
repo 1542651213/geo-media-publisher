@@ -551,6 +551,19 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     });
   });
 
+  it("marks the deferred completed-login runtime authenticated before identity proof", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", accountLabelText: "小红书账号：960803317" });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager, loginStabilityWindowMs: 0 });
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    expect(fixture.manager.getRuntimeAuthState(ctx).state).toBe("UNVERIFIED");
+
+    await expect(adapter.completeConnection(ctx)).resolves.toBe("logged_in");
+
+    expect(fixture.manager.getRuntimeAuthState(ctx)).toMatchObject({ state: "AUTHENTICATED", contextDebugId: "context-debug-id" });
+  });
+
   it("emits live-login and before-close auth diagnostics without exposing storage values", async () => {
     const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
     installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "数据看板"] });
