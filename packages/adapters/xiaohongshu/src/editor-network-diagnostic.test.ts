@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CDPSession, Page } from "playwright-core";
 import {
+  classifyXhsEditorBootstrapFailureClass,
   classifyXhsEditorNetworkRootCause,
+  classifyXhsEditorRequestUrl,
   runXhsEditorNetworkFailureDiagnostic,
   type XhsEditorNetworkDiagnosticMetadata,
   type XhsEditorNetworkCauseEvidence
@@ -134,5 +136,60 @@ describe("Xiaohongshu editor CDP network diagnostic", () => {
     expect(result.reloadCount).toBe(0);
     expect(fake.reload).not.toHaveBeenCalled();
     expect(cdp.send).not.toHaveBeenCalled();
+  });
+
+  it("classifies safe URL scheme, class, host, and path shape without retaining a raw URL", () => {
+    expect(classifyXhsEditorRequestUrl("https://creator.xiaohongshu.com/api/example?token=secret")).toEqual({ urlScheme: "https", urlClass: "HTTP_NETWORK_REQUEST", hostPresent: true, hostCategory: "xiaohongshu_creator", pathShape: "api_like", safeOrigin: "https://creator.xiaohongshu.com", safePathname: "/api/example" });
+    expect(classifyXhsEditorRequestUrl("blob:https://creator.xiaohongshu.com/opaque-id")).toMatchObject({ urlScheme: "blob", urlClass: "BLOB_RESOURCE", hostPresent: true, hostCategory: "xiaohongshu_creator", pathShape: "opaque" });
+    expect(classifyXhsEditorRequestUrl("data:text/plain,secret")).toMatchObject({ urlScheme: "data", urlClass: "DATA_RESOURCE", hostPresent: false, hostCategory: "none", pathShape: "opaque" });
+    expect(classifyXhsEditorRequestUrl("file:///tmp/example")).toMatchObject({ urlScheme: "file", urlClass: "FILE_RESOURCE", hostPresent: false, hostCategory: "none" });
+    expect(classifyXhsEditorRequestUrl("about:blank")).toMatchObject({ urlScheme: "about", urlClass: "BROWSER_INTERNAL_RESOURCE", hostPresent: false, hostCategory: "none", pathShape: "blank" });
+    expect(classifyXhsEditorRequestUrl("not a URL")).toEqual({ urlScheme: "other", urlClass: "MALFORMED_OR_UNPARSEABLE", hostPresent: false, hostCategory: "unknown", pathShape: "malformed", safeOrigin: null, safePathname: null });
+    expect(JSON.stringify(classifyXhsEditorRequestUrl("https://creator.xiaohongshu.com/api/example?token=secret"))).not.toContain("secret");
+  });
+
+  it("captures bounded initiator type and at most three safe stack frames", async () => {
+    const cdp = fakeCdp();
+    const fake = fakePage(cdp, () => {
+      cdp.emit("Network.requestWillBeSent", {
+        requestId: "req-init", type: "Fetch",
+        request: { url: "https://creator.xiaohongshu.com/api/bootstrap?token=secret", method: "GET" },
+        initiator: {
+          type: "script",
+          stack: { callFrames: [
+            { url: "https://creator.xiaohongshu.com/assets/app.js?token=secret", lineNumber: 10, columnNumber: 2 },
+            { url: "https://third.example/vendor.js?secret=1", lineNumber: 20, columnNumber: 3 },
+            { url: "about:blank", lineNumber: 30, columnNumber: 4 },
+            { url: "https://creator.xiaohongshu.com/assets/extra.js", lineNumber: 40, columnNumber: 5 }
+          ] }
+        }
+      });
+      cdp.emit("Network.loadingFailed", { requestId: "req-init", type: "Fetch", errorText: "net::ERR_FAILED", canceled: false });
+    });
+    const result = await runXhsEditorNetworkFailureDiagnostic(fake.page, metadata, { cdpSession: cdp.session, maxWaitMs: 0 });
+    const failure = result.failedFetchesSafe[0];
+    expect(failure).toMatchObject({ urlScheme: "https", urlClass: "HTTP_NETWORK_REQUEST", hostPresent: true, hostCategory: "xiaohongshu_creator", pathShape: "api_like", initiatorType: "script" });
+    expect(failure.initiatorSafe).toEqual({ type: "script", frames: [
+      { scriptUrlScheme: "https", safeOriginCategory: "xiaohongshu_creator", pathname: "/assets/app.js", lineNumber: 10, columnNumber: 2 },
+      { scriptUrlScheme: "https", safeOriginCategory: "third_party", pathname: null, lineNumber: 20, columnNumber: 3 },
+      { scriptUrlScheme: "about", safeOriginCategory: "none", pathname: null, lineNumber: 30, columnNumber: 4 }
+    ] });
+    expect(result.commonInitiator).toBe(true);
+    expect(result.commonInitiatorSafePathname).toBe("/assets/app.js");
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("third.example");
+    expect(serialized).not.toContain("token=secret");
+    expect(serialized).not.toContain("extra.js");
+  });
+
+  it("classifies the bounded bootstrap URL classes and does not call non-HTTP resources API failures", () => {
+    expect(classifyXhsEditorBootstrapFailureClass([{ urlClass: "HTTP_NETWORK_REQUEST", hostCategory: "xiaohongshu_creator" }], false)).toBe("A_HTTP_NETWORK_FETCH_FAILURE");
+    expect(classifyXhsEditorBootstrapFailureClass([{ urlClass: "BLOB_RESOURCE", hostCategory: "xiaohongshu_creator" }], false)).toBe("B_BLOB_FETCH_FAILURE");
+    expect(classifyXhsEditorBootstrapFailureClass([{ urlClass: "DATA_RESOURCE", hostCategory: "none" }], false)).toBe("C_DATA_OR_FILE_FETCH_FAILURE");
+    expect(classifyXhsEditorBootstrapFailureClass([{ urlClass: "BROWSER_INTERNAL_RESOURCE", hostCategory: "none" }], false)).toBe("D_BROWSER_INTERNAL_REQUEST_FAILURE");
+    expect(classifyXhsEditorBootstrapFailureClass([{ urlClass: "EXTENSION_RESOURCE", hostCategory: "third_party" }], false)).toBe("E_EXTENSION_INTERFERENCE");
+    expect(classifyXhsEditorBootstrapFailureClass([{ urlClass: "MALFORMED_OR_UNPARSEABLE", hostCategory: "unknown" }], false)).toBe("F_MALFORMED_REQUEST_URL");
+    expect(classifyXhsEditorBootstrapFailureClass([{ urlClass: "OTHER_NON_HTTP", hostCategory: "third_party" }], true)).toBe("H_XHS_SCRIPT_INITIATED_OPAQUE_FETCH_FAILURE");
+    expect(classifyXhsEditorBootstrapFailureClass([], false)).toBe("J_STILL_UNKNOWN_AFTER_URL_CLASSIFICATION");
   });
 });

@@ -21,6 +21,34 @@ export type XhsEditorNetworkRootCauseClass =
   | "J_TRANSIENT_FAILURE_RECOVERED_AFTER_SINGLE_RELOAD"
   | "K_UNKNOWN_NET_ERR_FAILED_AFTER_DEEP_DIAGNOSTIC";
 
+export type XhsEditorRequestUrlScheme = "https" | "http" | "blob" | "data" | "file" | "chrome" | "chrome-extension" | "about" | "ws" | "wss" | "other";
+export type XhsEditorRequestUrlClass = "HTTP_NETWORK_REQUEST" | "BLOB_RESOURCE" | "DATA_RESOURCE" | "FILE_RESOURCE" | "BROWSER_INTERNAL_RESOURCE" | "EXTENSION_RESOURCE" | "MALFORMED_OR_UNPARSEABLE" | "OTHER_NON_HTTP";
+export type XhsEditorRequestHostCategory = "xiaohongshu_creator" | "xiaohongshu_other" | "third_party" | "localhost" | "none" | "unknown";
+export type XhsEditorRequestPathShape = "root" | "api_like" | "publish_route" | "home_route" | "blank" | "opaque" | "non_root" | "malformed";
+
+export interface XhsSafeUrlClassification {
+  urlScheme: XhsEditorRequestUrlScheme;
+  urlClass: XhsEditorRequestUrlClass;
+  hostPresent: boolean;
+  hostCategory: XhsEditorRequestHostCategory;
+  pathShape: XhsEditorRequestPathShape;
+  safeOrigin: string | null;
+  safePathname: string | null;
+}
+
+export interface XhsSafeInitiatorFrame {
+  scriptUrlScheme: XhsEditorRequestUrlScheme;
+  safeOriginCategory: XhsEditorRequestHostCategory;
+  pathname: string | null;
+  lineNumber: number | null;
+  columnNumber: number | null;
+}
+
+export interface XhsSafeInitiator {
+  type: "parser" | "script" | "preload" | "SignedExchange" | "preflight" | "other";
+  frames: readonly XhsSafeInitiatorFrame[];
+}
+
 export interface XhsEditorNetworkDiagnosticMetadata {
   operationId: string;
   accountId: string;
@@ -46,6 +74,13 @@ export interface XhsSafeFailedNetworkRequest {
   corsErrorStatus: XhsSafeCorsErrorStatus | null;
   canceled: boolean;
   fromServiceWorker: boolean | null;
+  urlScheme: XhsEditorRequestUrlScheme;
+  urlClass: XhsEditorRequestUrlClass;
+  hostPresent: boolean;
+  hostCategory: XhsEditorRequestHostCategory;
+  pathShape: XhsEditorRequestPathShape;
+  initiatorType: XhsSafeInitiator["type"];
+  initiatorSafe: XhsSafeInitiator;
 }
 
 export interface XhsSafeFailedNetworkEndpointGroup {
@@ -76,6 +111,18 @@ export interface XhsEditorNetworkCauseEvidence {
   readyStateComplete: boolean;
 }
 
+export type XhsEditorBootstrapFailureClass =
+  | "A_HTTP_NETWORK_FETCH_FAILURE"
+  | "B_BLOB_FETCH_FAILURE"
+  | "C_DATA_OR_FILE_FETCH_FAILURE"
+  | "D_BROWSER_INTERNAL_REQUEST_FAILURE"
+  | "E_EXTENSION_INTERFERENCE"
+  | "F_MALFORMED_REQUEST_URL"
+  | "G_SANITIZER_OR_DIAGNOSTIC_PARSER_BUG"
+  | "H_XHS_SCRIPT_INITIATED_OPAQUE_FETCH_FAILURE"
+  | "I_OTHER_PROVEN_CLASS"
+  | "J_STILL_UNKNOWN_AFTER_URL_CLASSIFICATION";
+
 export interface XhsEditorNetworkDiagnosticResult {
   status: "COMPLETED" | "BLOCKED";
   operationId: string;
@@ -99,6 +146,11 @@ export interface XhsEditorNetworkDiagnosticResult {
   serviceWorkerInvolvement: XhsServiceWorkerInvolvement;
   serviceWorkerOrigins: readonly string[];
   serviceWorkerCount: number | null;
+  commonInitiator: boolean;
+  commonInitiatorSafe: XhsSafeInitiator | null;
+  commonInitiatorSafePathname: string | null;
+  bootstrapApiFailure: "PROVEN" | "NOT_PROVEN";
+  bootstrapFailureClass: XhsEditorBootstrapFailureClass | null;
   consoleErrorCount: number;
   consoleErrorsSafe: readonly XhsSafeNetworkConsoleError[];
   pageErrorCount: number;
@@ -140,6 +192,8 @@ interface MutableFailedNetworkRequest {
   canceled: boolean;
   fromServiceWorker: boolean | null;
   failed: boolean;
+  urlClassification: XhsSafeUrlClassification;
+  initiatorSafe: XhsSafeInitiator;
 }
 
 interface FixedPageNetworkSnapshot {
@@ -187,6 +241,94 @@ function safeStatus(value: unknown): number | null {
 
 function safeBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
+}
+
+function allowedUrlScheme(protocol: string): XhsEditorRequestUrlScheme {
+  const scheme = protocol.toLowerCase();
+  return scheme === "https" || scheme === "http" || scheme === "blob" || scheme === "data" || scheme === "file" || scheme === "chrome" || scheme === "chrome-extension" || scheme === "about" || scheme === "ws" || scheme === "wss" ? scheme : "other";
+}
+
+function hostCategory(hostname: string | null): XhsEditorRequestHostCategory {
+  const host = hostname?.toLowerCase() ?? "";
+  if (!host) return "none";
+  if (host === "localhost" || host === "127.0.0.1" || host === "[::1]") return "localhost";
+  if (host === "creator.xiaohongshu.com") return "xiaohongshu_creator";
+  if (host === "xiaohongshu.com" || host.endsWith(".xiaohongshu.com")) return "xiaohongshu_other";
+  return "third_party";
+}
+
+function pathShape(pathname: string, urlClass: XhsEditorRequestUrlClass): XhsEditorRequestPathShape {
+  if (urlClass === "BLOB_RESOURCE" || urlClass === "DATA_RESOURCE" || urlClass === "OTHER_NON_HTTP") return "opaque";
+  if (urlClass === "MALFORMED_OR_UNPARSEABLE") return "malformed";
+  if (urlClass === "BROWSER_INTERNAL_RESOURCE" && pathname === "blank") return "blank";
+  if (!pathname || pathname === "/") return "root";
+  if (/^\/api(?:\/|$)/iu.test(pathname)) return "api_like";
+  if (pathname === "/publish/publish") return "publish_route";
+  if (pathname === "/new/home") return "home_route";
+  return "non_root";
+}
+
+function nestedBlobUrl(rawUrl: string): URL | null {
+  if (!rawUrl.toLowerCase().startsWith("blob:")) return null;
+  try {
+    return new URL(rawUrl.slice(5));
+  } catch {
+    return null;
+  }
+}
+
+export function classifyXhsEditorRequestUrl(rawUrl: string | null): XhsSafeUrlClassification {
+  if (!rawUrl) return { urlScheme: "other", urlClass: "MALFORMED_OR_UNPARSEABLE", hostPresent: false, hostCategory: "unknown", pathShape: "malformed", safeOrigin: null, safePathname: null };
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return { urlScheme: "other", urlClass: "MALFORMED_OR_UNPARSEABLE", hostPresent: false, hostCategory: "unknown", pathShape: "malformed", safeOrigin: null, safePathname: null };
+  }
+  const urlScheme = allowedUrlScheme(parsed.protocol.slice(0, -1));
+  const urlClass: XhsEditorRequestUrlClass = urlScheme === "http" || urlScheme === "https"
+    ? "HTTP_NETWORK_REQUEST"
+    : urlScheme === "blob" ? "BLOB_RESOURCE"
+      : urlScheme === "data" ? "DATA_RESOURCE"
+        : urlScheme === "file" ? "FILE_RESOURCE"
+          : urlScheme === "chrome" || urlScheme === "about" ? "BROWSER_INTERNAL_RESOURCE"
+            : urlScheme === "chrome-extension" ? "EXTENSION_RESOURCE"
+              : "OTHER_NON_HTTP";
+  const nested = nestedBlobUrl(rawUrl);
+  const host = nested ? nested.hostname : parsed.hostname;
+  const category = hostCategory(host || null);
+  const hostPresent = Boolean(host);
+  const safeOrigin = urlClass === "HTTP_NETWORK_REQUEST" && category === "xiaohongshu_creator" ? parsed.origin : null;
+  const safePathname = urlClass === "HTTP_NETWORK_REQUEST" && category === "xiaohongshu_creator" ? parsed.pathname || "/" : null;
+  return { urlScheme, urlClass, hostPresent, hostCategory: category, pathShape: pathShape(parsed.pathname, urlClass), safeOrigin, safePathname };
+}
+
+function initiatorType(value: string | null): XhsSafeInitiator["type"] {
+  if (value === "parser" || value === "script" || value === "preload" || value === "SignedExchange" || value === "preflight") return value;
+  return "other";
+}
+
+function safeLineNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 10_000_000 ? value : null;
+}
+
+function readSafeInitiator(value: unknown): XhsSafeInitiator {
+  const root = record(value);
+  const stack = record(root?.stack);
+  const callFrames = Array.isArray(stack?.callFrames) ? stack.callFrames : [];
+  const frames: XhsSafeInitiatorFrame[] = [];
+  for (const candidate of callFrames.slice(0, 3)) {
+    const frame = record(candidate);
+    const classification = classifyXhsEditorRequestUrl(stringValue(frame?.url));
+    frames.push({
+      scriptUrlScheme: classification.urlScheme,
+      safeOriginCategory: classification.hostCategory,
+      pathname: classification.hostCategory === "xiaohongshu_creator" && classification.urlClass === "HTTP_NETWORK_REQUEST" ? classification.safePathname : null,
+      lineNumber: safeLineNumber(frame?.lineNumber),
+      columnNumber: safeLineNumber(frame?.columnNumber)
+    });
+  }
+  return { type: initiatorType(stringValue(root?.type)), frames };
 }
 
 function safeCorsErrorStatus(value: unknown): XhsSafeCorsErrorStatus | null {
@@ -237,6 +379,11 @@ function emptyResult(metadata: XhsEditorNetworkDiagnosticMetadata, url: string, 
     serviceWorkerInvolvement: "UNAVAILABLE",
     serviceWorkerOrigins: [],
     serviceWorkerCount: null,
+    commonInitiator: false,
+    commonInitiatorSafe: null,
+    commonInitiatorSafePathname: null,
+    bootstrapApiFailure: "NOT_PROVEN",
+    bootstrapFailureClass: null,
     consoleErrorCount: 0,
     consoleErrorsSafe: [],
     pageErrorCount: 0,
@@ -249,13 +396,13 @@ function emptyResult(metadata: XhsEditorNetworkDiagnosticMetadata, url: string, 
 }
 
 function newNetworkRecord(requestId: string, resourceType: "xhr" | "fetch", url: string | null, requestMethod: string | null): MutableFailedNetworkRequest {
-  const sanitized = url ? sanitizeXhsEditorDiagnosticUrl(url) : { origin: null, pathname: null };
+  const urlClassification = classifyXhsEditorRequestUrl(url);
   return {
     requestId: safeRequestId(requestId),
     method: method(requestMethod),
     resourceType,
-    origin: sanitized.origin,
-    pathname: sanitized.pathname,
+    origin: urlClassification.safeOrigin,
+    pathname: urlClassification.safePathname,
     responseObserved: false,
     httpStatus: null,
     errorText: null,
@@ -263,12 +410,21 @@ function newNetworkRecord(requestId: string, resourceType: "xhr" | "fetch", url:
     corsErrorStatus: null,
     canceled: false,
     fromServiceWorker: null,
-    failed: false
+    failed: false,
+    urlClassification,
+    initiatorSafe: { type: "other", frames: [] }
   };
 }
 
 function failedRequests(records: ReadonlyMap<string, MutableFailedNetworkRequest>): XhsSafeFailedNetworkRequest[] {
-  return [...records.values()].filter((item) => item.failed).slice(0, MAX_FAILED_FETCHES).map(({ failed: _failed, ...item }) => item);
+  return [...records.values()].filter((item) => item.failed).slice(0, MAX_FAILED_FETCHES).map(({ failed: _failed, urlClassification, initiatorSafe, ...item }) => ({
+    ...item,
+    origin: urlClassification.safeOrigin,
+    pathname: urlClassification.safePathname,
+    ...urlClassification,
+    initiatorType: initiatorSafe.type,
+    initiatorSafe
+  }));
 }
 
 function groupFailedRequests(items: readonly XhsSafeFailedNetworkRequest[]): XhsSafeFailedNetworkEndpointGroup[] {
@@ -301,6 +457,19 @@ function groupFailedRequests(items: readonly XhsSafeFailedNetworkRequest[]): Xhs
 function includesAny(value: string | null, needles: readonly string[]): boolean {
   const normalized = value?.toUpperCase() ?? "";
   return needles.some((needle) => normalized.includes(needle));
+}
+
+export function classifyXhsEditorBootstrapFailureClass(items: readonly Pick<XhsSafeUrlClassification, "urlClass" | "hostCategory">[], commonInitiator: boolean): XhsEditorBootstrapFailureClass {
+  if (items.length === 0) return "J_STILL_UNKNOWN_AFTER_URL_CLASSIFICATION";
+  if (items.some((item) => item.urlClass === "MALFORMED_OR_UNPARSEABLE")) return "F_MALFORMED_REQUEST_URL";
+  if (items.some((item) => item.urlClass === "EXTENSION_RESOURCE")) return "E_EXTENSION_INTERFERENCE";
+  if (items.every((item) => item.urlClass === "BLOB_RESOURCE")) return "B_BLOB_FETCH_FAILURE";
+  if (items.every((item) => item.urlClass === "DATA_RESOURCE" || item.urlClass === "FILE_RESOURCE")) return "C_DATA_OR_FILE_FETCH_FAILURE";
+  if (items.some((item) => item.urlClass === "BROWSER_INTERNAL_RESOURCE")) return "D_BROWSER_INTERNAL_REQUEST_FAILURE";
+  if (items.every((item) => item.urlClass === "HTTP_NETWORK_REQUEST")) return "A_HTTP_NETWORK_FETCH_FAILURE";
+  if (commonInitiator && items.some((item) => item.urlClass === "OTHER_NON_HTTP" || item.hostCategory === "none")) return "H_XHS_SCRIPT_INITIATED_OPAQUE_FETCH_FAILURE";
+  if (items.every((item) => item.urlClass === "OTHER_NON_HTTP")) return "I_OTHER_PROVEN_CLASS";
+  return "J_STILL_UNKNOWN_AFTER_URL_CLASSIFICATION";
 }
 
 export function classifyXhsEditorNetworkRootCause(evidence: XhsEditorNetworkCauseEvidence): XhsEditorNetworkRootCauseClass {
@@ -404,6 +573,13 @@ export async function runXhsEditorNetworkFailureDiagnostic(page: Page, metadata:
     requestWillBeSentCount += 1;
     const safeId = safeRequestId(requestId);
     const current = records.get(safeId) ?? newNetworkRecord(requestId, resourceType, stringValue(request?.url), stringValue(request?.method));
+    if (request) {
+      current.method = method(stringValue(request.method));
+      current.urlClassification = classifyXhsEditorRequestUrl(stringValue(request.url));
+      current.origin = current.urlClassification.safeOrigin;
+      current.pathname = current.urlClassification.safePathname;
+    }
+    current.initiatorSafe = readSafeInitiator(root?.initiator);
     records.set(safeId, current);
   };
   const responseReceived = (payload: unknown): void => {
@@ -476,6 +652,13 @@ export async function runXhsEditorNetworkFailureDiagnostic(page: Page, metadata:
     const serviceWorkerObserved = failedFetchesSafe.some((item) => item.fromServiceWorker === true);
     const serviceWorkerInvolvement: XhsServiceWorkerInvolvement = serviceWorkerObserved ? "OBSERVED" : serviceWorkers.status;
     const documentReadyStateFinal = normalizeReadyState(locationSnapshot?.readyState ?? null);
+    const firstInitiator = failedFetchesSafe[0]?.initiatorSafe ?? null;
+    const identifiableInitiator = firstInitiator !== null && (firstInitiator.type !== "other" || firstInitiator.frames.length > 0);
+    const commonInitiator = identifiableInitiator && failedFetchesSafe.every((item) => JSON.stringify(item.initiatorSafe) === JSON.stringify(firstInitiator));
+    const commonInitiatorSafe = commonInitiator ? firstInitiator : null;
+    const commonInitiatorSafePathname = commonInitiatorSafe?.frames.find((frame) => frame.pathname !== null)?.pathname ?? null;
+    const bootstrapFailureClass = classifyXhsEditorBootstrapFailureClass(failedFetchesSafe, commonInitiator);
+    const bootstrapApiFailure: "PROVEN" | "NOT_PROVEN" = bootstrapHttpStatuses.some((status) => status >= 400) || failedFetchesSafe.some((item) => item.urlClass === "HTTP_NETWORK_REQUEST") ? "PROVEN" : "NOT_PROVEN";
     const reloadRecovered = reloadErrorSafe === null && documentReadyStateFinal === "complete" && failedFetchesSafe.length === 0 && pageErrorCount === 0 && consoleErrorCount === 0;
     const rootCauseClass = classifyXhsEditorNetworkRootCause({ failedFetches: failedFetchesSafe, bootstrapHttpStatuses, pageErrorCount, consoleErrorCount, serviceWorkerInvolvement, reloadRecovered, readyStateComplete: documentReadyStateFinal === "complete" });
     const resultWithoutEvidence: Pick<XhsEditorNetworkDiagnosticResult, "failedFetchesSafe" | "bootstrapHttpStatuses" | "pageErrorCount" | "consoleErrorCount" | "serviceWorkerInvolvement" | "reloadErrorSafe" | "documentReadyStateFinal"> = { failedFetchesSafe, bootstrapHttpStatuses, pageErrorCount, consoleErrorCount, serviceWorkerInvolvement, reloadErrorSafe, documentReadyStateFinal };
@@ -502,6 +685,11 @@ export async function runXhsEditorNetworkFailureDiagnostic(page: Page, metadata:
       serviceWorkerInvolvement,
       serviceWorkerOrigins: serviceWorkers.origins,
       serviceWorkerCount: serviceWorkers.count,
+      commonInitiator,
+      commonInitiatorSafe,
+      commonInitiatorSafePathname,
+      bootstrapApiFailure,
+      bootstrapFailureClass,
       consoleErrorCount,
       consoleErrorsSafe,
       pageErrorCount,
