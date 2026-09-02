@@ -127,7 +127,7 @@ describe("Task10W canonical Page runtime probe wiring", () => {
     const adapter = readFileSync("packages/adapters/xiaohongshu/src/browser.ts", "utf8");
 
     expect(ipc).toContain('"platform-self-test:probe-xhs-canonical-page"');
-    expect(preload).toContain("probeXhsCanonicalPage: (accountId) => invoke(\"platform-self-test:probe-xhs-canonical-page\", { accountId })");
+    expect(preload).toContain("probeXhsCanonicalPage: () => invoke(\"platform-self-test:probe-xhs-canonical-page\", { accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID })");
     expect(adapter).toContain("evaluate(() => location.href)");
     expect(ipc).not.toContain("payload.script");
     expect(ipc).not.toContain("payload.url");
