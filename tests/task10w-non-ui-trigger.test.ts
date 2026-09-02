@@ -51,6 +51,20 @@ describe("Task10W fixed non-UI diagnostic trigger", () => {
     ]) expect(parseDiagnosticAction(args)).toBeNull();
   });
 
+  it("accepts only the fixed enum handoff from a secondary instance", () => {
+    expect(parseDiagnosticAction(["Geo Media Publisher.exe", "--unexpected-electron-arg"], { action: PROBE_XHS_CANONICAL_PAGE })).toBe(PROBE_XHS_CANONICAL_PAGE);
+    for (const data of [
+      undefined,
+      null,
+      {},
+      { action: XHS_CANONICAL_PAGE_PROBE_FLAG },
+      { action: "UNKNOWN_ACTION" },
+      { action: PROBE_XHS_CANONICAL_PAGE, payload: "https://example.com" },
+      { action: PROBE_XHS_CANONICAL_PAGE, pageId: "page-1" },
+      [PROBE_XHS_CANONICAL_PAGE]
+    ]) expect(parseDiagnosticAction(["Geo Media Publisher.exe", "--unexpected-electron-arg"], data)).toBeNull();
+  });
+
   it("dispatches exactly the existing proof-only probe and writes its result", async () => {
     const probe = vi.fn(async () => probeFixture);
     const writeEvidence = vi.fn();
@@ -62,9 +76,9 @@ describe("Task10W fixed non-UI diagnostic trigger", () => {
   });
 
   it("keeps the Main second-instance path single-purpose and primary-instance only", () => {
-    expect(mainSource).toContain("requestSingleInstanceLock()");
+    expect(mainSource).toContain("requestSingleInstanceLock(");
     expect(mainSource).toContain('app.on("second-instance"');
-    expect(mainSource).toContain("parseDiagnosticAction(commandLine)");
+    expect(mainSource).toContain("parseDiagnosticAction(commandLine, additionalData)");
     expect(mainSource).toContain("inspectCanonicalXhsPageRuntime");
     expect(mainSource).not.toContain("runDiagnostic(action: string, payload: unknown)");
     expect(mainSource).not.toContain("newContext");

@@ -24,7 +24,7 @@ const ownedBrowserSessionClosers = new Set<() => Promise<void>>();
 let shutdownStarted = false;
 let shutdownReady = false;
 const initialDiagnosticAction = parseDiagnosticAction(process.argv);
-const primaryInstanceLockAcquired = app.requestSingleInstanceLock();
+const primaryInstanceLockAcquired = app.requestSingleInstanceLock(initialDiagnosticAction ? { action: initialDiagnosticAction } : undefined);
 let queuedDiagnosticAction: DiagnosticAction | null = initialDiagnosticAction;
 let fixedDiagnosticActionRunner: ((action: DiagnosticAction) => Promise<boolean>) | null = null;
 let diagnosticRunInFlight: Promise<boolean> | null = null;
@@ -212,9 +212,10 @@ function runFixedDiagnosticAction(action: DiagnosticAction): Promise<boolean> {
 }
 
 if (primaryInstanceLockAcquired) {
-  app.on("second-instance", (_event, commandLine) => {
-    const action = parseDiagnosticAction(commandLine);
+  app.on("second-instance", (_event, commandLine, _workingDirectory, additionalData) => {
+    const action = parseDiagnosticAction(commandLine, additionalData);
     if (!action) return;
+    processDiagnostics.record("TASK10W_FIXED_DIAGNOSTIC_SECOND_INSTANCE", { action, commandLineArgCount: commandLine.length });
     if (!fixedDiagnosticActionRunner) {
       queuedDiagnosticAction ??= action;
       return;
