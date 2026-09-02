@@ -1,6 +1,7 @@
 import { app, BrowserWindow, safeStorage } from "electron";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { readFileSync as readPhysicalFileSync } from "original-fs";
 import { join } from "node:path";
 import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
 import type { XiaohongshuCanonicalPageRuntimeProbe } from "@publisher/adapters-xiaohongshu/browser";
@@ -47,7 +48,7 @@ function safeUrlPart(value: string | null, part: "origin" | "pathname"): string 
 }
 
 function hashFile(path: string): string | null {
-  try { return createHash("sha256").update(readFileSync(path)).digest("hex").toUpperCase(); }
+  try { return createHash("sha256").update(readPhysicalFileSync(path)).digest("hex").toUpperCase(); }
   catch { return null; }
 }
 

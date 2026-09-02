@@ -81,6 +81,7 @@ describe("Task10W fixed non-UI diagnostic trigger", () => {
     expect(mainSource).toContain("parseDiagnosticAction(commandLine, additionalData)");
     expect(mainSource).toContain("inspectCanonicalXhsPageRuntime");
     expect(mainSource).toContain("hashFile(app.getAppPath())");
+    expect(mainSource).toContain("original-fs");
     expect(mainSource).toContain("xiaohongshu-task10w-live-probe-r5-20260902.json");
     expect(mainSource).not.toContain("runDiagnostic(action: string, payload: unknown)");
     expect(mainSource).not.toContain("newContext");
