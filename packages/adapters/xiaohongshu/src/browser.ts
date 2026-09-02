@@ -66,6 +66,8 @@ import {
   type XhsIntermediateActionCandidate
 } from "./publish-flow-exploration";
 import { readXiaohongshuCreatorIdentity, type XiaohongshuIdentityDomDiagnosticMatch, type XiaohongshuCreatorIdentityCandidate } from "./identity";
+import { isExactXhsPublishEditorRoute, runXhsEditorLoadDiagnostic, type XhsEditorLoadDiagnosticResult } from "./editor-load-diagnostic";
+export type { XhsEditorLoadDiagnosticResult } from "./editor-load-diagnostic";
 export {
   collectCreatorHomeTopology,
   collectPublishSemanticNodes,
@@ -3099,6 +3101,23 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     if (!this.isCreatorHomeRoute(currentUrl) && !this.isEditorRoute(currentUrl)) await this.navigate(opened.page, url);
     if (this.isLoginPage(opened.page.url())) throw new BrowserAutomationError("LOGIN_EXPIRED", "小红书 Session 已过期，请重新登录");
     return { page: opened.page, session: opened.session, backendUrl: opened.page.url() };
+  }
+
+  /** Read-only load telemetry and one fixed-route reload on the existing canonical Page. */
+  async inspectEditorLoad(ctx: AccountContext): Promise<XhsEditorLoadDiagnosticResult> {
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
+      const canonical = await this.activeCanonicalPage(ctx);
+      if (!canonical) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书当前没有可复用的 canonical Page，请先完成账号连接");
+      if (!this.isBrowserConnected(canonical.session) || this.isCanonicalPageClosed(canonical.page)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书 canonical Page 当前不可用");
+      const currentUrl = canonical.page.url();
+      if (!isExactXhsPublishEditorRoute(currentUrl)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书当前 canonical Page 不在固定 /publish/publish 路由");
+      return runXhsEditorLoadDiagnostic(canonical.page, {
+        operationId: randomUUID(),
+        accountId: ctx.accountId,
+        contextDebugId: canonical.session.contextDebugId ?? "unknown-context",
+        pageDebugId: canonical.pageDebugId
+      });
+    }, "editorLoadDiagnostic");
   }
 
   protected override async inspectConnectionPage(ctx: AccountContext, page: Page): Promise<LoginStatus> {
