@@ -1,4 +1,4 @@
-import type { AccountContext, AccountProfile, CreatorIdentityProof, LoginSession, LoginStatus, PublishArticleInput, PublishResult, PublishStatusResult, ValidationResult } from "@publisher/domain";
+import type { AccountContext, AccountProfile, CreatorIdentityProof, CurrentRuntimeIdentityProof, LoginSession, LoginStatus, PublishArticleInput, PublishResult, PublishStatusResult, ValidationResult } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
 import { classifyOneShotPostSubmitObservation, reconcileOneShotPublication, type AutomationPrepareResult, type BrowserPublishAttemptContext, type BrowserPublishReconciliationInput, type BrowserPublishReconciliationResult, type BrowserRuntimeAuthState, type BrowserSession, type BrowserSessionRuntimeSnapshot, type ControlledPostUploadDiscoveryResult, OneShotPublicationGuardError, type OneShotConfirmationCandidate, type OneShotFinalSubmitPreflight, type OneShotPublicationGuard, type OneShotPostSubmitObservation, type OneShotRealPublishAcceptanceInput, type OneShotRealPublishAcceptanceResult, type PreSubmitGateFailureCode, type PreSubmitGateFailureStage, type PreSubmitGateResult, type PreSubmitGateStatus, type PublishFlowExplorationBudgets, type PublishFlowExplorationCounters, type PublishFlowExplorationInput, type PublishFlowExplorationResult } from "@publisher/adapters-core";
 import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomationAdapterOptions, type BrowserPlatformDefinition, type BrowserSessionScopeEvidence } from "@publisher/adapters-browser";
@@ -2719,12 +2719,22 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const validation = await this.validateArticle(article);
     if (!validation.valid) throw new BrowserAutomationError("CONTENT_REJECTED", validation.errors.join("；"));
 
+    const runtimeIdentityProof = ctx.runtimeIdentityProof;
+    if (runtimeIdentityProof) {
+      const currentCanonical = await this.activeCanonicalPage(ctx);
+      if (!currentCanonical) throw new XiaohongshuGateError("ACCOUNT_IDENTITY_UNVERIFIED", "USER_ACTION_REQUIRED", "当前 canonical Page 不存在，拒绝消费 runtime identity proof");
+      this.assertRuntimeIdentityProof(ctx, runtimeIdentityProof, currentCanonical.session.contextDebugId, currentCanonical.pageDebugId);
+    }
     const opened = await this.openBackendPage(ctx, XIAOHONGSHU_CREATOR_HOME);
+    if (runtimeIdentityProof) this.assertRuntimeIdentityProof(ctx, runtimeIdentityProof, opened.session.contextDebugId, opened.session.pageDebugId ?? "unknown-page");
     const page = opened.page;
     const evidence = await readXiaohongshuPageEvidence(page);
-    this.assertProfilePageCanBeRead(evidence);
+    this.assertProfilePageCanBeRead(evidence, runtimeIdentityProof);
     const gates: string[] = ["account_identity"];
     const identity = await this.inspectAccountIdentity(page, evidence);
+    if (runtimeIdentityProof && (identity.externalAccountId !== runtimeIdentityProof.observedExternalCreatorId || identity.identitySourceCandidates?.length !== 1)) {
+      throw new XiaohongshuGateError("ACCOUNT_IDENTITY_UNVERIFIED", "USER_ACTION_REQUIRED", "当前页面 identity evidence 与 runtime identity proof 不一致");
+    }
 
     const operationId = randomUUID();
     await this.navigateToImagePostEditor(page, operationId, ctx.accountId, { context: opened.session.context }, "PREPARE_PUBLISH");
@@ -3085,7 +3095,8 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
   protected override async openBackendPage(ctx: AccountContext, url = XIAOHONGSHU_CREATOR_HOME): Promise<{ page: Page; session: BrowserSession; backendUrl: string }> {
     const opened = await this.activeCanonicalPage(ctx);
     if (!opened) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书当前没有可复用的 canonical authenticated Page，请先完成登录");
-    await this.navigate(opened.page, url);
+    const currentUrl = opened.page.url();
+    if (!this.isCreatorHomeRoute(currentUrl) && !this.isEditorRoute(currentUrl)) await this.navigate(opened.page, url);
     if (this.isLoginPage(opened.page.url())) throw new BrowserAutomationError("LOGIN_EXPIRED", "小红书 Session 已过期，请重新登录");
     return { page: opened.page, session: opened.session, backendUrl: opened.page.url() };
   }
@@ -3370,7 +3381,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     return this.authStateFingerprintKey;
   }
 
-  private assertProfilePageCanBeRead(evidence: XiaohongshuPageEvidence): void {
+  private assertProfilePageCanBeRead(evidence: XiaohongshuPageEvidence, runtimeIdentityProof?: CurrentRuntimeIdentityProof): void {
     if (!evidence.available) {
       if (this.isLoginPage(evidence.login.url)) throw new XiaohongshuGateError("LOGIN_REQUIRED", "USER_ACTION_REQUIRED", "小红书页面仍是登录页，请先完成登录");
       if (this.isVerificationUrl(evidence.login.url)) throw new XiaohongshuGateError("SECURITY_VERIFICATION_REQUIRED", "USER_ACTION_REQUIRED", "小红书页面仍是安全验证页；未尝试绕过");
@@ -3379,7 +3390,14 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const decision = classifyXiaohongshuLoginEvidence(evidence.login);
     if (decision === "login_required") throw new XiaohongshuGateError("LOGIN_REQUIRED", "USER_ACTION_REQUIRED", "小红书页面仍是登录页，请先完成登录");
     if (decision === "needs_user_action") throw new XiaohongshuGateError("SECURITY_VERIFICATION_REQUIRED", "USER_ACTION_REQUIRED", "页面存在可见且阻塞当前操作的登录/安全验证；未尝试绕过");
+    if (decision === "unknown" && runtimeIdentityProof && evidence.login.creatorHost && !evidence.login.explicitLoginUrl && !evidence.login.verificationUrl && evidence.login.blockingSignals.length === 0 && evidence.identity.externalAccountId === runtimeIdentityProof.observedExternalCreatorId && evidence.identity.externalAccountIdCandidates.length === 1) return;
     if (decision !== "logged_in") throw new XiaohongshuGateError("ACCOUNT_IDENTITY_UNVERIFIED", "USER_ACTION_REQUIRED", "小红书 Creator 正向登录证据不足；未猜测账号身份");
+  }
+
+  private assertRuntimeIdentityProof(ctx: AccountContext, proof: CurrentRuntimeIdentityProof, contextDebugId: string | null | undefined, pageDebugId: string | null | undefined): void {
+    if (proof.accountId !== ctx.accountId || proof.platformKey !== ctx.platformKey || proof.verified !== true || !proof.expectedExternalCreatorId || !proof.observedExternalCreatorId || proof.expectedExternalCreatorId !== proof.observedExternalCreatorId || proof.canonicalContextId !== contextDebugId || proof.canonicalPageId !== pageDebugId) {
+      throw new XiaohongshuGateError("ACCOUNT_IDENTITY_UNVERIFIED", "USER_ACTION_REQUIRED", "runtime identity proof 与当前 canonical Context/Page 不一致");
+    }
   }
 
   private async inspectAccountIdentity(page: Page, pageEvidence?: XiaohongshuPageEvidence): Promise<XiaohongshuAccountIdentityEvidence> {

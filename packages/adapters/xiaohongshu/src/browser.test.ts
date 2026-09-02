@@ -700,6 +700,55 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(fixture.page.goto).toHaveBeenCalledTimes(1);
   });
 
+  it("consumes a same-runtime identity proof when the home page has only one generic login signal", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountLabelText: "小红书账号: 960803317" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记"] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = {
+      ...context("account-a"),
+      runtimeIdentityProof: {
+        accountId: "account-a",
+        platformKey: "xiaohongshu" as const,
+        expectedExternalCreatorId: "960803317",
+        observedExternalCreatorId: "960803317",
+        canonicalContextId: "context-debug-id",
+        canonicalPageId: "canonical-page-debug-id",
+        verified: true as const
+      }
+    };
+
+    await adapter.connectAccount(ctx);
+    const result = await adapter.preparePublish(ctx, article);
+
+    expect(result).toMatchObject({ prepared: true, titleFilled: true, bodyFilled: true });
+    expect(fixture.entryClick).toHaveBeenCalledTimes(1);
+    expect(fixture.inputSetFiles).toHaveBeenCalledTimes(1);
+    expect(fixture.submitClick).not.toHaveBeenCalled();
+  });
+
+  it("rejects a same-runtime proof bound to a foreign Page before editor entry", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountLabelText: "小红书账号: 960803317" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记"] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = {
+      ...context("account-a"),
+      runtimeIdentityProof: {
+        accountId: "account-a",
+        platformKey: "xiaohongshu" as const,
+        expectedExternalCreatorId: "960803317",
+        observedExternalCreatorId: "960803317",
+        canonicalContextId: "context-debug-id",
+        canonicalPageId: "foreign-page",
+        verified: true as const
+      }
+    };
+
+    await adapter.connectAccount(ctx);
+    await expect(adapter.preparePublish(ctx, article)).rejects.toMatchObject({ code: "USER_ACTION_REQUIRED", message: expect.stringContaining("runtime identity proof") });
+    expect(fixture.entryClick).not.toHaveBeenCalled();
+    expect(fixture.inputSetFiles).not.toHaveBeenCalled();
+  });
+
   it("uses the same bounded Creator ID reader for getAccountProfile", async () => {
     const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountName: "苏州别墅光伏", accountLabelText: "小红书账号: 960803317" });
     installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], displayName: "苏州别墅光伏" });

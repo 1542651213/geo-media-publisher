@@ -47,6 +47,7 @@ describe("Task10S platform self-test entry", () => {
     database.repository.createImageAsset({ brandId: database.repository.listBrands()[0]?.id ?? null, name: "Task10R SAFE_TEST_FIXTURE", filePath: "C:/safe/task10r-safe-test.png", originalFileName: "task10r-safe-test.png", mimeType: "image/png", size: 70, tags: ["测试"], usage: ["测试"], platform: ["xiaohongshu"], universal: true });
     const safeFixture = database.repository.createImageAsset({ brandId: database.repository.listBrands()[0]?.id ?? null, name: "Task10S SAFE_TEST_FIXTURE", filePath: "C:/safe/task10s-safe-test.png", originalFileName: "task10s-safe-test.png", mimeType: "image/png", size: 70, tags: ["测试"], usage: ["测试"], platform: ["xiaohongshu"], universal: true });
     let receivedInput: { images?: string[] } | null = null;
+    const receivedContext: { runtimeIdentityProof?: Record<string, unknown> } = {};
     const adapter = {
       platformKey: "xiaohongshu",
       manifest: { platformKey: "xiaohongshu", displayName: "XHS fixture", category: "测试", version: "test", adapterStatus: "ready", authStrategy: "ManualSession", callbackStrategy: "ManualCodeCallback", status: "WaitingForUser", researchStatus: "partial", transport: "browser", integrationMode: "BrowserAutomation", supportsArticle: true, supportsVideo: false, officialWebsite: "https://creator.xiaohongshu.com/", credentialSchema: [], officialSources: ["https://creator.xiaohongshu.com/"] },
@@ -58,7 +59,37 @@ describe("Task10S platform self-test entry", () => {
       checkSession: async () => "logged_in" as const,
       checkLogin: async () => "logged_in" as const,
       getBrowserRuntimeSnapshot: () => ({ sessionExists: true, browserConnected: true, contextExists: true, canonicalPageExists: true, canonicalPageClosed: false, contextDebugId: "context", canonicalPageDebugId: "page" }),
-      preparePublish: async (_context: unknown, input: { images?: string[] }) => {
+      inspectCanonicalPageRuntime: async () => ({
+        probeStatus: "PASS",
+        failureStage: null,
+        failureCode: null,
+        failureErrorClass: null,
+        canonicalContextId: "context",
+        canonicalPageId: "page",
+        probedContextId: "context",
+        probedPageId: "page",
+        pageContextMatchesSession: true,
+        createdNewPage: false,
+        browserConnected: true,
+        pageClosed: false,
+        runtimeAuthState: "AUTHENTICATED",
+        playwrightPageUrl: "https://creator.xiaohongshu.com/new/home",
+        domLocationHref: "https://creator.xiaohongshu.com/new/home",
+        domLocationEvaluateStatus: "PASS",
+        domLocationEvaluateErrorClass: null,
+        pageUrlConsistency: "PASS",
+        routeClass: "CREATOR_HOME",
+        identityObservationStatus: "PASS",
+        identitySourceCandidates: [{ sourceType: "VISIBLE_ACCOUNT_TEXT", stableIdentifierPresent: true, identifierFieldName: "externalCreatorId", sensitiveDataRequired: false, readOnlySafe: true, confidence: "HIGH", tagName: "SPAN", text: "960803317", href: null, role: null, dataIdentifierField: null, visible: true, source: "CREATOR_HOME_ACCOUNT_LABEL", rawValue: "960803317", normalizedCreatorId: "960803317", semanticAnchor: "xiaohongshu-account-id-label" }],
+        identityDomDiagnosticMatchCount: 1,
+        identityDomDiagnosticMatches: [],
+        observedCreatorIdRaw: "960803317",
+        observedCreatorIdNormalized: "960803317",
+        observedDisplayName: null,
+        observedProfileUrl: null
+      }),
+      preparePublish: async (context: unknown, input: { images?: string[] }) => {
+        Object.assign(receivedContext, context as { runtimeIdentityProof?: Record<string, unknown> });
         receivedInput = input;
         return ({
         prepared: true,
@@ -111,6 +142,15 @@ describe("Task10S platform self-test entry", () => {
     expect(result.finalSubmit.clickCount).toBe(0);
     expect(result.readyToResumeExistingOneShot).toBe(true);
     expect((receivedInput as { images?: string[] } | null)?.images).toEqual([safeFixture.filePath]);
+    expect(receivedContext.runtimeIdentityProof).toMatchObject({
+      accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID,
+      platformKey: "xiaohongshu",
+      expectedExternalCreatorId: "960803317",
+      observedExternalCreatorId: "960803317",
+      canonicalContextId: "context",
+      canonicalPageId: "page",
+      verified: true
+    });
     expect(result.preparedContent.imageAssetId).toBe(safeFixture.id);
     expect(database.repository.listJobs()).toHaveLength(0);
     expect(database.repository.db.prepare("SELECT COUNT(*) AS count FROM submission_intents").get()).toMatchObject({ count: 0 });

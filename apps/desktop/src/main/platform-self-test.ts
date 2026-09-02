@@ -7,7 +7,7 @@ import { createOwnerAuthorizedOneShotPublication, isAutomationAdapter, ONE_SHOT_
 import type { AutomationPrepareResult, ControlledPostUploadDiscoveryResult, PublishFlowExplorationResult } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
 import type { PublisherService } from "@publisher/publisher";
-import type { Account, AccountContext, BackgroundAutomationStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PublishArticleInput, Task10SPrepublishResult } from "@publisher/domain";
+import type { Account, AccountContext, BackgroundAutomationStatus, CurrentRuntimeIdentityProof, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PublishArticleInput, Task10SPrepublishResult } from "@publisher/domain";
 import type { XiaohongshuCanonicalPageRuntimeProbe } from "@publisher/adapters-xiaohongshu/browser";
 import { OneShotConfirmationCoordinator } from "./one-shot-confirmation";
 import { OneShotConfirmationReconciliationService } from "./one-shot-reconciliation";
@@ -333,9 +333,23 @@ export class PlatformSelfTestService {
     const runtimeBefore = adapter.getBrowserRuntimeSnapshot?.(context) ?? null;
     if (!runtimeBefore?.sessionExists || runtimeBefore.browserConnected !== true || !runtimeBefore.contextExists || !runtimeBefore.canonicalPageExists || runtimeBefore.canonicalPageClosed === true) throw new Error("XHS_CANONICAL_RUNTIME_UNAVAILABLE");
     if (!account.externalAccountId || !account.lastVerifiedAt) throw new Error("ACCOUNT_IDENTITY_UNVERIFIED");
+    const identityVerification = await this.xhsIdentity.verifyCreatorIdentity(account.id);
+    if (!identityVerification.verified || identityVerification.expectedExternalCreatorId !== account.externalAccountId || identityVerification.observed.externalCreatorId !== account.externalAccountId || identityVerification.canonicalContextId !== runtimeBefore.contextDebugId || identityVerification.canonicalPageId !== runtimeBefore.canonicalPageDebugId) {
+      throw Object.assign(new Error("ACCOUNT_IDENTITY_UNVERIFIED: current runtime identity proof did not match the existing canonical account runtime"), { code: "ACCOUNT_IDENTITY_UNVERIFIED" });
+    }
+    const runtimeIdentityProof: CurrentRuntimeIdentityProof = {
+      accountId: account.id,
+      platformKey: "xiaohongshu",
+      expectedExternalCreatorId: account.externalAccountId,
+      observedExternalCreatorId: identityVerification.observed.externalCreatorId,
+      canonicalContextId: identityVerification.canonicalContextId,
+      canonicalPageId: identityVerification.canonicalPageId,
+      verified: true
+    };
+    const preparedContext: AccountContext = { ...context, runtimeIdentityProof };
     this.controlledOperations.add(account.id);
     try {
-      const preparedContent = await this.runEditorAndContent(run, account, adapter, "VISIBLE", content);
+      const preparedContent = await this.runEditorAndContent(run, account, adapter, "VISIBLE", content, preparedContext);
       const preparedRun = this.options.repository.getPlatformSelfTestRun(run.testRunId) as PlatformSelfTestRun;
       const preparedResponse = preparedContent.prepared?.response ?? null;
       const imageStep = preparedRun.steps.find((item) => item.stepKey === "IMAGE_FILL");
@@ -389,7 +403,7 @@ export class PlatformSelfTestService {
         status: ready ? "READY_FOR_FINAL_SUBMIT" : "BLOCKED",
         authorizationState: "AUTHORIZED_UNUSED",
         canonicalAuthorizationId: authorization.operationId,
-        accountIdentityVerified: Boolean(account.externalAccountId && account.lastVerifiedAt),
+        accountIdentityVerified: identityVerification.verified,
         creatorId: account.externalAccountId ?? null,
         editor: {
           attemptCount: 1,
@@ -854,7 +868,7 @@ export class PlatformSelfTestService {
     }
   }
 
-  private async runEditorAndContent(run: PlatformSelfTestRun, account: Account, adapter: PlatformAdapter, executionMode: BrowserSelfTestMode, contentOverride?: PublishArticleInput): Promise<PreparedEditorRun> {
+  private async runEditorAndContent(run: PlatformSelfTestRun, account: Account, adapter: PlatformAdapter, executionMode: BrowserSelfTestMode, contentOverride?: PublishArticleInput, contextOverride?: AccountContext): Promise<PreparedEditorRun> {
     const startedAt = new Date().toISOString();
     if (!isAutomationAdapter(adapter)) {
       this.step(run, "L2_EDITOR", "EDITOR_OPEN", "NOT_SUPPORTED", "API_NO_BROWSER_EDITOR", "官方 API / OAuth 平台没有需要打开的浏览器编辑器", "adapter_transport_api", null, null, startedAt);
@@ -877,7 +891,7 @@ export class PlatformSelfTestService {
       ? content
       : { ...content, ...(image && adapter.getCapabilities().maxImageCount > 0 ? { images: [image.filePath] } : {}) };
     try {
-      const prepared = await adapter.preparePublish(this.context(account, run, executionMode), input);
+      const prepared = await adapter.preparePublish(contextOverride ?? this.context(account, run, executionMode), input);
       const executionModeProved = prepared.response.browserExecutionMode === executionMode
         && prepared.response.headless === (executionMode === "BACKGROUND");
       this.step(run, "L2_EDITOR", "BROWSER_EXECUTION_MODE", executionModeProved ? "PASSED" : "FAILED", executionModeProved ? null : "BROWSER_EXECUTION_MODE_NOT_VERIFIED", executionModeProved ? `已由 Browser Session 回传${executionMode === "BACKGROUND" ? "后台" : "可见"}执行证据` : "Adapter 未返回实际 Browser Session 执行模式证据", `browser_execution_mode:${String(prepared.response.browserExecutionMode ?? "UNKNOWN")}:headless:${String(prepared.response.headless ?? "UNKNOWN")}`, null, null, startedAt);

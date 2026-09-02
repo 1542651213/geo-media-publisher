@@ -426,6 +426,17 @@ export interface CreatorIdentityProof {
   stable: boolean;
 }
 
+/** A short-lived identity proof bound to one live BrowserSession Context/Page. */
+export interface CurrentRuntimeIdentityProof {
+  accountId: string;
+  platformKey: "xiaohongshu";
+  expectedExternalCreatorId: string;
+  observedExternalCreatorId: string;
+  canonicalContextId: string;
+  canonicalPageId: string;
+  verified: true;
+}
+
 export interface PlatformAccountIdentityBinding {
   id: string;
   platformKey: string;
@@ -648,6 +659,8 @@ export interface AccountContext {
   accountName: string;
   platformKey: string;
   settings: Record<string, string | number | boolean>;
+  /** Main-process-only proof bound to the current canonical browser runtime. */
+  runtimeIdentityProof?: CurrentRuntimeIdentityProof;
   /** Main-process-only credentials. Never serialize or log this object in the renderer. */
   secrets?: Record<string, string>;
 }

@@ -93,8 +93,15 @@ export class XhsIdentityService {
     const expectedExternalCreatorId = binding?.externalCreatorId ?? account.externalAccountId ?? null;
     const observedId = observation.proof.externalCreatorId;
     const mismatch = Boolean(expectedExternalCreatorId && observedId && expectedExternalCreatorId !== observedId);
+    // A fresh canonical probe is the identity proof consumed by Task10S. After
+    // restoring a persistent browser profile, the manager may still report
+    // UNVERIFIED because no generic login classification has run in this
+    // process yet. That state must not override an exact, stable Creator ID
+    // proof from the current Context/Page; active checking, login, security,
+    // and disconnected states remain fail-closed below.
+    const runtimeStateAllowsFreshIdentityProof = observation.runtimeAuthState === "AUTHENTICATED" || observation.runtimeAuthState === "UNVERIFIED";
     const verified = observation.pageUrlConsistency === "PASS"
-      && observation.runtimeAuthState === "AUTHENTICATED"
+      && runtimeStateAllowsFreshIdentityProof
       && observation.browserConnected
       && !observation.pageClosed
       && !BLOCKED_ROUTE_CLASSES.has(observation.routeClass)

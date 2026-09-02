@@ -32,7 +32,7 @@ const account: Account = {
   archivedAt: null
 };
 
-function observation(externalCreatorId: string | null): XiaohongshuCreatorIdentityObservation {
+function observation(externalCreatorId: string | null, runtimeAuthState: XiaohongshuCreatorIdentityObservation["runtimeAuthState"] = "AUTHENTICATED"): XiaohongshuCreatorIdentityObservation {
   return {
     canonicalContextId: "context-1",
     canonicalPageId: "page-1",
@@ -40,7 +40,7 @@ function observation(externalCreatorId: string | null): XiaohongshuCreatorIdenti
     domLocationHref: "https://creator.xiaohongshu.com/new/home",
     pageUrlConsistency: "PASS",
     routeClass: "CREATOR_HOME",
-    runtimeAuthState: "AUTHENTICATED",
+    runtimeAuthState,
     browserConnected: true,
     pageClosed: false,
     proof: { platformKey: "xiaohongshu", externalCreatorId, displayName: "测试账号", profileUrl: "https://creator.xiaohongshu.com/user/profile/960803317", source: "CREATOR_PROFILE_LINK", stable: externalCreatorId !== null }
@@ -52,8 +52,8 @@ function binding(externalCreatorId: string): PlatformAccountIdentityBinding {
   return { id: "binding-1", platformKey: "xiaohongshu", accountId: account.id, externalCreatorId, displayName: "测试账号", profileUrl: "https://creator.xiaohongshu.com/user/profile/960803317", bindingSource: "LEGACY_ACCOUNT_EXTERNAL_ID_MATCH", boundAt: timestamp, createdAt: timestamp, updatedAt: timestamp };
 }
 
-function setup(input: { observedId: string | null; expectedId?: string | null; existingBinding?: PlatformAccountIdentityBinding | null } = { observedId: "960803317" }) {
-  const reader = { readCanonicalCreatorIdentity: vi.fn(async () => observation(input.observedId)) };
+function setup(input: { observedId: string | null; expectedId?: string | null; existingBinding?: PlatformAccountIdentityBinding | null; runtimeAuthState?: XiaohongshuCreatorIdentityObservation["runtimeAuthState"] } = { observedId: "960803317" }) {
+  const reader = { readCanonicalCreatorIdentity: vi.fn(async () => observation(input.observedId, input.runtimeAuthState)) };
   const repository = {
     getAccountById: vi.fn(() => input.expectedId === undefined ? account : { ...account, externalAccountId: input.expectedId }),
     getPlatformAccountIdentityBinding: vi.fn(() => input.existingBinding ?? null),
@@ -104,5 +104,16 @@ describe("Task10V XHS identity proof", () => {
 
     await expect(fixture.service.verifyAndConverge(account.id)).rejects.toMatchObject({ code: "ACCOUNT_IDENTITY_UNVERIFIED" });
     expect(fixture.repository.convergeUnusedOneShotAuthorization).not.toHaveBeenCalled();
+  });
+
+  it("accepts a fresh exact canonical identity proof when the manager has not classified the runtime yet", async () => {
+    const fixture = setup({ observedId: "960803317", runtimeAuthState: "UNVERIFIED" });
+
+    await expect(fixture.service.verifyCreatorIdentity(account.id)).resolves.toMatchObject({
+      expectedExternalCreatorId: "960803317",
+      observed: { externalCreatorId: "960803317" },
+      verified: true,
+      mismatch: false
+    });
   });
 });
