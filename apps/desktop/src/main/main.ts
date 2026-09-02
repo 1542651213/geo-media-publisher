@@ -169,8 +169,8 @@ async function createWindow(): Promise<void> {
       ? "accounts.external_account_id"
       : "missing";
   const evidenceDirectory = join(dataDirectory, "evidence");
-  const evidencePath = join(evidenceDirectory, "xiaohongshu-task10w-live-probe-r3-20260902.json");
-  const installedAppAsarSha256 = app.isPackaged ? hashFile(join(process.resourcesPath, "app.asar")) : null;
+  const evidencePath = join(evidenceDirectory, "xiaohongshu-task10w-live-probe-r5-20260902.json");
+  const installedAppAsarSha256 = app.isPackaged ? hashFile(app.getAppPath()) : null;
   const writeProbeEvidence = (probe: XiaohongshuCanonicalPageRuntimeProbe): void => {
     mkdirSync(evidenceDirectory, { recursive: true });
     const evidence = buildTask10wLiveProbeEvidence({ probe, timestamp: new Date().toISOString(), evidencePath, installedAppAsarSha256, expectedCreatorId, expectedCreatorIdProvenance });
