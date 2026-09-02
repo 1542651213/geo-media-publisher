@@ -2,9 +2,10 @@ import type { AdapterRegistry } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
 import { ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type Account, type AccountContext, type CreatorIdentityVerificationResult, type PlatformAccountIdentityBinding, type XhsIdentityAcceptance } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
-import type { XiaohongshuCreatorIdentityObservation } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuCreatorIdentityObservation } from "@publisher/adapters-xiaohongshu/browser";
 
 type IdentityReader = {
+  inspectCanonicalPageRuntime?: (ctx: AccountContext) => Promise<XiaohongshuCanonicalPageRuntimeProbe>;
   readCanonicalCreatorIdentity?: (ctx: AccountContext) => Promise<XiaohongshuCreatorIdentityObservation>;
 };
 
@@ -16,15 +17,75 @@ export interface XhsIdentityServiceOptions {
 
 const BLOCKED_ROUTE_CLASSES = new Set<XiaohongshuCreatorIdentityObservation["routeClass"]>(["LOGIN", "SECURITY_VERIFICATION", "UNKNOWN"]);
 
+function observationFromRuntimeProbe(probe: XiaohongshuCanonicalPageRuntimeProbe): XiaohongshuCreatorIdentityObservation {
+  if (probe.probeStatus !== "PASS" || probe.domLocationEvaluateStatus !== "PASS" || probe.pageUrlConsistency !== "PASS") {
+    throw Object.assign(new Error(`小红书 canonical Page runtime probe failed at ${probe.failureStage ?? "UNKNOWN"}`), {
+      code: "XHS_CANONICAL_PAGE_RUNTIME_PROBE_FAILED",
+      failureStage: probe.failureStage,
+      failureCode: probe.failureCode,
+      failureErrorClass: probe.failureErrorClass,
+      probe
+    });
+  }
+  const stable = probe.identityObservationStatus === "PASS" && probe.identitySourceCandidates.some((candidate) => candidate.stableIdentifierPresent);
+  return {
+    canonicalContextId: probe.canonicalContextId ?? "unknown-context",
+    canonicalPageId: probe.canonicalPageId ?? "unknown-page",
+    canonicalPageUrl: probe.playwrightPageUrl ?? "about:blank",
+    domLocationHref: probe.domLocationHref ?? "about:blank",
+    pageUrlConsistency: probe.pageUrlConsistency === "PASS" ? "PASS" : "FAIL",
+    routeClass: probe.routeClass,
+    runtimeAuthState: probe.runtimeAuthState,
+    browserConnected: probe.browserConnected,
+    pageClosed: probe.pageClosed,
+    proof: {
+      platformKey: "xiaohongshu",
+      externalCreatorId: probe.observedCreatorIdNormalized,
+      displayName: probe.observedDisplayName,
+      profileUrl: probe.observedProfileUrl,
+      source: probe.observedProfileUrl ? "CREATOR_PROFILE_LINK" : probe.observedCreatorIdNormalized ? "CREATOR_ACCOUNT_SURFACE" : "CREATOR_ACCOUNT_SURFACE",
+      stable
+    }
+  };
+}
+
 export class XhsIdentityService {
   constructor(private readonly options: XhsIdentityServiceOptions) {}
+
+  async inspectCanonicalPageRuntime(accountId: string): Promise<XiaohongshuCanonicalPageRuntimeProbe> {
+    const account = this.requireAccount(accountId);
+    const adapter = this.options.registry.getForContent("xiaohongshu", "article") as IdentityReader;
+    if (typeof adapter.inspectCanonicalPageRuntime !== "function") throw Object.assign(new Error("当前小红书运行时未提供 canonical Page runtime probe"), { code: "XHS_CANONICAL_PAGE_RUNTIME_PROBE_UNAVAILABLE" });
+    const probe = await adapter.inspectCanonicalPageRuntime(this.context(account));
+    this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_CANONICAL_PAGE_RUNTIME_PROBE", "小红书 canonical Page 只读 runtime probe 完成", {
+      platformKey: "xiaohongshu",
+      accountId: account.id,
+      probeStatus: probe.probeStatus,
+      failureStage: probe.failureStage,
+      failureCode: probe.failureCode,
+      domLocationEvaluateStatus: probe.domLocationEvaluateStatus,
+      pageUrlConsistency: probe.pageUrlConsistency,
+      canonicalContextId: probe.canonicalContextId,
+      canonicalPageId: probe.canonicalPageId,
+      probedContextId: probe.probedContextId,
+      probedPageId: probe.probedPageId,
+      identityObservationStatus: probe.identityObservationStatus,
+      observedCreatorId: probe.observedCreatorIdNormalized,
+      identitySourceCount: probe.identitySourceCandidates.length,
+      createdNewPage: probe.createdNewPage
+    });
+    return probe;
+  }
 
   async verifyCreatorIdentity(accountId: string): Promise<CreatorIdentityVerificationResult> {
     const account = this.requireAccount(accountId);
     const operationId = `task10v-identity-proof-${accountId}`;
     const adapter = this.options.registry.getForContent("xiaohongshu", "article") as IdentityReader;
-    if (typeof adapter.readCanonicalCreatorIdentity !== "function") throw Object.assign(new Error("当前小红书运行时未提供 canonical Creator identity observer"), { code: "XHS_CREATOR_IDENTITY_OBSERVER_UNAVAILABLE" });
-    const observation = await adapter.readCanonicalCreatorIdentity(this.context(account));
+    const observation = typeof adapter.inspectCanonicalPageRuntime === "function"
+      ? observationFromRuntimeProbe(await this.inspectCanonicalPageRuntime(accountId))
+      : typeof adapter.readCanonicalCreatorIdentity === "function"
+        ? await adapter.readCanonicalCreatorIdentity(this.context(account))
+        : (() => { throw Object.assign(new Error("当前小红书运行时未提供 canonical Creator identity observer"), { code: "XHS_CREATOR_IDENTITY_OBSERVER_UNAVAILABLE" }); })();
     const binding = this.options.repository.getPlatformAccountIdentityBinding("xiaohongshu", account.id);
     if (binding?.externalCreatorId && account.externalAccountId && binding.externalCreatorId !== account.externalAccountId) {
       throw Object.assign(new Error("内部账号已有互相冲突的小红书 Creator 身份记录，拒绝继续"), { code: "ACCOUNT_IDENTITY_BINDING_CONFLICT" });

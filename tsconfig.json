@@ -39,6 +39,7 @@
       "@publisher/adapters-sohu-media": ["packages/adapters/sohu-media/src/index.ts"],
       "@publisher/adapters-wechat-channels": ["packages/adapters/wechat-channels/src/index.ts"],
       "@publisher/adapters-xiaohongshu": ["packages/adapters/xiaohongshu/src/index.ts"],
+      "@publisher/adapters-xiaohongshu/*": ["packages/adapters/xiaohongshu/src/*"],
       "@publisher/adapters-qq-public": ["packages/adapters/qq-public/src/index.ts"]
       ,"@publisher/adapters-lieju": ["packages/adapters/lieju/src/index.ts"]
       ,"@publisher/adapters-cnblogs": ["packages/adapters/cnblogs/src/index.ts"]

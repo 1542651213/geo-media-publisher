@@ -206,10 +206,62 @@ export interface XiaohongshuFinalSubmitControlEvidence {
   secondConfirmation: "present" | "absent" | "unknown";
 }
 
+export type XiaohongshuCanonicalPageRuntimeProbeFailureStage =
+  | "CANONICAL_PAGE_LOOKUP"
+  | "PAGE_OWNERSHIP"
+  | "PLAYWRIGHT_URL"
+  | "DOM_LOCATION_EVALUATE"
+  | "URL_CONSISTENCY"
+  | "IDENTITY_OBSERVATION";
+
+export interface XiaohongshuIdentitySourceCandidate {
+  sourceType: "PUBLIC_PROFILE_LINK" | "VISIBLE_ACCOUNT_TEXT" | "PUBLIC_DATA_IDENTIFIER" | "ACCOUNT_SURFACE";
+  stableIdentifierPresent: boolean;
+  identifierFieldName: "externalCreatorId" | "profileUrl" | null;
+  sensitiveDataRequired: false;
+  readOnlySafe: true;
+  confidence: "HIGH" | "MEDIUM" | "LOW";
+  tagName: string | null;
+  text: string | null;
+  href: string | null;
+  role: string | null;
+  dataIdentifierField: string | null;
+  visible: boolean;
+}
+
+export interface XiaohongshuCanonicalPageRuntimeProbe {
+  probeStatus: "PASS" | "FAIL";
+  failureStage: XiaohongshuCanonicalPageRuntimeProbeFailureStage | null;
+  failureCode: string | null;
+  failureErrorClass: string | null;
+  canonicalContextId: string | null;
+  canonicalPageId: string | null;
+  probedContextId: string | null;
+  probedPageId: string | null;
+  pageContextMatchesSession: boolean;
+  createdNewPage: false;
+  browserConnected: boolean;
+  pageClosed: boolean;
+  runtimeAuthState: BrowserRuntimeAuthState;
+  playwrightPageUrl: string | null;
+  domLocationHref: string | null;
+  domLocationEvaluateStatus: "PASS" | "FAIL" | "NOT_RUN";
+  domLocationEvaluateErrorClass: string | null;
+  pageUrlConsistency: "PASS" | "FAIL" | "NOT_VERIFIED";
+  routeClass: XiaohongshuCreatorIdentityRouteClass;
+  identityObservationStatus: "PASS" | "NOT_VERIFIED" | "FAIL" | "NOT_RUN";
+  identitySourceCandidates: XiaohongshuIdentitySourceCandidate[];
+  observedCreatorIdRaw: string | null;
+  observedCreatorIdNormalized: string | null;
+  observedDisplayName: string | null;
+  observedProfileUrl: string | null;
+}
+
 export interface XiaohongshuAccountIdentityEvidence {
   externalAccountId: string | null;
   displayName: string | null;
   profileUrl: string | null;
+  identitySourceCandidates?: XiaohongshuIdentitySourceCandidate[];
 }
 
 export type XiaohongshuCreatorIdentityRouteClass = "CREATOR_HOME" | "PUBLISH_EDITOR" | "CREATOR_CONTENT" | "OTHER_CREATOR_PAGE" | "LOGIN" | "SECURITY_VERIFICATION" | "UNKNOWN";
@@ -1020,7 +1072,7 @@ function emptyPageEvidence(page: XhsDocument): XiaohongshuPageEvidence {
     bodyPresent: true,
     bodyTextLength: 0,
     login: { available: false, url, creatorHost: false, creatorHomePath: false, explicitLoginUrl: /\/login(?:[/?#]|$)|\/signin(?:[/?#]|$)|passport|auth/iu.test(url), verificationUrl: /captcha|security[-_/]?check|sms[-_/]?verify|qr[-_/]?login|risk[-_/]?control/iu.test(url), publishNoteVisible: false, noteManagementVisible: false, dataDashboardVisible: false, accountStatusVisible: false, profileAreaVisible: false, visibleLoginForm: false, visibleQrLogin: false, visibleSmsVerification: false, visibleCaptcha: false, visibleSlider: false, visibleSecurityModal: false, positiveSignals: [], blockingSignals: [] },
-    identity: { externalAccountId: null, externalAccountIdCandidates: [], displayName: null, profileUrl: null }
+    identity: { externalAccountId: null, externalAccountIdCandidates: [], displayName: null, profileUrl: null, identitySourceCandidates: [] }
   };
 }
 
@@ -1045,6 +1097,76 @@ function sameUrlOriginAndPath(first: string, second: string): boolean {
   } catch {
     return false;
   }
+}
+
+function identitySourceCandidatesFromEvidence(identity: XiaohongshuPageEvidence["identity"]): XiaohongshuIdentitySourceCandidate[] {
+  if (identity.identitySourceCandidates && identity.identitySourceCandidates.length > 0) return identity.identitySourceCandidates;
+  const candidates: XiaohongshuIdentitySourceCandidate[] = [];
+  if (identity.profileUrl) candidates.push({
+    sourceType: "PUBLIC_PROFILE_LINK",
+    stableIdentifierPresent: Boolean(stableExternalAccountId(identity.profileUrl)),
+    identifierFieldName: "profileUrl",
+    sensitiveDataRequired: false,
+    readOnlySafe: true,
+    confidence: "HIGH",
+    tagName: "A",
+    text: identity.displayName,
+    href: sanitizePublicProfileUrl(identity.profileUrl),
+    role: null,
+    dataIdentifierField: null,
+    visible: true
+  });
+  if (identity.externalAccountId) candidates.push({
+    sourceType: "ACCOUNT_SURFACE",
+    stableIdentifierPresent: true,
+    identifierFieldName: "externalCreatorId",
+    sensitiveDataRequired: false,
+    readOnlySafe: true,
+    confidence: "HIGH",
+    tagName: null,
+    text: identity.displayName,
+    href: null,
+    role: null,
+    dataIdentifierField: null,
+    visible: true
+  });
+  return candidates;
+}
+
+function normalizeExternalCreatorId(value: string | null): string | null {
+  const normalized = value?.trim() ?? "";
+  return normalized.length > 0 ? normalized : null;
+}
+
+function emptyCanonicalPageRuntimeProbe(overrides: Partial<XiaohongshuCanonicalPageRuntimeProbe> = {}): XiaohongshuCanonicalPageRuntimeProbe {
+  return {
+    probeStatus: "FAIL",
+    failureStage: null,
+    failureCode: null,
+    failureErrorClass: null,
+    canonicalContextId: null,
+    canonicalPageId: null,
+    probedContextId: null,
+    probedPageId: null,
+    pageContextMatchesSession: false,
+    createdNewPage: false,
+    browserConnected: false,
+    pageClosed: true,
+    runtimeAuthState: "UNVERIFIED",
+    playwrightPageUrl: null,
+    domLocationHref: null,
+    domLocationEvaluateStatus: "NOT_RUN",
+    domLocationEvaluateErrorClass: null,
+    pageUrlConsistency: "NOT_VERIFIED",
+    routeClass: "UNKNOWN",
+    identityObservationStatus: "NOT_RUN",
+    identitySourceCandidates: [],
+    observedCreatorIdRaw: null,
+    observedCreatorIdNormalized: null,
+    observedDisplayName: null,
+    observedProfileUrl: null,
+    ...overrides
+  };
 }
 
 function sanitizePublicProfileUrl(value: string | null): string | null {
@@ -1073,9 +1195,12 @@ function classifyXiaohongshuCreatorIdentityRoute(url: string, login: boolean, ve
   }
 }
 
-async function readXiaohongshuPageEvidence(page: Page): Promise<XiaohongshuPageEvidence> {
+async function readXiaohongshuPageEvidence(page: Page, options: { failOnEvaluateError?: boolean } = {}): Promise<XiaohongshuPageEvidence> {
   const candidate = page as unknown as { evaluate?: <T>(pageFunction: () => T) => Promise<T> };
-  if (typeof candidate.evaluate !== "function") return emptyPageEvidence(page);
+  if (typeof candidate.evaluate !== "function") {
+    if (options.failOnEvaluateError) throw Object.assign(new Error("Page.evaluate is unavailable"), { name: "PageEvaluateUnavailableError" });
+    return emptyPageEvidence(page);
+  }
   try {
     return await candidate.evaluate(() => {
       const compact = (value: string): string => value.normalize("NFKC").replace(/[\s]+/gu, " ").trim();
@@ -1100,6 +1225,7 @@ async function readXiaohongshuPageEvidence(page: Page): Promise<XiaohongshuPageE
       ].join(" "));
       const elements = Array.from(document.querySelectorAll("*"))
         .filter((element) => visible(element));
+      const identityElements = elements.slice(0, 50);
       const visibleTextContains = (pattern: RegExp): boolean => elements.some((element) => pattern.test(textOf(element)));
       const positiveSignals: string[] = [];
       if (visibleTextContains(/发布笔记/iu)) positiveSignals.push("发布笔记");
@@ -1130,7 +1256,7 @@ async function readXiaohongshuPageEvidence(page: Page): Promise<XiaohongshuPageE
           return null;
         }
       };
-      for (const element of elements) {
+      for (const element of identityElements) {
         const descriptor = descriptorOf(element);
         let current: Element | null = element;
         for (let depth = 0; depth < 5 && current; depth += 1, current = current.parentElement) {
@@ -1161,6 +1287,34 @@ async function readXiaohongshuPageEvidence(page: Page): Promise<XiaohongshuPageE
       }
       const distinctNames = [...new Set(names)];
       if (distinctNames.length > 0) positiveSignals.push("账号身份");
+      const identitySourceCandidates: XiaohongshuIdentitySourceCandidate[] = profileLinks.map((profileLink) => ({
+        sourceType: "PUBLIC_PROFILE_LINK",
+        stableIdentifierPresent: true,
+        identifierFieldName: "externalCreatorId",
+        sensitiveDataRequired: false,
+        readOnlySafe: true,
+        confidence: "HIGH",
+        tagName: "A",
+        text: profileLink.name || null,
+        href: profileLink.url,
+        role: null,
+        dataIdentifierField: null,
+        visible: true
+      }));
+      if (externalAccountIdCandidates.length > 0) identitySourceCandidates.push({
+        sourceType: "VISIBLE_ACCOUNT_TEXT",
+        stableIdentifierPresent: externalAccountIdCandidates.length === 1,
+        identifierFieldName: "externalCreatorId",
+        sensitiveDataRequired: false,
+        readOnlySafe: true,
+        confidence: externalAccountIdCandidates.length === 1 ? "HIGH" : "MEDIUM",
+        tagName: null,
+        text: null,
+        href: null,
+        role: null,
+        dataIdentifierField: null,
+        visible: true
+      });
 
       const blockingSignals: string[] = [];
       let visibleLoginForm = false;
@@ -1208,10 +1362,11 @@ async function readXiaohongshuPageEvidence(page: Page): Promise<XiaohongshuPageE
         bodyPresent: Boolean(document.body),
         bodyTextLength: document.body?.innerText.length ?? 0,
         login: { available: true, url, creatorHost, creatorHomePath, explicitLoginUrl, verificationUrl, publishNoteVisible: positiveSignals.includes("发布笔记"), noteManagementVisible: positiveSignals.includes("笔记管理"), dataDashboardVisible: positiveSignals.includes("数据看板"), accountStatusVisible: positiveSignals.includes("账号状态正常"), profileAreaVisible: distinctNames.length > 0 || externalAccountIdCandidates.length > 0 || profileLinks.length > 0, visibleLoginForm, visibleQrLogin, visibleSmsVerification, visibleCaptcha, visibleSlider, visibleSecurityModal, positiveSignals: [...new Set(positiveSignals)], blockingSignals: [...new Set(blockingSignals)] },
-        identity: { externalAccountId: externalAccountIdCandidates.length === 1 ? externalAccountIdCandidates[0] : null, externalAccountIdCandidates: [...new Set(externalAccountIdCandidates)], displayName: distinctNames.length === 1 ? distinctNames[0] : (profile?.name ? compact(profile.name) : null), profileUrl: profile?.url ?? null }
+        identity: { externalAccountId: externalAccountIdCandidates.length === 1 ? externalAccountIdCandidates[0] : null, externalAccountIdCandidates: [...new Set(externalAccountIdCandidates)], displayName: distinctNames.length === 1 ? distinctNames[0] : (profile?.name ? compact(profile.name) : null), profileUrl: profile?.url ?? null, identitySourceCandidates }
       };
     });
-  } catch {
+  } catch (error) {
+    if (options.failOnEvaluateError) throw error;
     return emptyPageEvidence(page);
   }
 }
@@ -1320,53 +1475,198 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
   }
 
   /**
-   * Read-only identity proof on the retained canonical Page. This deliberately
+   * Read-only runtime evidence on the retained canonical Page. This deliberately
    * does not navigate, open an operation Page, or mutate the XHS editor.
    */
-  async readCanonicalCreatorIdentity(ctx: AccountContext): Promise<XiaohongshuCreatorIdentityObservation> {
+  async inspectCanonicalPageRuntime(ctx: AccountContext): Promise<XiaohongshuCanonicalPageRuntimeProbe> {
     return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
-      const canonical = await this.activeCanonicalPage(ctx);
-      if (!canonical) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书 canonical authenticated Page 不可用；未创建替代 Page");
+      let canonical: Awaited<ReturnType<typeof this.activeCanonicalPage>>;
+      try {
+        canonical = await this.activeCanonicalPage(ctx);
+      } catch (error) {
+        return emptyCanonicalPageRuntimeProbe({
+          failureStage: "PAGE_OWNERSHIP",
+          failureCode: "CANONICAL_PAGE_OWNERSHIP",
+          failureErrorClass: error instanceof Error ? error.name : "UnknownError"
+        });
+      }
+      if (!canonical) return emptyCanonicalPageRuntimeProbe({
+        failureStage: "CANONICAL_PAGE_LOOKUP",
+        failureCode: "CANONICAL_PAGE_UNAVAILABLE"
+      });
 
       const { session, page, pageDebugId } = canonical;
-      const pageContextMatchesSession = this.pageContextMatchesSession(session, page)
+      const canonicalContextId = session.contextDebugId ?? "unknown-context";
+      const canonicalPageId = pageDebugId;
+      const runtimeAuthState = this.getBrowserRuntimeState(ctx).state;
+      const browserConnected = this.isBrowserConnected(session);
+      const pageClosed = this.isCanonicalPageClosed(page);
+      const pageContextMatchesSession = !pageClosed
+        && this.pageContextMatchesSession(session, page)
         && (typeof session.context.pages !== "function" || session.context.pages().includes(page));
-      if (!pageContextMatchesSession) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书 canonical Page 不属于当前 authenticated Context");
-
-      const rawPageUrl = page.url();
-      const evaluatePage = page as unknown as { evaluate?: <T>(pageFunction: () => T) => Promise<T> };
-      const rawDomLocationHref = typeof evaluatePage.evaluate === "function"
-        ? await evaluatePage.evaluate(() => location.href)
-        : rawPageUrl;
-      const canonicalPageUrl = sanitizeUrlString(rawPageUrl);
-      const domLocationHref = sanitizeUrlString(String(rawDomLocationHref));
-      const pageUrlConsistency = sameUrlOriginAndPath(rawPageUrl, String(rawDomLocationHref)) ? "PASS" : "FAIL";
-      const routeClass = classifyXiaohongshuCreatorIdentityRoute(rawPageUrl, this.isLoginPage(rawPageUrl), this.isVerificationUrl(rawPageUrl));
-      const evidence = await readXiaohongshuPageEvidence(page);
-      const identity = evidence.identity;
-      const stable = identity.externalAccountId !== null && identity.externalAccountIdCandidates.length === 1;
-      const proof: CreatorIdentityProof = {
-        platformKey: "xiaohongshu",
-        externalCreatorId: identity.externalAccountId,
-        displayName: identity.displayName,
-        profileUrl: sanitizePublicProfileUrl(identity.profileUrl),
-        source: identity.profileUrl ? "CREATOR_PROFILE_LINK" : identity.externalAccountId ? "CREATOR_ACCOUNT_SURFACE" : "CREATOR_ACCOUNT_SURFACE",
-        stable
+      const base = {
+        canonicalContextId,
+        canonicalPageId,
+        probedContextId: canonicalContextId,
+        probedPageId: canonicalPageId,
+        pageContextMatchesSession,
+        createdNewPage: false as const,
+        browserConnected,
+        pageClosed,
+        runtimeAuthState
       };
+      if (pageClosed) return emptyCanonicalPageRuntimeProbe({
+        ...base,
+        failureStage: "CANONICAL_PAGE_LOOKUP",
+        failureCode: "CANONICAL_PAGE_CLOSED"
+      });
+      if (!pageContextMatchesSession) return emptyCanonicalPageRuntimeProbe({
+        ...base,
+        failureStage: "PAGE_OWNERSHIP",
+        failureCode: "CANONICAL_PAGE_OWNERSHIP"
+      });
+      if (!browserConnected) return emptyCanonicalPageRuntimeProbe({
+        ...base,
+        failureStage: "CANONICAL_PAGE_LOOKUP",
+        failureCode: "BROWSER_DISCONNECTED"
+      });
+      let rawPageUrl: string;
+      try {
+        rawPageUrl = page.url();
+      } catch (error) {
+        return emptyCanonicalPageRuntimeProbe({
+          ...base,
+          failureStage: "PLAYWRIGHT_URL",
+          failureCode: "PLAYWRIGHT_URL_READ_FAILED",
+          failureErrorClass: error instanceof Error ? error.name : "UnknownError"
+        });
+      }
+      const playwrightPageUrl = sanitizeUrlString(rawPageUrl);
+      const routeClass = classifyXiaohongshuCreatorIdentityRoute(rawPageUrl, this.isLoginPage(rawPageUrl), this.isVerificationUrl(rawPageUrl));
+      const evaluatePage = page as unknown as { evaluate?: <T>(pageFunction: () => T) => Promise<T> };
+      if (typeof evaluatePage.evaluate !== "function") return emptyCanonicalPageRuntimeProbe({
+        ...base,
+        probeStatus: "FAIL",
+        failureStage: "DOM_LOCATION_EVALUATE",
+        failureCode: "DOM_LOCATION_EVALUATE_UNAVAILABLE",
+        playwrightPageUrl,
+        routeClass,
+        domLocationEvaluateStatus: "FAIL",
+        domLocationEvaluateErrorClass: "PageEvaluateUnavailableError"
+      });
 
+      let rawDomLocationHref: string;
+      try {
+        rawDomLocationHref = String(await evaluatePage.evaluate(() => location.href));
+      } catch (error) {
+        return emptyCanonicalPageRuntimeProbe({
+          ...base,
+          failureStage: "DOM_LOCATION_EVALUATE",
+          failureCode: "DOM_LOCATION_EVALUATE_FAILED",
+          failureErrorClass: error instanceof Error ? error.name : "UnknownError",
+          playwrightPageUrl,
+          routeClass,
+          domLocationEvaluateStatus: "FAIL",
+          domLocationEvaluateErrorClass: error instanceof Error ? error.name : "UnknownError"
+        });
+      }
+      const domLocationHref = sanitizeUrlString(rawDomLocationHref);
+      const pageUrlConsistency = sameUrlOriginAndPath(rawPageUrl, rawDomLocationHref) ? "PASS" : "FAIL";
+      if (pageUrlConsistency === "FAIL") {
+        // Keep the URL mismatch as the authoritative probe failure, while
+        // retaining the legacy identity observation for callers of
+        // readCanonicalCreatorIdentity. This remains read-only and uses the
+        // same canonical Page; Task10V consumes the structured failure.
+        let identity: XiaohongshuPageEvidence["identity"] | null = null;
+        try {
+          identity = (await readXiaohongshuPageEvidence(page, { failOnEvaluateError: true })).identity;
+        } catch {
+          identity = null;
+        }
+        return emptyCanonicalPageRuntimeProbe({
+          ...base,
+          failureStage: "URL_CONSISTENCY",
+          failureCode: "CANONICAL_PAGE_URL_MISMATCH",
+          playwrightPageUrl,
+          domLocationHref,
+          domLocationEvaluateStatus: "PASS",
+          pageUrlConsistency,
+          routeClass,
+          identityObservationStatus: identity ? (identity.externalAccountId ? "PASS" : "NOT_VERIFIED") : "FAIL",
+          identitySourceCandidates: identity ? identitySourceCandidatesFromEvidence(identity) : [],
+          observedCreatorIdRaw: identity?.externalAccountId ?? null,
+          observedCreatorIdNormalized: normalizeExternalCreatorId(identity?.externalAccountId ?? null),
+          observedDisplayName: identity?.displayName ?? null,
+          observedProfileUrl: identity ? sanitizePublicProfileUrl(identity.profileUrl) : null
+        });
+      }
+
+      let evidence: XiaohongshuPageEvidence;
+      try {
+        evidence = await readXiaohongshuPageEvidence(page, { failOnEvaluateError: true });
+      } catch (error) {
+        return emptyCanonicalPageRuntimeProbe({
+          ...base,
+          failureStage: "IDENTITY_OBSERVATION",
+          failureCode: "IDENTITY_EVALUATE_FAILED",
+          failureErrorClass: error instanceof Error ? error.name : "UnknownError",
+          playwrightPageUrl,
+          domLocationHref,
+          domLocationEvaluateStatus: "PASS",
+          pageUrlConsistency,
+          routeClass,
+          identityObservationStatus: "FAIL"
+        });
+      }
+      const identity = evidence.identity;
+      const observedCreatorIdRaw = identity.externalAccountId;
+      const observedCreatorIdNormalized = normalizeExternalCreatorId(observedCreatorIdRaw);
       return {
-        canonicalContextId: session.contextDebugId ?? "unknown-context",
-        canonicalPageId: pageDebugId,
-        canonicalPageUrl,
+        probeStatus: "PASS",
+        failureStage: null,
+        failureCode: null,
+        failureErrorClass: null,
+        ...base,
+        playwrightPageUrl,
         domLocationHref,
+        domLocationEvaluateStatus: "PASS",
+        domLocationEvaluateErrorClass: null,
         pageUrlConsistency,
         routeClass,
-        runtimeAuthState: this.getBrowserRuntimeState(ctx).state,
-        browserConnected: this.isBrowserConnected(session),
-        pageClosed: this.isCanonicalPageClosed(page),
-        proof
+        identityObservationStatus: observedCreatorIdNormalized ? "PASS" : "NOT_VERIFIED",
+        identitySourceCandidates: identitySourceCandidatesFromEvidence(identity),
+        observedCreatorIdRaw,
+        observedCreatorIdNormalized,
+        observedDisplayName: identity.displayName,
+        observedProfileUrl: sanitizePublicProfileUrl(identity.profileUrl)
       };
-    }, "readCanonicalCreatorIdentity");
+    }, "inspectCanonicalPageRuntime");
+  }
+
+  /** Read-only identity proof on the retained canonical Page. */
+  async readCanonicalCreatorIdentity(ctx: AccountContext): Promise<XiaohongshuCreatorIdentityObservation> {
+    const probe = await this.inspectCanonicalPageRuntime(ctx);
+    const stable = probe.identityObservationStatus === "PASS" && probe.identitySourceCandidates.some((candidate) => candidate.stableIdentifierPresent);
+    const proof: CreatorIdentityProof = {
+      platformKey: "xiaohongshu",
+      externalCreatorId: probe.observedCreatorIdNormalized,
+      displayName: probe.observedDisplayName,
+      profileUrl: probe.observedProfileUrl,
+      source: probe.observedProfileUrl ? "CREATOR_PROFILE_LINK" : probe.observedCreatorIdNormalized ? "CREATOR_ACCOUNT_SURFACE" : "CREATOR_ACCOUNT_SURFACE",
+      stable
+    };
+    return {
+      canonicalContextId: probe.canonicalContextId ?? "unknown-context",
+      canonicalPageId: probe.canonicalPageId ?? "unknown-page",
+      canonicalPageUrl: probe.playwrightPageUrl ?? "about:blank",
+      domLocationHref: probe.domLocationHref ?? "about:blank",
+      pageUrlConsistency: probe.pageUrlConsistency === "PASS" ? "PASS" : "FAIL",
+      routeClass: probe.routeClass,
+      runtimeAuthState: probe.runtimeAuthState,
+      browserConnected: probe.browserConnected,
+      pageClosed: probe.pageClosed,
+      proof
+    };
   }
 
   /** Diagnostic correlation for the main-process CONNECTION_TEST log; it never changes checkLogin behavior. */

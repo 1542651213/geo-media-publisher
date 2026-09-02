@@ -8,6 +8,7 @@ import type { AutomationPrepareResult, ControlledPostUploadDiscoveryResult, Publ
 import type { Logger } from "@publisher/logger";
 import type { PublisherService } from "@publisher/publisher";
 import type { Account, AccountContext, BackgroundAutomationStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PublishArticleInput } from "@publisher/domain";
+import type { XiaohongshuCanonicalPageRuntimeProbe } from "@publisher/adapters-xiaohongshu/browser";
 import { OneShotConfirmationCoordinator } from "./one-shot-confirmation";
 import { OneShotConfirmationReconciliationService } from "./one-shot-reconciliation";
 import { XhsIdentityService } from "./xhs-identity";
@@ -280,6 +281,10 @@ export class PlatformSelfTestService {
 
   verifyXhsCreatorIdentity(accountId: string): Promise<CreatorIdentityVerificationResult> {
     return this.xhsIdentity.verifyCreatorIdentity(accountId);
+  }
+
+  inspectCanonicalXhsPageRuntime(accountId: string): Promise<XiaohongshuCanonicalPageRuntimeProbe> {
+    return this.xhsIdentity.inspectCanonicalPageRuntime(accountId);
   }
 
   confirmOneShotPublish(testRunId: string): Promise<PlatformSelfTestRun> {

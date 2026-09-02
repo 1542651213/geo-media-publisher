@@ -1072,6 +1072,93 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(fixture.manager.openOperationPage).not.toHaveBeenCalled();
   });
 
+  it("probes the existing canonical Page runtime with bounded identity evidence", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], externalAccountId: "960803317", displayName: "测试账号", profileUrl: "https://creator.xiaohongshu.com/user/profile/960803317" });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+    await adapter.connectAccount(ctx);
+    (fixture.page.goto as unknown as { mockClear: () => void }).mockClear();
+
+    const result = await (adapter as unknown as {
+      inspectCanonicalPageRuntime: (value: AccountContext) => Promise<Record<string, unknown>>
+    }).inspectCanonicalPageRuntime(ctx);
+
+    expect(result).toMatchObject({
+      probeStatus: "PASS",
+      canonicalContextId: "context-debug-id",
+      canonicalPageId: "canonical-page-debug-id",
+      probedContextId: "context-debug-id",
+      probedPageId: "canonical-page-debug-id",
+      playwrightPageUrl: "https://creator.xiaohongshu.com/new/home",
+      domLocationHref: "https://creator.xiaohongshu.com/new/home",
+      pageUrlConsistency: "PASS",
+      domLocationEvaluateStatus: "PASS",
+      observedCreatorIdRaw: "960803317",
+      observedCreatorIdNormalized: "960803317",
+      identityObservationStatus: "PASS"
+    });
+    expect(result.identitySourceCandidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceType: "PUBLIC_PROFILE_LINK", stableIdentifierPresent: true, sensitiveDataRequired: false, readOnlySafe: true, confidence: "HIGH" })
+    ]));
+    expect(fixture.page.goto).not.toHaveBeenCalled();
+    expect(fixture.manager.openOperationPage).not.toHaveBeenCalled();
+  });
+
+  it("ignores query and hash differences when canonical URL origin and pathname match", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home?tab=notes#top" });
+    installPageEvidence(fixture, { externalAccountId: "960803317", profileUrl: "https://creator.xiaohongshu.com/user/profile/960803317" });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context("account-a"));
+
+    const result = await (adapter as unknown as {
+      inspectCanonicalPageRuntime: (value: AccountContext) => Promise<Record<string, unknown>>
+    }).inspectCanonicalPageRuntime(context("account-a"));
+
+    expect(result).toMatchObject({ probeStatus: "PASS", pageUrlConsistency: "PASS" });
+  });
+
+  it("returns a structured URL consistency failure without navigating", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    installPageEvidence(fixture, { domLocationHref: "https://creator.xiaohongshu.com/publish/publish", externalAccountId: "960803317" });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context("account-a"));
+    (fixture.page.goto as unknown as { mockClear: () => void }).mockClear();
+
+    const result = await (adapter as unknown as {
+      inspectCanonicalPageRuntime: (value: AccountContext) => Promise<Record<string, unknown>>
+    }).inspectCanonicalPageRuntime(context("account-a"));
+
+    expect(result).toMatchObject({ probeStatus: "FAIL", failureStage: "URL_CONSISTENCY", pageUrlConsistency: "FAIL" });
+    expect(fixture.page.goto).not.toHaveBeenCalled();
+    expect(fixture.manager.openOperationPage).not.toHaveBeenCalled();
+  });
+
+  it("exposes location evaluation failures instead of converting them to incomplete identity evidence", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    const evaluate = vi.fn(async (pageFunction?: () => unknown) => {
+      if (typeof pageFunction === "function" && /^\(\)\s*=>\s*location\.href\s*$/u.test(String(pageFunction).trim())) {
+        throw Object.assign(new Error("execution context destroyed"), { name: "ExecutionContextDestroyedError" });
+      }
+      return fixture.phaseSnapshot();
+    });
+    (fixture.page as unknown as { evaluate: typeof evaluate }).evaluate = evaluate;
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context("account-a"));
+
+    const result = await (adapter as unknown as {
+      inspectCanonicalPageRuntime: (value: AccountContext) => Promise<Record<string, unknown>>
+    }).inspectCanonicalPageRuntime(context("account-a"));
+
+    expect(result).toMatchObject({
+      probeStatus: "FAIL",
+      failureStage: "DOM_LOCATION_EVALUATE",
+      domLocationEvaluateStatus: "FAIL",
+      domLocationEvaluateErrorClass: "ExecutionContextDestroyedError",
+      identityObservationStatus: "NOT_RUN"
+    });
+  });
+
   it("opens XHS backend on the canonical Page and leaves it open for the owner", async () => {
     const fixture = setupPage();
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
