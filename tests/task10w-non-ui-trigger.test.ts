@@ -27,6 +27,8 @@ const probeFixture: XiaohongshuCanonicalPageRuntimeProbe = {
   routeClass: "UNKNOWN",
   identityObservationStatus: "NOT_RUN",
   identitySourceCandidates: [],
+  identityDomDiagnosticMatchCount: 0,
+  identityDomDiagnosticMatches: [],
   observedCreatorIdRaw: null,
   observedCreatorIdNormalized: null,
   observedDisplayName: null,

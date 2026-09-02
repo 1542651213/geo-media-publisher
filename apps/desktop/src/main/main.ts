@@ -115,6 +115,8 @@ function buildTask10wLiveProbeEvidence(input: {
     expectedCreatorId: input.expectedCreatorId,
     expectedCreatorIdProvenance: input.expectedCreatorIdProvenance,
     identityCandidates: probe.identitySourceCandidates,
+    identityDomDiagnosticMatchCount: probe.identityDomDiagnosticMatchCount,
+    identityDomDiagnosticMatches: probe.identityDomDiagnosticMatches,
     observedCreatorIdRaw: probe.observedCreatorIdRaw,
     observedCreatorIdNormalized: probe.observedCreatorIdNormalized,
     creatorIdMatch,

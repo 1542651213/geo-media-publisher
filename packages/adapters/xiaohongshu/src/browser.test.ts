@@ -16,6 +16,7 @@ const article: PublishArticleInput = {
 type FixtureOptions = {
   accountId?: string | null;
   accountName?: string;
+  accountLabelText?: string | null;
   profileHref?: string | null;
   pageUrl?: string;
   entryCount?: number;
@@ -142,6 +143,7 @@ function locator(overrides: Partial<Record<string, unknown>> = {}): Locator {
     focus: vi.fn(async () => undefined),
     setInputFiles: vi.fn(async () => undefined),
     getAttribute: vi.fn(async () => null),
+    locator: vi.fn(function (this: Locator) { return this; }),
     evaluateAll: vi.fn(async () => []),
     ...overrides
   } as unknown as Locator;
@@ -183,6 +185,20 @@ function setupPage(options: FixtureOptions = {}): Fixture {
     count: vi.fn(async () => options.profileHref === null ? 1 : 0),
     innerText: vi.fn(async () => options.accountName ?? "XHS owner"),
     getAttribute: vi.fn(async (name: string) => name === "aria-label" ? "账号昵称" : null)
+  });
+  const accountLabelParent = locator({
+    innerText: vi.fn(async () => options.accountLabelText ?? ""),
+    textContent: vi.fn(async () => options.accountLabelText ?? ""),
+    getAttribute: vi.fn(async (name: string) => name === "class" ? "account-summary" : null),
+    evaluate: vi.fn(async () => "DIV")
+  });
+  const accountLabel = locator({
+    count: vi.fn(async () => options.accountLabelText ? 1 : 0),
+    innerText: vi.fn(async () => options.accountLabelText ?? ""),
+    textContent: vi.fn(async () => options.accountLabelText ?? ""),
+    getAttribute: vi.fn(async (name: string) => name === "role" ? "text" : name === "data-testid" ? "account-id" : null),
+    evaluate: vi.fn(async () => "SPAN"),
+    locator: vi.fn((selector: string) => selector === "xpath=.." ? accountLabelParent : accountLabel)
   });
   const entry = locator({
     count: vi.fn(async () => (currentUrl.endsWith("/") || currentUrl.endsWith("/new/home")) && options.publishEntryMode !== "generic-publish" ? options.entryCount ?? 1 : 0),
@@ -303,6 +319,7 @@ function setupPage(options: FixtureOptions = {}): Fixture {
           return publishEntryCandidates;
         }
         if (selector === "a[href]") return profile;
+        if (selector === "text=小红书账号") return accountLabel;
         if (selector.includes("data-testid*='publish'") || selector.includes('data-testid*="publish"')) return publishEntry;
         if (selector.includes("content-type-image")) return contentTypeEntry;
         if (selector.includes("nickname") || selector.includes("账号")) return nickname;
@@ -642,12 +659,41 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   });
 
   it("reads the stable Xiaohongshu account field instead of guessing an external ID", async () => {
-    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountName: "苏州别墅光伏" });
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountName: "苏州别墅光伏", accountLabelText: "小红书账号：960803317" });
     installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "账号状态正常"], displayName: "苏州别墅光伏", externalAccountId: "960803317" });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
 
     await adapter.connectAccount(context("account-a"));
     await expect(adapter.getAccountProfile(context("account-a"))).resolves.toMatchObject({ accountName: "苏州别墅光伏", accountId: "960803317" });
+  });
+
+  it("reads the Creator ID from the bounded 小红书账号 label on the existing canonical Page", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountName: "苏州别墅光伏", accountLabelText: "小红书账号：960803317" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], displayName: "苏州别墅光伏" });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+
+    await adapter.connectAccount(context("account-a"));
+    const result = await adapter.inspectCanonicalPageRuntime(context("account-a"));
+
+    expect(result).toMatchObject({
+      observedCreatorIdRaw: "960803317",
+      observedCreatorIdNormalized: "960803317",
+      identityObservationStatus: "PASS",
+      identityDomDiagnosticMatchCount: 1
+    });
+    expect(result.identitySourceCandidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: "CREATOR_HOME_ACCOUNT_LABEL", rawValue: "960803317", normalizedCreatorId: "960803317", semanticAnchor: "xiaohongshu-account-id-label" })
+    ]));
+    expect(fixture.page.goto).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the same bounded Creator ID reader for getAccountProfile", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountName: "苏州别墅光伏", accountLabelText: "小红书账号: 960803317" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], displayName: "苏州别墅光伏" });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+
+    await adapter.connectAccount(context("account-a"));
+    await expect(adapter.getAccountProfile(context("account-a"))).resolves.toMatchObject({ accountId: "960803317", accountName: "苏州别墅光伏" });
   });
 
   it("keeps the owner visible Page through login completion and identity readback", async () => {
@@ -1037,7 +1083,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   });
 
   it("reads canonical URL and stable Creator identity from the existing Page", async () => {
-    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: "https://creator.xiaohongshu.com/user/profile/960803317" });
     installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], externalAccountId: "960803317", displayName: "测试账号", profileUrl: "https://creator.xiaohongshu.com/user/profile/960803317" });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
     const ctx = context("account-a");
@@ -1058,7 +1104,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   });
 
   it("reports canonical URL disagreement without navigating or opening a replacement Page", async () => {
-    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: "https://creator.xiaohongshu.com/user/profile/960803317" });
     installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], externalAccountId: "960803317", domLocationHref: "https://creator.xiaohongshu.com/publish/publish" });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
     const ctx = context("account-a");
@@ -1073,7 +1119,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   });
 
   it("probes the existing canonical Page runtime with bounded identity evidence", async () => {
-    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: "https://creator.xiaohongshu.com/user/profile/960803317" });
     installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], externalAccountId: "960803317", displayName: "测试账号", profileUrl: "https://creator.xiaohongshu.com/user/profile/960803317" });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
     const ctx = context("account-a");
@@ -1215,13 +1261,11 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     await expect(adapter.connectAccount(context("account-a"))).rejects.toThrow(/BrowserSession\/Page mismatch/iu);
   });
 
-  it("records a nickname when the page exposes no stable external account ID", async () => {
+  it("fails closed when the page exposes only a nickname and no stable external account ID", async () => {
     const fixture = setupPage({ profileHref: null, accountName: "仅昵称" });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
     await adapter.connectAccount(context("account-a"));
-    const profile = await adapter.getAccountProfile(context("account-a"));
-    expect(profile).toMatchObject({ accountName: "仅昵称" });
-    expect(profile).not.toHaveProperty("accountId");
+    await expect(adapter.getAccountProfile(context("account-a"))).rejects.toMatchObject({ gateCode: "ACCOUNT_IDENTITY_UNVERIFIED" });
   });
 
   it("does not cold-check a stored session whose page is on a login page", async () => {

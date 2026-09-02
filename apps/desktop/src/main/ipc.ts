@@ -637,6 +637,23 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
         logger.info("ACCOUNT", "COMPLETE_LOGIN_RESPONSE", "主进程完成登录结果", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, status, reason: "CHECK_LOGIN_NOT_PASSED", errorCode: null, resultContract: { configured: result.configured, accountStatus: result.accountStatus, authorizationStatus: result.authorizationStatus } });
         return result;
       }
+      if (input.platformKey === "xiaohongshu") {
+        const identityProof = await platformSelfTests.verifyXhsCreatorIdentity(input.accountId);
+        logger.info("ACCOUNT", "COMPLETE_LOGIN_IDENTITY_PROOF", "complete-login 已复用 Task10W canonical Creator 身份证明", {
+          accountId: input.accountId,
+          platformKey: input.platformKey,
+          userActionId: action.userActionId,
+          canonicalContextId: identityProof.canonicalContextId,
+          canonicalPageId: identityProof.canonicalPageId,
+          expectedCreatorId: identityProof.expectedExternalCreatorId,
+          observedCreatorId: identityProof.observed.externalCreatorId,
+          verified: identityProof.verified,
+          mismatch: identityProof.mismatch,
+          pageUrlConsistency: identityProof.pageUrlConsistency,
+          routeClass: identityProof.routeClass
+        });
+        if (!identityProof.verified) throw Object.assign(new Error("ACCOUNT_IDENTITY_UNVERIFIED: complete-login 的 Creator 身份证明未通过"), { code: "ACCOUNT_IDENTITY_UNVERIFIED" });
+      }
       const profile = adapter.getAccountProfile ? await adapter.getAccountProfile(completedContext) : undefined;
       const archivedAccount = profile?.accountId ? repository.findArchivedAccountByExternalIdForConnection(input.accountId, input.platformKey, profile.accountId) : null;
       const effectiveAccountId = archivedAccount?.id ?? input.accountId;

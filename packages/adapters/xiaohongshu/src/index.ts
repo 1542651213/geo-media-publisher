@@ -7,6 +7,7 @@ export * from "./auth-state-diagnostics";
 export * from "./navigation-diagnostics";
 export * from "./image-editor-discovery";
 export * from "./publish-flow-exploration";
+export * from "./identity";
 
 export function mapXiaohongshuError(message: string, httpStatus?: number): ErrorCode { return mapManualError(message, httpStatus); }
 

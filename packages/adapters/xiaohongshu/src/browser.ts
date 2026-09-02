@@ -65,6 +65,7 @@ import {
   selectSafeIntermediateAction,
   type XhsIntermediateActionCandidate
 } from "./publish-flow-exploration";
+import { readXiaohongshuCreatorIdentity, type XiaohongshuIdentityDomDiagnosticMatch, type XiaohongshuCreatorIdentityCandidate } from "./identity";
 export {
   collectCreatorHomeTopology,
   collectPublishSemanticNodes,
@@ -227,6 +228,10 @@ export interface XiaohongshuIdentitySourceCandidate {
   role: string | null;
   dataIdentifierField: string | null;
   visible: boolean;
+  source?: XiaohongshuCreatorIdentityCandidate["source"];
+  rawValue?: string;
+  normalizedCreatorId?: string;
+  semanticAnchor?: XiaohongshuCreatorIdentityCandidate["semanticAnchor"];
 }
 
 export interface XiaohongshuCanonicalPageRuntimeProbe {
@@ -251,6 +256,8 @@ export interface XiaohongshuCanonicalPageRuntimeProbe {
   routeClass: XiaohongshuCreatorIdentityRouteClass;
   identityObservationStatus: "PASS" | "NOT_VERIFIED" | "FAIL" | "NOT_RUN";
   identitySourceCandidates: XiaohongshuIdentitySourceCandidate[];
+  identityDomDiagnosticMatchCount: number;
+  identityDomDiagnosticMatches: XiaohongshuIdentityDomDiagnosticMatch[];
   observedCreatorIdRaw: string | null;
   observedCreatorIdNormalized: string | null;
   observedDisplayName: string | null;
@@ -262,6 +269,8 @@ export interface XiaohongshuAccountIdentityEvidence {
   displayName: string | null;
   profileUrl: string | null;
   identitySourceCandidates?: XiaohongshuIdentitySourceCandidate[];
+  identityDomDiagnosticMatchCount?: number;
+  identityDomDiagnosticMatches?: XiaohongshuIdentityDomDiagnosticMatch[];
 }
 
 export type XiaohongshuCreatorIdentityRouteClass = "CREATOR_HOME" | "PUBLISH_EDITOR" | "CREATOR_CONTENT" | "OTHER_CREATOR_PAGE" | "LOGIN" | "SECURITY_VERIFICATION" | "UNKNOWN";
@@ -1072,7 +1081,7 @@ function emptyPageEvidence(page: XhsDocument): XiaohongshuPageEvidence {
     bodyPresent: true,
     bodyTextLength: 0,
     login: { available: false, url, creatorHost: false, creatorHomePath: false, explicitLoginUrl: /\/login(?:[/?#]|$)|\/signin(?:[/?#]|$)|passport|auth/iu.test(url), verificationUrl: /captcha|security[-_/]?check|sms[-_/]?verify|qr[-_/]?login|risk[-_/]?control/iu.test(url), publishNoteVisible: false, noteManagementVisible: false, dataDashboardVisible: false, accountStatusVisible: false, profileAreaVisible: false, visibleLoginForm: false, visibleQrLogin: false, visibleSmsVerification: false, visibleCaptcha: false, visibleSlider: false, visibleSecurityModal: false, positiveSignals: [], blockingSignals: [] },
-    identity: { externalAccountId: null, externalAccountIdCandidates: [], displayName: null, profileUrl: null, identitySourceCandidates: [] }
+    identity: { externalAccountId: null, externalAccountIdCandidates: [], displayName: null, profileUrl: null, identitySourceCandidates: [], identityDomDiagnosticMatchCount: 0, identityDomDiagnosticMatches: [] }
   };
 }
 
@@ -1114,7 +1123,11 @@ function identitySourceCandidatesFromEvidence(identity: XiaohongshuPageEvidence[
     href: sanitizePublicProfileUrl(identity.profileUrl),
     role: null,
     dataIdentifierField: null,
-    visible: true
+    visible: true,
+    source: "CREATOR_PROFILE_LINK",
+    rawValue: stableExternalAccountId(identity.profileUrl) ?? "",
+    normalizedCreatorId: stableExternalAccountId(identity.profileUrl) ?? "",
+    semanticAnchor: "xiaohongshu-profile-link"
   });
   if (identity.externalAccountId) candidates.push({
     sourceType: "ACCOUNT_SURFACE",
@@ -1128,7 +1141,11 @@ function identitySourceCandidatesFromEvidence(identity: XiaohongshuPageEvidence[
     href: null,
     role: null,
     dataIdentifierField: null,
-    visible: true
+    visible: true,
+    source: "CREATOR_HOME_ACCOUNT_LABEL",
+    rawValue: identity.externalAccountId,
+    normalizedCreatorId: identity.externalAccountId,
+    semanticAnchor: "xiaohongshu-account-id-label"
   });
   return candidates;
 }
@@ -1161,6 +1178,8 @@ function emptyCanonicalPageRuntimeProbe(overrides: Partial<XiaohongshuCanonicalP
     routeClass: "UNKNOWN",
     identityObservationStatus: "NOT_RUN",
     identitySourceCandidates: [],
+    identityDomDiagnosticMatchCount: 0,
+    identityDomDiagnosticMatches: [],
     observedCreatorIdRaw: null,
     observedCreatorIdNormalized: null,
     observedDisplayName: null,
@@ -1202,7 +1221,7 @@ async function readXiaohongshuPageEvidence(page: Page, options: { failOnEvaluate
     return emptyPageEvidence(page);
   }
   try {
-    return await candidate.evaluate(() => {
+    const evaluated = await candidate.evaluate(() => {
       const compact = (value: string): string => value.normalize("NFKC").replace(/[\s]+/gu, " ").trim();
       const verificationPattern = /captcha|human|security|risk|验证码|人机|安全验证|风控|滑块|二维码|扫码/iu;
       const loginPattern = /登录|验证码|手机号|短信|密码/iu;
@@ -1225,7 +1244,6 @@ async function readXiaohongshuPageEvidence(page: Page, options: { failOnEvaluate
       ].join(" "));
       const elements = Array.from(document.querySelectorAll("*"))
         .filter((element) => visible(element));
-      const identityElements = elements.slice(0, 50);
       const visibleTextContains = (pattern: RegExp): boolean => elements.some((element) => pattern.test(textOf(element)));
       const positiveSignals: string[] = [];
       if (visibleTextContains(/发布笔记/iu)) positiveSignals.push("发布笔记");
@@ -1233,88 +1251,6 @@ async function readXiaohongshuPageEvidence(page: Page, options: { failOnEvaluate
       if (visibleTextContains(/数据看板/iu)) positiveSignals.push("数据看板");
       if (visibleTextContains(/小红书创作服务平台/iu)) positiveSignals.push("创作服务平台");
       if (visibleTextContains(/账号状态正常/iu)) positiveSignals.push("账号状态正常");
-
-      const externalAccountIdCandidates: string[] = [];
-      const profileLinks: Array<{ id: string; url: string; name: string }> = [];
-      const names: string[] = [];
-      const addName = (value: string): void => {
-        const name = compact(value).replace(/^(?:昵称|账号昵称)[:：]?/iu, "").trim();
-        if (!name || /^(?:昵称|账号昵称|小红书账号|账号状态正常)$/iu.test(name) || name.length > 100) return;
-        if (!names.includes(name)) names.push(name);
-      };
-      const accountIdFromText = (value: string): string | null => {
-        const match = compact(value).match(/小红书账号(?:\s*(?:ID|id))?\s*[:：]?\s*([A-Za-z0-9][A-Za-z0-9_-]{2,63})/u);
-        return match?.[1] ?? null;
-      };
-      const stableIdFromHref = (href: string): string | null => {
-        try {
-          const parsed = new URL(href, location.href);
-          const match = parsed.pathname.match(/\/user\/profile\/([^/?#]+)/iu) ?? parsed.pathname.match(/\/user\/([^/?#]+)/iu);
-          const value = match?.[1]?.trim() ?? "";
-          return value && !/^(?:profile|home|index)$/iu.test(value) ? value : null;
-        } catch {
-          return null;
-        }
-      };
-      for (const element of identityElements) {
-        const descriptor = descriptorOf(element);
-        let current: Element | null = element;
-        for (let depth = 0; depth < 5 && current; depth += 1, current = current.parentElement) {
-          const text = textOf(current);
-          if (text.length <= 240) {
-            const id = accountIdFromText(text);
-            if (id && !externalAccountIdCandidates.includes(id)) externalAccountIdCandidates.push(id);
-            const nickname = text.match(/(?:昵称|账号昵称)\s*[:：]?\s*([^|｜\n]{2,100})/iu)?.[1];
-            if (nickname) addName(nickname);
-          }
-        }
-        if (/nickname|账号昵称|昵称|个人主页/iu.test(descriptor)) {
-          const text = textOf(element);
-          const nickname = text.match(/(?:昵称|账号昵称)\s*[:：]?\s*([^|｜\n]{2,100})/iu)?.[1];
-          if (nickname) addName(nickname);
-          else if (text && !/nickname|账号昵称|昵称|个人主页/iu.test(text)) addName(text);
-        }
-        if (element.tagName.toLowerCase() === "a") {
-          const href = element.getAttribute("href") || "";
-          const id = stableIdFromHref(href);
-          if (id) {
-            const url = new URL(href, location.href).toString();
-            profileLinks.push({ id, url, name: textOf(element) });
-            if (!externalAccountIdCandidates.includes(id)) externalAccountIdCandidates.push(id);
-            addName(textOf(element));
-          }
-        }
-      }
-      const distinctNames = [...new Set(names)];
-      if (distinctNames.length > 0) positiveSignals.push("账号身份");
-      const identitySourceCandidates: XiaohongshuIdentitySourceCandidate[] = profileLinks.map((profileLink) => ({
-        sourceType: "PUBLIC_PROFILE_LINK",
-        stableIdentifierPresent: true,
-        identifierFieldName: "externalCreatorId",
-        sensitiveDataRequired: false,
-        readOnlySafe: true,
-        confidence: "HIGH",
-        tagName: "A",
-        text: profileLink.name || null,
-        href: profileLink.url,
-        role: null,
-        dataIdentifierField: null,
-        visible: true
-      }));
-      if (externalAccountIdCandidates.length > 0) identitySourceCandidates.push({
-        sourceType: "VISIBLE_ACCOUNT_TEXT",
-        stableIdentifierPresent: externalAccountIdCandidates.length === 1,
-        identifierFieldName: "externalCreatorId",
-        sensitiveDataRequired: false,
-        readOnlySafe: true,
-        confidence: externalAccountIdCandidates.length === 1 ? "HIGH" : "MEDIUM",
-        tagName: null,
-        text: null,
-        href: null,
-        role: null,
-        dataIdentifierField: null,
-        visible: true
-      });
 
       const blockingSignals: string[] = [];
       let visibleLoginForm = false;
@@ -1356,15 +1292,46 @@ async function readXiaohongshuPageEvidence(page: Page, options: { failOnEvaluate
       const creatorHomePath = /^\/(?:new\/home)?$/iu.test(parsedUrl.pathname);
       const explicitLoginUrl = /\/(?:login|signin|auth|passport)(?:[/?#]|$)/iu.test(parsedUrl.pathname);
       const verificationUrl = /captcha|security[-_/]?check|sms[-_/]?verify|qr[-_/]?login|risk[-_/]?control/iu.test(url);
-      const profile = profileLinks.find((candidate) => candidate.id === externalAccountIdCandidates[0]);
       return {
         available: true,
         bodyPresent: Boolean(document.body),
         bodyTextLength: document.body?.innerText.length ?? 0,
-        login: { available: true, url, creatorHost, creatorHomePath, explicitLoginUrl, verificationUrl, publishNoteVisible: positiveSignals.includes("发布笔记"), noteManagementVisible: positiveSignals.includes("笔记管理"), dataDashboardVisible: positiveSignals.includes("数据看板"), accountStatusVisible: positiveSignals.includes("账号状态正常"), profileAreaVisible: distinctNames.length > 0 || externalAccountIdCandidates.length > 0 || profileLinks.length > 0, visibleLoginForm, visibleQrLogin, visibleSmsVerification, visibleCaptcha, visibleSlider, visibleSecurityModal, positiveSignals: [...new Set(positiveSignals)], blockingSignals: [...new Set(blockingSignals)] },
-        identity: { externalAccountId: externalAccountIdCandidates.length === 1 ? externalAccountIdCandidates[0] : null, externalAccountIdCandidates: [...new Set(externalAccountIdCandidates)], displayName: distinctNames.length === 1 ? distinctNames[0] : (profile?.name ? compact(profile.name) : null), profileUrl: profile?.url ?? null, identitySourceCandidates }
+        login: { available: true, url, creatorHost, creatorHomePath, explicitLoginUrl, verificationUrl, publishNoteVisible: positiveSignals.includes("发布笔记"), noteManagementVisible: positiveSignals.includes("笔记管理"), dataDashboardVisible: positiveSignals.includes("数据看板"), accountStatusVisible: positiveSignals.includes("账号状态正常"), profileAreaVisible: false, visibleLoginForm, visibleQrLogin, visibleSmsVerification, visibleCaptcha, visibleSlider, visibleSecurityModal, positiveSignals: [...new Set(positiveSignals)], blockingSignals: [...new Set(blockingSignals)] },
+        identity: { externalAccountId: null, externalAccountIdCandidates: [], displayName: null, profileUrl: null, identitySourceCandidates: [] }
       };
     });
+    const boundedIdentity = await readXiaohongshuCreatorIdentity(page);
+    const identitySourceCandidates: XiaohongshuIdentitySourceCandidate[] = boundedIdentity.candidates.map((candidate) => ({
+      sourceType: candidate.source === "CREATOR_PROFILE_LINK" ? "PUBLIC_PROFILE_LINK" : "VISIBLE_ACCOUNT_TEXT",
+      stableIdentifierPresent: true,
+      identifierFieldName: "externalCreatorId",
+      sensitiveDataRequired: false,
+      readOnlySafe: true,
+      confidence: "HIGH",
+      tagName: candidate.source === "CREATOR_PROFILE_LINK" ? "A" : "SPAN",
+      text: candidate.rawValue,
+      href: candidate.source === "CREATOR_PROFILE_LINK" ? boundedIdentity.profileUrl : null,
+      role: null,
+      dataIdentifierField: null,
+      visible: true,
+      source: candidate.source,
+      rawValue: candidate.rawValue,
+      normalizedCreatorId: candidate.normalizedCreatorId,
+      semanticAnchor: candidate.semanticAnchor
+    }));
+    return {
+      ...evaluated,
+      login: { ...evaluated.login, profileAreaVisible: evaluated.login.profileAreaVisible || Boolean(boundedIdentity.displayName || boundedIdentity.normalizedCreatorId) },
+      identity: {
+        externalAccountId: boundedIdentity.status === "PASS" ? boundedIdentity.observedCreatorIdRaw : null,
+        externalAccountIdCandidates: boundedIdentity.candidates.map((candidate) => candidate.normalizedCreatorId),
+        displayName: evaluated.identity.displayName ?? boundedIdentity.displayName,
+        profileUrl: evaluated.identity.profileUrl ?? boundedIdentity.profileUrl,
+        identitySourceCandidates,
+        identityDomDiagnosticMatchCount: boundedIdentity.diagnostic.matchCount,
+        identityDomDiagnosticMatches: boundedIdentity.diagnostic.matches
+      }
+    };
   } catch (error) {
     if (options.failOnEvaluateError) throw error;
     return emptyPageEvidence(page);
@@ -1594,6 +1561,8 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
           routeClass,
           identityObservationStatus: identity ? (identity.externalAccountId ? "PASS" : "NOT_VERIFIED") : "FAIL",
           identitySourceCandidates: identity ? identitySourceCandidatesFromEvidence(identity) : [],
+          identityDomDiagnosticMatchCount: identity?.identityDomDiagnosticMatchCount ?? 0,
+          identityDomDiagnosticMatches: identity?.identityDomDiagnosticMatches ?? [],
           observedCreatorIdRaw: identity?.externalAccountId ?? null,
           observedCreatorIdNormalized: normalizeExternalCreatorId(identity?.externalAccountId ?? null),
           observedDisplayName: identity?.displayName ?? null,
@@ -1635,6 +1604,8 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         routeClass,
         identityObservationStatus: observedCreatorIdNormalized ? "PASS" : "NOT_VERIFIED",
         identitySourceCandidates: identitySourceCandidatesFromEvidence(identity),
+        identityDomDiagnosticMatchCount: identity.identityDomDiagnosticMatchCount ?? 0,
+        identityDomDiagnosticMatches: identity.identityDomDiagnosticMatches ?? [],
         observedCreatorIdRaw,
         observedCreatorIdNormalized,
         observedDisplayName: identity.displayName,
@@ -3406,43 +3377,20 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
   }
 
   private async inspectAccountIdentity(page: Page, pageEvidence?: XiaohongshuPageEvidence): Promise<XiaohongshuAccountIdentityEvidence> {
-    if (pageEvidence?.available) {
-      if (pageEvidence.identity.externalAccountIdCandidates.length > 1) throw new XiaohongshuGateError("ACCOUNT_IDENTITY_UNVERIFIED", "USER_ACTION_REQUIRED", "页面发现多个互相冲突的平台账号 ID");
-      if (pageEvidence.identity.externalAccountId || pageEvidence.identity.displayName || pageEvidence.identity.profileUrl) {
-        return {
-          externalAccountId: pageEvidence.identity.externalAccountId,
-          displayName: pageEvidence.identity.displayName,
-          profileUrl: pageEvidence.identity.profileUrl
-        };
-      }
+    const evidence = pageEvidence ?? await readXiaohongshuPageEvidence(page);
+    const identity = evidence.identity;
+    if (!identity.externalAccountId || identity.externalAccountIdCandidates.length !== 1) {
+      const failure = identity.externalAccountIdCandidates.length > 1 ? "页面发现多个互相冲突的平台账号 ID" : "未从真实页面可靠取得小红书账号身份；未猜测平台账号 ID";
+      throw new XiaohongshuGateError("ACCOUNT_IDENTITY_UNVERIFIED", "USER_ACTION_REQUIRED", failure);
     }
-    const links = page.locator("a[href]");
-    const candidates: Array<{ href: string; id: string | null; name: string }> = [];
-    for (let index = 0; index < await locatorCount(links); index += 1) {
-      const link = locatorAt(links, index);
-      const href = await attribute(link, "href");
-      const id = stableExternalAccountId(href);
-      if (!id) continue;
-      candidates.push({ href: new URL(href, XIAOHONGSHU_CREATOR_HOME).toString(), id, name: normalizeXiaohongshuEditorText((await innerText(link)) || (await attribute(link, "aria-label")) || (await attribute(link, "title"))) });
-    }
-    const distinctIds = [...new Set(candidates.map((candidate) => candidate.id).filter((value): value is string => Boolean(value)))];
-    if (distinctIds.length > 1) throw new XiaohongshuGateError("ACCOUNT_IDENTITY_UNVERIFIED", "USER_ACTION_REQUIRED", "页面发现多个互相冲突的平台账号 ID");
-    const selected = candidates.find((candidate) => candidate.id === distinctIds[0]);
-    if (selected) return { externalAccountId: selected.id, displayName: selected.name || null, profileUrl: selected.href };
-
-    const nicknameCandidates: string[] = [];
-    for (const selector of ['[data-testid*="nickname" i]', '[class*="nickname" i]', '[aria-label*="个人主页"], [aria-label*="账号"]']) {
-      const locator = page.locator(selector);
-      for (let index = 0; index < await locatorCount(locator); index += 1) {
-        const candidate = locatorAt(locator, index);
-        if (!(await isVisible(candidate)) || !(await isEnabled(candidate))) continue;
-        const name = normalizeXiaohongshuEditorText((await innerText(candidate)) || (await attribute(candidate, "aria-label")));
-        if (name) nicknameCandidates.push(name);
-      }
-    }
-    const distinctNames = [...new Set(nicknameCandidates)];
-    if (distinctNames.length === 1) return { externalAccountId: null, displayName: distinctNames[0], profileUrl: null };
-    throw new XiaohongshuGateError("ACCOUNT_IDENTITY_UNVERIFIED", "USER_ACTION_REQUIRED", "未从真实页面可靠取得小红书账号身份；未猜测平台账号 ID");
+    return {
+      externalAccountId: identity.externalAccountId,
+      displayName: identity.displayName,
+      profileUrl: identity.profileUrl,
+      identitySourceCandidates: identity.identitySourceCandidates,
+      identityDomDiagnosticMatchCount: identity.identityDomDiagnosticMatchCount,
+      identityDomDiagnosticMatches: identity.identityDomDiagnosticMatches
+    };
   }
 
   private preSubmitGateStatusForError(error: unknown): PreSubmitGateStatus {

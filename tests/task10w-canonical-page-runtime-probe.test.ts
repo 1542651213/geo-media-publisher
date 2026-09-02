@@ -67,8 +67,14 @@ function probe(overrides: Partial<XiaohongshuCanonicalPageRuntimeProbe> = {}): X
       href: "https://creator.xiaohongshu.com/user/profile/960803317",
       role: null,
       dataIdentifierField: null,
-      visible: true
+      visible: true,
+      source: "CREATOR_PROFILE_LINK",
+      rawValue: "960803317",
+      normalizedCreatorId: "960803317",
+      semanticAnchor: "xiaohongshu-profile-link"
     }],
+    identityDomDiagnosticMatchCount: 0,
+    identityDomDiagnosticMatches: [],
     observedCreatorIdRaw: "960803317",
     observedCreatorIdNormalized: "960803317",
     observedDisplayName: "测试账号",
@@ -131,5 +137,13 @@ describe("Task10W canonical Page runtime probe wiring", () => {
     expect(adapter).toContain("evaluate(() => location.href)");
     expect(ipc).not.toContain("payload.script");
     expect(ipc).not.toContain("payload.url");
+  });
+
+  it("gates XHS complete-login with the same Task10W identity service before profile persistence", () => {
+    const ipc = readFileSync("apps/desktop/src/main/ipc.ts", "utf8");
+    const completeLogin = ipc.slice(ipc.indexOf('register("accounts:complete-login"'), ipc.indexOf('register("accounts:refresh-login"'));
+    expect(completeLogin).toContain("platformSelfTests.verifyXhsCreatorIdentity(input.accountId)");
+    expect(completeLogin.indexOf("platformSelfTests.verifyXhsCreatorIdentity(input.accountId)")).toBeLessThan(completeLogin.indexOf("adapter.getAccountProfile"));
+    expect(completeLogin).not.toContain("verifyAndConvergeXhsIdentity");
   });
 });
