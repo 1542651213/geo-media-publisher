@@ -47,6 +47,42 @@ export interface XiaohongshuExactPublishSemanticTarget {
   depth: number;
 }
 
+export interface XiaohongshuPublishDropdownTriggerDiagnostic {
+  triggerId: string;
+  targetId: string;
+  tagName: string;
+  role: string | null;
+  ariaHasPopup: string | null;
+  ariaExpanded: string | null;
+  ariaLabel: string | null;
+  title: string | null;
+  visible: boolean;
+  enabled: boolean;
+  boundingBox: XiaohongshuPublishBoundingBox | null;
+}
+
+export interface XiaohongshuPublishDropdownTriggerResolution {
+  status: "PROVEN_UNIQUE" | "AMBIGUOUS" | "NOT_FOUND";
+  trigger: XiaohongshuPublishDropdownTriggerDiagnostic | null;
+  failureCode?: "PUBLISH_NOTE_DROPDOWN_TRIGGER_NOT_FOUND" | "PUBLISH_NOTE_DROPDOWN_TRIGGER_AMBIGUOUS";
+}
+
+export interface XiaohongshuImagePostMenuItemDiagnostic {
+  itemId: string;
+  tagName: string;
+  role: string | null;
+  exactText: "上传图文";
+  visible: boolean;
+  enabled: boolean;
+  boundingBox: XiaohongshuPublishBoundingBox | null;
+}
+
+export interface XiaohongshuImagePostMenuItemResolution {
+  status: "PROVEN_UNIQUE" | "AMBIGUOUS" | "NOT_FOUND";
+  item: XiaohongshuImagePostMenuItemDiagnostic | null;
+  failureCode?: "XIAOHONGSHU_IMAGE_POST_MENU_ITEM_NOT_FOUND" | "XIAOHONGSHU_IMAGE_POST_MENU_ITEM_AMBIGUOUS";
+}
+
 export interface XiaohongshuPublishAncestorDiagnostic {
   targetId: string;
   surfaceId: string;
@@ -123,6 +159,7 @@ export interface XiaohongshuClickableSurfaceDiagnostics {
   hitTestDiagnostics: readonly XiaohongshuPublishHitTestDiagnostic[];
   publishNoteSurface: XiaohongshuClickableSurfaceResolution;
   imagePostSurface: XiaohongshuClickableSurfaceResolution;
+  publishNoteDropdownTrigger: XiaohongshuPublishDropdownTriggerResolution;
   clickableSurfaceStatus: XiaohongshuClickableSurfaceStatus;
   clickableSurfaceFailureCode: XiaohongshuClickableSurfaceFailureCode | null;
   clickableSurfaceConfidence: "HIGH" | "NONE";
@@ -235,6 +272,41 @@ function normalizeExactTarget(value: unknown, index: number): XiaohongshuExactPu
   };
 }
 
+function normalizeDropdownTrigger(value: unknown, index: number): XiaohongshuPublishDropdownTriggerDiagnostic | null {
+  if (!isRecord(value)) return null;
+  const triggerId = boundedString(value.triggerId, `xhs-publish-dropdown-trigger-${index}`);
+  const targetId = boundedString(value.targetId);
+  if (!triggerId || !targetId) return null;
+  return {
+    triggerId,
+    targetId,
+    tagName: normalizedTagName(value.tagName),
+    role: normalizedRole(value.role),
+    ariaHasPopup: normalizedNullable(value.ariaHasPopup),
+    ariaExpanded: normalizedNullable(value.ariaExpanded),
+    ariaLabel: normalizedNullable(value.ariaLabel),
+    title: normalizedNullable(value.title),
+    visible: booleanValue(value.visible),
+    enabled: booleanValue(value.enabled),
+    boundingBox: boundedBox(value.boundingBox)
+  };
+}
+
+function normalizeImagePostMenuItem(value: unknown, index: number): XiaohongshuImagePostMenuItemDiagnostic | null {
+  if (!isRecord(value)) return null;
+  const itemId = boundedString(value.itemId, `xhs-publish-menu-item-${index}`);
+  if (!itemId || boundedString(value.exactText) !== "上传图文") return null;
+  return {
+    itemId,
+    tagName: normalizedTagName(value.tagName),
+    role: normalizedRole(value.role),
+    exactText: "上传图文",
+    visible: booleanValue(value.visible),
+    enabled: booleanValue(value.enabled),
+    boundingBox: boundedBox(value.boundingBox)
+  };
+}
+
 function normalizeAncestor(value: unknown, fallbackTargetId: string, fallbackDepth: number): XiaohongshuPublishAncestorDiagnostic | null {
   if (!isRecord(value)) return null;
   const targetId = boundedString(value.targetId, fallbackTargetId);
@@ -303,6 +375,144 @@ export async function collectExactPublishSemanticTargets(page: Page): Promise<re
   } catch {
     return [];
   }
+}
+
+/** Collects only a bounded, semantically identified dropdown trigger related to 发布笔记. */
+export async function collectPublishNoteDropdownTriggerDiagnostics(page: Page, targets: readonly XiaohongshuExactPublishSemanticTarget[]): Promise<readonly XiaohongshuPublishDropdownTriggerDiagnostic[]> {
+  const candidate = page as unknown as PageEvaluateLike;
+  if (typeof candidate.evaluate !== "function" || targets.length === 0) return [];
+  try {
+    const payload = await candidate.evaluate(readPublishDropdownTriggers as unknown as (...args: never[]) => unknown, targets.filter((target) => target.exactText === XIAOHONGSHU_PUBLISH_NOTE_TEXT).map(({ targetId }) => ({ targetId })));
+    const values = Array.isArray(payload) ? payload : isRecord(payload) && Array.isArray(payload.triggers) ? payload.triggers : [];
+    return values.slice(0, MAX_EXACT_TARGETS).map((value, index) => normalizeDropdownTrigger(value, index)).filter((entry): entry is XiaohongshuPublishDropdownTriggerDiagnostic => Boolean(entry));
+  } catch {
+    return [];
+  }
+}
+
+/** Collects exact visible menu actions after the dropdown has been opened; it never clicks. */
+export async function collectExactImagePostMenuItems(page: Page): Promise<readonly XiaohongshuImagePostMenuItemDiagnostic[]> {
+  const candidate = page as unknown as PageEvaluateLike;
+  if (typeof candidate.evaluate !== "function") return [];
+  try {
+    const payload = await candidate.evaluate(readExactImagePostMenuItems);
+    const values = Array.isArray(payload) ? payload : isRecord(payload) && Array.isArray(payload.items) ? payload.items : [];
+    return values.slice(0, MAX_EXACT_TARGETS).map((value, index) => normalizeImagePostMenuItem(value, index)).filter((entry): entry is XiaohongshuImagePostMenuItemDiagnostic => Boolean(entry));
+  } catch {
+    return [];
+  }
+}
+
+function readExactImagePostMenuItems(): { items: Array<Record<string, unknown>> } {
+  const maxScanElements = 2000;
+  const compact = (value: string, limit = 120): string => value.normalize("NFKC").replace(/[\s]+/gu, " ").trim().slice(0, limit);
+  const allElements = Array.from(document.querySelectorAll("*")).slice(0, maxScanElements);
+  const exactTargets = allElements.filter((element) => {
+    const tagName = element.tagName.toUpperCase();
+    return tagName !== "HTML" && tagName !== "BODY" && tagName !== "SCRIPT" && tagName !== "STYLE" && compact(element.textContent ?? "") === "上传图文";
+  });
+  const visible = (element: Element): boolean => {
+    const node = element as HTMLElement;
+    if (element.hasAttribute("hidden") || element.getAttribute("aria-hidden") === "true") return false;
+    const style = window.getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && style.visibility !== "collapse" && style.opacity !== "0" && rect.width > 0 && rect.height > 0;
+  };
+  const enabled = (element: Element): boolean => !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true";
+  const roleOf = (element: Element): string | null => compact(element.getAttribute("role") ?? "", 40).toLowerCase() || null;
+  const interactive = (element: Element): boolean => ["button", "a"].includes(element.tagName.toLowerCase()) || ["button", "menuitem"].includes(roleOf(element) ?? "");
+  const boxOf = (element: Element): Record<string, number> | null => {
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
+  };
+  const items: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
+  for (const target of exactTargets) {
+    let action: Element | null = interactive(target) ? target : target.parentElement;
+    for (let depth = 1; action && depth <= 8 && !interactive(action); depth += 1) action = action.parentElement;
+    if (!action || !interactive(action) || !visible(target) || !visible(action) || !enabled(action)) continue;
+    const index = allElements.indexOf(action);
+    if (index < 0) continue;
+    const itemId = `xhs-publish-menu-item-${index}`;
+    if (seen.has(itemId)) continue;
+    seen.add(itemId);
+    items.push({ itemId, tagName: action.tagName.toUpperCase(), role: roleOf(action), exactText: "上传图文", visible: visible(action), enabled: enabled(action), boundingBox: boxOf(action) });
+  }
+  return { items };
+}
+
+function readPublishDropdownTriggers(input: readonly { targetId: string }[]): { triggers: Array<Record<string, unknown>> } {
+  const maxAncestorDepth = 8;
+  const maxScanElements = 2000;
+  const compact = (value: string, limit = 120): string => value.normalize("NFKC").replace(/[\s]+/gu, " ").trim().slice(0, limit);
+  const exactTargets = Array.from(document.querySelectorAll("*")).filter((element) => {
+    const tagName = element.tagName.toUpperCase();
+    return tagName !== "HTML" && tagName !== "BODY" && tagName !== "SCRIPT" && tagName !== "STYLE" && compact(element.textContent ?? "") === "发布笔记";
+  });
+  const allElements = Array.from(document.querySelectorAll("*")).slice(0, maxScanElements);
+  const visible = (element: Element): boolean => {
+    const node = element as HTMLElement;
+    if (element.hasAttribute("hidden") || element.getAttribute("aria-hidden") === "true") return false;
+    const style = window.getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && style.visibility !== "collapse" && style.opacity !== "0" && rect.width > 0 && rect.height > 0;
+  };
+  const enabled = (element: Element): boolean => !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true";
+  const roleOf = (element: Element): string | null => compact(element.getAttribute("role") ?? "", 40).toLowerCase() || null;
+  const isButtonSemantics = (element: Element): boolean => element.tagName.toLowerCase() === "button" || roleOf(element) === "button";
+  const hasDropdownSemantics = (element: Element): boolean => {
+    if (!isButtonSemantics(element)) return false;
+    const hasPopup = compact(element.getAttribute("aria-haspopup") ?? "", 40).toLowerCase();
+    const expanded = element.getAttribute("aria-expanded");
+    const accessibleLabel = compact(`${element.getAttribute("aria-label") ?? ""} ${element.getAttribute("title") ?? ""}`);
+    return Boolean(hasPopup && ["true", "menu", "listbox", "tree", "grid", "dialog"].includes(hasPopup)) || expanded !== null || /下拉|更多|发布类型|dropdown|menu/iu.test(accessibleLabel);
+  };
+  const boxOf = (element: Element): Record<string, number> | null => {
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
+  };
+  const triggers: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
+  for (const item of input.slice(0, 20)) {
+    const targetIndex = Number.parseInt(item.targetId.match(/-(\d+)$/u)?.[1] ?? "-1", 10);
+    const target = Number.isInteger(targetIndex) ? exactTargets[targetIndex] : undefined;
+    if (!target) continue;
+    let container: Element | null = target.parentElement;
+    let depth = 1;
+    while (container && depth <= maxAncestorDepth) {
+      const candidates = [container, ...Array.from(container.querySelectorAll("button, [role='button']"))].filter((element, index, all) => all.indexOf(element) === index);
+      const matches = candidates.filter((element) => {
+        if (element === target || element.contains(target) || !hasDropdownSemantics(element) || !visible(element) || !enabled(element)) return false;
+        return container?.contains(element) ?? false;
+      });
+      if (matches.length > 0) {
+        for (const trigger of matches) {
+          const index = allElements.indexOf(trigger);
+          if (index < 0) continue;
+          const triggerId = `xhs-publish-dropdown-trigger-${index}`;
+          if (seen.has(triggerId)) continue;
+          seen.add(triggerId);
+          triggers.push({
+            triggerId,
+            targetId: item.targetId,
+            tagName: trigger.tagName.toUpperCase(),
+            role: roleOf(trigger),
+            ariaHasPopup: compact(trigger.getAttribute("aria-haspopup") ?? "", 40) || null,
+            ariaExpanded: compact(trigger.getAttribute("aria-expanded") ?? "", 40) || null,
+            ariaLabel: compact(trigger.getAttribute("aria-label") ?? "") || null,
+            title: compact(trigger.getAttribute("title") ?? "") || null,
+            visible: visible(trigger),
+            enabled: enabled(trigger),
+            boundingBox: boxOf(trigger)
+          });
+        }
+        break;
+      }
+      container = container.parentElement;
+      depth += 1;
+    }
+  }
+  return { triggers };
 }
 
 function readExactPublishSemanticTargets(): { targets: Array<Record<string, unknown>>; truncated: boolean } {
@@ -626,15 +836,39 @@ function overallStatus(resolutions: readonly XiaohongshuClickableSurfaceResoluti
   return "PROVEN_UNIQUE";
 }
 
+export function resolvePublishNoteDropdownTrigger(input: {
+  exactTargets: readonly XiaohongshuExactPublishSemanticTarget[];
+  dropdownTriggers: readonly XiaohongshuPublishDropdownTriggerDiagnostic[];
+}): XiaohongshuPublishDropdownTriggerResolution {
+  const publishTargetIds = new Set(input.exactTargets.filter((target) => target.exactText === XIAOHONGSHU_PUBLISH_NOTE_TEXT).map((target) => target.targetId));
+  const candidates = input.dropdownTriggers.filter((trigger) => publishTargetIds.has(trigger.targetId) && trigger.visible && trigger.enabled && Boolean(trigger.boundingBox));
+  const unique = [...new Map(candidates.map((trigger) => [trigger.triggerId, trigger])).values()];
+  if (unique.length === 1) return { status: "PROVEN_UNIQUE", trigger: unique[0]! };
+  if (unique.length > 1) return { status: "AMBIGUOUS", trigger: null, failureCode: "PUBLISH_NOTE_DROPDOWN_TRIGGER_AMBIGUOUS" };
+  return { status: "NOT_FOUND", trigger: null, failureCode: "PUBLISH_NOTE_DROPDOWN_TRIGGER_NOT_FOUND" };
+}
+
+export function resolveExactImagePostMenuItem(input: {
+  items: readonly XiaohongshuImagePostMenuItemDiagnostic[];
+}): XiaohongshuImagePostMenuItemResolution {
+  const candidates = input.items.filter((item) => item.exactText === "上传图文" && item.visible && item.enabled && Boolean(item.boundingBox));
+  const unique = [...new Map(candidates.map((item) => [item.itemId, item])).values()];
+  if (unique.length === 1) return { status: "PROVEN_UNIQUE", item: unique[0]! };
+  if (unique.length > 1) return { status: "AMBIGUOUS", item: null, failureCode: "XIAOHONGSHU_IMAGE_POST_MENU_ITEM_AMBIGUOUS" };
+  return { status: "NOT_FOUND", item: null, failureCode: "XIAOHONGSHU_IMAGE_POST_MENU_ITEM_NOT_FOUND" };
+}
+
 /** Resolves only from read-only diagnostic evidence; it never receives or clicks a Locator. */
 export function resolvePublishClickableSurfaces(input: {
   exactTargets: readonly XiaohongshuExactPublishSemanticTarget[];
   ancestorChains: readonly XiaohongshuPublishAncestorDiagnostic[];
   eventListeners: XiaohongshuPublishEventListenerInspection;
   hitTests: readonly XiaohongshuPublishHitTestDiagnostic[];
+  dropdownTriggers?: readonly XiaohongshuPublishDropdownTriggerDiagnostic[];
 }): XiaohongshuClickableSurfaceDiagnostics {
   const publishNoteSurface = resolutionForExactText(XIAOHONGSHU_PUBLISH_NOTE_TEXT, input.exactTargets, input.ancestorChains, input.eventListeners, input.hitTests);
   const imagePostSurface = resolutionForExactText(XIAOHONGSHU_IMAGE_POST_TEXT, input.exactTargets, input.ancestorChains, input.eventListeners, input.hitTests);
+  const publishNoteDropdownTrigger = resolvePublishNoteDropdownTrigger({ exactTargets: input.exactTargets, dropdownTriggers: input.dropdownTriggers ?? [] });
   const status = overallStatus([publishNoteSurface, imagePostSurface]);
   const clickableSurfaceFailureCode = publishNoteSurface.failureCode ?? imagePostSurface.failureCode ?? null;
   return {
@@ -645,6 +879,7 @@ export function resolvePublishClickableSurfaces(input: {
     hitTestDiagnostics: input.hitTests.slice(0, MAX_EXACT_TARGETS),
     publishNoteSurface,
     imagePostSurface,
+    publishNoteDropdownTrigger,
     clickableSurfaceStatus: status,
     clickableSurfaceFailureCode,
     clickableSurfaceConfidence: status === "PROVEN_UNIQUE" ? "HIGH" : "NONE",
@@ -657,12 +892,13 @@ export function resolvePublishClickableSurfaces(input: {
 
 export async function collectPublishClickableSurfaceDiagnostics(page: Page): Promise<XiaohongshuClickableSurfaceDiagnostics> {
   const exactTargets = await collectExactPublishSemanticTargets(page);
-  const [ancestorChainDiagnostics, hitTestDiagnostics, eventListeners] = await Promise.all([
+  const [ancestorChainDiagnostics, hitTestDiagnostics, eventListeners, dropdownTriggers] = await Promise.all([
     collectPublishAncestorChainDiagnostics(page, exactTargets),
     collectPublishHitTestDiagnostics(page, exactTargets),
-    collectPublishEventListenerDiagnostics(page, exactTargets)
+    collectPublishEventListenerDiagnostics(page, exactTargets),
+    collectPublishNoteDropdownTriggerDiagnostics(page, exactTargets)
   ]);
-  return resolvePublishClickableSurfaces({ exactTargets, ancestorChains: ancestorChainDiagnostics, eventListeners, hitTests: hitTestDiagnostics });
+  return resolvePublishClickableSurfaces({ exactTargets, ancestorChains: ancestorChainDiagnostics, eventListeners, hitTests: hitTestDiagnostics, dropdownTriggers });
 }
 
 export { MAX_ANCESTOR_DEPTH, MAX_EXACT_TARGETS };

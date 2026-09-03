@@ -79,7 +79,9 @@ function resolution(
       eventListenerSignal: "event:click"
     },
     diagnostics: null,
+    dropdownTrigger: null,
     surfaceHandle: handle,
+    dropdownTriggerHandle: null,
     lifecycle: lifecycle(),
     ...overrides
   };
@@ -89,12 +91,21 @@ function handle(state: PublishNoteSurfaceRuntimeState = runtimeState(), click: (
   return { inspect: vi.fn(async () => state), click: vi.fn(click) };
 }
 
+function dropdownHandle(click: () => Promise<void> = async () => undefined) {
+  return {
+    inspect: vi.fn(async () => ({ triggerAttached: true, relatedTargetAttached: true, visible: true, enabled: true, pointerEventsActive: true, geometryValid: true, hitTestConsistent: true, dropdownSemanticsActive: true })),
+    click: vi.fn(click)
+  };
+}
+
 describe("Xiaohongshu publish-note navigation policy", () => {
   it("resolves the current dynamic surface identity into a click handle without hardcoding surface ids", async () => {
     const targetElement = { evaluate: vi.fn(async () => runtimeState()) };
     const surfaceElement = { click: vi.fn(async () => undefined), evaluate: vi.fn(async () => runtimeState()) };
     const targetHandle = { asElement: () => targetElement, dispose: vi.fn(async () => undefined) };
     const surfaceHandle = { asElement: () => surfaceElement, dispose: vi.fn(async () => undefined) };
+    const dropdownElement = { click: vi.fn(async () => undefined), evaluate: vi.fn(async () => ({ triggerAttached: true, relatedTargetAttached: true, visible: true, enabled: true, pointerEventsActive: true, geometryValid: true, hitTestConsistent: true, dropdownSemanticsActive: true })) };
+    const dropdownHandle = { asElement: () => dropdownElement, dispose: vi.fn(async () => undefined) };
     const context = { newCDPSession: vi.fn(async () => ({
         send: vi.fn(async (method: string, _params?: { expression?: string }) => {
         if (method === "Runtime.evaluate") return { result: { objectId: "object-0" } };
@@ -109,9 +120,13 @@ describe("Xiaohongshu publish-note navigation policy", () => {
         const name = pageFunction.name;
         if (name === "readExactPublishSemanticTargets") return { targets: [target] };
         if (name === "readPublishAncestorChains") return { chains: [{ targetId: target.targetId, ancestors: [{ ...surface, surfaceId: "xhs-publish-surface-42", depth: 2, visible: true, pointerEvents: "auto", display: "block", visibility: "visible", boundingBox: surface.boundingBox }] }] };
+        if (name === "readPublishDropdownTriggers") return { triggers: [{ triggerId: "xhs-publish-dropdown-trigger-42", targetId: target.targetId, tagName: "BUTTON", role: "button", ariaHasPopup: "menu", ariaExpanded: "false", ariaLabel: "选择发布类型", title: null, visible: true, enabled: true, boundingBox: { x: 125, y: 20, width: 24, height: 40 } }] };
         return { hitTests: [{ targetId: target.targetId, center: { x: 70, y: 40 }, elements: [{ surfaceId: "xhs-publish-surface-42", tagName: "DIV", role: null, exactSemanticText: "发布笔记", ancestorRelation: "ANCESTOR" }] }] };
       }),
-      evaluateHandle: vi.fn(async () => (page.evaluateHandle.mock.calls.length === 1 ? targetHandle : surfaceHandle))
+      evaluateHandle: vi.fn(async () => {
+        const call = page.evaluateHandle.mock.calls.length;
+        return call === 1 || call === 3 ? targetHandle : call === 2 ? surfaceHandle : dropdownHandle;
+      })
     } as unknown as Page & { evaluateHandle: ReturnType<typeof vi.fn> };
     const resolved = await resolvePublishNoteNavigationSurface(page, lifecycle({ page, context }));
 
@@ -132,6 +147,32 @@ describe("Xiaohongshu publish-note navigation policy", () => {
 
     expect(result).toMatchObject({ status: "NAVIGATION_CLICK_COMPLETED", preClickRevalidated: true, navigationClickCount: 1, navigationTransition: true });
     expect(surfaceHandle.click).toHaveBeenCalledTimes(1);
+  });
+
+  it("clicks the unique dropdown trigger and never the publish-note primary action", async () => {
+    const primarySurface = handle();
+    const trigger = dropdownHandle();
+    const menuItem = {
+      inspect: vi.fn(async () => ({ itemAttached: true, visible: true, enabled: true, pointerEventsActive: true, geometryValid: true, hitTestConsistent: true, exactText: "上传图文" })),
+      click: vi.fn(async () => undefined)
+    };
+    const result = await clickPublishNoteNavigationSurface({
+      resolution: resolution(primarySurface, {
+        dropdownTrigger: { triggerId: "xhs-publish-dropdown-trigger-42", targetId: target.targetId, tagName: "BUTTON", role: "button", ariaHasPopup: "menu", ariaExpanded: "false", ariaLabel: "选择发布类型", title: null, visible: true, enabled: true, boundingBox: { x: 125, y: 20, width: 24, height: 40 } },
+        dropdownTriggerHandle: trigger,
+        imagePostMenuItemHandle: menuItem
+      }),
+      current: lifecycle(),
+      navigationClickCount: 0,
+      sanitizedUrlBefore: "https://creator.xiaohongshu.com/new/home",
+      readSanitizedUrl: () => "https://creator.xiaohongshu.com/publish/publish?from=menu&target=image"
+    });
+
+    expect(result).toMatchObject({ status: "NAVIGATION_CLICK_COMPLETED", navigationClickCount: 1 });
+    expect(trigger.click).toHaveBeenCalledTimes(1);
+    expect(menuItem.click).toHaveBeenCalledTimes(1);
+    expect(primarySurface.click).not.toHaveBeenCalled();
+    expect(result.imagePostMenuItemClickCount).toBe(1);
   });
 
   it("supports SPAN -> btn-inner -> btn-wrapper and selects the listener surface", async () => {
@@ -243,6 +284,10 @@ describe("Xiaohongshu publish-note navigation policy", () => {
 
   it("classifies a direct image editor after the single note click", () => {
     expect(classifyPublishNotePostClickState({ url: "https://creator.xiaohongshu.com/publish/publish", bodyText: "填写标题" })).toBe("IMAGE_EDITOR");
+  });
+
+  it("rejects a video target as the wrong content-type editor", () => {
+    expect(classifyPublishNotePostClickState({ url: "https://creator.xiaohongshu.com/publish/publish?from=menu&target=video", bodyText: "上传视频" })).toBe("VIDEO_EDITOR");
   });
 
   it("classifies login and security verification redirects", () => {

@@ -82,9 +82,13 @@ export {
   collectExactPublishSemanticTargets,
   collectPublishAncestorChainDiagnostics,
   collectPublishClickableSurfaceDiagnostics,
+  collectExactImagePostMenuItems,
+  collectPublishNoteDropdownTriggerDiagnostics,
   collectPublishEventListenerDiagnostics,
   collectPublishHitTestDiagnostics,
-  resolvePublishClickableSurfaces
+  resolvePublishClickableSurfaces,
+  resolvePublishNoteDropdownTrigger,
+  resolveExactImagePostMenuItem
 } from "./publish-clickable-surface";
 export {
   classifyPublishNotePostClickState,
@@ -115,6 +119,10 @@ export type {
   XiaohongshuClickableSurfaceStatus,
   XiaohongshuExactPublishSemanticTarget,
   XiaohongshuPublishAncestorDiagnostic,
+  XiaohongshuPublishDropdownTriggerDiagnostic,
+  XiaohongshuPublishDropdownTriggerResolution,
+  XiaohongshuImagePostMenuItemDiagnostic,
+  XiaohongshuImagePostMenuItemResolution,
   XiaohongshuPublishBoundingBox,
   XiaohongshuPublishEventListenerEntry,
   XiaohongshuPublishEventListenerInspection,
@@ -466,6 +474,7 @@ export interface XiaohongshuEditorEntryDiagnostic {
   hitTestDiagnostics?: readonly XiaohongshuPublishHitTestDiagnostic[];
   publishNoteSurface?: XiaohongshuClickableSurfaceResolution;
   imagePostSurface?: XiaohongshuClickableSurfaceResolution;
+  publishNoteDropdownTrigger?: XiaohongshuClickableSurfaceDiagnostics["publishNoteDropdownTrigger"];
   clickableSurfaceStatus?: XiaohongshuClickableSurfaceDiagnostics["clickableSurfaceStatus"];
   clickableSurfaceFailureCode?: XiaohongshuClickableSurfaceDiagnostics["clickableSurfaceFailureCode"];
   clickableSurfaceConfidence?: XiaohongshuClickableSurfaceDiagnostics["clickableSurfaceConfidence"];
@@ -491,7 +500,12 @@ export interface XiaohongshuEditorEntryDiagnostic {
   eventListenerSignal?: string | null;
   targetIdentity?: Record<string, unknown>;
   surfaceIdentity?: Record<string, unknown>;
+  dropdownTriggerIdentity?: Record<string, unknown>;
+  dropdownTriggerStatus?: XiaohongshuClickableSurfaceDiagnostics["publishNoteDropdownTrigger"]["status"];
   navigationTransition?: boolean;
+  publishNoteDropdownClickCount?: 0 | 1;
+  imagePostMenuItemClickCount?: 0 | 1;
+  uploadVideoMenuItemClickCount?: 0;
   imagePostSurfaceAfterPublishNote?: XiaohongshuClickableSurfaceResolution;
   postPublishNoteState?: PublishNotePostClickState;
   shellStatus?: ImageEditorShellStatus;
@@ -3711,6 +3725,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         ancestorChainDiagnostics: clickable.ancestorChainDiagnostics,
         publishNoteSurface: clickable.publishNoteSurface,
         imagePostSurface: clickable.imagePostSurface,
+        publishNoteDropdownTrigger: clickable.publishNoteDropdownTrigger,
         clickableSurfaceStatus: clickable.clickableSurfaceStatus,
         clickableSurfaceFailureCode: clickable.clickableSurfaceFailureCode,
         clickableSurfaceConfidence: clickable.clickableSurfaceConfidence,
@@ -3746,6 +3761,10 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const startedAt = Date.now();
     const startUrl = sanitizePageUrl(page);
     if (this.isEditorRoute(page.url())) {
+      if (classifyPublishNotePostClickState({ url: page.url(), bodyText: "" }) === "VIDEO_EDITOR") {
+        this.emitEditorEntryStep(page, operationId, accountId, startedAt, "EDITOR_ROUTE_REACHED", false, "url:/publish/publish?target=video", startUrl, startUrl, "PLATFORM_REDIRECT");
+        throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "当前页面是视频发布编辑器；不会在错误内容类型页面继续上传或填写", { failureCode: "CONTENT_TYPE_ENTRY_NOT_FOUND", failureStage: "CONTENT_TYPE_SELECTION", missingSignal: "target=image" });
+      }
       this.emitEditorEntryDiagnostic({ code: "EDITOR_ENTRY_STARTED", timestamp: new Date().toISOString(), operationId, platformKey: "xiaohongshu", accountId, startUrl, entryMethod: "ALREADY_ON_EDITOR", expectedTarget: "https://creator.xiaohongshu.com/publish/publish" });
       this.emitEditorEntryStep(page, operationId, accountId, startedAt, "EDITOR_ROUTE_REACHED", true, "url:/publish/publish", startUrl, startUrl, "DIRECT_GOTO");
       return { editorReached: true, sanitizedUrl: startUrl, navigationClickCount: 0, navigationTransitionObserved: false, postPublishNoteState: "IMAGE_EDITOR" };
@@ -3836,6 +3855,11 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         throw new XiaohongshuGateError("SECURITY_VERIFICATION_REQUIRED", "USER_ACTION_REQUIRED", "图文入口导航后出现安全验证页；未尝试绕过", { failureCode: "SECURITY_VERIFICATION_REQUIRED", failureStage: "AUTHENTICATION", missingSignal: "security-verification-url" });
       }
       if (/\/publish\/publish(?:[/?#]|$)/iu.test(currentUrl)) {
+        const postState = classifyPublishNotePostClickState({ url: currentUrl, bodyText: "" });
+        if (postState === "VIDEO_EDITOR") {
+          this.emitEditorEntryStep(page, operationId, accountId, startedAt, "EDITOR_ROUTE_REACHED", false, "url:/publish/publish?target=video", startUrl, sanitizePageUrl(page), "PLATFORM_REDIRECT");
+          throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "发布笔记 dropdown 后进入了视频发布编辑器；不会切换 tab 或继续 mutation", { failureCode: "CONTENT_TYPE_ENTRY_NOT_FOUND", failureStage: "CONTENT_TYPE_SELECTION", missingSignal: "target=image" });
+        }
         this.emitEditorEntryStep(page, operationId, accountId, startedAt, "EDITOR_ROUTE_REACHED", true, "url:/publish/publish");
         return { editorReached: true, sanitizedUrl: sanitizePageUrl(page), navigationClickCount: 1, navigationTransitionObserved: true, postPublishNoteState: "IMAGE_EDITOR" };
       }
@@ -3874,6 +3898,8 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       status: resolution.status,
       targetIdentity: resolution.target ? { targetId: resolution.target.targetId, tagName: resolution.target.tagName, exactText: resolution.target.exactText, depth: resolution.target.depth } : undefined,
       surfaceIdentity: resolution.surface ? { surfaceId: resolution.surface.surfaceId, targetId: resolution.surface.targetId, ancestorDepth: resolution.surface.ancestorDepth, tagName: resolution.surface.tagName } : undefined,
+      dropdownTriggerIdentity: resolution.dropdownTrigger ? { triggerId: resolution.dropdownTrigger.triggerId, targetId: resolution.dropdownTrigger.targetId, tagName: resolution.dropdownTrigger.tagName, role: resolution.dropdownTrigger.role } : undefined,
+      dropdownTriggerStatus: resolution.diagnostics?.publishNoteDropdownTrigger.status,
       exactSemanticText: resolution.evidence.exactSemanticText,
       visible: resolution.evidence.visible,
       pointerEventsActive: resolution.evidence.pointerEventsActive,
@@ -3952,6 +3978,9 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       sanitizedUrlAfter: click.sanitizedUrlAfter,
       navigationTransition: click.navigationTransition,
       navigationClickCount: click.navigationClickCount,
+      publishNoteDropdownClickCount: click.publishNoteDropdownClickCount,
+      imagePostMenuItemClickCount: click.imagePostMenuItemClickCount,
+      uploadVideoMenuItemClickCount: click.uploadVideoMenuItemClickCount,
       finalSubmitCount: click.finalSubmitCount,
       failureCode: click.failureCode,
       elapsedMs: Math.max(0, Date.now() - startedAt)
@@ -3963,6 +3992,17 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
 
     const postEvidence = await readXiaohongshuPageEvidence(page);
     const postBodyText = await bodyText(page);
+    if (resolution.dropdownTriggerHandle) {
+      let route: URL;
+      try {
+        route = new URL(page.url());
+      } catch {
+        throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "上传图文菜单点击后的页面 URL 无法验证", { failureCode: "CONTENT_TYPE_ENTRY_NOT_FOUND", failureStage: "CONTENT_TYPE_SELECTION", missingSignal: "from=menu&target=image" });
+      }
+      if (route.pathname !== "/publish/publish" || route.searchParams.get("from") !== "menu" || route.searchParams.get("target") !== "image") {
+        throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "上传图文菜单点击后未得到 from=menu&target=image 路由", { failureCode: "CONTENT_TYPE_ENTRY_NOT_FOUND", failureStage: "CONTENT_TYPE_SELECTION", missingSignal: "from=menu&target=image" });
+      }
+    }
     const postState = classifyPublishNotePostClickState({
       url: page.url(),
       bodyText: postBodyText,
@@ -3993,6 +4033,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     });
     if (postState === "LOGIN") throw new XiaohongshuGateError("LOGIN_REQUIRED", "USER_ACTION_REQUIRED", "发布笔记 navigation 后被重定向到登录页", { failureCode: "AUTH_REDIRECTED_TO_LOGIN", failureStage: "AUTHENTICATION", missingSignal: "login-url" });
     if (postState === "SECURITY_VERIFICATION") throw new XiaohongshuGateError("SECURITY_VERIFICATION_REQUIRED", "USER_ACTION_REQUIRED", "发布笔记 navigation 后出现安全验证页；未尝试绕过", { failureCode: "SECURITY_VERIFICATION_REQUIRED", failureStage: "AUTHENTICATION", missingSignal: "security-verification-signal" });
+    if (postState === "VIDEO_EDITOR") throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "发布笔记 dropdown 后进入了视频发布编辑器；不会切换 tab 或继续 mutation", { failureCode: "CONTENT_TYPE_ENTRY_NOT_FOUND", failureStage: "CONTENT_TYPE_SELECTION", missingSignal: "target=image" });
     if (postState === "UNKNOWN") throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "发布笔记 navigation 后页面状态未知", { failureCode: "UNKNOWN_UI_STATE", failureStage: "EDITOR_NAVIGATION", missingSignal: "post-publish-note-state" });
     return {
       editorReached: postState === "IMAGE_EDITOR",

@@ -5,10 +5,16 @@ import {
   collectExactPublishSemanticTargets,
   collectPublishAncestorChainDiagnostics,
   collectPublishClickableSurfaceDiagnostics,
+  collectPublishNoteDropdownTriggerDiagnostics,
+  collectExactImagePostMenuItems,
   collectPublishEventListenerDiagnostics,
   collectPublishHitTestDiagnostics,
+  resolvePublishNoteDropdownTrigger,
+  resolveExactImagePostMenuItem,
   resolvePublishClickableSurfaces,
   type XiaohongshuExactPublishSemanticTarget,
+  type XiaohongshuPublishDropdownTriggerDiagnostic,
+  type XiaohongshuImagePostMenuItemDiagnostic,
   type XiaohongshuPublishAncestorDiagnostic,
   type XiaohongshuPublishEventListenerInspection,
   type XiaohongshuPublishHitTestDiagnostic,
@@ -82,6 +88,36 @@ function hitTest(targetId: string, surfaceId: string, relation: "TARGET" | "ANCE
   };
 }
 
+function dropdownTrigger(overrides: Partial<XiaohongshuPublishDropdownTriggerDiagnostic> = {}): XiaohongshuPublishDropdownTriggerDiagnostic {
+  return {
+    triggerId: "xhs-publish-dropdown-trigger-42",
+    targetId: "target-0",
+    tagName: "BUTTON",
+    role: "button",
+    ariaHasPopup: "menu",
+    ariaExpanded: "false",
+    ariaLabel: "选择发布类型",
+    title: null,
+    visible: true,
+    enabled: true,
+    boundingBox: { x: 125, y: 20, width: 24, height: 40 },
+    ...overrides
+  };
+}
+
+function imagePostMenuItem(overrides: Partial<XiaohongshuImagePostMenuItemDiagnostic> = {}): XiaohongshuImagePostMenuItemDiagnostic {
+  return {
+    itemId: "xhs-publish-menu-item-42",
+    tagName: "LI",
+    role: "menuitem",
+    exactText: "上传图文",
+    visible: true,
+    enabled: true,
+    boundingBox: { x: 10, y: 70, width: 120, height: 32 },
+    ...overrides
+  };
+}
+
 function resolve(
   exactTargets: readonly XiaohongshuExactPublishSemanticTarget[],
   chains: readonly XiaohongshuPublishAncestorDiagnostic[],
@@ -92,6 +128,29 @@ function resolve(
 }
 
 describe("Xiaohongshu clickable publish surfaces", () => {
+  it("requires the unique dropdown trigger instead of the publish-note primary action", () => {
+    const exact = target();
+    const result = resolvePublishNoteDropdownTrigger({
+      exactTargets: [exact],
+      dropdownTriggers: [dropdownTrigger({ targetId: exact.targetId })]
+    });
+
+    expect(result).toMatchObject({ status: "PROVEN_UNIQUE", trigger: { triggerId: "xhs-publish-dropdown-trigger-42", targetId: exact.targetId } });
+    expect(result.trigger?.tagName).toBe("BUTTON");
+  });
+
+  it("fails closed when the publish-note dropdown trigger is missing or ambiguous", () => {
+    const exact = target();
+    expect(resolvePublishNoteDropdownTrigger({ exactTargets: [exact], dropdownTriggers: [] })).toMatchObject({ status: "NOT_FOUND", trigger: null });
+    expect(resolvePublishNoteDropdownTrigger({ exactTargets: [exact], dropdownTriggers: [dropdownTrigger(), dropdownTrigger({ triggerId: "xhs-publish-dropdown-trigger-43" })] })).toMatchObject({ status: "AMBIGUOUS", trigger: null });
+  });
+
+  it("accepts only one exact visible enabled 上传图文 menu action", () => {
+    expect(resolveExactImagePostMenuItem({ items: [imagePostMenuItem()] })).toMatchObject({ status: "PROVEN_UNIQUE", item: { exactText: "上传图文" } });
+    expect(resolveExactImagePostMenuItem({ items: [] })).toMatchObject({ status: "NOT_FOUND", item: null });
+    expect(resolveExactImagePostMenuItem({ items: [imagePostMenuItem(), imagePostMenuItem({ itemId: "xhs-publish-menu-item-43" })] })).toMatchObject({ status: "AMBIGUOUS", item: null });
+  });
+
   it("proves a SPAN exact target through a parent DIV click listener", () => {
     const exact = target();
     const surface = ancestor();
@@ -390,6 +449,39 @@ describe("Xiaohongshu clickable publish surfaces", () => {
       expect(result.diagnosticClickCount).toBe(0);
       expect(result.mouseEventDispatchCount).toBe(0);
       expect(result.keyboardEventCount).toBe(0);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  it.skipIf(!existsSync(chromeExecutable))("finds the dropdown trigger beside the publish-note primary action", async () => {
+    const browser = await chromium.launch({ headless: true, executablePath: chromeExecutable });
+    try {
+      const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+      await page.setContent("<div id='publish-note'><button id='primary'><span>发布笔记</span></button><button id='dropdown' aria-haspopup='menu' aria-expanded='false' aria-label='选择发布类型'><span>⌄</span></button></div>");
+      await page.evaluate(() => {
+        document.querySelector("#primary")?.addEventListener("click", () => undefined);
+        document.querySelector("#dropdown")?.addEventListener("click", () => undefined);
+      });
+
+      const exactTargets = await collectExactPublishSemanticTargets(page);
+      const triggers = await collectPublishNoteDropdownTriggerDiagnostics(page, exactTargets);
+      const result = resolvePublishNoteDropdownTrigger({ exactTargets, dropdownTriggers: triggers });
+
+      expect(result).toMatchObject({ status: "PROVEN_UNIQUE", trigger: { tagName: "BUTTON", ariaHasPopup: "menu", ariaExpanded: "false" } });
+      expect(result.trigger?.triggerId).toMatch(/^xhs-publish-dropdown-trigger-\d+$/u);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  it.skipIf(!existsSync(chromeExecutable))("finds the exact image menu action after the dropdown is open", async () => {
+    const browser = await chromium.launch({ headless: true, executablePath: chromeExecutable });
+    try {
+      const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+      await page.setContent("<div role='menu'><div role='menuitem'><span>上传图文</span></div><div role='menuitem'>上传视频</div><div role='menuitem'>写长文</div><div role='menuitem'>发播客</div></div>");
+      const items = await collectExactImagePostMenuItems(page);
+      expect(resolveExactImagePostMenuItem({ items })).toMatchObject({ status: "PROVEN_UNIQUE", item: { tagName: "DIV", role: "menuitem", exactText: "上传图文" } });
     } finally {
       await browser.close();
     }
