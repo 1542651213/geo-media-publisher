@@ -1690,7 +1690,7 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
           finalSubmitCandidateCount
         },
         mediaPreviewDiagnostics: { previewCount: previewReady ? 1 : 0, previewVisible: previewReady, previewGeometry: [], deleteReplaceEditSignals: [], associatedSemanticText: [] },
-        modalDiagnostics: emptyModalDiagnostics(),
+        modalDiagnostics: { dialogCount: 0, modalSignalCount: 0, maskCount: 0, overlayCount: 0, drawerCount: 0, visible: false, ariaModalCount: 0 },
         intermediateActionCandidates,
         requiredValidationSignals,
         forbiddenActionSignalPresent,

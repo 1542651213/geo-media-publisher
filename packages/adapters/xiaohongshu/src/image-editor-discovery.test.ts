@@ -1,4 +1,6 @@
+import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { chromium } from "playwright-core";
 import type { Page } from "playwright-core";
 import {
   assertPreUploadImageEditorContract,
@@ -91,6 +93,8 @@ async function inspect(snapshots: ImageEditorDomSnapshot[], diagnostics: ImageEd
 }
 
 describe("Xiaohongshu image editor discovery", () => {
+  const chromeExecutable = process.env.CHROME_PATH ?? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+
   function phaseEvidence(overrides: Partial<ImageEditorPhaseEvidence> = {}): ImageEditorPhaseEvidence {
     return {
       shellReady: true,
@@ -272,6 +276,31 @@ describe("Xiaohongshu image editor discovery", () => {
       confidence: "HIGH",
       tabPresence: { currentSelectedTab: "上传图文", uploadImageTabPresent: true }
     });
+  });
+
+  it.skipIf(!existsSync(chromeExecutable))("executes the phase DOM evaluator against a browser-shaped image editor", async () => {
+    const browser = await chromium.launch({ headless: true, executablePath: chromeExecutable });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+      await page.goto(`${editorUrl}?from=homepage&target=image`, { waitUntil: "commit", timeout: 5000 }).catch(() => undefined);
+      await page.setContent(`
+        <main class="editor-shell"><nav class="header-tabs">
+          <div class="creator-tab"><span>上传视频</span></div>
+          <div class="creator-tab active"><span>上传图文</span></div>
+          <div class="creator-tab"><span>写长文</span></div>
+          <div class="creator-tab"><span>发播客</span></div>
+        </nav><section class="upload-panel">
+          <button class="upload-button"><span>上传图片</span></button>
+          <input type="file" accept=".jpg,.jpeg,.png,.webp" multiple>
+        </section></main>
+      `);
+      const result = await inspectImagePostEditorPhase(page, metadata, { maxWaitMs: 80, probeIntervalMs: 0, stableSampleCount: 2 });
+      expect(result.phase).toBe("IMAGE_POST_PRE_UPLOAD");
+      expect(result.tabPresence?.currentSelectedTab).toBe("上传图文");
+      expect(result.uploadCapabilityStatus).toBe("PRESENT");
+    } finally {
+      await browser.close();
+    }
   });
 
   it("emits a bounded read-only pre-upload phase observation", async () => {
