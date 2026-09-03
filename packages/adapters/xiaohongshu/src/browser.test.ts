@@ -508,6 +508,42 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(fixture.submitClick).not.toHaveBeenCalled();
   });
 
+  it("exposes post-upload reconciliation on the retained canonical Page without a second upload", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/publish/publish?target=image" });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+    await adapter.connectAccount(ctx);
+    (fixture.manager as unknown as { getCanonicalPage: ReturnType<typeof vi.fn> }).getCanonicalPage = vi.fn(() => ({ session: fixture.session, page: fixture.page, pageDebugId: "canonical-post-upload-page" }));
+    vi.mocked(fixture.page.evaluate).mockResolvedValue({
+      origin: "https://creator.xiaohongshu.com",
+      pathname: "/publish/publish",
+      readyState: "complete",
+      editorRegionPresent: true,
+      imageItems: [{ tagName: "IMG", classNameSafe: "preview", boundingRect: { x: 10, y: 20, width: 120, height: 120 }, display: "block", visibility: "visible", pointerEvents: "auto", imgPresent: true, imgNaturalWidth: 1080, imgNaturalHeight: 1440, complete: true, blobUrlPresent: true, dataUrlPresent: false, backgroundImagePresent: false, connected: true, visible: true }],
+      visibleImageItemCount: 1,
+      imageCounterTextSafe: "1/18",
+      addImageControlPresent: true,
+      deleteImageControlCount: 1,
+      titleControlMatchCount: 1,
+      titleControlVisible: true,
+      bodyControlMatchCount: 1,
+      bodyControlVisible: true,
+      finalSubmitCandidateCount: 0,
+      finalSubmitVisibleCount: 0,
+      finalSubmitProof: "NOT_PROVEN",
+      explicitUploadErrorSignals: [],
+      processingSignalPresent: false
+    });
+
+    const diagnostic = (adapter as unknown as { inspectCurrentXiaohongshuPostUploadReconciliation: (input: AccountContext) => Promise<Record<string, unknown>> }).inspectCurrentXiaohongshuPostUploadReconciliation;
+    const result = await diagnostic.call(adapter, ctx);
+
+    expect(result).toMatchObject({ inspectionStatus: "PASS", imageUploadReconciliation: "PASS", postUploadState: "EDITOR_READY", imageAssetRenderedCount: 1, titleControlPresent: true, bodyControlPresent: true, finalSubmitProof: "NOT_PROVEN" });
+    expect(result.pageId).toBe("canonical-post-upload-page");
+    expect(fixture.inputSetFiles).not.toHaveBeenCalled();
+    expect(fixture.submitClick).not.toHaveBeenCalled();
+  });
+
   it("fails closed before evaluate for a foreign origin and without an active session", async () => {
     const foreignFixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/publish/publish?target=image" });
     const foreignAdapter = new XiaohongshuBrowserAdapter({ sessionManager: foreignFixture.manager });

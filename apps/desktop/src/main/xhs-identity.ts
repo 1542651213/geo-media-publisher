@@ -2,7 +2,7 @@ import type { AdapterRegistry } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
 import { ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type Account, type AccountContext, type CreatorIdentityVerificationResult, type PlatformAccountIdentityBinding, type XhsIdentityAcceptance } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentImageEditorReadiness, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentImageEditorReadiness, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 
 type IdentityReader = {
   inspectCanonicalPageRuntime?: (ctx: AccountContext) => Promise<XiaohongshuCanonicalPageRuntimeProbe>;
@@ -11,6 +11,7 @@ type IdentityReader = {
   inspectCurrentXiaohongshuImageEditorReadiness?: (ctx: AccountContext) => Promise<XiaohongshuCurrentImageEditorReadiness>;
   inspectCurrentXiaohongshuPublishEditorDom?: (ctx: AccountContext) => Promise<XiaohongshuPublishEditorDomRuntimeDiagnostic>;
   inspectCurrentXiaohongshuPublishEditorSemanticCandidates?: (ctx: AccountContext) => Promise<XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic>;
+  inspectCurrentXiaohongshuPostUploadReconciliation?: (ctx: AccountContext) => Promise<XiaohongshuCurrentPostUploadReconciliation>;
   readCanonicalCreatorIdentity?: (ctx: AccountContext) => Promise<XiaohongshuCreatorIdentityObservation>;
 };
 
@@ -193,6 +194,39 @@ export class XhsIdentityService {
       fileInputMatchCount: diagnostic.fileInputs.length,
       acceptableImageFileInputCount: diagnostic.acceptableImageFileInputCount,
       imagePostSemanticProof: diagnostic.imagePostSemanticProof
+    });
+    return diagnostic;
+  }
+
+  async inspectCurrentXiaohongshuPostUploadReconciliation(accountId: string): Promise<XiaohongshuCurrentPostUploadReconciliation> {
+    const account = this.requireAccount(accountId);
+    const adapter = this.options.registry.getForContent("xiaohongshu", "article") as IdentityReader;
+    if (typeof adapter.inspectCurrentXiaohongshuPostUploadReconciliation !== "function") throw Object.assign(new Error("当前小红书运行时未提供 post-upload reconciliation diagnostic"), { code: "XHS_POST_UPLOAD_RECONCILIATION_DIAGNOSTIC_UNAVAILABLE" });
+    const diagnostic = await adapter.inspectCurrentXiaohongshuPostUploadReconciliation(this.context(account));
+    this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_POST_UPLOAD_RECONCILIATION", "小红书 retained canonical Page post-upload 只读 reconciliation 完成", {
+      platformKey: "xiaohongshu",
+      accountId: account.id,
+      inspectionStatus: diagnostic.inspectionStatus,
+      failureCode: diagnostic.failureCode,
+      contextDebugId: diagnostic.contextDebugId,
+      pageId: diagnostic.pageId,
+      sessionExists: diagnostic.sessionExists,
+      browserConnected: diagnostic.browserConnected,
+      contextExists: diagnostic.contextExists,
+      pageExists: diagnostic.pageExists,
+      pageClosed: diagnostic.pageClosed,
+      pageContextMatchesSession: diagnostic.pageContextMatchesSession,
+      origin: diagnostic.origin,
+      pathname: diagnostic.pathname,
+      readyState: diagnostic.readyState,
+      postUploadState: diagnostic.postUploadState,
+      imageUploadReconciliation: diagnostic.imageUploadReconciliation,
+      imageItemCount: diagnostic.imageItems.length,
+      visibleImageItemCount: diagnostic.visibleImageItemCount,
+      titleControlPresent: diagnostic.titleControlPresent,
+      bodyControlPresent: diagnostic.bodyControlPresent,
+      finalSubmitProof: diagnostic.finalSubmitProof,
+      noExplicitUploadError: diagnostic.noExplicitUploadError
     });
     return diagnostic;
   }
