@@ -225,6 +225,7 @@ export interface XiaohongshuPublishEntryDomDiagnostics {
   uploadImage: XiaohongshuPublishEntryDomLabelDiagnostic;
   diagnosticClickCount: 0;
   navigationCount: 0;
+  pageCapabilities?: XiaohongshuPageCapabilitiesSafe;
 }
 
 export interface XiaohongshuPublishEntryDomRuntimeDiagnostic extends XiaohongshuPublishEntryDomDiagnostics {
@@ -283,6 +284,17 @@ export interface XiaohongshuImagePostEntryInspectionPayload {
   target: XiaohongshuImagePostEntryTargetDiagnostic | null;
 }
 
+export interface XiaohongshuPageCapabilitiesSafe {
+  typeofPage: string;
+  exists: boolean;
+  constructorName: string;
+  hasUrl: boolean;
+  hasIsClosed: boolean;
+  hasEvaluate: boolean;
+}
+
+export type XiaohongshuPageEvaluationFailureReason = "EVALUATE_METHOD_MISSING" | "EVALUATE_CALL_FAILED";
+
 export type XiaohongshuImagePostEntryFailureCode =
   | "PAGE_EVALUATION_UNAVAILABLE"
   | "NOT_CREATOR_HOME"
@@ -307,6 +319,8 @@ export interface XiaohongshuImagePostEntryInspection extends XiaohongshuImagePos
   inspectionStatus: "PASS" | "FAIL";
   safeToTestClick: boolean;
   failureCode: XiaohongshuImagePostEntryFailureCode | null;
+  pageCapabilities?: XiaohongshuPageCapabilitiesSafe;
+  evaluationFailureReason?: XiaohongshuPageEvaluationFailureReason;
 }
 
 export interface XiaohongshuImagePostEntryActivationResult {
@@ -324,7 +338,40 @@ export interface XiaohongshuImagePostEntryActivationResult {
 }
 
 interface PageEvaluateLike {
+  url?: unknown;
+  isClosed?: unknown;
   evaluate?: <T>(pageFunction: (...args: never[]) => T, arg?: unknown) => Promise<T>;
+}
+
+function pageCapabilitiesSafe(page: Page): XiaohongshuPageCapabilitiesSafe {
+  const exists = page !== null && page !== undefined;
+  const candidate = page as unknown as PageEvaluateLike;
+  let constructorName = "";
+  try {
+    const constructorCandidate = page as unknown as { constructor?: { name?: unknown } };
+    constructorName = typeof constructorCandidate.constructor?.name === "string" ? constructorCandidate.constructor.name.slice(0, MAX_STRING_LENGTH) : "";
+  } catch {
+    constructorName = "";
+  }
+  return {
+    typeofPage: typeof page,
+    exists,
+    constructorName,
+    hasUrl: typeof candidate.url === "function",
+    hasIsClosed: typeof candidate.isClosed === "function",
+    hasEvaluate: typeof candidate.evaluate === "function"
+  };
+}
+
+function safePageUrl(page: Page): string {
+  const candidate = page as unknown as PageEvaluateLike;
+  if (typeof candidate.url !== "function") return "";
+  try {
+    const value = candidate.url();
+    return typeof value === "string" ? value : "";
+  } catch {
+    return "";
+  }
 }
 
 interface RawChain {
@@ -515,9 +562,10 @@ function normalizeEntryDomLabel(value: unknown, label: XiaohongshuPublishEntryDo
 
 /** Collects exact visible publish labels and at most four ancestor levels. It never clicks or navigates. */
 export async function collectPublishEntryDomDiagnostics(page: Page): Promise<XiaohongshuPublishEntryDomDiagnostics> {
+  const capabilities = pageCapabilitiesSafe(page);
   const candidate = page as unknown as PageEvaluateLike;
   const emptyLabel = (label: XiaohongshuPublishEntryDomLabel): XiaohongshuPublishEntryDomLabelDiagnostic => ({ label, matchCount: 0, matches: [], clickableAncestorCount: 0, target: null, ancestors: [], uniqueClickableAncestor: null });
-  if (typeof candidate.evaluate !== "function") return { pageOrigin: "", pathname: "", publishNote: emptyLabel(XIAOHONGSHU_PUBLISH_NOTE_TEXT), imagePost: emptyLabel(XIAOHONGSHU_IMAGE_POST_TEXT), uploadImage: emptyLabel(XIAOHONGSHU_IMAGE_POST_MENU_TEXT), diagnosticClickCount: 0, navigationCount: 0 };
+  if (typeof candidate.evaluate !== "function") return { pageOrigin: "", pathname: "", publishNote: emptyLabel(XIAOHONGSHU_PUBLISH_NOTE_TEXT), imagePost: emptyLabel(XIAOHONGSHU_IMAGE_POST_TEXT), uploadImage: emptyLabel(XIAOHONGSHU_IMAGE_POST_MENU_TEXT), diagnosticClickCount: 0, navigationCount: 0, pageCapabilities: capabilities };
   try {
     const payload = await candidate.evaluate(readPublishEntryDomDiagnostics);
     const record = isRecord(payload) ? payload : {};
@@ -528,10 +576,11 @@ export async function collectPublishEntryDomDiagnostics(page: Page): Promise<Xia
       imagePost: normalizeEntryDomLabel(record.imagePost, XIAOHONGSHU_IMAGE_POST_TEXT),
       uploadImage: normalizeEntryDomLabel(record.uploadImage, XIAOHONGSHU_IMAGE_POST_MENU_TEXT),
       diagnosticClickCount: 0,
-      navigationCount: 0
+      navigationCount: 0,
+      pageCapabilities: capabilities
     };
   } catch {
-    return { pageOrigin: "", pathname: "", publishNote: emptyLabel(XIAOHONGSHU_PUBLISH_NOTE_TEXT), imagePost: emptyLabel(XIAOHONGSHU_IMAGE_POST_TEXT), uploadImage: emptyLabel(XIAOHONGSHU_IMAGE_POST_MENU_TEXT), diagnosticClickCount: 0, navigationCount: 0 };
+    return { pageOrigin: "", pathname: "", publishNote: emptyLabel(XIAOHONGSHU_PUBLISH_NOTE_TEXT), imagePost: emptyLabel(XIAOHONGSHU_IMAGE_POST_TEXT), uploadImage: emptyLabel(XIAOHONGSHU_IMAGE_POST_MENU_TEXT), diagnosticClickCount: 0, navigationCount: 0, pageCapabilities: capabilities };
   }
 }
 
@@ -627,8 +676,11 @@ function routeUrlSafe(url: string): string {
 }
 
 function readXiaohongshuImagePostEntryPayload(): Record<string, unknown> {
-  const compact = (value: string): string => value.normalize("NFKC").replace(/[\s]+/gu, " ").trim().slice(0, MAX_STRING_LENGTH);
-  const allElements = Array.from(document.querySelectorAll("*")).slice(0, MAX_IMAGE_POST_ENTRY_SCAN_ELEMENTS);
+  const maxStringLength = 120;
+  const maxAncestorDepth = 8;
+  const maxScanElements = 2000;
+  const compact = (value: string): string => value.normalize("NFKC").replace(/[\s]+/gu, " ").trim().slice(0, maxStringLength);
+  const allElements = Array.from(document.querySelectorAll("*")).slice(0, maxScanElements);
   const label = "发布图文笔记";
   const boxOf = (element: Element): Record<string, number> | null => {
     const rect = element.getBoundingClientRect();
@@ -645,7 +697,7 @@ function readXiaohongshuImagePostEntryPayload(): Record<string, unknown> {
   const ancestorChainOf = (element: Element): Array<Record<string, unknown>> => {
     const chain: Array<Record<string, unknown>> = [];
     let current = element.parentElement;
-    while (current && chain.length < MAX_IMAGE_POST_ENTRY_ANCESTORS) {
+    while (current && chain.length < maxAncestorDepth) {
       const node = current as HTMLElement;
       const style = window.getComputedStyle(node);
       chain.push({
@@ -712,21 +764,23 @@ function evaluateImagePostEntrySafety(payload: XiaohongshuImagePostEntryInspecti
 
 /** Evaluates the unique official image-post card without requiring native button/ARIA semantics. It never clicks. */
 export async function inspectXiaohongshuImagePostEntry(page: Page): Promise<XiaohongshuImagePostEntryInspection> {
-  const currentRoute = pageRouteParts(page.url());
+  const capabilities = pageCapabilitiesSafe(page);
+  const currentRoute = pageRouteParts(safePageUrl(page));
   const candidate = page as unknown as PageEvaluateLike;
-  if (typeof candidate.evaluate !== "function") return inspectionFailure({ pageOrigin: currentRoute?.origin ?? "", pathname: currentRoute?.pathname ?? "", exactTextMatchCount: 0, target: null }, "PAGE_EVALUATION_UNAVAILABLE");
+  const emptyPayload = { pageOrigin: currentRoute?.origin ?? "", pathname: currentRoute?.pathname ?? "", exactTextMatchCount: 0, target: null } as const;
+  if (typeof candidate.evaluate !== "function") return { ...inspectionFailure(emptyPayload, "PAGE_EVALUATION_UNAVAILABLE"), pageCapabilities: capabilities, evaluationFailureReason: "EVALUATE_METHOD_MISSING" };
   try {
     const payload = normalizeImagePostEntryPayload(await candidate.evaluate(readXiaohongshuImagePostEntryPayload));
-    return evaluateImagePostEntrySafety(payload, currentRoute);
+    return { ...evaluateImagePostEntrySafety(payload, currentRoute), pageCapabilities: capabilities };
   } catch {
-    return inspectionFailure({ pageOrigin: currentRoute?.origin ?? "", pathname: currentRoute?.pathname ?? "", exactTextMatchCount: 0, target: null }, "PAGE_EVALUATION_UNAVAILABLE");
+    return { ...inspectionFailure(emptyPayload, "PAGE_EVALUATION_UNAVAILABLE"), pageCapabilities: capabilities, evaluationFailureReason: "EVALUATE_CALL_FAILED" };
   }
 }
 
 /** Clicks the fixed exact card at most once, then requires the platform image-post route. */
 export async function activateXiaohongshuImagePostEntry(page: Page, input: { navigationClickCount: number }): Promise<XiaohongshuImagePostEntryActivationResult> {
   const inspection = await inspectXiaohongshuImagePostEntry(page);
-  const before = routeUrlSafe(page.url());
+  const before = routeUrlSafe(safePageUrl(page));
   const rejected = (status: "REJECTED" | "NO_EFFECT", clickCount: number, failureCode: XiaohongshuImagePostEntryFailureCode, after = before, pathname = "", from: string | null = null, target: string | null = null, observedTarget: "image" | "video" | null = target === "image" || target === "video" ? target : null): XiaohongshuImagePostEntryActivationResult => ({ status, clickCount, routeReadback: "FAIL", observedTarget, pathname, from, target, sanitizedUrlBefore: before, sanitizedUrlAfter: after, inspection, failureCode });
   if (input.navigationClickCount >= 1) return rejected("REJECTED", input.navigationClickCount, "CLICK_ALREADY_USED");
   if (!inspection.safeToTestClick) return rejected("REJECTED", 0, inspection.failureCode ?? "TARGET_NOT_FOUND");
@@ -745,20 +799,20 @@ export async function activateXiaohongshuImagePostEntry(page: Page, input: { nav
   try {
     await locator.click({ timeout: 3000 });
   } catch {
-    return rejected("REJECTED", 1, "CLICK_FAILED", routeUrlSafe(page.url()));
+    return rejected("REJECTED", 1, "CLICK_FAILED", routeUrlSafe(safePageUrl(page)));
   }
 
-  let after = routeUrlSafe(page.url());
+  let after = routeUrlSafe(safePageUrl(page));
   for (let attempt = 0; attempt < 8 && after === before; attempt += 1) {
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
-    after = routeUrlSafe(page.url());
+    after = routeUrlSafe(safePageUrl(page));
   }
-  const route = pageRouteParts(page.url());
+  const route = pageRouteParts(safePageUrl(page));
   let from: string | null = null;
   let target: string | null = null;
   if (route) {
     try {
-      const parsed = new URL(page.url());
+      const parsed = new URL(safePageUrl(page));
       from = parsed.searchParams.get("from");
       target = parsed.searchParams.get("target");
     } catch {

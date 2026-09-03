@@ -23,6 +23,8 @@ import {
   type XiaohongshuExactPublishSemanticTarget,
   type XiaohongshuImagePostEntryActivationResult,
   type XiaohongshuImagePostEntryInspection,
+  type XiaohongshuPageCapabilitiesSafe,
+  type XiaohongshuPageEvaluationFailureReason,
   type XiaohongshuPublishAncestorDiagnostic,
   type XiaohongshuPublishEntryDomRuntimeDiagnostic,
   type XiaohongshuPublishEventListenerInspection,
@@ -152,6 +154,8 @@ export type {
   XiaohongshuImagePostEntryFailureCode,
   XiaohongshuImagePostEntryInspection,
   XiaohongshuImagePostEntryInspectionPayload,
+  XiaohongshuPageCapabilitiesSafe,
+  XiaohongshuPageEvaluationFailureReason,
   XiaohongshuImagePostEntryStyleDiagnostic,
   XiaohongshuImagePostEntryTargetDiagnostic
 } from "./publish-clickable-surface";
@@ -531,6 +535,8 @@ export interface XiaohongshuEditorEntryDiagnostic {
   uploadVideoMenuItemClickCount?: 0;
   imagePostEntryInspection?: XiaohongshuImagePostEntryInspection;
   imagePostEntryActivation?: XiaohongshuImagePostEntryActivationResult;
+  pageCapabilitiesSafe?: XiaohongshuPageCapabilitiesSafe;
+  evaluationFailureReason?: XiaohongshuPageEvaluationFailureReason;
   exactTextMatchCount?: number;
   safeToTestClick?: boolean;
   imagePostEntryClickCount?: number;
@@ -3833,6 +3839,8 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       exactTextMatchCount: inspection.exactTextMatchCount,
       safeToTestClick: inspection.safeToTestClick,
       imagePostEntryInspection: inspection,
+      pageCapabilitiesSafe: inspection.pageCapabilities,
+      evaluationFailureReason: inspection.evaluationFailureReason,
       imagePostEntryClickCount: 0,
       failureCode: inspection.failureCode === "NOT_CREATOR_HOME" ? "EDITOR_ROUTE_NOT_REACHED" : inspection.failureCode === null ? undefined : "PUBLISH_ENTRY_NOT_FOUND",
       failureStage: inspection.failureCode === null ? undefined : "PUBLISH_ENTRY_DISCOVERY",

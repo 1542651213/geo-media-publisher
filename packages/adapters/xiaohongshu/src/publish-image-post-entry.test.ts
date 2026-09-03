@@ -41,6 +41,7 @@ type FakeLocator = {
 
 type FakePage = {
   url: () => string;
+  isClosed: () => boolean;
   evaluate: <T>(pageFunction: (...args: never[]) => T) => Promise<unknown>;
   getByText: (text: string, options: { exact: true }) => FakeLocator;
 };
@@ -61,6 +62,7 @@ function pageWithPayload(currentPayload: XiaohongshuImagePostEntryInspectionPayl
   };
   const page: FakePage = {
     url: () => currentUrl,
+    isClosed: () => false,
     evaluate: vi.fn(async () => currentPayload),
     getByText: vi.fn(() => locator)
   };
@@ -72,6 +74,39 @@ describe("XHS exact image-post entry activation", () => {
     const result = await inspectXiaohongshuImagePostEntry(pageWithPayload(payload()).page);
 
     expect(result).toMatchObject({ inspectionStatus: "PASS", exactTextMatchCount: 1, safeToTestClick: true, target: { tagName: "DIV", role: null, tabIndex: -1 } });
+  });
+
+  it("keeps the exact inspection function executable across the Page.evaluate serialization boundary", async () => {
+    const fixture = pageWithPayload(payload());
+    const page = fixture.page as unknown as {
+      evaluate: <T>(pageFunction: (...args: never[]) => T) => Promise<unknown>;
+    };
+    page.evaluate = vi.fn(async (pageFunction: (...args: never[]) => unknown) => {
+      if (String(pageFunction).includes("MAX_IMAGE_POST_ENTRY_")) throw new Error("browser isolate cannot resolve Main closure constants");
+      return payload();
+    });
+
+    const result = await inspectXiaohongshuImagePostEntry(fixture.page);
+
+    expect(result).toMatchObject({
+      inspectionStatus: "PASS",
+      safeToTestClick: true,
+      pageCapabilities: { exists: true, hasUrl: true, hasIsClosed: true, hasEvaluate: true }
+    });
+  });
+
+  it("fails closed with a bounded capability reason for a serialized Page snapshot", async () => {
+    const snapshot = { url: homeUrl, isClosed: false } as unknown as Page;
+
+    const result = await inspectXiaohongshuImagePostEntry(snapshot);
+
+    expect(result).toMatchObject({
+      inspectionStatus: "FAIL",
+      safeToTestClick: false,
+      failureCode: "PAGE_EVALUATION_UNAVAILABLE",
+      evaluationFailureReason: "EVALUATE_METHOD_MISSING",
+      pageCapabilities: { typeofPage: "object", exists: true, hasUrl: false, hasIsClosed: false, hasEvaluate: false }
+    });
   });
 
   it.each([
