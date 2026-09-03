@@ -14,11 +14,13 @@ import {
   type XiaohongshuPublishSemanticNodeCollection
 } from "./creator-home-diagnostics";
 import {
+  collectPublishEntryDomDiagnostics,
   collectPublishClickableSurfaceDiagnostics,
   type XiaohongshuClickableSurfaceDiagnostics,
   type XiaohongshuClickableSurfaceResolution,
   type XiaohongshuExactPublishSemanticTarget,
   type XiaohongshuPublishAncestorDiagnostic,
+  type XiaohongshuPublishEntryDomRuntimeDiagnostic,
   type XiaohongshuPublishEventListenerInspection,
   type XiaohongshuPublishEventListenerTarget,
   type XiaohongshuPublishHitTestDiagnostic
@@ -79,6 +81,7 @@ export {
   observeCreatorHomeReadiness
 } from "./creator-home-diagnostics";
 export {
+  collectPublishEntryDomDiagnostics,
   collectExactPublishSemanticTargets,
   collectPublishAncestorChainDiagnostics,
   collectPublishClickableSurfaceDiagnostics,
@@ -130,7 +133,13 @@ export type {
   XiaohongshuPublishHitTestDiagnostic,
   XiaohongshuPublishHitTestElement,
   XiaohongshuPublishHitTestAncestorRelation,
-  XiaohongshuPublishInteractionEvent
+  XiaohongshuPublishInteractionEvent,
+  XiaohongshuPublishEntryDomDiagnostics,
+  XiaohongshuPublishEntryDomElementDiagnostic,
+  XiaohongshuPublishEntryDomLabel,
+  XiaohongshuPublishEntryDomLabelDiagnostic,
+  XiaohongshuPublishEntryDomMatchDiagnostic,
+  XiaohongshuPublishEntryDomRuntimeDiagnostic
 } from "./publish-clickable-surface";
 export type {
   PublishNoteNavigationClickResult,
@@ -1722,6 +1731,37 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
   async inspectPublishEditor(ctx: AccountContext): Promise<PreSubmitGateResult> {
     // The activeCanonicalPage is resolved inside the read-only PRE_SUBMIT_GATE path.
     return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, () => this.inspectPublishEditorOnCanonicalPage(ctx), "preSubmitGate");
+  }
+
+  /** Read-only bounded inspection of exact Creator Home publish-entry labels. */
+  async inspectXhsPublishEntryDom(ctx: AccountContext): Promise<XiaohongshuPublishEntryDomRuntimeDiagnostic> {
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
+      const activeSession = this.activeBrowserSession(ctx);
+      const canonical = await this.activeCanonicalPage(ctx).catch(() => null);
+      const empty = (failureCode: XiaohongshuPublishEntryDomRuntimeDiagnostic["failureCode"]): XiaohongshuPublishEntryDomRuntimeDiagnostic => ({
+        inspectionStatus: "FAIL",
+        failureCode,
+        accountId: ctx.accountId,
+        contextDebugId: activeSession?.contextDebugId ?? null,
+        pageId: activeSession?.pageDebugId ?? null,
+        pageContextMatchesSession: false,
+        browserConnected: activeSession ? this.isBrowserConnected(activeSession) : false,
+        pageClosed: activeSession ? this.isCanonicalPageClosed(activeSession.page) : true,
+        pageOrigin: "",
+        pathname: "",
+        publishNote: { label: "发布笔记", matchCount: 0, matches: [], clickableAncestorCount: 0, target: null, ancestors: [], uniqueClickableAncestor: null },
+        imagePost: { label: "发布图文笔记", matchCount: 0, matches: [], clickableAncestorCount: 0, target: null, ancestors: [], uniqueClickableAncestor: null },
+        uploadImage: { label: "上传图文", matchCount: 0, matches: [], clickableAncestorCount: 0, target: null, ancestors: [], uniqueClickableAncestor: null },
+        diagnosticClickCount: 0,
+        navigationCount: 0
+      });
+      if (!canonical) return empty("CANONICAL_PAGE_UNAVAILABLE");
+      const pageContextMatchesSession = this.pageContextMatchesSession(canonical.session, canonical.page);
+      if (!pageContextMatchesSession) return { ...empty("CANONICAL_PAGE_OWNERSHIP_FAILURE"), contextDebugId: canonical.session.contextDebugId ?? null, pageId: canonical.pageDebugId, pageContextMatchesSession: false, browserConnected: this.isBrowserConnected(canonical.session), pageClosed: this.isCanonicalPageClosed(canonical.page) };
+      if (!this.isBrowserConnected(canonical.session)) return { ...empty("BROWSER_SESSION_DISCONNECTED"), contextDebugId: canonical.session.contextDebugId ?? null, pageId: canonical.pageDebugId, pageContextMatchesSession: true, pageClosed: this.isCanonicalPageClosed(canonical.page) };
+      const diagnostic = await collectPublishEntryDomDiagnostics(canonical.page);
+      return { ...diagnostic, inspectionStatus: "PASS", failureCode: null, accountId: ctx.accountId, contextDebugId: canonical.session.contextDebugId ?? null, pageId: canonical.pageDebugId, pageContextMatchesSession: true, browserConnected: true, pageClosed: this.isCanonicalPageClosed(canonical.page) };
+    }, "inspectPublishEntryDom");
   }
 
   /**

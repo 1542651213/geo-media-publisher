@@ -2,11 +2,12 @@ import type { AdapterRegistry } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
 import { ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type Account, type AccountContext, type CreatorIdentityVerificationResult, type PlatformAccountIdentityBinding, type XhsIdentityAcceptance } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 
 type IdentityReader = {
   inspectCanonicalPageRuntime?: (ctx: AccountContext) => Promise<XiaohongshuCanonicalPageRuntimeProbe>;
   inspectXhsContextPages?: (ctx: AccountContext) => Promise<XiaohongshuContextPageInventory>;
+  inspectXhsPublishEntryDom?: (ctx: AccountContext) => Promise<XiaohongshuPublishEntryDomRuntimeDiagnostic>;
   readCanonicalCreatorIdentity?: (ctx: AccountContext) => Promise<XiaohongshuCreatorIdentityObservation>;
 };
 
@@ -94,6 +95,28 @@ export class XhsIdentityService {
       readyImageEditorPageCount: inventory.pages.filter((page) => page.urlOrigin === "https://creator.xiaohongshu.com" && page.pathname === "/publish/publish" && !page.isClosed && page.editorShellPresent && page.uploadImageTabPresent && page.imageUploadControlPresent && page.contentType === "IMAGE_POST").length
     });
     return inventory;
+  }
+
+  async inspectXhsPublishEntryDom(accountId: string): Promise<XiaohongshuPublishEntryDomRuntimeDiagnostic> {
+    const account = this.requireAccount(accountId);
+    const adapter = this.options.registry.getForContent("xiaohongshu", "article") as IdentityReader;
+    if (typeof adapter.inspectXhsPublishEntryDom !== "function") throw Object.assign(new Error("当前小红书运行时未提供 publish-entry DOM diagnostic"), { code: "XHS_PUBLISH_ENTRY_DOM_DIAGNOSTIC_UNAVAILABLE" });
+    const diagnostic = await adapter.inspectXhsPublishEntryDom(this.context(account));
+    this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_PUBLISH_ENTRY_DOM_DIAGNOSTIC", "小红书 publish-entry bounded DOM diagnostic 完成", {
+      platformKey: "xiaohongshu",
+      accountId: account.id,
+      inspectionStatus: diagnostic.inspectionStatus,
+      failureCode: diagnostic.failureCode,
+      pageOrigin: diagnostic.pageOrigin,
+      pathname: diagnostic.pathname,
+      publishNoteMatchCount: diagnostic.publishNote.matchCount,
+      imagePostMatchCount: diagnostic.imagePost.matchCount,
+      imagePostClickableAncestorCount: diagnostic.imagePost.clickableAncestorCount,
+      uploadImageMatchCount: diagnostic.uploadImage.matchCount,
+      diagnosticClickCount: diagnostic.diagnosticClickCount,
+      navigationCount: diagnostic.navigationCount
+    });
+    return diagnostic;
   }
 
   async verifyCreatorIdentity(accountId: string): Promise<CreatorIdentityVerificationResult> {

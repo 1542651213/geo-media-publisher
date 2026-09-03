@@ -6,9 +6,12 @@ const MAX_HIT_TEST_ELEMENTS = 8;
 const MAX_CLASS_TOKENS = 8;
 const MAX_STABLE_DATA_ATTRIBUTES = 5;
 const MAX_STRING_LENGTH = 120;
+const MAX_ENTRY_DOM_MATCHES = 20;
+const MAX_ENTRY_DOM_ANCESTORS = 4;
 
 export const XIAOHONGSHU_PUBLISH_NOTE_TEXT = "发布笔记";
 export const XIAOHONGSHU_IMAGE_POST_TEXT = "发布图文笔记";
+export const XIAOHONGSHU_IMAGE_POST_MENU_TEXT = "上传图文";
 export const XIAOHONGSHU_PUBLISH_INTERACTION_EVENTS = [
   "click",
   "pointerup",
@@ -20,6 +23,7 @@ export const XIAOHONGSHU_PUBLISH_INTERACTION_EVENTS = [
 ] as const;
 
 export type XiaohongshuPublishInteractionEvent = typeof XIAOHONGSHU_PUBLISH_INTERACTION_EVENTS[number];
+export type XiaohongshuPublishEntryDomLabel = typeof XIAOHONGSHU_PUBLISH_NOTE_TEXT | typeof XIAOHONGSHU_IMAGE_POST_TEXT | typeof XIAOHONGSHU_IMAGE_POST_MENU_TEXT;
 export type XiaohongshuClickableSurfaceStatus = "PROVEN_UNIQUE" | "AMBIGUOUS" | "NO_CLICK_SURFACE_FOUND" | "EVENT_LISTENER_INSPECTION_UNAVAILABLE";
 export type XiaohongshuClickableSurfaceFailureCode =
   | "PUBLISH_SEMANTIC_TARGET_NOT_FOUND"
@@ -174,6 +178,64 @@ export interface XiaohongshuClickableSurfaceDiagnostics {
   };
 }
 
+export interface XiaohongshuPublishEntryDomElementDiagnostic {
+  elementId: string;
+  tagName: string;
+  role: string | null;
+  ariaHasPopup: string | null;
+  ariaExpanded: string | null;
+  tabIndex: number;
+  disabled: boolean;
+  classNameSafe: string;
+  textContentSafe: string;
+  childElementCount: number;
+  visible: boolean;
+  enabled: boolean;
+  isButton: boolean;
+  isAnchor: boolean;
+  isRoleButton: boolean;
+  clickableContainer: boolean;
+  ancestorDepth: number;
+}
+
+export interface XiaohongshuPublishEntryDomMatchDiagnostic {
+  target: XiaohongshuPublishEntryDomElementDiagnostic;
+  ancestors: readonly XiaohongshuPublishEntryDomElementDiagnostic[];
+  clickableAncestorCount: number;
+  uniqueClickableAncestor: XiaohongshuPublishEntryDomElementDiagnostic | null;
+}
+
+export interface XiaohongshuPublishEntryDomLabelDiagnostic {
+  label: XiaohongshuPublishEntryDomLabel;
+  matchCount: number;
+  matches: readonly XiaohongshuPublishEntryDomMatchDiagnostic[];
+  clickableAncestorCount: number;
+  target: XiaohongshuPublishEntryDomElementDiagnostic | null;
+  ancestors: readonly XiaohongshuPublishEntryDomElementDiagnostic[];
+  uniqueClickableAncestor: XiaohongshuPublishEntryDomElementDiagnostic | null;
+}
+
+export interface XiaohongshuPublishEntryDomDiagnostics {
+  pageOrigin: string;
+  pathname: string;
+  publishNote: XiaohongshuPublishEntryDomLabelDiagnostic;
+  imagePost: XiaohongshuPublishEntryDomLabelDiagnostic;
+  uploadImage: XiaohongshuPublishEntryDomLabelDiagnostic;
+  diagnosticClickCount: 0;
+  navigationCount: 0;
+}
+
+export interface XiaohongshuPublishEntryDomRuntimeDiagnostic extends XiaohongshuPublishEntryDomDiagnostics {
+  inspectionStatus: "PASS" | "FAIL";
+  failureCode: "CANONICAL_PAGE_UNAVAILABLE" | "CANONICAL_PAGE_OWNERSHIP_FAILURE" | "BROWSER_SESSION_DISCONNECTED" | null;
+  accountId: string;
+  contextDebugId: string | null;
+  pageId: string | null;
+  pageContextMatchesSession: boolean;
+  browserConnected: boolean;
+  pageClosed: boolean;
+}
+
 interface PageEvaluateLike {
   evaluate?: <T>(pageFunction: (...args: never[]) => T, arg?: unknown) => Promise<T>;
 }
@@ -305,6 +367,85 @@ function normalizeImagePostMenuItem(value: unknown, index: number): XiaohongshuI
     enabled: booleanValue(value.enabled),
     boundingBox: boundedBox(value.boundingBox)
   };
+}
+
+function normalizeEntryDomElement(value: unknown, index: number, fallbackDepth = 0): XiaohongshuPublishEntryDomElementDiagnostic | null {
+  if (!isRecord(value)) return null;
+  const elementId = boundedString(value.elementId, `xhs-publish-entry-dom-${index}`);
+  if (!elementId) return null;
+  return {
+    elementId,
+    tagName: normalizedTagName(value.tagName),
+    role: normalizedRole(value.role),
+    ariaHasPopup: normalizedNullable(value.ariaHasPopup),
+    ariaExpanded: normalizedNullable(value.ariaExpanded),
+    tabIndex: Math.trunc(numberValue(value.tabIndex, -1)),
+    disabled: booleanValue(value.disabled),
+    classNameSafe: boundedString(value.classNameSafe),
+    textContentSafe: boundedString(value.textContentSafe),
+    childElementCount: Math.min(2000, Math.max(0, Math.trunc(nonNegativeNumber(value.childElementCount)))),
+    visible: booleanValue(value.visible),
+    enabled: booleanValue(value.enabled),
+    isButton: booleanValue(value.isButton),
+    isAnchor: booleanValue(value.isAnchor),
+    isRoleButton: booleanValue(value.isRoleButton),
+    clickableContainer: booleanValue(value.clickableContainer),
+    ancestorDepth: Math.min(MAX_ENTRY_DOM_ANCESTORS, Math.max(0, Math.trunc(nonNegativeNumber(value.ancestorDepth, fallbackDepth))))
+  };
+}
+
+function normalizeEntryDomMatch(value: unknown, index: number): XiaohongshuPublishEntryDomMatchDiagnostic | null {
+  if (!isRecord(value)) return null;
+  const target = normalizeEntryDomElement(value.target, index);
+  if (!target) return null;
+  const ancestors = Array.isArray(value.ancestors)
+    ? value.ancestors.map((ancestorValue, ancestorIndex) => normalizeEntryDomElement(ancestorValue, ancestorIndex, ancestorIndex + 1)).filter((entry): entry is XiaohongshuPublishEntryDomElementDiagnostic => Boolean(entry)).slice(0, MAX_ENTRY_DOM_ANCESTORS)
+    : [];
+  const clickableAncestorCount = Math.min(MAX_ENTRY_DOM_ANCESTORS, Math.max(0, Math.trunc(nonNegativeNumber(value.clickableAncestorCount))));
+  const uniqueClickableAncestor = normalizeEntryDomElement(value.uniqueClickableAncestor, index + MAX_ENTRY_DOM_MATCHES) ?? null;
+  return { target, ancestors, clickableAncestorCount, uniqueClickableAncestor };
+}
+
+function normalizeEntryDomLabel(value: unknown, label: XiaohongshuPublishEntryDomLabel): XiaohongshuPublishEntryDomLabelDiagnostic {
+  const record = isRecord(value) ? value : {};
+  const matches = Array.isArray(record.matches)
+    ? record.matches.map((match, index) => normalizeEntryDomMatch(match, index)).filter((entry): entry is XiaohongshuPublishEntryDomMatchDiagnostic => Boolean(entry)).slice(0, MAX_ENTRY_DOM_MATCHES)
+    : [];
+  const matchCount = Math.min(MAX_ENTRY_DOM_MATCHES, Math.max(0, Math.trunc(nonNegativeNumber(record.matchCount, matches.length))));
+  const selectedMatch = matches.length === 1 && matchCount === 1 ? matches[0] : null;
+  return {
+    label,
+    matchCount,
+    matches,
+    clickableAncestorCount: Math.min(MAX_ENTRY_DOM_MATCHES * MAX_ENTRY_DOM_ANCESTORS, Math.max(0, Math.trunc(nonNegativeNumber(record.clickableAncestorCount, matches.reduce((total, match) => total + match.clickableAncestorCount, 0))))),
+    target: normalizeEntryDomElement(record.target, 0) ?? selectedMatch?.target ?? null,
+    ancestors: Array.isArray(record.ancestors)
+      ? record.ancestors.map((ancestorValue, index) => normalizeEntryDomElement(ancestorValue, index, index + 1)).filter((entry): entry is XiaohongshuPublishEntryDomElementDiagnostic => Boolean(entry)).slice(0, MAX_ENTRY_DOM_ANCESTORS)
+      : selectedMatch?.ancestors ?? [],
+    uniqueClickableAncestor: normalizeEntryDomElement(record.uniqueClickableAncestor, MAX_ENTRY_DOM_MATCHES) ?? selectedMatch?.uniqueClickableAncestor ?? null
+  };
+}
+
+/** Collects exact visible publish labels and at most four ancestor levels. It never clicks or navigates. */
+export async function collectPublishEntryDomDiagnostics(page: Page): Promise<XiaohongshuPublishEntryDomDiagnostics> {
+  const candidate = page as unknown as PageEvaluateLike;
+  const emptyLabel = (label: XiaohongshuPublishEntryDomLabel): XiaohongshuPublishEntryDomLabelDiagnostic => ({ label, matchCount: 0, matches: [], clickableAncestorCount: 0, target: null, ancestors: [], uniqueClickableAncestor: null });
+  if (typeof candidate.evaluate !== "function") return { pageOrigin: "", pathname: "", publishNote: emptyLabel(XIAOHONGSHU_PUBLISH_NOTE_TEXT), imagePost: emptyLabel(XIAOHONGSHU_IMAGE_POST_TEXT), uploadImage: emptyLabel(XIAOHONGSHU_IMAGE_POST_MENU_TEXT), diagnosticClickCount: 0, navigationCount: 0 };
+  try {
+    const payload = await candidate.evaluate(readPublishEntryDomDiagnostics);
+    const record = isRecord(payload) ? payload : {};
+    return {
+      pageOrigin: boundedString(record.pageOrigin),
+      pathname: boundedString(record.pathname),
+      publishNote: normalizeEntryDomLabel(record.publishNote, XIAOHONGSHU_PUBLISH_NOTE_TEXT),
+      imagePost: normalizeEntryDomLabel(record.imagePost, XIAOHONGSHU_IMAGE_POST_TEXT),
+      uploadImage: normalizeEntryDomLabel(record.uploadImage, XIAOHONGSHU_IMAGE_POST_MENU_TEXT),
+      diagnosticClickCount: 0,
+      navigationCount: 0
+    };
+  } catch {
+    return { pageOrigin: "", pathname: "", publishNote: emptyLabel(XIAOHONGSHU_PUBLISH_NOTE_TEXT), imagePost: emptyLabel(XIAOHONGSHU_IMAGE_POST_TEXT), uploadImage: emptyLabel(XIAOHONGSHU_IMAGE_POST_MENU_TEXT), diagnosticClickCount: 0, navigationCount: 0 };
+  }
 }
 
 function normalizeAncestor(value: unknown, fallbackTargetId: string, fallbackDepth: number): XiaohongshuPublishAncestorDiagnostic | null {
@@ -439,6 +580,90 @@ function readExactImagePostMenuItems(): { items: Array<Record<string, unknown>> 
     items.push({ itemId, tagName: action.tagName.toUpperCase(), role: roleOf(action), exactText: "上传图文", visible: visible(action), enabled: enabled(action), boundingBox: boxOf(action) });
   }
   return { items };
+}
+
+function readPublishEntryDomDiagnostics(): Record<string, unknown> {
+  const maxMatches = 20;
+  const maxAncestors = 4;
+  const maxScanElements = 2000;
+  const labels = ["发布笔记", "发布图文笔记", "上传图文"] as const;
+  const compact = (value: string, limit = 120): string => value.normalize("NFKC").replace(/[\s]+/gu, " ").trim().slice(0, limit);
+  const allElements = Array.from(document.querySelectorAll("*")).slice(0, maxScanElements);
+  const visible = (element: Element): boolean => {
+    const node = element as HTMLElement;
+    if (element.hasAttribute("hidden") || element.getAttribute("aria-hidden") === "true") return false;
+    const style = window.getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && style.visibility !== "collapse" && style.opacity !== "0" && rect.width > 0 && rect.height > 0;
+  };
+  const disabled = (element: Element): boolean => element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true";
+  const roleOf = (element: Element): string | null => compact(element.getAttribute("role") ?? "", 40).toLowerCase() || null;
+  const metadata = (element: Element, ancestorDepth: number): Record<string, unknown> => {
+    const tagName = element.tagName.toUpperCase();
+    const role = roleOf(element);
+    const node = element as HTMLElement;
+    const tabIndex = typeof node.tabIndex === "number" ? node.tabIndex : -1;
+    const style = window.getComputedStyle(node);
+    const isButton = tagName === "BUTTON";
+    const isAnchor = tagName === "A";
+    const isRoleButton = role === "button";
+    const clickableContainer = isButton || isAnchor || isRoleButton || role === "link" || role === "menuitem" || element.hasAttribute("onclick") || (tabIndex >= 0 && style.cursor === "pointer");
+    const index = allElements.indexOf(element);
+    return {
+      elementId: `xhs-publish-entry-dom-${index >= 0 ? index : ancestorDepth}`,
+      tagName,
+      role,
+      ariaHasPopup: compact(element.getAttribute("aria-haspopup") ?? "", 40) || null,
+      ariaExpanded: compact(element.getAttribute("aria-expanded") ?? "", 40) || null,
+      tabIndex,
+      disabled: disabled(element),
+      classNameSafe: compact(typeof element.className === "string" ? element.className : element.getAttribute("class") ?? "", 160),
+      textContentSafe: compact(element.textContent ?? "", 160),
+      childElementCount: Math.min(2000, Math.max(0, element.children.length)),
+      visible: visible(element),
+      enabled: !disabled(element),
+      isButton,
+      isAnchor,
+      isRoleButton,
+      clickableContainer,
+      ancestorDepth
+    };
+  };
+  const diagnosticFor = (label: string): Record<string, unknown> => {
+    const targets = allElements.filter((element) => element.tagName.toUpperCase() !== "HTML" && element.tagName.toUpperCase() !== "BODY" && element.tagName.toUpperCase() !== "SCRIPT" && element.tagName.toUpperCase() !== "STYLE" && compact(element.textContent ?? "") === label && visible(element)).slice(0, maxMatches);
+    const matches = targets.map((target) => {
+      const ancestors: Array<Record<string, unknown>> = [];
+      let current = target.parentElement;
+      for (let depth = 1; current && depth <= maxAncestors; depth += 1) {
+        ancestors.push(metadata(current, depth));
+        current = current.parentElement;
+      }
+      const clickableAncestors = ancestors.filter((ancestor) => ancestor.clickableContainer === true && ancestor.visible === true && ancestor.enabled === true);
+      return {
+        target: metadata(target, 0),
+        ancestors,
+        clickableAncestorCount: clickableAncestors.length,
+        uniqueClickableAncestor: clickableAncestors.length === 1 ? clickableAncestors[0] : null
+      };
+    });
+    const selected = matches.length === 1 ? matches[0] : null;
+    return {
+      label,
+      matchCount: targets.length,
+      matches,
+      clickableAncestorCount: matches.reduce((total, match) => total + Number(match.clickableAncestorCount ?? 0), 0),
+      target: selected?.target ?? null,
+      ancestors: selected?.ancestors ?? [],
+      uniqueClickableAncestor: selected?.uniqueClickableAncestor ?? null
+    };
+  };
+  return {
+    pageOrigin: compact(window.location.origin, 200),
+    pathname: compact(window.location.pathname, 200),
+    publishNote: diagnosticFor(labels[0]),
+    imagePost: diagnosticFor(labels[1]),
+    uploadImage: diagnosticFor(labels[2])
+  };
 }
 
 function readPublishDropdownTriggers(input: readonly { targetId: string }[]): { triggers: Array<Record<string, unknown>> } {

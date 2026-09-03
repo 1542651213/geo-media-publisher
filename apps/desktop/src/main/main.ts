@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { readFileSync as readPhysicalFileSync } from "node:original-fs";
 import { join } from "node:path";
 import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { openDatabase, restoreDatabaseSafely } from "@publisher/db";
 import { SafeStorageCredentialStore } from "@publisher/security";
 import { createFileLogger } from "@publisher/logger";
@@ -14,7 +14,7 @@ import { createRuntimeAdapterRegistry } from "./adapter-registry";
 import { runDeepSeekBenchmarkMode } from "./deepseek-benchmark-mode";
 import { createProcessDiagnostics } from "./process-diagnostics";
 import { recordAppStartup } from "./runtime-observability";
-import { createFixedDiagnosticRunner, INSPECT_XHS_CONTEXT_PAGES, parseDiagnosticAction, type DiagnosticAction, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
+import { createFixedDiagnosticRunner, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticAction, type DiagnosticAction, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
 
 app.setName("codex-media-publisher");
 const processDiagnostics = createProcessDiagnostics(join(app.getPath("userData"), "production-data", "logs", "main-process-diagnostics.log"));
@@ -229,6 +229,59 @@ function buildTask10sContextPageInventoryEvidence(input: {
   };
 }
 
+function buildTask10sPublishEntryDomEvidence(input: {
+  diagnostic: XiaohongshuPublishEntryDomRuntimeDiagnostic;
+  timestamp: string;
+  evidencePath: string;
+}): Record<string, unknown> {
+  const { diagnostic } = input;
+  const card = diagnostic.imagePost;
+  const uniqueCardAncestor = card.uniqueClickableAncestor;
+  const imageNoteCardContractProven = diagnostic.inspectionStatus === "PASS"
+    && diagnostic.pageContextMatchesSession
+    && diagnostic.browserConnected
+    && !diagnostic.pageClosed
+    && diagnostic.pageOrigin === "https://creator.xiaohongshu.com"
+    && diagnostic.pathname === "/new/home"
+    && card.matchCount === 1
+    && card.clickableAncestorCount === 1
+    && Boolean(uniqueCardAncestor?.visible && uniqueCardAncestor.enabled && uniqueCardAncestor.clickableContainer);
+  const oldPublishNote = diagnostic.publishNote;
+  const oldDropdownTrigger = oldPublishNote.uniqueClickableAncestor;
+  const oldDropdownContractFailure = oldPublishNote.matchCount !== 1
+    ? "PUBLISH_NOTE_EXACT_LABEL_NOT_UNIQUE"
+    : oldPublishNote.clickableAncestorCount !== 1 || !oldDropdownTrigger
+      ? "PUBLISH_NOTE_UNIQUE_CLICKABLE_ANCESTOR_NOT_PROVEN"
+      : !(oldDropdownTrigger.isButton || oldDropdownTrigger.isRoleButton)
+        ? "PUBLISH_NOTE_ANCESTOR_NOT_NATIVE_BUTTON_OR_ROLE_BUTTON"
+        : !oldDropdownTrigger.ariaHasPopup && !oldDropdownTrigger.ariaExpanded
+          ? "PUBLISH_NOTE_DROPDOWN_SEMANTICS_NOT_OBSERVED"
+          : null;
+  return {
+    timestamp: input.timestamp,
+    evidencePath: input.evidencePath,
+    action: INSPECT_XHS_PUBLISH_ENTRY_DOM,
+    inspectionStatus: diagnostic.inspectionStatus,
+    failureCode: diagnostic.failureCode,
+    accountId: diagnostic.accountId,
+    contextDebugId: diagnostic.contextDebugId,
+    pageId: diagnostic.pageId,
+    pageContextMatchesSession: diagnostic.pageContextMatchesSession,
+    browserConnected: diagnostic.browserConnected,
+    pageClosed: diagnostic.pageClosed,
+    PAGE_ORIGIN: diagnostic.pageOrigin || null,
+    PAGE_PATHNAME: diagnostic.pathname || null,
+    PUBLISH_NOTE: diagnostic.publishNote,
+    PUBLISH_IMAGE_CARD: diagnostic.imagePost,
+    UPLOAD_IMAGE: diagnostic.uploadImage,
+    IMAGE_NOTE_CARD_CONTRACT: imageNoteCardContractProven ? "PROVEN" : "NOT_PROVEN",
+    OLD_DROPDOWN_CONTRACT_FAILURE_LIVE_EVIDENCE: oldDropdownContractFailure,
+    DIAGNOSTIC_CLICK_COUNT: diagnostic.diagnosticClickCount,
+    NAVIGATION_COUNT: diagnostic.navigationCount,
+    CODE_CHANGED: "DIAGNOSTIC_ONLY_NO_ENTRY_FIX"
+  };
+}
+
 async function createWindow(): Promise<void> {
   const migrationsDir = firstExisting([join(app.getAppPath(), "packages", "db", "migrations"), join(process.resourcesPath, "packages", "db", "migrations"), join(process.cwd(), "packages", "db", "migrations"), join(__dirname, "../../packages/db/migrations")]);
   const csvPath = firstExisting([join(app.getAppPath(), "PLATFORMS.csv"), join(process.resourcesPath, "PLATFORMS.csv"), join(process.cwd(), "PLATFORMS.csv")]);
@@ -268,6 +321,7 @@ async function createWindow(): Promise<void> {
   const evidenceDirectory = join(dataDirectory, "evidence");
   const evidencePath = join(evidenceDirectory, "xiaohongshu-task10w-live-probe-r6-20260902.json");
   const contextPageInventoryEvidencePath = join(evidenceDirectory, "xiaohongshu-task10s-context-page-inventory-20260903.json");
+  const publishEntryDomEvidencePath = join(evidenceDirectory, "xiaohongshu-task10s-publish-entry-dom-diagnostic-20260903.json");
   const installedAppAsarSha256 = app.isPackaged ? hashFile(app.getAppPath()) : null;
   const writeProbeEvidence = (probe: XiaohongshuCanonicalPageRuntimeProbe): void => {
     mkdirSync(evidenceDirectory, { recursive: true });
@@ -281,6 +335,12 @@ async function createWindow(): Promise<void> {
     writeFileSync(contextPageInventoryEvidencePath, JSON.stringify(evidence, null, 2), "utf8");
     logger.info("PLATFORM_SELF_TEST", "XHS_CONTEXT_PAGE_INVENTORY_EVIDENCE_WRITTEN", "小红书 Context Page inventory evidence 已写入", { action: INSPECT_XHS_CONTEXT_PAGES, evidencePath: contextPageInventoryEvidencePath, pageCount: evidence.CONTEXT_PAGE_COUNT, readyImageEditorPageCount: evidence.READY_IMAGE_EDITOR_PAGE_COUNT, canonicalEqualsReady: evidence.CANONICAL_EQUALS_READY_EDITOR_PAGE });
   };
+  const writePublishEntryDomEvidence = (diagnostic: XiaohongshuPublishEntryDomRuntimeDiagnostic): void => {
+    mkdirSync(evidenceDirectory, { recursive: true });
+    const evidence = buildTask10sPublishEntryDomEvidence({ diagnostic, timestamp: new Date().toISOString(), evidencePath: publishEntryDomEvidencePath });
+    writeFileSync(publishEntryDomEvidencePath, JSON.stringify(evidence, null, 2), "utf8");
+    logger.info("PLATFORM_SELF_TEST", "XHS_PUBLISH_ENTRY_DOM_EVIDENCE_WRITTEN", "小红书 publish-entry bounded DOM diagnostic evidence 已写入", { action: INSPECT_XHS_PUBLISH_ENTRY_DOM, evidencePath: publishEntryDomEvidencePath, inspectionStatus: evidence.inspectionStatus, imageNoteCardContract: evidence.IMAGE_NOTE_CARD_CONTRACT, diagnosticClickCount: evidence.DIAGNOSTIC_CLICK_COUNT, navigationCount: evidence.NAVIGATION_COUNT });
+  };
   fixedDiagnosticActionRunner = createFixedDiagnosticRunner({
     probe: async () => {
       logger.info("PLATFORM_SELF_TEST", "XHS_CANONICAL_PAGE_RUNTIME_PROBE_TRIGGER_RECEIVED", "收到固定非 UI 小红书 canonical Page probe trigger", { action: PROBE_XHS_CANONICAL_PAGE, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
@@ -291,7 +351,12 @@ async function createWindow(): Promise<void> {
       logger.info("PLATFORM_SELF_TEST", "XHS_CONTEXT_PAGE_INVENTORY_TRIGGER_RECEIVED", "收到固定非 UI 小红书 Context Page inventory trigger", { action: INSPECT_XHS_CONTEXT_PAGES, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
       return platformSelfTests.inspectXhsContextPages(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
     },
-    writeContextPageEvidence
+    writeContextPageEvidence,
+    inspectPublishEntryDom: async () => {
+      logger.info("PLATFORM_SELF_TEST", "XHS_PUBLISH_ENTRY_DOM_TRIGGER_RECEIVED", "收到固定非 UI 小红书 publish-entry bounded DOM diagnostic trigger", { action: INSPECT_XHS_PUBLISH_ENTRY_DOM, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
+      return platformSelfTests.inspectXhsPublishEntryDom(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
+    },
+    writePublishEntryDomEvidence
   });
   const pendingDiagnosticAction = queuedDiagnosticAction;
   queuedDiagnosticAction = null;
