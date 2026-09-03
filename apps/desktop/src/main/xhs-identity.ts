@@ -2,10 +2,11 @@ import type { AdapterRegistry } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
 import { ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type Account, type AccountContext, type CreatorIdentityVerificationResult, type PlatformAccountIdentityBinding, type XhsIdentityAcceptance } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuCreatorIdentityObservation } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation } from "@publisher/adapters-xiaohongshu/browser";
 
 type IdentityReader = {
   inspectCanonicalPageRuntime?: (ctx: AccountContext) => Promise<XiaohongshuCanonicalPageRuntimeProbe>;
+  inspectXhsContextPages?: (ctx: AccountContext) => Promise<XiaohongshuContextPageInventory>;
   readCanonicalCreatorIdentity?: (ctx: AccountContext) => Promise<XiaohongshuCreatorIdentityObservation>;
 };
 
@@ -75,6 +76,24 @@ export class XhsIdentityService {
       createdNewPage: probe.createdNewPage
     });
     return probe;
+  }
+
+  async inspectXhsContextPages(accountId: string): Promise<XiaohongshuContextPageInventory> {
+    const account = this.requireAccount(accountId);
+    const adapter = this.options.registry.getForContent("xiaohongshu", "article") as IdentityReader;
+    if (typeof adapter.inspectXhsContextPages !== "function") throw Object.assign(new Error("当前小红书运行时未提供 Context Page inventory"), { code: "XHS_CONTEXT_PAGE_INVENTORY_UNAVAILABLE" });
+    const inventory = await adapter.inspectXhsContextPages(this.context(account));
+    this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_CONTEXT_PAGE_INVENTORY", "小红书 Context Page 只读 inventory 完成", {
+      platformKey: "xiaohongshu",
+      accountId: account.id,
+      inventoryStatus: inventory.inventoryStatus,
+      failureCode: inventory.failureCode,
+      contextDebugId: inventory.contextDebugId,
+      pageCount: inventory.pageCount,
+      canonicalPageId: inventory.canonicalPageId,
+      readyImageEditorPageCount: inventory.pages.filter((page) => page.urlOrigin === "https://creator.xiaohongshu.com" && page.pathname === "/publish/publish" && !page.isClosed && page.editorShellPresent && page.uploadImageTabPresent && page.imageUploadControlPresent && page.contentType === "IMAGE_POST").length
+    });
+    return inventory;
   }
 
   async verifyCreatorIdentity(accountId: string): Promise<CreatorIdentityVerificationResult> {

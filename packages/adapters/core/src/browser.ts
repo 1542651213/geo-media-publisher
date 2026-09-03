@@ -139,6 +139,18 @@ export interface BrowserSessionCanonicalPage {
   pageDebugId: string;
 }
 
+/**
+ * A read-only view of a Page that already exists in an account-owned Context.
+ * This identity is process-memory-only and is never supplied by the Renderer.
+ */
+export interface BrowserSessionContextPage {
+  session: BrowserSession;
+  page: Page;
+  pageIndex: number;
+  pageDebugId: string;
+  isCanonical: boolean;
+}
+
 export interface BrowserSessionOperationPageLifecycleEvent {
   phase: "OPERATION_PAGE_OPENED" | "OPERATION_PAGE_CLOSE_STARTED" | "OPERATION_PAGE_CLOSE_COMPLETED";
   timestamp: string;
@@ -153,6 +165,20 @@ export interface BrowserSessionOperationPageLifecycleEvent {
   browserConnected: boolean | null;
   sanitizedUrl: string | null;
   contextMatch: boolean | null;
+}
+
+export interface BrowserSessionContextPageLifecycleEvent {
+  phase: "CONTEXT_PAGE_CREATED";
+  timestamp: string;
+  platformKey: string;
+  accountId: string;
+  contextDebugId: string | null;
+  pageDebugId: string;
+  pageIndex: number | null;
+  pageCount: number | null;
+  canonicalPageId: string | null;
+  pageUrlOrigin: string | null;
+  pageUrlPathname: string | null;
 }
 
 /** Runtime object-identity check. Test doubles may omit Page.context(), but a real Playwright Page always exposes it. */
@@ -266,6 +292,7 @@ export interface BrowserSessionManagerOptions {
   writeProfileInitializedMarker?: (markerPath: string) => Promise<void>;
   onSessionLifecycle?: (event: BrowserSessionLifecycleEvent) => void;
   onOperationPageLifecycle?: (event: BrowserSessionOperationPageLifecycleEvent) => void;
+  onContextPageLifecycle?: (event: BrowserSessionContextPageLifecycleEvent) => void;
   platformPolicies?: Readonly<Record<string, Partial<BrowserSessionPlatformPolicy>>>;
 }
 
@@ -304,6 +331,9 @@ export class PlaywrightSessionManager {
   private readonly sessionIdentities = new WeakMap<BrowserSession, BrowserSessionIdentity>();
   private readonly operationPages = new WeakMap<BrowserSession, Set<Page>>();
   private readonly operationPageDebugIds = new WeakMap<Page, string>();
+  private readonly pageDebugIds = new WeakMap<Page, string>();
+  private readonly contextPageLifecycleEvents = new WeakMap<BrowserSession, BrowserSessionContextPageLifecycleEvent[]>();
+  private readonly contextPageListenerCleanups = new WeakMap<BrowserSession, () => void>();
   private readonly disconnectListenerCleanups = new WeakMap<BrowserSession, () => void>();
   private readonly explicitCloseSessions = new Set<BrowserSession>();
   private readonly lastExplicitCloseInfo = new WeakMap<BrowserSession, BrowserSessionCloseInfo>();
@@ -485,6 +515,7 @@ export class PlaywrightSessionManager {
     operationPages.add(page);
     this.operationPages.set(session, operationPages);
     this.operationPageDebugIds.set(page, pageDebugId);
+    this.pageDebugIds.set(page, pageDebugId);
     return { session, page, pageDebugId };
   }
 
@@ -509,7 +540,32 @@ export class PlaywrightSessionManager {
     if (!session || this.isPageClosed(session.page)) return null;
     assertBrowserSessionPageOwnership(session, session.page);
     if (!this.contextContainsPage(session.context, session.page)) throw new BrowserSessionPageOwnershipError("BrowserSession/Page lifecycle ownership invariant failed: canonical Page is not in its Context");
-    return { session, page: session.page, pageDebugId: session.pageDebugId ?? "unknown-page" };
+    return { session, page: session.page, pageDebugId: this.pageDebugIdForPage(session, session.page) };
+  }
+
+  /**
+   * Enumerates only Pages already returned by the account-owned Context.
+   * No Page, Context, navigation, or lifecycle mutation is performed here.
+   */
+  getContextPages(identity: BrowserSessionIdentity): BrowserSessionContextPage[] | null {
+    const session = this.getActiveSession(identity);
+    if (!session) return null;
+    const pages = session.context.pages();
+    return pages.map((page, pageIndex) => {
+      assertBrowserSessionPageOwnership(session, page);
+      return {
+        session,
+        page,
+        pageIndex,
+        pageDebugId: this.pageDebugIdForPage(session, page),
+        isCanonical: page === session.page
+      };
+    });
+  }
+
+  getContextPageLifecycleEvents(identity: BrowserSessionIdentity): readonly BrowserSessionContextPageLifecycleEvent[] | null {
+    const session = this.getActiveSession(identity);
+    return session ? [...(this.contextPageLifecycleEvents.get(session) ?? [])] : null;
   }
 
   retainsContextAfterPageClose(identity: BrowserSessionIdentity): boolean {
@@ -782,6 +838,64 @@ export class PlaywrightSessionManager {
     }
   }
 
+  private pageDebugIdForPage(session: BrowserSession, page: Page): string {
+    const existing = this.pageDebugIds.get(page);
+    if (existing) return existing;
+    if (page === session.page && session.pageDebugId) {
+      this.pageDebugIds.set(page, session.pageDebugId);
+      return session.pageDebugId;
+    }
+    const pageDebugId = randomUUID();
+    this.pageDebugIds.set(page, pageDebugId);
+    return pageDebugId;
+  }
+
+  private observeContextPages(identity: BrowserSessionIdentity, session: BrowserSession): void {
+    const candidate = session.context as unknown as {
+      on?: (event: string, listener: (page: Page) => void) => void;
+      off?: (event: string, listener: (page: Page) => void) => void;
+      removeListener?: (event: string, listener: (page: Page) => void) => void;
+    };
+    if (typeof candidate.on !== "function") return;
+    const listener = (page: Page): void => {
+      const pages = this.safeContextPages(session.context);
+      const event: BrowserSessionContextPageLifecycleEvent = {
+        phase: "CONTEXT_PAGE_CREATED",
+        timestamp: new Date().toISOString(),
+        platformKey: identity.platformKey,
+        accountId: identity.accountId,
+        contextDebugId: session.contextDebugId ?? null,
+        pageDebugId: this.pageDebugIdForPage(session, page),
+        pageIndex: pages ? pages.indexOf(page) : null,
+        pageCount: pages?.length ?? null,
+        canonicalPageId: this.pageDebugIdForPage(session, session.page),
+        ...this.safeSanitizedPageUrl(page)
+      };
+      const events = this.contextPageLifecycleEvents.get(session) ?? [];
+      events.push(event);
+      this.contextPageLifecycleEvents.set(session, events);
+      try { this.options.onContextPageLifecycle?.(event); } catch { /* diagnostics must not affect the Page lifecycle */ }
+    };
+    candidate.on("page", listener);
+    this.contextPageListenerCleanups.set(session, () => {
+      if (typeof candidate.off === "function") candidate.off("page", listener);
+      else candidate.removeListener?.("page", listener);
+    });
+  }
+
+  private safeContextPages(context: BrowserContext): Page[] | null {
+    try { return context.pages(); } catch { return null; }
+  }
+
+  private safeSanitizedPageUrl(page: Page): { pageUrlOrigin: string | null; pageUrlPathname: string | null } {
+    try {
+      const parsed = new URL(page.url());
+      return { pageUrlOrigin: parsed.origin, pageUrlPathname: parsed.pathname };
+    } catch {
+      return { pageUrlOrigin: null, pageUrlPathname: null };
+    }
+  }
+
   private pageContextMatches(session: BrowserSession, page: Page): boolean {
     try {
       assertBrowserSessionPageOwnership(session, page);
@@ -894,6 +1008,8 @@ export class PlaywrightSessionManager {
 
   private releaseSession(session: BrowserSession, identity?: BrowserSessionIdentity): void {
     this.detachBrowserDisconnectObserver(session);
+    this.contextPageListenerCleanups.get(session)?.();
+    this.contextPageListenerCleanups.delete(session);
     this.ownedSessions.delete(session);
     this.sessionIdentities.delete(session);
     this.operationPages.delete(session);
@@ -944,6 +1060,8 @@ export class PlaywrightSessionManager {
     }
     this.ownedSessions.add(session);
     this.sessionIdentities.set(session, identity);
+    this.pageDebugIds.set(session.page, session.pageDebugId ?? randomUUID());
+    this.observeContextPages(identity, session);
     const key = browserSessionCredentialKey(identity);
     this.activeSessions.set(key, session);
     this.contextLaunchCounts.set(key, (this.contextLaunchCounts.get(key) ?? 0) + 1);

@@ -68,8 +68,10 @@ import {
 import { readXiaohongshuCreatorIdentity, type XiaohongshuIdentityDomDiagnosticMatch, type XiaohongshuCreatorIdentityCandidate } from "./identity";
 import { isExactXhsPublishEditorRoute, runXhsEditorLoadDiagnostic, type XhsEditorLoadDiagnosticResult } from "./editor-load-diagnostic";
 import { runXhsEditorNetworkFailureDiagnostic, type XhsEditorNetworkDiagnosticResult } from "./editor-network-diagnostic";
+import { emptyXiaohongshuContextPageInventory, inspectXiaohongshuContextPage, type XiaohongshuContextPageInventory } from "./context-page-inventory";
 export type { XhsEditorLoadDiagnosticResult } from "./editor-load-diagnostic";
 export type { XhsEditorNetworkDiagnosticResult } from "./editor-network-diagnostic";
+export type { XiaohongshuContextPageInventory, XiaohongshuContextPageInventoryEntry, XiaohongshuContextPageDomSnapshot, XiaohongshuDocumentReadyState, XiaohongshuVisibilityState } from "./context-page-inventory";
 export {
   collectCreatorHomeTopology,
   collectPublishSemanticNodes,
@@ -1622,6 +1624,41 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         observedProfileUrl: sanitizePublicProfileUrl(identity.profileUrl)
       };
     }, "inspectCanonicalPageRuntime");
+  }
+
+  /**
+   * Read-only inventory of every Page already present in the account-owned
+   * BrowserContext. This method never creates, closes, navigates, reloads, or
+   * mutates a Page and never accepts a Page identity from the Renderer.
+   */
+  async inspectXhsContextPages(ctx: AccountContext): Promise<XiaohongshuContextPageInventory> {
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
+      const session = this.activeBrowserSession(ctx);
+      const base = emptyXiaohongshuContextPageInventory({
+        accountId: ctx.accountId,
+        contextDebugId: session?.contextDebugId,
+        runtimeAuthState: this.getBrowserRuntimeState(ctx).state,
+        browserConnected: session ? this.isBrowserConnected(session) : false
+      });
+      let pages: Awaited<ReturnType<typeof this.activeContextPages>>;
+      try {
+        pages = this.activeContextPages(ctx);
+      } catch (error) {
+        return { ...base, failureCode: error instanceof Error ? error.name : "CONTEXT_PAGE_OWNERSHIP" };
+      }
+      if (!pages || !session) return base;
+      const inspectedPages = await Promise.all(pages.map((page) => inspectXiaohongshuContextPage(page, pages)));
+      return {
+        ...base,
+        inventoryStatus: "PASS",
+        failureCode: null,
+        contextDebugId: session.contextDebugId ?? "unknown-context",
+        pageCount: inspectedPages.length,
+        canonicalPageId: inspectedPages.find((page) => page.isCanonical)?.pageId ?? null,
+        pages: inspectedPages,
+        pageCreationEvents: [...(this.activeContextPageLifecycleEvents(ctx) ?? [])]
+      };
+    }, "inspectXhsContextPages");
   }
 
   /** Read-only identity proof on the retained canonical Page. */
