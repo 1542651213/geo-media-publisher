@@ -20,6 +20,17 @@ export interface ImageEditorTabPresence {
   currentSelectedTab: ImageEditorSelectedTab | null;
 }
 
+export interface ImageEditorTabCandidateEvidence {
+  label: ImageEditorSelectedTab;
+  rendered: boolean;
+  intersectsViewport: boolean;
+  creatorTabRendered: boolean;
+  creatorTabIntersectsViewport: boolean;
+  enabled: boolean;
+  pointerEvents: string;
+  active: boolean;
+}
+
 export interface ImageEditorBoundingBox {
   x: number;
   y: number;
@@ -134,6 +145,7 @@ export interface ImageEditorPhaseEvidence {
   uploadCapabilityPresent: boolean;
   uploadCapabilityUnique: boolean;
   preUploadSemanticSignalPresent: boolean;
+  selectedTab: ImageEditorSelectedTab | null;
   titleCandidateCount: number;
   bodyCandidateCount: number;
   finalSubmitCandidateCount: number;
@@ -174,6 +186,7 @@ interface ImageEditorPhaseDomSnapshot {
   mediaPreviewSignalPresent: boolean;
   mediaEditingSignalPresent: boolean;
   tabPresence: ImageEditorTabPresence;
+  tabCandidates: readonly ImageEditorTabCandidateEvidence[];
   uploadBusy?: boolean;
   previewReady?: boolean;
 }
@@ -236,6 +249,7 @@ export interface ImageEditorDomSnapshot {
   mediaEditingSignalPresent?: boolean;
   phaseTopology?: ImageEditorPhaseTopology;
   tabPresence?: ImageEditorTabPresence;
+  tabCandidates?: readonly ImageEditorTabCandidateEvidence[];
   uploadBusy?: boolean;
   previewReady?: boolean;
 }
@@ -552,6 +566,44 @@ function normalizeTabPresence(value: unknown): ImageEditorTabPresence {
   };
 }
 
+function normalizeTabCandidateEvidence(value: unknown): readonly ImageEditorTabCandidateEvidence[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item): ImageEditorTabCandidateEvidence | null => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) return null;
+    const record = item as Record<string, unknown>;
+    const label = record.label;
+    if (label !== "上传视频" && label !== "上传图文" && label !== "写长文" && label !== "发播客") return null;
+    return {
+      label,
+      rendered: record.rendered === true,
+      intersectsViewport: record.intersectsViewport === true,
+      creatorTabRendered: record.creatorTabRendered === true,
+      creatorTabIntersectsViewport: record.creatorTabIntersectsViewport === true,
+      enabled: record.enabled === true,
+      pointerEvents: typeof record.pointerEvents === "string" ? record.pointerEvents.slice(0, 40) : "unknown",
+      active: record.active === true
+    };
+  }).filter((item): item is ImageEditorTabCandidateEvidence => Boolean(item)).slice(0, 40);
+}
+
+export function resolveImageEditorTabPresence(candidates: readonly ImageEditorTabCandidateEvidence[]): ImageEditorTabPresence {
+  const viewportCandidates = candidates.filter((candidate) => candidate.rendered
+    && candidate.intersectsViewport
+    && candidate.creatorTabRendered
+    && candidate.creatorTabIntersectsViewport
+    && candidate.enabled
+    && candidate.pointerEvents !== "none");
+  const activeCandidates = viewportCandidates.filter((candidate) => candidate.active);
+  const currentSelectedTab = activeCandidates.length === 1 ? activeCandidates[0]?.label ?? null : null;
+  return {
+    uploadVideoTabPresent: viewportCandidates.some((candidate) => candidate.label === "上传视频"),
+    uploadImageTabPresent: viewportCandidates.some((candidate) => candidate.label === "上传图文"),
+    longFormTabPresent: viewportCandidates.some((candidate) => candidate.label === "写长文"),
+    podcastTabPresent: viewportCandidates.some((candidate) => candidate.label === "发播客"),
+    currentSelectedTab
+  };
+}
+
 export function resolveImageEditorUploadCapability(relationships: readonly ImageEditorUploadControlRelationship[]): ImageEditorUploadCapabilityResult {
   const usableRelationships = relationships.filter((relationship) => relationship.enabled && relationship.usableSurface);
   const status: ImageEditorUploadCapabilityStatus = usableRelationships.length === 1
@@ -581,6 +633,7 @@ export function classifyImagePostEditorPhase(evidence: ImageEditorPhaseEvidence)
     evidence.uploadCapabilityPresent
     && evidence.uploadCapabilityUnique
     && evidence.preUploadSemanticSignalPresent
+    && evidence.selectedTab === "上传图文"
     && evidence.titleCandidateCount === 0
     && evidence.bodyCandidateCount === 0
     && evidence.finalSubmitCandidateCount === 0
@@ -630,6 +683,7 @@ export function assertPreUploadImageEditorContract(inspection: ImagePostEditorPh
   if (inspection.phaseTopology.stable !== true || inspection.phase === "IMAGE_POST_TRANSITIONING") return failure("PRE_UPLOAD_PHASE_NOT_READY", "stable-pre-upload-phase");
   if (inspection.contentType !== "IMAGE_POST" || !inspection.contentTypeReady) return failure("CONTENT_TYPE_NOT_READY", "content-type:image-post");
   if (!inspection.uploadCapabilityPresent || !inspection.uploadCapabilityUnique || inspection.uploadCapabilityStatus !== "PRESENT") return failure("UPLOAD_CAPABILITY_NOT_VERIFIED", "image-upload-capability");
+  if (inspection.tabPresence?.currentSelectedTab !== "上传图文") return failure("PRE_UPLOAD_PHASE_NOT_READY", "selected-tab:上传图文");
   if (inspection.preUploadSemanticNodes.length === 0) return failure("PRE_UPLOAD_PHASE_NOT_READY", "pre-upload-semantic-signal");
   if (inspection.phase !== "IMAGE_POST_PRE_UPLOAD" || inspection.confidence !== "HIGH") return failure("PRE_UPLOAD_PHASE_NOT_READY", "image-post-pre-upload-phase");
   if (inspection.phaseTopology.titleCandidateCount !== 0 || inspection.phaseTopology.bodyCandidateCount !== 0 || inspection.phaseTopology.finalSubmitCandidateCount !== 0) return failure("PRE_UPLOAD_PHASE_NOT_READY", "post-upload-controls-absent-before-upload");
@@ -993,6 +1047,7 @@ function emptyPhaseSnapshot(fallbackUrl: string): ImageEditorPhaseDomSnapshot {
     mediaPreviewSignalPresent: false,
     mediaEditingSignalPresent: false,
     tabPresence: emptyTabPresence(),
+    tabCandidates: [],
     uploadBusy: false,
     previewReady: false
   };
@@ -1004,6 +1059,8 @@ function normalizePhaseSnapshot(value: unknown, fallbackUrl: string): ImageEdito
   const relationships = normalizeUploadRelationships(record.uploadControlRelationships);
   const uploadCapability = resolveImageEditorUploadCapability(relationships);
   const topology = normalizePhaseTopology(record.phaseTopology);
+  const tabCandidates = normalizeTabCandidateEvidence(record.tabCandidates);
+  const tabPresence = tabCandidates.length > 0 ? resolveImageEditorTabPresence(tabCandidates) : normalizeTabPresence(record.tabPresence);
   return {
     currentUrl: typeof record.currentUrl === "string" ? record.currentUrl : fallbackUrl,
     readyState: typeof record.readyState === "string" ? record.readyState : "loading",
@@ -1016,7 +1073,7 @@ function normalizePhaseSnapshot(value: unknown, fallbackUrl: string): ImageEdito
     domStable: false,
     uploadCapabilityPresent: uploadCapability.present,
     uploadCapabilityUnique: uploadCapability.uniqueSurface,
-    preUploadSemanticSignalPresent: record.preUploadSemanticSignalPresent === true,
+    preUploadSemanticSignalPresent: record.preUploadSemanticSignalPresent === true || tabPresence.currentSelectedTab === "上传图文",
     titleCandidateCount: topology.titleCandidateCount,
     bodyCandidateCount: topology.bodyCandidateCount,
     finalSubmitCandidateCount: topology.finalSubmitCandidateCount,
@@ -1031,7 +1088,8 @@ function normalizePhaseSnapshot(value: unknown, fallbackUrl: string): ImageEdito
     forbiddenActionSignalPresent: record.forbiddenActionSignalPresent === true,
     mediaPreviewSignalPresent: record.mediaPreviewSignalPresent === true,
     mediaEditingSignalPresent: record.mediaEditingSignalPresent === true,
-    tabPresence: normalizeTabPresence(record.tabPresence),
+    tabPresence,
+    tabCandidates,
     phaseTopology: topology,
     ...(typeof record.uploadBusy === "boolean" ? { uploadBusy: record.uploadBusy } : {}),
     ...(typeof record.previewReady === "boolean" ? { previewReady: record.previewReady } : {})
@@ -1386,6 +1444,13 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
         if (![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) return null;
         return { x: Math.round(rect.x * 100) / 100, y: Math.round(rect.y * 100) / 100, width: Math.round(rect.width * 100) / 100, height: Math.round(rect.height * 100) / 100 };
       };
+      const intersectsViewport = (box: ImageEditorBoundingBox | null): boolean => box !== null
+        && box.x + box.width > 0
+        && box.y + box.height > 0
+        && box.x < window.innerWidth
+        && box.y < window.innerHeight
+        && box.width > 0
+        && box.height > 0;
       const visible = (element: Element): boolean => {
         const style = window.getComputedStyle(element);
         const box = boundingBox(element);
@@ -1396,6 +1461,16 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
         return !node.disabled && element.getAttribute("aria-disabled") !== "true";
       };
       const role = (element: Element): string | null => element.getAttribute("role");
+      const hasClassToken = (element: Element, token: string): boolean => (element.getAttribute("class") ?? "").split(/[\s]+/u).includes(token);
+      const isPositiveState = (value: string | null): boolean => value !== null && value.toLowerCase() !== "false" && value !== "0";
+      const activeSignal = (element: Element): boolean => isPositiveState(element.getAttribute("aria-selected"))
+        || isPositiveState(element.getAttribute("aria-current"))
+        || isPositiveState(element.getAttribute("aria-pressed"))
+        || isPositiveState(element.getAttribute("data-selected"))
+        || isPositiveState(element.getAttribute("data-active"))
+        || hasClassToken(element, "active")
+        || hasClassToken(element, "selected")
+        || hasClassToken(element, "current");
       const semanticText = (element: Element): string => normalize(`${element.textContent ?? ""} ${element.getAttribute("aria-label") ?? ""} ${element.getAttribute("title") ?? ""} ${element.getAttribute("data-content-type") ?? ""} ${element.getAttribute("data-type") ?? ""}`).slice(0, 120);
       const signalFor = (value: string): string | null => {
         const text = value.toLowerCase();
@@ -1444,15 +1519,56 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
         if (preUploadSemanticNodes.length >= 20) break;
       }
       const uploadInputs = Array.from(document.querySelectorAll('input[type="file"]'));
-      const tabLabel = (element: Element): ImageEditorSelectedTab | null => {
-        const text = semanticText(element);
-        if (/上传视频/iu.test(text)) return "上传视频";
-        if (/上传图文/iu.test(text)) return "上传图文";
-        if (/写长文/iu.test(text)) return "写长文";
-        if (/发播客/iu.test(text)) return "发播客";
+      const exactTabElements = (label: ImageEditorSelectedTab): Element[] => {
+        const raw = Array.from(document.querySelectorAll("*")).filter((element) => normalize(element.textContent ?? "") === label);
+        return raw.filter((element) => !raw.some((other) => other !== element && element.contains(other))).slice(0, 20);
+      };
+      const creatorTabAncestor = (element: Element): Element | null => {
+        let current = element.parentElement;
+        for (let depth = 1; current && depth <= 5; depth += 1, current = current.parentElement) {
+          if (hasClassToken(current, "creator-tab")) return current;
+        }
         return null;
       };
-      const tabElements = semanticElements.filter((element) => tabLabel(element) !== null && visible(element));
+      const tabCandidates: ImageEditorTabCandidateEvidence[] = [];
+      for (const label of ["上传视频", "上传图文", "写长文", "发播客"] as const) {
+        for (const element of exactTabElements(label)) {
+          const creatorTab = creatorTabAncestor(element);
+          const elementBox = boundingBox(element);
+          const creatorTabBox = creatorTab ? boundingBox(creatorTab) : null;
+          let current: Element | null = element;
+          let active = false;
+          for (let depth = 0; current && depth <= 5; depth += 1, current = current.parentElement) {
+            if (activeSignal(current)) { active = true; break; }
+          }
+          const elementStyle = window.getComputedStyle(element);
+          tabCandidates.push({
+            label,
+            rendered: visible(element),
+            intersectsViewport: intersectsViewport(elementBox),
+            creatorTabRendered: creatorTab !== null && visible(creatorTab),
+            creatorTabIntersectsViewport: intersectsViewport(creatorTabBox),
+            enabled: enabled(element),
+            pointerEvents: elementStyle.pointerEvents,
+            active
+          });
+        }
+      }
+      const usableTabCandidates = tabCandidates.filter((candidate) => candidate.rendered
+        && candidate.intersectsViewport
+        && candidate.creatorTabRendered
+        && candidate.creatorTabIntersectsViewport
+        && candidate.enabled
+        && candidate.pointerEvents !== "none");
+      const activeTabCandidates = usableTabCandidates.filter((candidate) => candidate.active);
+      const currentSelectedTab = activeTabCandidates.length === 1 ? activeTabCandidates[0]?.label ?? null : null;
+      const tabPresence: ImageEditorTabPresence = {
+        uploadVideoTabPresent: usableTabCandidates.some((candidate) => candidate.label === "上传视频"),
+        uploadImageTabPresent: usableTabCandidates.some((candidate) => candidate.label === "上传图文"),
+        longFormTabPresent: usableTabCandidates.some((candidate) => candidate.label === "写长文"),
+        podcastTabPresent: usableTabCandidates.some((candidate) => candidate.label === "发播客"),
+        currentSelectedTab
+      };
       const uploadControlRelationships: ImageEditorUploadControlRelationship[] = uploadInputs.slice(0, 20).map((input, index) => {
         const ancestors: ImageEditorUploadAncestor[] = [];
         let current: Element | null = input.parentElement;
@@ -1511,23 +1627,17 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
       const requiredValidationSignals = Array.from(new Set(semanticElements.map(semanticText).filter((text) => /必填|必须|不能为空|请选择|required|must\s+(?:select|choose|fill)/iu.test(text)))).slice(0, 12);
       const forbiddenActionSignalPresent = semanticElements.some((element) => /删除账号|注销账号|退出登录|永久删除|delete\s+account|log\s*out/iu.test(semanticText(element)));
       const typedAttributes = Array.from(document.querySelectorAll("[data-content-type], [data-type]")).map((element) => `${element.getAttribute("data-content-type") ?? ""} ${element.getAttribute("data-type") ?? ""}`).join(" ");
-      const imageSignal = uploadInputs.length > 0 || /image|图文|图片/iu.test(`${typedAttributes} ${semanticControls} ${bodyText}`);
+      const imageSignal = uploadInputs.length > 0 || usableTabCandidates.some((candidate) => candidate.label === "上传图文") || /image|图文|图片/iu.test(`${typedAttributes} ${semanticControls} ${bodyText}`);
       const videoSignal = /video|视频/iu.test(`${typedAttributes} ${semanticControls} ${bodyText}`);
       const contentTypeSignal: ImageEditorContentType = videoSignal && !imageSignal ? "VIDEO" : imageSignal ? "IMAGE_POST" : "UNKNOWN";
-      const selectedTabElement = tabElements.find((element) => /^(?:true|1)$/iu.test(element.getAttribute("aria-selected") ?? element.getAttribute("data-selected") ?? element.getAttribute("data-active") ?? "") || /(?:active|selected|current)/iu.test(element.getAttribute("class") ?? ""));
-      const selectedTabLabel = selectedTabElement ? tabLabel(selectedTabElement) : null;
-      const tabPresence: ImageEditorTabPresence = {
-        uploadVideoTabPresent: tabElements.some((element) => tabLabel(element) === "上传视频"),
-        uploadImageTabPresent: tabElements.some((element) => tabLabel(element) === "上传图文"),
-        longFormTabPresent: tabElements.some((element) => tabLabel(element) === "写长文"),
-        podcastTabPresent: tabElements.some((element) => tabLabel(element) === "发播客"),
-        currentSelectedTab: selectedTabLabel ?? (contentTypeSignal === "IMAGE_POST" && tabElements.some((element) => tabLabel(element) === "上传图文") ? "上传图文" : contentTypeSignal === "VIDEO" && tabElements.some((element) => tabLabel(element) === "上传视频") ? "上传视频" : null)
-      };
       const loginPagePresent = /\/login(?:[/?#]|$)/iu.test(window.location.href) || /登录/iu.test(bodyText) || Boolean(document.querySelector('[data-testid*="login" i], form[action*="login" i]'));
       const securityVerificationPresent = /security|verify|captcha|安全验证|验证码/iu.test(`${window.location.pathname} ${semanticControls} ${bodyText}`) || Boolean(document.querySelector('[data-testid*="captcha" i], [class*="captcha" i], [aria-label*="安全验证"]'));
       const shellCount = document.querySelectorAll('main, [role="main"], [data-testid*="publish" i], [class*="publish" i], [class*="editor" i]').length;
       const shellSignal = /^https:\/\/creator\.xiaohongshu\.com\/publish\/publish(?:[/?#]|$)/iu.test(window.location.href) && document.readyState === "complete" && document.body !== null && shellCount > 0 && !loginPagePresent && !securityVerificationPresent;
-      const semanticSignals = Array.from(new Set(preUploadSemanticNodes.map((node) => signalFor(node.normalizedText)).filter((signal): signal is string => signal !== null))).slice(0, 12);
+      const semanticSignals = Array.from(new Set([
+        ...preUploadSemanticNodes.map((node) => signalFor(node.normalizedText)),
+        ...(tabPresence.currentSelectedTab === "上传图文" ? ["image-post"] : [])
+      ].filter((signal): signal is string => signal !== null))).slice(0, 12);
       const phaseTopology: ImageEditorPhaseTopology = {
         titleCandidateCount,
         bodyCandidateCount,
@@ -1556,7 +1666,9 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
         domStable: false,
         uploadCapabilityPresent: capability.length === 1,
         uploadCapabilityUnique: capability.length === 1,
-        preUploadSemanticSignalPresent: semanticSignals.some((signal) => signal === "upload" || signal === "drag" || signal === "image" || signal === "image-post"),
+        preUploadSemanticSignalPresent: semanticSignals.some((signal) => signal === "upload" || signal === "drag" || signal === "image" || signal === "image-post") || tabPresence.currentSelectedTab === "上传图文",
+        tabCandidates,
+        tabPresence,
         titleCandidateCount,
         bodyCandidateCount,
         finalSubmitCandidateCount,
@@ -1584,7 +1696,6 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
         forbiddenActionSignalPresent,
         mediaPreviewSignalPresent: false,
         mediaEditingSignalPresent: false,
-        tabPresence,
         uploadBusy,
         previewReady
       };
@@ -2124,6 +2235,7 @@ export async function inspectImagePostEditorPhase(page: Page, metadata: ImageEdi
       uploadCapabilityPresent: lastSnapshot.uploadCapabilityPresent,
       uploadCapabilityUnique: lastSnapshot.uploadCapabilityUnique,
       preUploadSemanticSignalPresent: lastSnapshot.preUploadSemanticSignalPresent,
+      selectedTab: lastSnapshot.tabPresence.currentSelectedTab,
       titleCandidateCount: lastSnapshot.titleCandidateCount,
       bodyCandidateCount: lastSnapshot.bodyCandidateCount,
       finalSubmitCandidateCount: lastSnapshot.finalSubmitCandidateCount

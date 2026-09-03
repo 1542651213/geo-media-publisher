@@ -5,6 +5,7 @@ import {
   classifyImagePostEditorPhase,
   classifyPostUploadImageEditorState,
   resolveImageEditorUploadCapability,
+  resolveImageEditorTabPresence,
   inspectImagePostEditorPhase,
   inspectImagePostEditor,
   inspectPostUploadImageEditor,
@@ -12,6 +13,7 @@ import {
   type ImageEditorDomSnapshot,
   type ImageEditorInspectionMetadata,
   type ImageEditorPhaseEvidence,
+  type ImageEditorTabCandidateEvidence,
   type ImageEditorUploadControlRelationship
 } from "./image-editor-discovery";
 
@@ -60,6 +62,7 @@ function snapshot(overrides: Partial<ImageEditorDomSnapshot> = {}): ImageEditorD
     uploadCandidates: [candidate("upload-0", { tagName: "INPUT", semanticSignal: "input[type=file]" })],
     publishSettingsCandidates: [],
     finalSubmitCandidates: [candidate("submit-0", { tagName: "BUTTON", semanticSignal: "final-submit-label" })],
+    tabPresence: { uploadVideoTabPresent: true, uploadImageTabPresent: true, longFormTabPresent: true, podcastTabPresent: true, currentSelectedTab: "上传图文" },
     uploadBusy: false,
     previewReady: true,
     ...overrides
@@ -99,6 +102,7 @@ describe("Xiaohongshu image editor discovery", () => {
       uploadCapabilityPresent: true,
       uploadCapabilityUnique: true,
       preUploadSemanticSignalPresent: true,
+      selectedTab: "上传图文",
       titleCandidateCount: 0,
       bodyCandidateCount: 0,
       finalSubmitCandidateCount: 0,
@@ -171,6 +175,105 @@ describe("Xiaohongshu image editor discovery", () => {
     expect(result.uniqueSurface).toBe(false);
   });
 
+  it("ignores an offscreen active clone when resolving the selected image tab", () => {
+    const candidate = (overrides: Partial<ImageEditorTabCandidateEvidence> = {}): ImageEditorTabCandidateEvidence => ({
+      label: "上传图文",
+      rendered: true,
+      intersectsViewport: true,
+      creatorTabRendered: true,
+      creatorTabIntersectsViewport: true,
+      enabled: true,
+      pointerEvents: "auto",
+      active: true,
+      ...overrides
+    });
+
+    expect(resolveImageEditorTabPresence([
+      candidate({ intersectsViewport: false, creatorTabIntersectsViewport: false }),
+      candidate({ creatorTabRendered: false }),
+      candidate()
+    ])).toMatchObject({
+      uploadImageTabPresent: true,
+      currentSelectedTab: "上传图文"
+    });
+  });
+
+  it("fails closed for multiple viewport active tabs, offscreen-only tabs, and video selection", () => {
+    const candidate = (label: ImageEditorTabCandidateEvidence["label"], overrides: Partial<ImageEditorTabCandidateEvidence> = {}): ImageEditorTabCandidateEvidence => ({
+      label,
+      rendered: true,
+      intersectsViewport: true,
+      creatorTabRendered: true,
+      creatorTabIntersectsViewport: true,
+      enabled: true,
+      pointerEvents: "auto",
+      active: true,
+      ...overrides
+    });
+
+    expect(resolveImageEditorTabPresence([
+      candidate("上传图文"),
+      candidate("上传视频")
+    ])).toMatchObject({ currentSelectedTab: null });
+    expect(resolveImageEditorTabPresence([
+      candidate("上传图文", { intersectsViewport: false, creatorTabIntersectsViewport: false })
+    ])).toMatchObject({ uploadImageTabPresent: false, currentSelectedTab: null });
+    expect(resolveImageEditorTabPresence([candidate("上传视频")])).toMatchObject({ uploadImageTabPresent: false, currentSelectedTab: "上传视频" });
+  });
+
+  it("accepts a partially out-of-bounds image tab when it intersects the viewport", () => {
+    expect(resolveImageEditorTabPresence([{
+      label: "上传图文",
+      rendered: true,
+      intersectsViewport: true,
+      creatorTabRendered: true,
+      creatorTabIntersectsViewport: true,
+      enabled: true,
+      pointerEvents: "auto",
+      active: true
+    }])).toMatchObject({ uploadImageTabPresent: true, currentSelectedTab: "上传图文" });
+  });
+
+  it("requires the uniquely selected image tab for the pre-upload phase", () => {
+    expect(classifyImagePostEditorPhase(phaseEvidence({ selectedTab: null })).phase).toBe("IMAGE_POST_UNKNOWN");
+    expect(classifyImagePostEditorPhase(phaseEvidence({ selectedTab: "上传视频" })).phase).toBe("IMAGE_POST_UNKNOWN");
+  });
+
+  it("uses viewport-bounded tab evidence in the live pre-upload phase inspection", async () => {
+    const tabEvidence = (overrides: Partial<ImageEditorTabCandidateEvidence> = {}): ImageEditorTabCandidateEvidence => ({
+      label: "上传图文",
+      rendered: true,
+      intersectsViewport: true,
+      creatorTabRendered: true,
+      creatorTabIntersectsViewport: true,
+      enabled: true,
+      pointerEvents: "auto",
+      active: true,
+      ...overrides
+    });
+    const phaseSnapshots = [0, 1].map(() => ({
+      ...snapshot({
+        titleCandidates: [],
+        bodyCandidates: [],
+        finalSubmitCandidates: [],
+        tabPresence: undefined,
+        tabCandidates: [
+          tabEvidence({ intersectsViewport: false, creatorTabIntersectsViewport: false }),
+          tabEvidence({ creatorTabRendered: false }),
+          tabEvidence()
+        ]
+      }),
+      uploadControlRelationships: [uploadRelationship()]
+    } as unknown as ImageEditorDomSnapshot));
+    const result = await inspectImagePostEditorPhase(pageFor(phaseSnapshots), metadata, { maxWaitMs: 80, probeIntervalMs: 0, stableSampleCount: 2 });
+
+    expect(result).toMatchObject({
+      phase: "IMAGE_POST_PRE_UPLOAD",
+      confidence: "HIGH",
+      tabPresence: { currentSelectedTab: "上传图文", uploadImageTabPresent: true }
+    });
+  });
+
   it("emits a bounded read-only pre-upload phase observation", async () => {
     const diagnostics: ImageEditorDiagnostic[] = [];
     const phaseSnapshot = {
@@ -206,7 +309,8 @@ describe("Xiaohongshu image editor discovery", () => {
         nearestInteractiveAncestorTag: "LABEL",
         nearestInteractiveAncestorRole: null
       }],
-      uploadControlRelationships: [uploadRelationship()]
+      uploadControlRelationships: [uploadRelationship()],
+      tabPresence: { uploadVideoTabPresent: true, uploadImageTabPresent: true, longFormTabPresent: true, podcastTabPresent: true, currentSelectedTab: "上传图文" }
     };
     let evaluateCount = 0;
     const page = {
@@ -332,6 +436,7 @@ describe("Xiaohongshu image editor discovery", () => {
         nearestInteractiveAncestorRole: "button"
       }],
       uploadControlRelationships: [uploadRelationship()],
+      tabPresence: { uploadVideoTabPresent: true, uploadImageTabPresent: true, longFormTabPresent: true, podcastTabPresent: true, currentSelectedTab: "上传图文" as const },
       uploadCapabilityStatus: "PRESENT" as const,
       uploadCapabilityPresent: true,
       uploadCapabilityUnique: true,
@@ -359,6 +464,11 @@ describe("Xiaohongshu image editor discovery", () => {
       expectedPhase: "IMAGE_POST_PRE_UPLOAD",
       observedPhase: "IMAGE_POST_PRE_UPLOAD",
       postUploadControlsStatus: "NOT_APPLICABLE_BEFORE_UPLOAD"
+    });
+    expect(assertPreUploadImageEditorContract({ ...phase, tabPresence: undefined })).toMatchObject({
+      status: "FAIL",
+      failureCode: "PRE_UPLOAD_PHASE_NOT_READY",
+      missingSignal: "selected-tab:上传图文"
     });
   });
 
