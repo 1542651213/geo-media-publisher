@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AdapterRegistry } from "@publisher/adapters-core";
 import type { Account, PlatformAccountIdentityBinding } from "@publisher/domain";
 import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
-import type { XiaohongshuCreatorIdentityObservation } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentImageEditorReadiness } from "@publisher/adapters-xiaohongshu/browser";
 import { XhsIdentityService } from "./xhs-identity";
 
 const account: Account = {
@@ -65,6 +65,22 @@ function setup(input: { observedId: string | null; expectedId?: string | null; e
 }
 
 describe("Task10V XHS identity proof", () => {
+  it("routes the retained canonical-page readiness diagnostic through the account-owned adapter", async () => {
+    const readiness = { inspectionStatus: "PASS", accountId: account.id } as XiaohongshuCurrentImageEditorReadiness;
+    const reader = { inspectCurrentXiaohongshuImageEditorReadiness: vi.fn(async () => readiness) };
+    const repository = {
+      getAccountById: vi.fn(() => account),
+      getPlatformAccountIdentityBinding: vi.fn(() => null),
+      bindPlatformAccountIdentity: vi.fn(),
+      convergeUnusedOneShotAuthorization: vi.fn()
+    };
+    const registry = { getForContent: vi.fn(() => reader) } as unknown as AdapterRegistry;
+    const service = new XhsIdentityService({ repository, registry });
+
+    await expect(service.inspectCurrentXiaohongshuImageEditorReadiness(account.id)).resolves.toBe(readiness);
+    expect(reader.inspectCurrentXiaohongshuImageEditorReadiness).toHaveBeenCalledWith(expect.objectContaining({ accountId: account.id, platformKey: "xiaohongshu" }));
+  });
+
   it("requires the stable Creator ID and converges only after an exact match", async () => {
     const fixture = setup();
     const result = await fixture.service.verifyAndConverge(account.id);

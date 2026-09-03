@@ -420,7 +420,8 @@ function setupPage(options: FixtureOptions = {}): Fixture {
         stable: false
       },
       preUploadSemanticNodes: [{ tagName: "DIV", normalizedText: "上传图片", role: "button", visible: true, enabled: true, boundingBox: { x: 10, y: 20, width: 120, height: 40 }, nearestInteractiveAncestorTag: "DIV", nearestInteractiveAncestorRole: "button" }],
-        uploadControlRelationships: uploadPresent ? [{ candidateId: "fixture-upload-0", tagName: "INPUT", type: "file", accept: "image/*", multiple: true, enabled: true, visible: false, usableSurface: true, surfaceSignal: "visible-upload-ancestor", ancestors: [] }] : [],
+      uploadControlRelationships: uploadPresent ? [{ candidateId: "fixture-upload-0", tagName: "INPUT", type: "file", accept: "image/*", multiple: true, enabled: true, visible: false, usableSurface: true, surfaceSignal: "visible-upload-ancestor", ancestors: [] }] : [],
+      tabPresence: { uploadVideoTabPresent: true, uploadImageTabPresent: true, longFormTabPresent: true, podcastTabPresent: true, currentSelectedTab: "上传图文" },
       uploadBusy: Boolean(options.imageLoading && !postUpload),
       previewReady: postUpload && (options.imagePreviewCount ?? 1) > 0,
       mediaPreviewSignalPresent: intermediate,
@@ -487,6 +488,98 @@ function context(accountId = "account-a") {
 }
 
 describe("Xiaohongshu BrowserAutomation article gate", () => {
+  it("exposes a retained canonical-page image-editor readiness diagnostic without mutation", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/publish/publish?from=menu&target=image" });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+    await adapter.connectAccount(ctx);
+    (fixture.manager as unknown as { getCanonicalPage: ReturnType<typeof vi.fn> }).getCanonicalPage = vi.fn(() => ({ session: fixture.session, page: fixture.page, pageDebugId: "canonical-from-registry" }));
+    vi.mocked(fixture.page.goto).mockClear();
+    const diagnostic = (adapter as unknown as {
+      inspectCurrentXiaohongshuImageEditorReadiness: (input: AccountContext) => Promise<Record<string, unknown>>;
+    }).inspectCurrentXiaohongshuImageEditorReadiness;
+
+    expect(diagnostic).toBeTypeOf("function");
+    const result = await diagnostic.call(adapter, ctx);
+
+    expect(result).toMatchObject({
+      inspectionStatus: "PASS",
+      preUploadPhaseResult: "PASS",
+      contentType: "IMAGE_POST",
+      imageUploadControlPresent: true,
+      editorShellPresent: true,
+      origin: "https://creator.xiaohongshu.com",
+      pathname: "/publish/publish",
+      from: "menu",
+      target: "image",
+      uploadImageTabPresent: true,
+      currentSelectedTab: "上传图文"
+    });
+    expect(result.pageId).toBe("canonical-from-registry");
+    expect(fixture.page.goto).not.toHaveBeenCalled();
+    expect(fixture.inputSetFiles).not.toHaveBeenCalled();
+    expect(fixture.submitClick).not.toHaveBeenCalled();
+    expect(fixture.calls).not.toContain("title-fill");
+    expect(fixture.calls).not.toContain("body-fill");
+  });
+
+  it("executes on an editor route but reports semantic failure when the editor upload capability is absent", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/publish/publish?from=menu&target=image", fileInputCount: 0 });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+    await adapter.connectAccount(ctx);
+    const diagnostic = (adapter as unknown as { inspectCurrentXiaohongshuImageEditorReadiness: (input: AccountContext) => Promise<Record<string, unknown>> }).inspectCurrentXiaohongshuImageEditorReadiness;
+
+    await expect(diagnostic.call(adapter, ctx)).resolves.toMatchObject({ inspectionStatus: "PASS", preUploadPhaseResult: "FAIL", contentType: "IMAGE_POST", imageUploadControlPresent: false });
+  });
+
+  it("fails closed without an active canonical session and never cold-opens it", async () => {
+    const fixture = setupPage();
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+    const diagnostic = (adapter as unknown as { inspectCurrentXiaohongshuImageEditorReadiness: (input: AccountContext) => Promise<Record<string, unknown>> }).inspectCurrentXiaohongshuImageEditorReadiness;
+
+    await expect(diagnostic.call(adapter, ctx)).resolves.toMatchObject({ inspectionStatus: "FAIL", failureCode: "BROWSER_SESSION_UNAVAILABLE", sessionExists: false });
+    expect(fixture.open).not.toHaveBeenCalled();
+  });
+
+  it("rejects a closed retained canonical Page", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/publish/publish?target=image" });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+    await adapter.connectAccount(ctx);
+    vi.mocked(fixture.page.isClosed).mockReturnValue(true);
+
+    const diagnostic = (adapter as unknown as { inspectCurrentXiaohongshuImageEditorReadiness: (input: AccountContext) => Promise<Record<string, unknown>> }).inspectCurrentXiaohongshuImageEditorReadiness;
+    await expect(diagnostic.call(adapter, ctx)).resolves.toMatchObject({ inspectionStatus: "FAIL", failureCode: "CANONICAL_PAGE_CLOSED", sessionExists: true, pageClosed: true });
+  });
+
+  it("rejects a foreign origin before DOM editor inspection", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/publish/publish?target=image" });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+    await adapter.connectAccount(ctx);
+    vi.mocked(fixture.page.url).mockReturnValue("https://example.com/publish/publish?target=image");
+    vi.mocked(fixture.page.evaluate).mockClear();
+
+    const diagnostic = (adapter as unknown as { inspectCurrentXiaohongshuImageEditorReadiness: (input: AccountContext) => Promise<Record<string, unknown>> }).inspectCurrentXiaohongshuImageEditorReadiness;
+    await expect(diagnostic.call(adapter, ctx)).resolves.toMatchObject({ inspectionStatus: "FAIL", failureCode: "CANONICAL_PAGE_NOT_XHS_IMAGE_EDITOR_ROUTE", origin: "https://example.com", pathname: "/publish/publish", target: "image" });
+    expect(fixture.page.evaluate).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-editor pathname before DOM editor inspection", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home?source=official" });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+    await adapter.connectAccount(ctx);
+    vi.mocked(fixture.page.url).mockReturnValue("https://creator.xiaohongshu.com/new/home?source=official");
+    vi.mocked(fixture.page.evaluate).mockClear();
+
+    const diagnostic = (adapter as unknown as { inspectCurrentXiaohongshuImageEditorReadiness: (input: AccountContext) => Promise<Record<string, unknown>> }).inspectCurrentXiaohongshuImageEditorReadiness;
+    await expect(diagnostic.call(adapter, ctx)).resolves.toMatchObject({ inspectionStatus: "FAIL", failureCode: "CANONICAL_PAGE_NOT_XHS_IMAGE_EDITOR_ROUTE", origin: "https://creator.xiaohongshu.com", pathname: "/new/home", source: "official" });
+    expect(fixture.page.evaluate).not.toHaveBeenCalled();
+  });
+
   it("requires creator host plus two unique positive signals and keeps login/security blockers higher priority", () => {
     const base: XiaohongshuLoginEvidence = {
       available: true,

@@ -60,8 +60,10 @@ import {
   type ImageEditorPostUploadControlsStatus,
   type ImageEditorReadinessSample,
   type ImageEditorSemanticNode,
+  type ImageEditorSelectedTab,
   type ImageEditorSettingsDiscovery,
   type ImageEditorShellStatus,
+  type ImageEditorTabPresence,
   type ImageEditorUploadCapabilityStatus,
   type ImageEditorUploadControlRelationship
 } from "./image-editor-discovery";
@@ -80,6 +82,44 @@ import { emptyXiaohongshuContextPageInventory, inspectXiaohongshuContextPage, ty
 export type { XhsEditorLoadDiagnosticResult } from "./editor-load-diagnostic";
 export type { XhsEditorNetworkDiagnosticResult } from "./editor-network-diagnostic";
 export type { XiaohongshuContextPageInventory, XiaohongshuContextPageInventoryEntry, XiaohongshuContextPageDomSnapshot, XiaohongshuDocumentReadyState, XiaohongshuVisibilityState } from "./context-page-inventory";
+
+export interface XiaohongshuCurrentImageEditorReadiness {
+  inspectionStatus: "PASS" | "FAIL";
+  failureCode: string | null;
+  accountId: string;
+  contextDebugId: string | null;
+  pageId: string | null;
+  sessionExists: boolean;
+  browserConnected: boolean;
+  contextExists: boolean;
+  pageExists: boolean;
+  pageClosed: boolean;
+  pageContextMatchesSession: boolean;
+  origin: string | null;
+  pathname: string | null;
+  source: string | null;
+  from: string | null;
+  target: string | null;
+  sanitizedUrl: string | null;
+  readyState: string | null;
+  editorShellPresent: boolean;
+  uploadVideoTabPresent: boolean;
+  uploadImageTabPresent: boolean;
+  longFormTabPresent: boolean;
+  podcastTabPresent: boolean;
+  currentSelectedTab: ImageEditorSelectedTab | null;
+  imageUploadControlPresent: boolean;
+  titleControlPresent: boolean;
+  bodyControlPresent: boolean;
+  finalSubmitControlPresent: boolean;
+  contentType: ImageEditorContentType;
+  imageEditorPhase: ImageEditorPhase;
+  preUploadPhaseResult: "PASS" | "FAIL";
+  preUploadFailureCode: string | null;
+  preUploadFailureStage: string | null;
+  preUploadMissingSignal: string | null;
+  readinessSamples: readonly ImageEditorReadinessSample[];
+}
 export {
   collectCreatorHomeTopology,
   collectPublishSemanticNodes,
@@ -1154,6 +1194,85 @@ function sanitizeUrlString(value: string): string {
   }
 }
 
+function safeXiaohongshuRouteMetadata(value: string): Pick<XiaohongshuCurrentImageEditorReadiness, "origin" | "pathname" | "source" | "from" | "target" | "sanitizedUrl"> {
+  try {
+    const parsed = new URL(value);
+    const safeQueryValue = (key: string): string | null => {
+      const queryValue = parsed.searchParams.get(key);
+      if (!queryValue) return null;
+      const normalized = queryValue.normalize("NFKC").trim();
+      return normalized.length > 0 && normalized.length <= 80 ? normalized : null;
+    };
+    return {
+      origin: parsed.origin,
+      pathname: parsed.pathname,
+      source: safeQueryValue("source"),
+      from: safeQueryValue("from"),
+      target: safeQueryValue("target"),
+      sanitizedUrl: `${parsed.origin}${parsed.pathname}`
+    };
+  } catch {
+    return { origin: null, pathname: null, source: null, from: null, target: null, sanitizedUrl: null };
+  }
+}
+
+function inferredImageEditorTabs(inspection: { contentType: ImageEditorContentType; tabPresence?: ImageEditorTabPresence; preUploadSemanticNodes: readonly ImageEditorSemanticNode[] }): ImageEditorTabPresence {
+  if (inspection.tabPresence) return inspection.tabPresence;
+  const has = (pattern: RegExp): boolean => inspection.preUploadSemanticNodes.some((node) => pattern.test(node.normalizedText));
+  const uploadImageTabPresent = has(/上传图文/iu);
+  const uploadVideoTabPresent = has(/上传视频/iu);
+  const longFormTabPresent = has(/写长文/iu);
+  const podcastTabPresent = has(/发播客/iu);
+  return {
+    uploadVideoTabPresent,
+    uploadImageTabPresent,
+    longFormTabPresent,
+    podcastTabPresent,
+    currentSelectedTab: inspection.contentType === "IMAGE_POST" && uploadImageTabPresent ? "上传图文" : inspection.contentType === "VIDEO" && uploadVideoTabPresent ? "上传视频" : null
+  };
+}
+
+function emptyCurrentImageEditorReadiness(accountId: string, overrides: Partial<XiaohongshuCurrentImageEditorReadiness> = {}): XiaohongshuCurrentImageEditorReadiness {
+  return {
+    inspectionStatus: "FAIL",
+    failureCode: "BROWSER_SESSION_UNAVAILABLE",
+    accountId,
+    contextDebugId: null,
+    pageId: null,
+    sessionExists: false,
+    browserConnected: false,
+    contextExists: false,
+    pageExists: false,
+    pageClosed: true,
+    pageContextMatchesSession: false,
+    origin: null,
+    pathname: null,
+    source: null,
+    from: null,
+    target: null,
+    sanitizedUrl: null,
+    readyState: null,
+    editorShellPresent: false,
+    uploadVideoTabPresent: false,
+    uploadImageTabPresent: false,
+    longFormTabPresent: false,
+    podcastTabPresent: false,
+    currentSelectedTab: null,
+    imageUploadControlPresent: false,
+    titleControlPresent: false,
+    bodyControlPresent: false,
+    finalSubmitControlPresent: false,
+    contentType: "UNKNOWN",
+    imageEditorPhase: "IMAGE_POST_UNKNOWN",
+    preUploadPhaseResult: "FAIL",
+    preUploadFailureCode: null,
+    preUploadFailureStage: null,
+    preUploadMissingSignal: null,
+    readinessSamples: [],
+    ...overrides
+  };
+}
+
 function sameUrlOriginAndPath(first: string, second: string): boolean {
   try {
     const left = new URL(first);
@@ -1709,6 +1828,108 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         pageCreationEvents: [...(this.activeContextPageLifecycleEvents(ctx) ?? [])]
       };
     }, "inspectXhsContextPages");
+  }
+
+  /**
+   * Read-only readiness inspection of the retained canonical Page. The caller
+   * supplies only the account context; Page identity, route validation, and
+   * the editor inspection all stay inside Main/Adapter-owned state.
+   */
+  async inspectCurrentXiaohongshuImageEditorReadiness(ctx: AccountContext): Promise<XiaohongshuCurrentImageEditorReadiness> {
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
+      const activeSession = this.activeBrowserSession(ctx);
+      if (!activeSession) return emptyCurrentImageEditorReadiness(ctx.accountId, { failureCode: "BROWSER_SESSION_UNAVAILABLE" });
+
+      const sessionBase = {
+        accountId: ctx.accountId,
+        contextDebugId: activeSession.contextDebugId ?? null,
+        pageId: activeSession.pageDebugId ?? null,
+        sessionExists: true,
+        browserConnected: this.isBrowserConnected(activeSession),
+        contextExists: Boolean(activeSession.context && typeof activeSession.context.pages === "function"),
+        pageExists: false,
+        pageClosed: this.isCanonicalPageClosed(activeSession.page),
+        pageContextMatchesSession: false
+      };
+      let canonical: Awaited<ReturnType<typeof this.activeCanonicalPage>> = null;
+      try {
+        canonical = await this.activeCanonicalPage(ctx);
+      } catch {
+        return emptyCurrentImageEditorReadiness(ctx.accountId, { ...sessionBase, failureCode: "CANONICAL_PAGE_OWNERSHIP_FAILURE" });
+      }
+      if (!canonical) {
+        return emptyCurrentImageEditorReadiness(ctx.accountId, {
+          ...sessionBase,
+          failureCode: sessionBase.pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_UNAVAILABLE"
+        });
+      }
+
+      const { session, page, pageDebugId } = canonical;
+      const browserConnected = this.isBrowserConnected(session);
+      const contextExists = Boolean(session.context && typeof session.context.pages === "function");
+      const pageClosed = this.isCanonicalPageClosed(page);
+      let pageExists = false;
+      if (contextExists) {
+        try { pageExists = session.context.pages().includes(page); } catch { pageExists = false; }
+      }
+      const pageContextMatchesSession = !pageClosed && this.pageContextMatchesSession(session, page) && pageExists;
+      const base = {
+        accountId: ctx.accountId,
+        contextDebugId: session.contextDebugId ?? null,
+        pageId: pageDebugId,
+        sessionExists: true,
+        browserConnected,
+        contextExists,
+        pageExists,
+        pageClosed,
+        pageContextMatchesSession
+      };
+      const fail = (failureCode: string, overrides: Partial<XiaohongshuCurrentImageEditorReadiness> = {}): XiaohongshuCurrentImageEditorReadiness => emptyCurrentImageEditorReadiness(ctx.accountId, { ...base, failureCode, ...overrides });
+      if (!browserConnected) return fail("BROWSER_SESSION_DISCONNECTED");
+      if (!contextExists || !pageExists || !pageContextMatchesSession) return fail(pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_OWNERSHIP_FAILURE");
+
+      let rawUrl: string;
+      try { rawUrl = page.url(); } catch { return fail("CANONICAL_PAGE_URL_UNAVAILABLE"); }
+      const route = safeXiaohongshuRouteMetadata(rawUrl);
+      const canonicalRoute = route.origin === "https://creator.xiaohongshu.com" && route.pathname === "/publish/publish";
+      if (!canonicalRoute) return fail("CANONICAL_PAGE_NOT_XHS_IMAGE_EDITOR_ROUTE", { ...route });
+
+      const inspection = await inspectImagePostEditorPhase(page, {
+        operationId: randomUUID(),
+        platformKey: "xiaohongshu",
+        accountId: ctx.accountId,
+        contextDebugId: session.contextDebugId ?? "unknown-context",
+        pageDebugId: session.pageDebugId ?? "unknown-page"
+      });
+      const preUpload = assertPreUploadImageEditorContract(inspection);
+      const latestSample = inspection.readinessSamples[inspection.readinessSamples.length - 1] ?? null;
+      const tabs = inferredImageEditorTabs(inspection);
+      return {
+        ...base,
+        inspectionStatus: "PASS",
+        failureCode: null,
+        pageId: pageDebugId,
+        ...route,
+        readyState: latestSample?.readyState ?? null,
+        editorShellPresent: latestSample?.shellSignal === true,
+        uploadVideoTabPresent: tabs.uploadVideoTabPresent,
+        uploadImageTabPresent: tabs.uploadImageTabPresent,
+        longFormTabPresent: tabs.longFormTabPresent,
+        podcastTabPresent: tabs.podcastTabPresent,
+        currentSelectedTab: tabs.currentSelectedTab,
+        imageUploadControlPresent: inspection.uploadCapabilityStatus === "PRESENT" && inspection.uploadCapabilityPresent,
+        titleControlPresent: inspection.phaseTopology.titleCandidateCount > 0,
+        bodyControlPresent: inspection.phaseTopology.bodyCandidateCount > 0,
+        finalSubmitControlPresent: inspection.phaseTopology.finalSubmitCandidateCount > 0,
+        contentType: inspection.contentType,
+        imageEditorPhase: inspection.phase,
+        preUploadPhaseResult: preUpload.status,
+        preUploadFailureCode: preUpload.failureCode ?? null,
+        preUploadFailureStage: preUpload.failureStage ?? null,
+        preUploadMissingSignal: preUpload.missingSignal ?? null,
+        readinessSamples: inspection.readinessSamples
+      };
+    }, "inspectCurrentXiaohongshuImageEditorReadiness");
   }
 
   /** Read-only identity proof on the retained canonical Page. */

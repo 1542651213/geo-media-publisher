@@ -10,6 +10,15 @@ export type ImageEditorPhase = "IMAGE_POST_PRE_UPLOAD" | "IMAGE_POST_POST_UPLOAD
 export type ImageEditorPhaseConfidence = "HIGH" | "LOW";
 export type ImageEditorUploadCapabilityStatus = "PRESENT" | "AMBIGUOUS" | "ABSENT";
 export type ImageEditorPostUploadControlsStatus = "READY" | "FAIL";
+export type ImageEditorSelectedTab = "上传视频" | "上传图文" | "写长文" | "发播客";
+
+export interface ImageEditorTabPresence {
+  uploadVideoTabPresent: boolean;
+  uploadImageTabPresent: boolean;
+  longFormTabPresent: boolean;
+  podcastTabPresent: boolean;
+  currentSelectedTab: ImageEditorSelectedTab | null;
+}
 
 export interface ImageEditorBoundingBox {
   x: number;
@@ -164,6 +173,7 @@ interface ImageEditorPhaseDomSnapshot {
   forbiddenActionSignalPresent: boolean;
   mediaPreviewSignalPresent: boolean;
   mediaEditingSignalPresent: boolean;
+  tabPresence: ImageEditorTabPresence;
   uploadBusy?: boolean;
   previewReady?: boolean;
 }
@@ -225,6 +235,7 @@ export interface ImageEditorDomSnapshot {
   mediaPreviewSignalPresent?: boolean;
   mediaEditingSignalPresent?: boolean;
   phaseTopology?: ImageEditorPhaseTopology;
+  tabPresence?: ImageEditorTabPresence;
   uploadBusy?: boolean;
   previewReady?: boolean;
 }
@@ -465,6 +476,7 @@ export interface ImagePostEditorPhaseInspectionResult {
   forbiddenActionSignalPresent?: boolean;
   mediaPreviewSignalPresent?: boolean;
   mediaEditingSignalPresent?: boolean;
+  tabPresence?: ImageEditorTabPresence;
   securityVerificationPresent: boolean;
   loginPagePresent: boolean;
   sanitizedUrl: string;
@@ -521,6 +533,23 @@ function emptyMediaPreviewDiagnostics(): ImageEditorMediaPreviewDiagnostics {
 
 function emptyModalDiagnostics(): ImageEditorModalDiagnostics {
   return { dialogCount: 0, modalSignalCount: 0, maskCount: 0, overlayCount: 0, drawerCount: 0, visible: false, ariaModalCount: 0 };
+}
+
+function emptyTabPresence(): ImageEditorTabPresence {
+  return { uploadVideoTabPresent: false, uploadImageTabPresent: false, longFormTabPresent: false, podcastTabPresent: false, currentSelectedTab: null };
+}
+
+function normalizeTabPresence(value: unknown): ImageEditorTabPresence {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return emptyTabPresence();
+  const record = value as Record<string, unknown>;
+  const selected = record.currentSelectedTab;
+  return {
+    uploadVideoTabPresent: record.uploadVideoTabPresent === true,
+    uploadImageTabPresent: record.uploadImageTabPresent === true,
+    longFormTabPresent: record.longFormTabPresent === true,
+    podcastTabPresent: record.podcastTabPresent === true,
+    currentSelectedTab: selected === "上传视频" || selected === "上传图文" || selected === "写长文" || selected === "发播客" ? selected : null
+  };
 }
 
 export function resolveImageEditorUploadCapability(relationships: readonly ImageEditorUploadControlRelationship[]): ImageEditorUploadCapabilityResult {
@@ -963,6 +992,7 @@ function emptyPhaseSnapshot(fallbackUrl: string): ImageEditorPhaseDomSnapshot {
     forbiddenActionSignalPresent: false,
     mediaPreviewSignalPresent: false,
     mediaEditingSignalPresent: false,
+    tabPresence: emptyTabPresence(),
     uploadBusy: false,
     previewReady: false
   };
@@ -1001,6 +1031,7 @@ function normalizePhaseSnapshot(value: unknown, fallbackUrl: string): ImageEdito
     forbiddenActionSignalPresent: record.forbiddenActionSignalPresent === true,
     mediaPreviewSignalPresent: record.mediaPreviewSignalPresent === true,
     mediaEditingSignalPresent: record.mediaEditingSignalPresent === true,
+    tabPresence: normalizeTabPresence(record.tabPresence),
     phaseTopology: topology,
     ...(typeof record.uploadBusy === "boolean" ? { uploadBusy: record.uploadBusy } : {}),
     ...(typeof record.previewReady === "boolean" ? { previewReady: record.previewReady } : {})
@@ -1413,6 +1444,15 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
         if (preUploadSemanticNodes.length >= 20) break;
       }
       const uploadInputs = Array.from(document.querySelectorAll('input[type="file"]'));
+      const tabLabel = (element: Element): ImageEditorSelectedTab | null => {
+        const text = semanticText(element);
+        if (/上传视频/iu.test(text)) return "上传视频";
+        if (/上传图文/iu.test(text)) return "上传图文";
+        if (/写长文/iu.test(text)) return "写长文";
+        if (/发播客/iu.test(text)) return "发播客";
+        return null;
+      };
+      const tabElements = semanticElements.filter((element) => tabLabel(element) !== null && visible(element));
       const uploadControlRelationships: ImageEditorUploadControlRelationship[] = uploadInputs.slice(0, 20).map((input, index) => {
         const ancestors: ImageEditorUploadAncestor[] = [];
         let current: Element | null = input.parentElement;
@@ -1474,6 +1514,15 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
       const imageSignal = uploadInputs.length > 0 || /image|图文|图片/iu.test(`${typedAttributes} ${semanticControls} ${bodyText}`);
       const videoSignal = /video|视频/iu.test(`${typedAttributes} ${semanticControls} ${bodyText}`);
       const contentTypeSignal: ImageEditorContentType = videoSignal && !imageSignal ? "VIDEO" : imageSignal ? "IMAGE_POST" : "UNKNOWN";
+      const selectedTabElement = tabElements.find((element) => /^(?:true|1)$/iu.test(element.getAttribute("aria-selected") ?? element.getAttribute("data-selected") ?? element.getAttribute("data-active") ?? "") || /(?:active|selected|current)/iu.test(element.getAttribute("class") ?? ""));
+      const selectedTabLabel = selectedTabElement ? tabLabel(selectedTabElement) : null;
+      const tabPresence: ImageEditorTabPresence = {
+        uploadVideoTabPresent: tabElements.some((element) => tabLabel(element) === "上传视频"),
+        uploadImageTabPresent: tabElements.some((element) => tabLabel(element) === "上传图文"),
+        longFormTabPresent: tabElements.some((element) => tabLabel(element) === "写长文"),
+        podcastTabPresent: tabElements.some((element) => tabLabel(element) === "发播客"),
+        currentSelectedTab: selectedTabLabel ?? (contentTypeSignal === "IMAGE_POST" && tabElements.some((element) => tabLabel(element) === "上传图文") ? "上传图文" : contentTypeSignal === "VIDEO" && tabElements.some((element) => tabLabel(element) === "上传视频") ? "上传视频" : null)
+      };
       const loginPagePresent = /\/login(?:[/?#]|$)/iu.test(window.location.href) || /登录/iu.test(bodyText) || Boolean(document.querySelector('[data-testid*="login" i], form[action*="login" i]'));
       const securityVerificationPresent = /security|verify|captcha|安全验证|验证码/iu.test(`${window.location.pathname} ${semanticControls} ${bodyText}`) || Boolean(document.querySelector('[data-testid*="captcha" i], [class*="captcha" i], [aria-label*="安全验证"]'));
       const shellCount = document.querySelectorAll('main, [role="main"], [data-testid*="publish" i], [class*="publish" i], [class*="editor" i]').length;
@@ -1500,7 +1549,7 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
         currentUrl: window.location.href,
         readyState: document.readyState,
         shellSignal,
-        shellFingerprint: JSON.stringify({ shellCount, titleCandidateCount, bodyCandidateCount, uploadCandidateCount, finalSubmitCandidateCount, semanticSignals, capabilityCount: capability.length }),
+        shellFingerprint: JSON.stringify({ shellCount, titleCandidateCount, bodyCandidateCount, uploadCandidateCount, finalSubmitCandidateCount, semanticSignals, capabilityCount: capability.length, tabPresence }),
         contentTypeSignal,
         securityVerificationPresent,
         loginPagePresent,
@@ -1535,6 +1584,7 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
         forbiddenActionSignalPresent,
         mediaPreviewSignalPresent: false,
         mediaEditingSignalPresent: false,
+        tabPresence,
         uploadBusy,
         previewReady
       };
@@ -2023,6 +2073,7 @@ function phaseResult(snapshot: ImageEditorPhaseDomSnapshot, classification: Imag
     forbiddenActionSignalPresent: snapshot.forbiddenActionSignalPresent,
     securityVerificationPresent: snapshot.securityVerificationPresent,
     loginPagePresent: snapshot.loginPagePresent,
+    tabPresence: snapshot.tabPresence,
     sanitizedUrl: sanitizeUrl(snapshot.currentUrl)
   };
 }

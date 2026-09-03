@@ -8,7 +8,7 @@ import type { AutomationPrepareResult, ControlledPostUploadDiscoveryResult, Publ
 import type { Logger } from "@publisher/logger";
 import type { PublisherService } from "@publisher/publisher";
 import type { Account, AccountContext, BackgroundAutomationStatus, CurrentRuntimeIdentityProof, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PublishArticleInput, Task10SPrepublishResult } from "@publisher/domain";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentImageEditorReadiness, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { OneShotConfirmationCoordinator } from "./one-shot-confirmation";
 import { OneShotConfirmationReconciliationService } from "./one-shot-reconciliation";
 import { XhsIdentityService } from "./xhs-identity";
@@ -477,6 +477,10 @@ export class PlatformSelfTestService {
 
   inspectXhsContextPages(accountId: string): Promise<XiaohongshuContextPageInventory> {
     return this.xhsIdentity.inspectXhsContextPages(accountId);
+  }
+
+  inspectCurrentXiaohongshuImageEditorReadiness(): Promise<XiaohongshuCurrentImageEditorReadiness> {
+    return this.xhsIdentity.inspectCurrentXiaohongshuImageEditorReadiness(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
   }
 
   inspectXhsPublishEntryDom(accountId: string): Promise<XiaohongshuPublishEntryDomRuntimeDiagnostic> {

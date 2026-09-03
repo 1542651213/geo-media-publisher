@@ -2,12 +2,13 @@ import type { AdapterRegistry } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
 import { ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type Account, type AccountContext, type CreatorIdentityVerificationResult, type PlatformAccountIdentityBinding, type XhsIdentityAcceptance } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentImageEditorReadiness, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 
 type IdentityReader = {
   inspectCanonicalPageRuntime?: (ctx: AccountContext) => Promise<XiaohongshuCanonicalPageRuntimeProbe>;
   inspectXhsContextPages?: (ctx: AccountContext) => Promise<XiaohongshuContextPageInventory>;
   inspectXhsPublishEntryDom?: (ctx: AccountContext) => Promise<XiaohongshuPublishEntryDomRuntimeDiagnostic>;
+  inspectCurrentXiaohongshuImageEditorReadiness?: (ctx: AccountContext) => Promise<XiaohongshuCurrentImageEditorReadiness>;
   readCanonicalCreatorIdentity?: (ctx: AccountContext) => Promise<XiaohongshuCreatorIdentityObservation>;
 };
 
@@ -95,6 +96,42 @@ export class XhsIdentityService {
       readyImageEditorPageCount: inventory.pages.filter((page) => page.urlOrigin === "https://creator.xiaohongshu.com" && page.pathname === "/publish/publish" && !page.isClosed && page.editorShellPresent && page.uploadImageTabPresent && page.imageUploadControlPresent && page.contentType === "IMAGE_POST").length
     });
     return inventory;
+  }
+
+  async inspectCurrentXiaohongshuImageEditorReadiness(accountId: string): Promise<XiaohongshuCurrentImageEditorReadiness> {
+    const account = this.requireAccount(accountId);
+    const adapter = this.options.registry.getForContent("xiaohongshu", "article") as IdentityReader;
+    if (typeof adapter.inspectCurrentXiaohongshuImageEditorReadiness !== "function") throw Object.assign(new Error("当前小红书运行时未提供 retained canonical Page editor readiness diagnostic"), { code: "XHS_CURRENT_EDITOR_READINESS_DIAGNOSTIC_UNAVAILABLE" });
+    const diagnostic = await adapter.inspectCurrentXiaohongshuImageEditorReadiness(this.context(account));
+    this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_CURRENT_IMAGE_EDITOR_READINESS", "小红书 retained canonical Page editor 只读 readiness diagnostic 完成", {
+      platformKey: "xiaohongshu",
+      accountId: account.id,
+      inspectionStatus: diagnostic.inspectionStatus,
+      failureCode: diagnostic.failureCode,
+      contextDebugId: diagnostic.contextDebugId,
+      pageId: diagnostic.pageId,
+      sessionExists: diagnostic.sessionExists,
+      browserConnected: diagnostic.browserConnected,
+      contextExists: diagnostic.contextExists,
+      pageExists: diagnostic.pageExists,
+      pageClosed: diagnostic.pageClosed,
+      pageContextMatchesSession: diagnostic.pageContextMatchesSession,
+      origin: diagnostic.origin,
+      pathname: diagnostic.pathname,
+      source: diagnostic.source,
+      from: diagnostic.from,
+      target: diagnostic.target,
+      readyState: diagnostic.readyState,
+      editorShellPresent: diagnostic.editorShellPresent,
+      uploadImageTabPresent: diagnostic.uploadImageTabPresent,
+      currentSelectedTab: diagnostic.currentSelectedTab,
+      imageUploadControlPresent: diagnostic.imageUploadControlPresent,
+      contentType: diagnostic.contentType,
+      imageEditorPhase: diagnostic.imageEditorPhase,
+      preUploadPhaseResult: diagnostic.preUploadPhaseResult,
+      preUploadFailureCode: diagnostic.preUploadFailureCode
+    });
+    return diagnostic;
   }
 
   async inspectXhsPublishEntryDom(accountId: string): Promise<XiaohongshuPublishEntryDomRuntimeDiagnostic> {
