@@ -81,6 +81,22 @@ describe("Task10V XHS identity proof", () => {
     expect(reader.inspectCurrentXiaohongshuPublishEditorDom).toHaveBeenCalledWith(expect.objectContaining({ accountId: account.id, platformKey: "xiaohongshu" }));
   });
 
+  it("routes semantic candidate evidence through the fixed account-owned adapter", async () => {
+    const diagnostic = { inspectionStatus: "PASS", accountId: account.id };
+    const reader = { inspectCurrentXiaohongshuPublishEditorSemanticCandidates: vi.fn(async () => diagnostic) };
+    const repository = {
+      getAccountById: vi.fn(() => account),
+      getPlatformAccountIdentityBinding: vi.fn(() => null),
+      bindPlatformAccountIdentity: vi.fn(),
+      convergeUnusedOneShotAuthorization: vi.fn()
+    };
+    const registry = { getForContent: vi.fn(() => reader) } as unknown as AdapterRegistry;
+    const service = new XhsIdentityService({ repository, registry });
+
+    await expect(service.inspectCurrentXiaohongshuPublishEditorSemanticCandidates(account.id)).resolves.toBe(diagnostic);
+    expect(reader.inspectCurrentXiaohongshuPublishEditorSemanticCandidates).toHaveBeenCalledWith(expect.objectContaining({ accountId: account.id, platformKey: "xiaohongshu" }));
+  });
+
   it("routes the retained canonical-page readiness diagnostic through the account-owned adapter", async () => {
     const readiness = { inspectionStatus: "PASS", accountId: account.id } as XiaohongshuCurrentImageEditorReadiness;
     const reader = { inspectCurrentXiaohongshuImageEditorReadiness: vi.fn(async () => readiness) };

@@ -80,10 +80,12 @@ import { isExactXhsPublishEditorRoute, runXhsEditorLoadDiagnostic, type XhsEdito
 import { runXhsEditorNetworkFailureDiagnostic, type XhsEditorNetworkDiagnosticResult } from "./editor-network-diagnostic";
 import { emptyXiaohongshuContextPageInventory, inspectXiaohongshuContextPage, type XiaohongshuContextPageInventory } from "./context-page-inventory";
 import { emptyXiaohongshuPublishEditorDomRuntimeDiagnostic, inspectXiaohongshuPublishEditorDom, type XiaohongshuPublishEditorDomRuntimeDiagnostic } from "./publish-editor-dom-diagnostic";
+import { emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, inspectXiaohongshuPublishEditorSemanticCandidates, type XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic } from "./publish-editor-semantic-diagnostic";
 export type { XhsEditorLoadDiagnosticResult } from "./editor-load-diagnostic";
 export type { XhsEditorNetworkDiagnosticResult } from "./editor-network-diagnostic";
 export type { XiaohongshuContextPageInventory, XiaohongshuContextPageInventoryEntry, XiaohongshuContextPageDomSnapshot, XiaohongshuDocumentReadyState, XiaohongshuVisibilityState } from "./context-page-inventory";
 export type { XiaohongshuPublishEditorDomRuntimeDiagnostic } from "./publish-editor-dom-diagnostic";
+export type { XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic } from "./publish-editor-semantic-diagnostic";
 
 export interface XiaohongshuCurrentImageEditorReadiness {
   inspectionStatus: "PASS" | "FAIL";
@@ -2012,6 +2014,87 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         return fail("PAGE_EVALUATION_FAILED", { ...route });
       }
     }, "inspectCurrentXiaohongshuPublishEditorDom");
+  }
+
+  /**
+   * Read-only semantic candidate evidence on the retained canonical XHS
+   * publish Page. The candidate resolver is fixed inside Main and accepts no
+   * Renderer-provided selector, text, URL, Page, or Context identity.
+   */
+  async inspectCurrentXiaohongshuPublishEditorSemanticCandidates(ctx: AccountContext): Promise<XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic> {
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
+      const activeSession = this.activeBrowserSession(ctx);
+      if (!activeSession) return emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic(ctx.accountId);
+
+      const sessionBase = {
+        accountId: ctx.accountId,
+        contextDebugId: activeSession.contextDebugId ?? null,
+        pageId: activeSession.pageDebugId ?? null,
+        sessionExists: true,
+        browserConnected: this.isBrowserConnected(activeSession),
+        contextExists: Boolean(activeSession.context && typeof activeSession.context.pages === "function"),
+        pageExists: false,
+        pageClosed: this.isCanonicalPageClosed(activeSession.page),
+        pageContextMatchesSession: false
+      };
+
+      let canonical: Awaited<ReturnType<typeof this.activeCanonicalPage>> = null;
+      try {
+        canonical = await this.activeCanonicalPage(ctx);
+      } catch {
+        return emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic(ctx.accountId, { ...sessionBase, failureCode: "CANONICAL_PAGE_OWNERSHIP_FAILURE" });
+      }
+      if (!canonical) {
+        return emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic(ctx.accountId, {
+          ...sessionBase,
+          failureCode: sessionBase.pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_UNAVAILABLE"
+        });
+      }
+
+      const { session, page, pageDebugId } = canonical;
+      const browserConnected = this.isBrowserConnected(session);
+      const contextExists = Boolean(session.context && typeof session.context.pages === "function");
+      const pageClosed = this.isCanonicalPageClosed(page);
+      let pageExists = false;
+      if (contextExists) {
+        try { pageExists = session.context.pages().includes(page); } catch { pageExists = false; }
+      }
+      const pageContextMatchesSession = !pageClosed && this.pageContextMatchesSession(session, page) && pageExists;
+      const base = {
+        accountId: ctx.accountId,
+        contextDebugId: session.contextDebugId ?? null,
+        pageId: pageDebugId,
+        sessionExists: true,
+        browserConnected,
+        contextExists,
+        pageExists,
+        pageClosed,
+        pageContextMatchesSession
+      };
+      const fail = (failureCode: XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic["failureCode"], overrides: Partial<XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic> = {}): XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic => emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic(ctx.accountId, { ...base, failureCode, ...overrides });
+      if (!browserConnected) return fail("BROWSER_SESSION_DISCONNECTED");
+      if (!contextExists || !pageExists || !pageContextMatchesSession) return fail(pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_OWNERSHIP_FAILURE");
+
+      let rawUrl: string;
+      try { rawUrl = page.url(); } catch { return fail("CANONICAL_PAGE_URL_UNAVAILABLE"); }
+      const route = safeXiaohongshuRouteMetadata(rawUrl);
+      if (route.origin !== "https://creator.xiaohongshu.com" || route.pathname !== "/publish/publish") {
+        return fail("CANONICAL_PAGE_NOT_XHS_IMAGE_EDITOR_ROUTE", { ...route });
+      }
+
+      try {
+        const snapshot = await inspectXiaohongshuPublishEditorSemanticCandidates(page);
+        return {
+          ...base,
+          inspectionStatus: "PASS",
+          failureCode: null,
+          ...route,
+          ...snapshot
+        };
+      } catch {
+        return fail("PAGE_EVALUATION_FAILED", { ...route });
+      }
+    }, "inspectCurrentXiaohongshuPublishEditorSemanticCandidates");
   }
 
   /** Read-only identity proof on the retained canonical Page. */

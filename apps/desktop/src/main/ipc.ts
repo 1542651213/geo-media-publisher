@@ -833,6 +833,10 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
     logger.info("PLATFORM_SELF_TEST", "XHS_PUBLISH_EDITOR_DOM_DIAGNOSTIC_STARTED", "开始只读读取现有 canonical XHS publish editor bounded DOM", { platformKey: "xiaohongshu", accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
     return platformSelfTests.inspectCurrentXiaohongshuPublishEditorDom();
   });
+  register("platform-self-test:inspect-current-xhs-publish-editor-semantic-candidates", async () => {
+    logger.info("PLATFORM_SELF_TEST", "XHS_PUBLISH_EDITOR_SEMANTIC_DIAGNOSTIC_STARTED", "开始只读读取现有 canonical XHS publish editor semantic candidates", { platformKey: "xiaohongshu", accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
+    return platformSelfTests.inspectCurrentXiaohongshuPublishEditorSemanticCandidates();
+  });
   register("platform-self-test:verify-and-converge-xhs-identity", async (_event, payload) => {
     const input = z.object({ accountId: z.literal(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID), ownerApproved: z.boolean().optional() }).parse(payload);
     logger.info("PLATFORM_SELF_TEST", "XHS_IDENTITY_CONVERGENCE_STARTED", "开始小红书 Creator 身份证明与未消费一次性授权收敛", { platformKey: "xiaohongshu", accountId: input.accountId, ownerApproved: input.ownerApproved === true });

@@ -2,7 +2,7 @@ import type { AdapterRegistry } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
 import { ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type Account, type AccountContext, type CreatorIdentityVerificationResult, type PlatformAccountIdentityBinding, type XhsIdentityAcceptance } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentImageEditorReadiness, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentImageEditorReadiness, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 
 type IdentityReader = {
   inspectCanonicalPageRuntime?: (ctx: AccountContext) => Promise<XiaohongshuCanonicalPageRuntimeProbe>;
@@ -10,6 +10,7 @@ type IdentityReader = {
   inspectXhsPublishEntryDom?: (ctx: AccountContext) => Promise<XiaohongshuPublishEntryDomRuntimeDiagnostic>;
   inspectCurrentXiaohongshuImageEditorReadiness?: (ctx: AccountContext) => Promise<XiaohongshuCurrentImageEditorReadiness>;
   inspectCurrentXiaohongshuPublishEditorDom?: (ctx: AccountContext) => Promise<XiaohongshuPublishEditorDomRuntimeDiagnostic>;
+  inspectCurrentXiaohongshuPublishEditorSemanticCandidates?: (ctx: AccountContext) => Promise<XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic>;
   readCanonicalCreatorIdentity?: (ctx: AccountContext) => Promise<XiaohongshuCreatorIdentityObservation>;
 };
 
@@ -161,6 +162,37 @@ export class XhsIdentityService {
       labelMatchCounts: diagnostic.labels.map((item) => ({ label: item.label, exactTextMatchCount: item.exactTextMatchCount })),
       actualSelectedTabSignal: diagnostic.actualSelectedTabSignal,
       fileInputMatchCount: diagnostic.fileInputs.length
+    });
+    return diagnostic;
+  }
+
+  async inspectCurrentXiaohongshuPublishEditorSemanticCandidates(accountId: string): Promise<XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic> {
+    const account = this.requireAccount(accountId);
+    const adapter = this.options.registry.getForContent("xiaohongshu", "article") as IdentityReader;
+    if (typeof adapter.inspectCurrentXiaohongshuPublishEditorSemanticCandidates !== "function") throw Object.assign(new Error("当前小红书运行时未提供 publish editor semantic candidate diagnostic"), { code: "XHS_PUBLISH_EDITOR_SEMANTIC_DIAGNOSTIC_UNAVAILABLE" });
+    const diagnostic = await adapter.inspectCurrentXiaohongshuPublishEditorSemanticCandidates(this.context(account));
+    this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_PUBLISH_EDITOR_SEMANTIC_DIAGNOSTIC", "小红书 publish editor semantic candidate 只读 diagnostic 完成", {
+      platformKey: "xiaohongshu",
+      accountId: account.id,
+      inspectionStatus: diagnostic.inspectionStatus,
+      failureCode: diagnostic.failureCode,
+      contextDebugId: diagnostic.contextDebugId,
+      pageId: diagnostic.pageId,
+      origin: diagnostic.origin,
+      pathname: diagnostic.pathname,
+      uploadImageTabTextMatchCount: diagnostic.uploadImageTabTextMatchCount,
+      uploadImageTabRenderedCandidateCount: diagnostic.uploadImageTabRenderedCandidateCount,
+      uploadImageButtonTextMatchCount: diagnostic.uploadImageButtonTextMatchCount,
+      uploadImageButtonRenderedCandidateCount: diagnostic.uploadImageButtonRenderedCandidateCount,
+      visibleCreatorTabCount: diagnostic.visibleCreatorTabCount,
+      activeCreatorTabCount: diagnostic.activeCreatorTabCount,
+      activeCreatorTabLabel: diagnostic.activeCreatorTabLabel,
+      actualSelectedTabSignal: diagnostic.actualSelectedTabSignal,
+      selectedImageTabProof: diagnostic.selectedImageTabProof,
+      imageUploadSurfaceProof: diagnostic.imageUploadSurfaceProof,
+      fileInputMatchCount: diagnostic.fileInputs.length,
+      acceptableImageFileInputCount: diagnostic.acceptableImageFileInputCount,
+      imagePostSemanticProof: diagnostic.imagePostSemanticProof
     });
     return diagnostic;
   }

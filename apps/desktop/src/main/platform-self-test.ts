@@ -8,7 +8,7 @@ import type { AutomationPrepareResult, ControlledPostUploadDiscoveryResult, Publ
 import type { Logger } from "@publisher/logger";
 import type { PublisherService } from "@publisher/publisher";
 import type { Account, AccountContext, BackgroundAutomationStatus, CurrentRuntimeIdentityProof, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PublishArticleInput, Task10SPrepublishResult } from "@publisher/domain";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentImageEditorReadiness, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentImageEditorReadiness, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { OneShotConfirmationCoordinator } from "./one-shot-confirmation";
 import { OneShotConfirmationReconciliationService } from "./one-shot-reconciliation";
 import { XhsIdentityService } from "./xhs-identity";
@@ -485,6 +485,10 @@ export class PlatformSelfTestService {
 
   inspectCurrentXiaohongshuPublishEditorDom(): Promise<XiaohongshuPublishEditorDomRuntimeDiagnostic> {
     return this.xhsIdentity.inspectCurrentXiaohongshuPublishEditorDom(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
+  }
+
+  inspectCurrentXiaohongshuPublishEditorSemanticCandidates(): Promise<XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic> {
+    return this.xhsIdentity.inspectCurrentXiaohongshuPublishEditorSemanticCandidates(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
   }
 
   inspectXhsPublishEntryDom(accountId: string): Promise<XiaohongshuPublishEntryDomRuntimeDiagnostic> {
