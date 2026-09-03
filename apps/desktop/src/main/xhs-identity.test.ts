@@ -65,6 +65,22 @@ function setup(input: { observedId: string | null; expectedId?: string | null; e
 }
 
 describe("Task10V XHS identity proof", () => {
+  it("routes the current publish-editor DOM diagnostic through the fixed account-owned adapter", async () => {
+    const diagnostic = { inspectionStatus: "PASS", accountId: account.id };
+    const reader = { inspectCurrentXiaohongshuPublishEditorDom: vi.fn(async () => diagnostic) };
+    const repository = {
+      getAccountById: vi.fn(() => account),
+      getPlatformAccountIdentityBinding: vi.fn(() => null),
+      bindPlatformAccountIdentity: vi.fn(),
+      convergeUnusedOneShotAuthorization: vi.fn()
+    };
+    const registry = { getForContent: vi.fn(() => reader) } as unknown as AdapterRegistry;
+    const service = new XhsIdentityService({ repository, registry });
+
+    await expect(service.inspectCurrentXiaohongshuPublishEditorDom(account.id)).resolves.toBe(diagnostic);
+    expect(reader.inspectCurrentXiaohongshuPublishEditorDom).toHaveBeenCalledWith(expect.objectContaining({ accountId: account.id, platformKey: "xiaohongshu" }));
+  });
+
   it("routes the retained canonical-page readiness diagnostic through the account-owned adapter", async () => {
     const readiness = { inspectionStatus: "PASS", accountId: account.id } as XiaohongshuCurrentImageEditorReadiness;
     const reader = { inspectCurrentXiaohongshuImageEditorReadiness: vi.fn(async () => readiness) };

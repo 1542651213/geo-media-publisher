@@ -2,13 +2,14 @@ import type { AdapterRegistry } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
 import { ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type Account, type AccountContext, type CreatorIdentityVerificationResult, type PlatformAccountIdentityBinding, type XhsIdentityAcceptance } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentImageEditorReadiness, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentImageEditorReadiness, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 
 type IdentityReader = {
   inspectCanonicalPageRuntime?: (ctx: AccountContext) => Promise<XiaohongshuCanonicalPageRuntimeProbe>;
   inspectXhsContextPages?: (ctx: AccountContext) => Promise<XiaohongshuContextPageInventory>;
   inspectXhsPublishEntryDom?: (ctx: AccountContext) => Promise<XiaohongshuPublishEntryDomRuntimeDiagnostic>;
   inspectCurrentXiaohongshuImageEditorReadiness?: (ctx: AccountContext) => Promise<XiaohongshuCurrentImageEditorReadiness>;
+  inspectCurrentXiaohongshuPublishEditorDom?: (ctx: AccountContext) => Promise<XiaohongshuPublishEditorDomRuntimeDiagnostic>;
   readCanonicalCreatorIdentity?: (ctx: AccountContext) => Promise<XiaohongshuCreatorIdentityObservation>;
 };
 
@@ -130,6 +131,36 @@ export class XhsIdentityService {
       imageEditorPhase: diagnostic.imageEditorPhase,
       preUploadPhaseResult: diagnostic.preUploadPhaseResult,
       preUploadFailureCode: diagnostic.preUploadFailureCode
+    });
+    return diagnostic;
+  }
+
+  async inspectCurrentXiaohongshuPublishEditorDom(accountId: string): Promise<XiaohongshuPublishEditorDomRuntimeDiagnostic> {
+    const account = this.requireAccount(accountId);
+    const adapter = this.options.registry.getForContent("xiaohongshu", "article") as IdentityReader;
+    if (typeof adapter.inspectCurrentXiaohongshuPublishEditorDom !== "function") throw Object.assign(new Error("当前小红书运行时未提供 publish editor bounded DOM diagnostic"), { code: "XHS_PUBLISH_EDITOR_DOM_DIAGNOSTIC_UNAVAILABLE" });
+    const diagnostic = await adapter.inspectCurrentXiaohongshuPublishEditorDom(this.context(account));
+    this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_PUBLISH_EDITOR_DOM_DIAGNOSTIC", "小红书 publish editor bounded DOM diagnostic 完成", {
+      platformKey: "xiaohongshu",
+      accountId: account.id,
+      inspectionStatus: diagnostic.inspectionStatus,
+      failureCode: diagnostic.failureCode,
+      contextDebugId: diagnostic.contextDebugId,
+      pageId: diagnostic.pageId,
+      sessionExists: diagnostic.sessionExists,
+      browserConnected: diagnostic.browserConnected,
+      contextExists: diagnostic.contextExists,
+      pageExists: diagnostic.pageExists,
+      pageClosed: diagnostic.pageClosed,
+      pageContextMatchesSession: diagnostic.pageContextMatchesSession,
+      origin: diagnostic.origin,
+      pathname: diagnostic.pathname,
+      source: diagnostic.source,
+      from: diagnostic.from,
+      target: diagnostic.target,
+      labelMatchCounts: diagnostic.labels.map((item) => ({ label: item.label, exactTextMatchCount: item.exactTextMatchCount })),
+      actualSelectedTabSignal: diagnostic.actualSelectedTabSignal,
+      fileInputMatchCount: diagnostic.fileInputs.length
     });
     return diagnostic;
   }

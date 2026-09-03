@@ -9,6 +9,7 @@ export * from "./image-editor-discovery";
 export * from "./editor-load-diagnostic";
 export * from "./editor-network-diagnostic";
 export * from "./context-page-inventory";
+export * from "./publish-editor-dom-diagnostic";
 export * from "./publish-flow-exploration";
 export * from "./identity";
 
