@@ -8,6 +8,8 @@ const MAX_STABLE_DATA_ATTRIBUTES = 5;
 const MAX_STRING_LENGTH = 120;
 const MAX_ENTRY_DOM_MATCHES = 20;
 const MAX_ENTRY_DOM_ANCESTORS = 4;
+const MAX_IMAGE_POST_ENTRY_ANCESTORS = 8;
+const MAX_IMAGE_POST_ENTRY_SCAN_ELEMENTS = 2000;
 
 export const XIAOHONGSHU_PUBLISH_NOTE_TEXT = "发布笔记";
 export const XIAOHONGSHU_IMAGE_POST_TEXT = "发布图文笔记";
@@ -236,6 +238,91 @@ export interface XiaohongshuPublishEntryDomRuntimeDiagnostic extends Xiaohongshu
   pageClosed: boolean;
 }
 
+export interface XiaohongshuImagePostEntryBoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface XiaohongshuImagePostEntryStyleDiagnostic {
+  display: string;
+  visibility: string;
+  pointerEvents: string;
+  cursor: string;
+  userSelect: string;
+}
+
+export interface XiaohongshuImagePostEntryAncestorDiagnostic {
+  tagName: string;
+  role: string | null;
+  tabIndex: number;
+  hrefPresent: boolean;
+  onclickPropertyPresent: boolean;
+  cursor: string;
+  pointerEvents: string;
+}
+
+export interface XiaohongshuImagePostEntryTargetDiagnostic {
+  tagName: string;
+  role: string | null;
+  tabIndex: number;
+  visible: boolean;
+  enabled: boolean;
+  disabled: boolean;
+  connected: boolean;
+  boundingBox: XiaohongshuImagePostEntryBoundingBox | null;
+  style: XiaohongshuImagePostEntryStyleDiagnostic;
+  ancestorChain: readonly XiaohongshuImagePostEntryAncestorDiagnostic[];
+}
+
+export interface XiaohongshuImagePostEntryInspectionPayload {
+  pageOrigin: string;
+  pathname: string;
+  exactTextMatchCount: number;
+  target: XiaohongshuImagePostEntryTargetDiagnostic | null;
+}
+
+export type XiaohongshuImagePostEntryFailureCode =
+  | "PAGE_EVALUATION_UNAVAILABLE"
+  | "NOT_CREATOR_HOME"
+  | "EXACT_TEXT_NOT_UNIQUE"
+  | "TARGET_NOT_FOUND"
+  | "TARGET_NOT_VISIBLE"
+  | "TARGET_DISABLED"
+  | "TARGET_DETACHED"
+  | "TARGET_ZERO_SIZE"
+  | "TARGET_DISPLAY_NONE"
+  | "TARGET_VISIBILITY_HIDDEN"
+  | "TARGET_POINTER_EVENTS_NONE"
+  | "LOCATOR_NOT_UNIQUE"
+  | "LOCATOR_NOT_ACTIVATABLE"
+  | "CLICK_FAILED"
+  | "CLICK_ALREADY_USED"
+  | "NO_ROUTE_TRANSITION"
+  | "WRONG_TARGET"
+  | "WRONG_EDITOR_ROUTE";
+
+export interface XiaohongshuImagePostEntryInspection extends XiaohongshuImagePostEntryInspectionPayload {
+  inspectionStatus: "PASS" | "FAIL";
+  safeToTestClick: boolean;
+  failureCode: XiaohongshuImagePostEntryFailureCode | null;
+}
+
+export interface XiaohongshuImagePostEntryActivationResult {
+  status: "ACTIVATED" | "REJECTED" | "NO_EFFECT";
+  clickCount: number;
+  routeReadback: "PASS" | "FAIL";
+  observedTarget: "image" | "video" | null;
+  pathname: string;
+  from: string | null;
+  target: string | null;
+  sanitizedUrlBefore: string;
+  sanitizedUrlAfter: string;
+  inspection: XiaohongshuImagePostEntryInspection;
+  failureCode?: XiaohongshuImagePostEntryFailureCode;
+}
+
 interface PageEvaluateLike {
   evaluate?: <T>(pageFunction: (...args: never[]) => T, arg?: unknown) => Promise<T>;
 }
@@ -446,6 +533,242 @@ export async function collectPublishEntryDomDiagnostics(page: Page): Promise<Xia
   } catch {
     return { pageOrigin: "", pathname: "", publishNote: emptyLabel(XIAOHONGSHU_PUBLISH_NOTE_TEXT), imagePost: emptyLabel(XIAOHONGSHU_IMAGE_POST_TEXT), uploadImage: emptyLabel(XIAOHONGSHU_IMAGE_POST_MENU_TEXT), diagnosticClickCount: 0, navigationCount: 0 };
   }
+}
+
+function normalizeImagePostEntryBox(value: unknown): XiaohongshuImagePostEntryBoundingBox | null {
+  if (!isRecord(value)) return null;
+  const x = numberValue(value.x, Number.NaN);
+  const y = numberValue(value.y, Number.NaN);
+  const width = numberValue(value.width, Number.NaN);
+  const height = numberValue(value.height, Number.NaN);
+  if (![x, y, width, height].every(Number.isFinite) || width < 0 || height < 0) return null;
+  return { x, y, width, height };
+}
+
+function normalizeImagePostEntryStyle(value: unknown): XiaohongshuImagePostEntryStyleDiagnostic {
+  const record = isRecord(value) ? value : {};
+  return {
+    display: boundedString(record.display),
+    visibility: boundedString(record.visibility),
+    pointerEvents: boundedString(record.pointerEvents),
+    cursor: boundedString(record.cursor),
+    userSelect: boundedString(record.userSelect)
+  };
+}
+
+function normalizeImagePostEntryAncestor(value: unknown): XiaohongshuImagePostEntryAncestorDiagnostic | null {
+  if (!isRecord(value)) return null;
+  return {
+    tagName: normalizedTagName(value.tagName),
+    role: normalizedRole(value.role),
+    tabIndex: Math.trunc(numberValue(value.tabIndex, -1)),
+    hrefPresent: booleanValue(value.hrefPresent),
+    onclickPropertyPresent: booleanValue(value.onclickPropertyPresent),
+    cursor: boundedString(value.cursor),
+    pointerEvents: boundedString(value.pointerEvents)
+  };
+}
+
+function normalizeImagePostEntryTarget(value: unknown): XiaohongshuImagePostEntryTargetDiagnostic | null {
+  if (!isRecord(value)) return null;
+  const ancestorChain = Array.isArray(value.ancestorChain)
+    ? value.ancestorChain.map(normalizeImagePostEntryAncestor).filter((entry): entry is XiaohongshuImagePostEntryAncestorDiagnostic => Boolean(entry)).slice(0, MAX_IMAGE_POST_ENTRY_ANCESTORS)
+    : [];
+  return {
+    tagName: normalizedTagName(value.tagName),
+    role: normalizedRole(value.role),
+    tabIndex: Math.trunc(numberValue(value.tabIndex, -1)),
+    visible: booleanValue(value.visible),
+    enabled: booleanValue(value.enabled),
+    disabled: booleanValue(value.disabled),
+    connected: booleanValue(value.connected),
+    boundingBox: normalizeImagePostEntryBox(value.boundingBox),
+    style: normalizeImagePostEntryStyle(value.style),
+    ancestorChain
+  };
+}
+
+function normalizeImagePostEntryPayload(value: unknown): XiaohongshuImagePostEntryInspectionPayload {
+  const record = isRecord(value) ? value : {};
+  return {
+    pageOrigin: boundedString(record.pageOrigin),
+    pathname: boundedString(record.pathname),
+    exactTextMatchCount: Math.min(MAX_IMAGE_POST_ENTRY_SCAN_ELEMENTS, Math.max(0, Math.trunc(nonNegativeNumber(record.exactTextMatchCount)))),
+    target: normalizeImagePostEntryTarget(record.target)
+  };
+}
+
+function creatorHomeRouteMatches(pageOrigin: string, pathname: string): boolean {
+  return pageOrigin.toLowerCase() === "https://creator.xiaohongshu.com" && pathname === "/new/home";
+}
+
+function pageRouteParts(url: string): { origin: string; pathname: string } | null {
+  try {
+    const parsed = new URL(url);
+    return { origin: parsed.origin, pathname: parsed.pathname };
+  } catch {
+    return null;
+  }
+}
+
+function routeUrlSafe(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const query = new URLSearchParams();
+    for (const key of ["source", "from", "target"] as const) {
+      const value = parsed.searchParams.get(key);
+      if (value !== null) query.set(key, value.slice(0, MAX_STRING_LENGTH));
+    }
+    const suffix = query.toString();
+    return `${parsed.origin}${parsed.pathname}${suffix ? `?${suffix}` : ""}`;
+  } catch {
+    return "";
+  }
+}
+
+function readXiaohongshuImagePostEntryPayload(): Record<string, unknown> {
+  const compact = (value: string): string => value.normalize("NFKC").replace(/[\s]+/gu, " ").trim().slice(0, MAX_STRING_LENGTH);
+  const allElements = Array.from(document.querySelectorAll("*")).slice(0, MAX_IMAGE_POST_ENTRY_SCAN_ELEMENTS);
+  const label = "发布图文笔记";
+  const boxOf = (element: Element): Record<string, number> | null => {
+    const rect = element.getBoundingClientRect();
+    return [rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
+  };
+  const visible = (element: Element): boolean => {
+    const node = element as HTMLElement;
+    const style = window.getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return !element.hasAttribute("hidden") && element.getAttribute("aria-hidden") !== "true" && style.display !== "none" && style.visibility !== "hidden" && style.visibility !== "collapse" && style.opacity !== "0" && rect.width > 0 && rect.height > 0;
+  };
+  const disabled = (element: Element): boolean => element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true";
+  const roleOf = (element: Element): string | null => compact(element.getAttribute("role") ?? "").toLowerCase() || null;
+  const ancestorChainOf = (element: Element): Array<Record<string, unknown>> => {
+    const chain: Array<Record<string, unknown>> = [];
+    let current = element.parentElement;
+    while (current && chain.length < MAX_IMAGE_POST_ENTRY_ANCESTORS) {
+      const node = current as HTMLElement;
+      const style = window.getComputedStyle(node);
+      chain.push({
+        tagName: current.tagName.toUpperCase(),
+        role: roleOf(current),
+        tabIndex: typeof node.tabIndex === "number" ? node.tabIndex : -1,
+        hrefPresent: current.hasAttribute("href"),
+        onclickPropertyPresent: "onclick" in node && typeof node.onclick === "function",
+        cursor: compact(style.cursor),
+        pointerEvents: compact(style.pointerEvents)
+      });
+      current = current.parentElement;
+    }
+    return chain;
+  };
+  const targets = allElements.filter((element) => {
+    const tagName = element.tagName.toUpperCase();
+    return tagName !== "HTML" && tagName !== "BODY" && tagName !== "SCRIPT" && tagName !== "STYLE" && compact(element.textContent ?? "") === label;
+  });
+  const target = targets.length === 1 ? targets[0] : undefined;
+  const targetRecord = target ? (() => {
+    const node = target as HTMLElement;
+    const style = window.getComputedStyle(node);
+    return {
+      tagName: target.tagName.toUpperCase(),
+      role: roleOf(target),
+      tabIndex: typeof node.tabIndex === "number" ? node.tabIndex : -1,
+      visible: visible(target),
+      enabled: !disabled(target),
+      disabled: disabled(target),
+      connected: target.isConnected,
+      boundingBox: boxOf(target),
+      style: {
+        display: compact(style.display),
+        visibility: compact(style.visibility),
+        pointerEvents: compact(style.pointerEvents),
+        cursor: compact(style.cursor),
+        userSelect: compact(style.userSelect)
+      },
+      ancestorChain: ancestorChainOf(target)
+    };
+  })() : null;
+  return { pageOrigin: compact(window.location.origin), pathname: compact(window.location.pathname), exactTextMatchCount: targets.length, target: targetRecord };
+}
+
+function inspectionFailure(payload: XiaohongshuImagePostEntryInspectionPayload, failureCode: XiaohongshuImagePostEntryFailureCode): XiaohongshuImagePostEntryInspection {
+  return { ...payload, inspectionStatus: "FAIL", safeToTestClick: false, failureCode };
+}
+
+function evaluateImagePostEntrySafety(payload: XiaohongshuImagePostEntryInspectionPayload, currentRoute: { origin: string; pathname: string } | null): XiaohongshuImagePostEntryInspection {
+  if (!currentRoute || !creatorHomeRouteMatches(currentRoute.origin, currentRoute.pathname) || !creatorHomeRouteMatches(payload.pageOrigin, payload.pathname)) return inspectionFailure(payload, "NOT_CREATOR_HOME");
+  if (payload.exactTextMatchCount !== 1) return inspectionFailure(payload, "EXACT_TEXT_NOT_UNIQUE");
+  const target = payload.target;
+  if (!target) return inspectionFailure(payload, "TARGET_NOT_FOUND");
+  if (!target.connected) return inspectionFailure(payload, "TARGET_DETACHED");
+  if (target.disabled || !target.enabled) return inspectionFailure(payload, "TARGET_DISABLED");
+  if (!target.visible) return inspectionFailure(payload, "TARGET_NOT_VISIBLE");
+  if (!target.boundingBox || target.boundingBox.width <= 0 || target.boundingBox.height <= 0) return inspectionFailure(payload, "TARGET_ZERO_SIZE");
+  if (target.style.display === "none") return inspectionFailure(payload, "TARGET_DISPLAY_NONE");
+  if (target.style.visibility === "hidden" || target.style.visibility === "collapse") return inspectionFailure(payload, "TARGET_VISIBILITY_HIDDEN");
+  if (target.style.pointerEvents === "none") return inspectionFailure(payload, "TARGET_POINTER_EVENTS_NONE");
+  return { ...payload, inspectionStatus: "PASS", safeToTestClick: true, failureCode: null };
+}
+
+/** Evaluates the unique official image-post card without requiring native button/ARIA semantics. It never clicks. */
+export async function inspectXiaohongshuImagePostEntry(page: Page): Promise<XiaohongshuImagePostEntryInspection> {
+  const currentRoute = pageRouteParts(page.url());
+  const candidate = page as unknown as PageEvaluateLike;
+  if (typeof candidate.evaluate !== "function") return inspectionFailure({ pageOrigin: currentRoute?.origin ?? "", pathname: currentRoute?.pathname ?? "", exactTextMatchCount: 0, target: null }, "PAGE_EVALUATION_UNAVAILABLE");
+  try {
+    const payload = normalizeImagePostEntryPayload(await candidate.evaluate(readXiaohongshuImagePostEntryPayload));
+    return evaluateImagePostEntrySafety(payload, currentRoute);
+  } catch {
+    return inspectionFailure({ pageOrigin: currentRoute?.origin ?? "", pathname: currentRoute?.pathname ?? "", exactTextMatchCount: 0, target: null }, "PAGE_EVALUATION_UNAVAILABLE");
+  }
+}
+
+/** Clicks the fixed exact card at most once, then requires the platform image-post route. */
+export async function activateXiaohongshuImagePostEntry(page: Page, input: { navigationClickCount: number }): Promise<XiaohongshuImagePostEntryActivationResult> {
+  const inspection = await inspectXiaohongshuImagePostEntry(page);
+  const before = routeUrlSafe(page.url());
+  const rejected = (status: "REJECTED" | "NO_EFFECT", clickCount: number, failureCode: XiaohongshuImagePostEntryFailureCode, after = before, pathname = "", from: string | null = null, target: string | null = null, observedTarget: "image" | "video" | null = target === "image" || target === "video" ? target : null): XiaohongshuImagePostEntryActivationResult => ({ status, clickCount, routeReadback: "FAIL", observedTarget, pathname, from, target, sanitizedUrlBefore: before, sanitizedUrlAfter: after, inspection, failureCode });
+  if (input.navigationClickCount >= 1) return rejected("REJECTED", input.navigationClickCount, "CLICK_ALREADY_USED");
+  if (!inspection.safeToTestClick) return rejected("REJECTED", 0, inspection.failureCode ?? "TARGET_NOT_FOUND");
+
+  let locator: ReturnType<Page["getByText"]> | null = null;
+  try {
+    locator = page.getByText(XIAOHONGSHU_IMAGE_POST_TEXT, { exact: true });
+    if (await locator.count() !== 1 || !(await locator.isVisible()) || !(await locator.isEnabled())) return rejected("REJECTED", 0, "LOCATOR_NOT_ACTIVATABLE");
+    const box = await locator.boundingBox();
+    if (!box || box.width <= 0 || box.height <= 0) return rejected("REJECTED", 0, "TARGET_ZERO_SIZE");
+  } catch {
+    return rejected("REJECTED", 0, "LOCATOR_NOT_ACTIVATABLE");
+  }
+  if (!locator) return rejected("REJECTED", 0, "LOCATOR_NOT_ACTIVATABLE");
+
+  try {
+    await locator.click({ timeout: 3000 });
+  } catch {
+    return rejected("REJECTED", 1, "CLICK_FAILED", routeUrlSafe(page.url()));
+  }
+
+  let after = routeUrlSafe(page.url());
+  for (let attempt = 0; attempt < 8 && after === before; attempt += 1) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    after = routeUrlSafe(page.url());
+  }
+  const route = pageRouteParts(page.url());
+  let from: string | null = null;
+  let target: string | null = null;
+  if (route) {
+    try {
+      const parsed = new URL(page.url());
+      from = parsed.searchParams.get("from");
+      target = parsed.searchParams.get("target");
+    } catch {
+      // pageRouteParts already rejects malformed URLs.
+    }
+  }
+  const observedTarget = target === "image" || target === "video" ? target : null;
+  if (after === before) return rejected("NO_EFFECT", 1, "NO_ROUTE_TRANSITION", after, route?.pathname ?? "", from, target, observedTarget);
+  if (!route || route.pathname !== "/publish/publish" || target !== "image") return rejected("REJECTED", 1, target === "video" ? "WRONG_TARGET" : "WRONG_EDITOR_ROUTE", after, route?.pathname ?? "", from, target, observedTarget);
+  return { status: "ACTIVATED", clickCount: 1, routeReadback: "PASS", observedTarget: "image", pathname: route.pathname, from, target, sanitizedUrlBefore: before, sanitizedUrlAfter: after, inspection };
 }
 
 function normalizeAncestor(value: unknown, fallbackTargetId: string, fallbackDepth: number): XiaohongshuPublishAncestorDiagnostic | null {

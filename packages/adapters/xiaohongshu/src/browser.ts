@@ -14,11 +14,15 @@ import {
   type XiaohongshuPublishSemanticNodeCollection
 } from "./creator-home-diagnostics";
 import {
+  activateXiaohongshuImagePostEntry,
   collectPublishEntryDomDiagnostics,
   collectPublishClickableSurfaceDiagnostics,
+  inspectXiaohongshuImagePostEntry,
   type XiaohongshuClickableSurfaceDiagnostics,
   type XiaohongshuClickableSurfaceResolution,
   type XiaohongshuExactPublishSemanticTarget,
+  type XiaohongshuImagePostEntryActivationResult,
+  type XiaohongshuImagePostEntryInspection,
   type XiaohongshuPublishAncestorDiagnostic,
   type XiaohongshuPublishEntryDomRuntimeDiagnostic,
   type XiaohongshuPublishEventListenerInspection,
@@ -81,6 +85,7 @@ export {
   observeCreatorHomeReadiness
 } from "./creator-home-diagnostics";
 export {
+  activateXiaohongshuImagePostEntry,
   collectPublishEntryDomDiagnostics,
   collectExactPublishSemanticTargets,
   collectPublishAncestorChainDiagnostics,
@@ -93,6 +98,7 @@ export {
   resolvePublishNoteDropdownTrigger,
   resolveExactImagePostMenuItem
 } from "./publish-clickable-surface";
+export { inspectXiaohongshuImagePostEntry } from "./publish-clickable-surface";
 export {
   classifyPublishNotePostClickState,
   clickPublishNoteNavigationSurface,
@@ -139,7 +145,15 @@ export type {
   XiaohongshuPublishEntryDomLabel,
   XiaohongshuPublishEntryDomLabelDiagnostic,
   XiaohongshuPublishEntryDomMatchDiagnostic,
-  XiaohongshuPublishEntryDomRuntimeDiagnostic
+  XiaohongshuPublishEntryDomRuntimeDiagnostic,
+  XiaohongshuImagePostEntryActivationResult,
+  XiaohongshuImagePostEntryAncestorDiagnostic,
+  XiaohongshuImagePostEntryBoundingBox,
+  XiaohongshuImagePostEntryFailureCode,
+  XiaohongshuImagePostEntryInspection,
+  XiaohongshuImagePostEntryInspectionPayload,
+  XiaohongshuImagePostEntryStyleDiagnostic,
+  XiaohongshuImagePostEntryTargetDiagnostic
 } from "./publish-clickable-surface";
 export type {
   PublishNoteNavigationClickResult,
@@ -413,7 +427,7 @@ export type XiaohongshuEditorEntryStepName =
 export type XiaohongshuEditorNavigationTrigger = "DIRECT_GOTO" | "PUBLISH_ENTRY_CLICK" | "CONTENT_TYPE_CLICK" | "PLATFORM_REDIRECT" | "UNKNOWN";
 
 export interface XiaohongshuEditorEntryDiagnostic {
-  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED" | "PUBLISH_EXACT_TARGETS_OBSERVED" | "PUBLISH_TARGET_ANCESTOR_CHAINS" | "PUBLISH_CLICK_SURFACE_DIAGNOSTICS" | "PUBLISH_HIT_TEST_OBSERVED" | "PUBLISH_EVENT_LISTENERS_OBSERVED" | "PUBLISH_NOTE_SURFACE_RESOLVED" | "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED" | "PUBLISH_NOTE_NAVIGATION_CLICK_STARTED" | "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED" | "POST_PUBLISH_NOTE_STATE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_STARTED" | "IMAGE_EDITOR_READINESS_SAMPLE" | "IMAGE_EDITOR_SHELL_READY" | "IMAGE_EDITOR_SHELL_NOT_READY" | "IMAGE_EDITOR_SHELL_TIMEOUT" | "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED" | "IMAGE_EDITOR_CONTROLS_DISCOVERED" | "IMAGE_EDITOR_PHASE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_COMPLETED" | "IMAGE_EDITOR_INSPECTION_FAILED" | "PRE_UPLOAD_GATE_INSPECTION_STARTED" | "PRE_UPLOAD_GATE_RESULT" | "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED" | "IMAGE_UPLOAD_STARTED" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED" | "POST_UPLOAD_EDITOR_READINESS_STARTED" | "POST_UPLOAD_EDITOR_READINESS_SAMPLE" | "POST_UPLOAD_EDITOR_SEMANTIC_INVENTORY_OBSERVED" | "POST_UPLOAD_EDITOR_INTERACTIVE_TOPOLOGY_OBSERVED" | "POST_UPLOAD_EDITOR_MEDIA_PREVIEW_OBSERVED" | "POST_UPLOAD_EDITOR_MODAL_STATE_OBSERVED" | "POST_UPLOAD_EDITOR_PHASE_OBSERVED" | "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED" | "POST_UPLOAD_EDITOR_INSPECTION_FAILED" | "POST_UPLOAD_EDITOR_INSPECTION_COMPLETED" | "XHS_PUBLISH_FLOW_TIMELINE" | "XHS_PUBLISH_FLOW_COMPLETED" | "XHS_PUBLISH_FLOW_BLOCKED" | "XHS_PUBLISH_FLOW_INTERMEDIATE_ACTION";
+  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED" | "PUBLISH_EXACT_TARGETS_OBSERVED" | "PUBLISH_TARGET_ANCESTOR_CHAINS" | "PUBLISH_CLICK_SURFACE_DIAGNOSTICS" | "PUBLISH_HIT_TEST_OBSERVED" | "PUBLISH_EVENT_LISTENERS_OBSERVED" | "PUBLISH_NOTE_SURFACE_RESOLVED" | "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED" | "PUBLISH_NOTE_NAVIGATION_CLICK_STARTED" | "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED" | "IMAGE_POST_ENTRY_INSPECTION" | "IMAGE_POST_ENTRY_ACTIVATION" | "POST_PUBLISH_NOTE_STATE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_STARTED" | "IMAGE_EDITOR_READINESS_SAMPLE" | "IMAGE_EDITOR_SHELL_READY" | "IMAGE_EDITOR_SHELL_NOT_READY" | "IMAGE_EDITOR_SHELL_TIMEOUT" | "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED" | "IMAGE_EDITOR_CONTROLS_DISCOVERED" | "IMAGE_EDITOR_PHASE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_COMPLETED" | "IMAGE_EDITOR_INSPECTION_FAILED" | "PRE_UPLOAD_GATE_INSPECTION_STARTED" | "PRE_UPLOAD_GATE_RESULT" | "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED" | "IMAGE_UPLOAD_STARTED" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED" | "POST_UPLOAD_EDITOR_READINESS_STARTED" | "POST_UPLOAD_EDITOR_READINESS_SAMPLE" | "POST_UPLOAD_EDITOR_SEMANTIC_INVENTORY_OBSERVED" | "POST_UPLOAD_EDITOR_INTERACTIVE_TOPOLOGY_OBSERVED" | "POST_UPLOAD_EDITOR_MEDIA_PREVIEW_OBSERVED" | "POST_UPLOAD_EDITOR_MODAL_STATE_OBSERVED" | "POST_UPLOAD_EDITOR_PHASE_OBSERVED" | "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED" | "POST_UPLOAD_EDITOR_INSPECTION_FAILED" | "POST_UPLOAD_EDITOR_INSPECTION_COMPLETED" | "XHS_PUBLISH_FLOW_TIMELINE" | "XHS_PUBLISH_FLOW_COMPLETED" | "XHS_PUBLISH_FLOW_BLOCKED" | "XHS_PUBLISH_FLOW_INTERMEDIATE_ACTION";
   timestamp: string;
   operationId: string;
   platformKey: "xiaohongshu";
@@ -515,6 +529,13 @@ export interface XiaohongshuEditorEntryDiagnostic {
   publishNoteDropdownClickCount?: 0 | 1;
   imagePostMenuItemClickCount?: 0 | 1;
   uploadVideoMenuItemClickCount?: 0;
+  imagePostEntryInspection?: XiaohongshuImagePostEntryInspection;
+  imagePostEntryActivation?: XiaohongshuImagePostEntryActivationResult;
+  exactTextMatchCount?: number;
+  safeToTestClick?: boolean;
+  imagePostEntryClickCount?: number;
+  observedTarget?: "image" | "video" | null;
+  imagePostEntryRouteReadback?: "PASS" | "FAIL";
   imagePostSurfaceAfterPublishNote?: XiaohongshuClickableSurfaceResolution;
   postPublishNoteState?: PublishNotePostClickState;
   shellStatus?: ImageEditorShellStatus;
@@ -3797,6 +3818,68 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     }
   }
 
+  private async navigateToImagePostEditorViaExactCard(page: Page, operationId: string, accountId: string, startedAt: number): Promise<XiaohongshuEditorEntryResult> {
+    const selectorSignal = "semantic:EXACT_PUBLISH_IMAGE_POST_CARD";
+    const inspection = await inspectXiaohongshuImagePostEntry(page);
+    this.emitEditorEntryDiagnostic({
+      code: "IMAGE_POST_ENTRY_INSPECTION",
+      timestamp: new Date().toISOString(),
+      operationId,
+      platformKey: "xiaohongshu",
+      accountId,
+      sanitizedUrl: sanitizePageUrl(page),
+      selectorSignal,
+      status: inspection.inspectionStatus,
+      exactTextMatchCount: inspection.exactTextMatchCount,
+      safeToTestClick: inspection.safeToTestClick,
+      imagePostEntryInspection: inspection,
+      imagePostEntryClickCount: 0,
+      failureCode: inspection.failureCode === "NOT_CREATOR_HOME" ? "EDITOR_ROUTE_NOT_REACHED" : inspection.failureCode === null ? undefined : "PUBLISH_ENTRY_NOT_FOUND",
+      failureStage: inspection.failureCode === null ? undefined : "PUBLISH_ENTRY_DISCOVERY",
+      missingSignal: inspection.failureCode === null ? undefined : selectorSignal
+    });
+    this.emitEditorEntryStep(page, operationId, accountId, startedAt, "PUBLISH_ENTRY_FOUND", inspection.safeToTestClick, selectorSignal);
+    if (!inspection.safeToTestClick) {
+      throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", `小红书唯一“发布图文笔记”入口未通过 bounded contract：${inspection.failureCode ?? "UNKNOWN"}`, { failureCode: "PUBLISH_ENTRY_NOT_FOUND", failureStage: "PUBLISH_ENTRY_DISCOVERY", missingSignal: selectorSignal });
+    }
+
+    const activation = await activateXiaohongshuImagePostEntry(page, { navigationClickCount: 0 });
+    this.emitEditorEntryDiagnostic({
+      code: "IMAGE_POST_ENTRY_ACTIVATION",
+      timestamp: new Date().toISOString(),
+      operationId,
+      platformKey: "xiaohongshu",
+      accountId,
+      sanitizedUrl: sanitizePageUrl(page),
+      selectorSignal,
+      status: activation.status,
+      imagePostEntryInspection: activation.inspection,
+      imagePostEntryActivation: activation,
+      imagePostEntryClickCount: activation.clickCount,
+      observedTarget: activation.observedTarget,
+      imagePostEntryRouteReadback: activation.routeReadback,
+      sanitizedUrlBefore: activation.sanitizedUrlBefore,
+      sanitizedUrlAfter: activation.sanitizedUrlAfter,
+      navigationClickCount: activation.clickCount,
+      navigationTransition: activation.status === "ACTIVATED",
+      failureCode: activation.failureCode === "WRONG_TARGET" ? "CONTENT_TYPE_ENTRY_NOT_FOUND" : activation.failureCode === undefined ? undefined : "EDITOR_ROUTE_NOT_REACHED",
+      failureStage: activation.failureCode === undefined ? undefined : "EDITOR_NAVIGATION",
+      missingSignal: activation.failureCode === undefined ? undefined : selectorSignal
+    });
+    this.emitEditorEntryStep(page, operationId, accountId, startedAt, "PUBLISH_ENTRY_CLICKED", activation.status === "ACTIVATED", selectorSignal, activation.sanitizedUrlBefore, activation.sanitizedUrlAfter, "PUBLISH_ENTRY_CLICK");
+    if (activation.status !== "ACTIVATED") {
+      const failureCode = activation.failureCode === "WRONG_TARGET" ? "CONTENT_TYPE_ENTRY_NOT_FOUND" : activation.failureCode === "NO_ROUTE_TRANSITION" ? "EDITOR_ROUTE_NOT_REACHED" : "PUBLISH_ENTRY_NOT_FOUND";
+      const failureStage = activation.failureCode === "WRONG_TARGET" ? "CONTENT_TYPE_SELECTION" : activation.failureCode === "NO_ROUTE_TRANSITION" ? "EDITOR_ROUTE" : "PUBLISH_ENTRY_CLICK";
+      throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", `唯一“发布图文笔记”入口激活未到达图文编辑器：${activation.failureCode ?? activation.status}；不会 retry`, { failureCode, failureStage, missingSignal: selectorSignal });
+    }
+
+    const postState = classifyPublishNotePostClickState({ url: page.url(), bodyText: "" });
+    if (postState === "VIDEO_EDITOR") throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "发布图文笔记入口进入了视频编辑器；不会继续 mutation", { failureCode: "CONTENT_TYPE_ENTRY_NOT_FOUND", failureStage: "CONTENT_TYPE_SELECTION", missingSignal: "target=image" });
+    if (postState !== "IMAGE_EDITOR") throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "发布图文笔记入口未得到可验证的图文编辑器路由", { failureCode: "EDITOR_ROUTE_NOT_REACHED", failureStage: "EDITOR_ROUTE", missingSignal: "url:/publish/publish?target=image" });
+    this.emitEditorEntryStep(page, operationId, accountId, startedAt, "EDITOR_ROUTE_REACHED", true, "url:/publish/publish?target=image", activation.sanitizedUrlBefore, activation.sanitizedUrlAfter, "PUBLISH_ENTRY_CLICK");
+    return { editorReached: true, sanitizedUrl: activation.sanitizedUrlAfter, preClickRevalidated: true, navigationClickCount: 1, navigationTransitionObserved: true, postPublishNoteState: "IMAGE_EDITOR" };
+  }
+
   private async navigateToImagePostEditor(page: Page, operationId: string = randomUUID(), accountId = "unknown-account", identity: { context?: object; contextDebugId?: string; pageDebugId?: string } = {}, policy: XiaohongshuEditorNavigationPolicy = "PREPARE_PUBLISH"): Promise<XiaohongshuEditorEntryResult> {
     const startedAt = Date.now();
     const startUrl = sanitizePageUrl(page);
@@ -3823,6 +3906,10 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     }
 
     await this.emitCreatorHomeDiagnostics(page, operationId, accountId, identity);
+
+    if (typeof (page as unknown as { getByText?: unknown }).getByText === "function") {
+      return this.navigateToImagePostEditorViaExactCard(page, operationId, accountId, startedAt);
+    }
 
     if (typeof (page as unknown as { evaluateHandle?: unknown }).evaluateHandle === "function") {
       if (policy === "GATE_NAVIGATION") return this.navigateToImagePostEditorForGate(page, operationId, accountId, identity);
