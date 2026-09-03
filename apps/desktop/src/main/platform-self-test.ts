@@ -36,7 +36,7 @@ function safeSelfTestImagePath(fileName = "task10n-safe-test.png"): string {
 const XHS_EXPLORATION_TITLE = "小红书发布流程测试-请勿发布";
 const XHS_EXPLORATION_BODY = "自动化发布流程验证，仅用于本地测试，不执行最终发布。";
 const XHS_ONE_SHOT_TITLE = "自动化发布测试｜请忽略";
-const XHS_ONE_SHOT_BODY = "这是一条 GEO Media Publisher 小红书发布链路自动化测试内容，仅用于验证图片上传、标题正文填写及发布前状态检查。本轮不会执行最终发布。";
+const XHS_ONE_SHOT_BODY = "这是一条 GEO Media Publisher 小红书自动发布链路测试内容，请忽略。";
 const XHS_ONE_SHOT_CONFIRMATION = "本次会真实发布 1 条测试笔记，最多提交一次。";
 const XHS_EXPLORATION_EVIDENCE_FILE = "xiaohongshu-task10r-publish-flow-exploration.json";
 function publishDomainCountsEqual(left: { publishJobs: number; submissionIntents: number; publishRecords: number }, right: { publishJobs: number; submissionIntents: number; publishRecords: number }): boolean {

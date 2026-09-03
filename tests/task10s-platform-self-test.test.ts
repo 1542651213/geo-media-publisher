@@ -105,7 +105,7 @@ describe("Task10S platform self-test entry", () => {
           headless: false,
           stage: "xiaohongshu_gate_only",
           titleReadbackValue: "自动化发布测试｜请忽略",
-          bodyReadbackValue: "这是一条 GEO Media Publisher 小红书发布链路自动化测试内容，仅用于验证图片上传、标题正文填写及发布前状态检查。本轮不会执行最终发布。",
+          bodyReadbackValue: "这是一条 GEO Media Publisher 小红书自动发布链路测试内容，请忽略。",
           imageUploaded: true,
           imageUploadRequired: true,
           events: ["IMAGE_UPLOAD_STARTED", "IMAGE_UPLOAD_PASSED"],
@@ -142,6 +142,7 @@ describe("Task10S platform self-test entry", () => {
     expect(result.finalSubmit.clickCount).toBe(0);
     expect(result.readyToResumeExistingOneShot).toBe(true);
     expect((receivedInput as { images?: string[] } | null)?.images).toEqual([safeFixture.filePath]);
+    expect((receivedInput as { body?: string } | null)?.body).toBe("这是一条 GEO Media Publisher 小红书自动发布链路测试内容，请忽略。");
     expect(receivedContext.runtimeIdentityProof).toMatchObject({
       accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID,
       platformKey: "xiaohongshu",
