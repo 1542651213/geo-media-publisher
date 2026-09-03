@@ -15,6 +15,10 @@ export type XiaohongshuPublishEditorSelectedSignal =
 export interface XiaohongshuPublishEditorSemanticBoundingRect {
   x: number;
   y: number;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
   width: number;
   height: number;
 }
@@ -33,6 +37,7 @@ export interface XiaohongshuPublishEditorSemanticElementSafe {
   boundingRect: XiaohongshuPublishEditorSemanticBoundingRect | null;
   connected: boolean;
   rendered: boolean;
+  intersectsViewport: boolean;
   enabled: boolean;
   active: boolean;
   activeSignal: XiaohongshuPublishEditorSelectedSignal;
@@ -69,6 +74,7 @@ export interface XiaohongshuPublishEditorSemanticUploadImageNodeSafe {
   boundingRect: XiaohongshuPublishEditorSemanticBoundingRect | null;
   connected: boolean;
   rendered: boolean;
+  intersectsViewport: boolean;
   enabled: boolean;
   parent: XiaohongshuPublishEditorSemanticElementSafe | null;
   ancestors: readonly XiaohongshuPublishEditorSemanticElementSafe[];
@@ -86,19 +92,26 @@ export interface XiaohongshuPublishEditorSemanticFileInputSafe {
 export interface XiaohongshuPublishEditorSemanticCandidateSnapshot {
   origin: string;
   pathname: string;
+  windowInnerWidth: number;
+  windowInnerHeight: number;
   source: string | null;
   from: string | null;
   target: string | null;
   tabs: readonly XiaohongshuPublishEditorSemanticTabDiagnostic[];
   uploadImageTabTextMatchCount: number;
   uploadImageTabRenderedCandidateCount: number;
+  viewportIntersectingUploadImageCandidateCount: number;
   uploadImageTabNodesSafe: readonly XiaohongshuPublishEditorSemanticTabNodeSafe[];
   uploadImageButtonTextMatchCount: number;
   uploadImageButtonRenderedCandidateCount: number;
   uploadImageButtonNodesSafe: readonly XiaohongshuPublishEditorSemanticUploadImageNodeSafe[];
   visibleCreatorTabCount: number;
+  renderedCreatorTabCount: number;
+  viewportIntersectingCreatorTabCount: number;
   activeCreatorTabCount: number;
+  viewportIntersectingActiveCreatorTabCount: number;
   activeCreatorTabLabel: XiaohongshuPublishEditorTabLabel | null;
+  viewportIntersectingActiveCreatorTabLabel: XiaohongshuPublishEditorTabLabel | null;
   actualSelectedTabSignal: XiaohongshuPublishEditorSelectedSignal;
   selectedImageTabProof: XiaohongshuPublishEditorSemanticProof;
   imageUploadSurfaceProof: XiaohongshuPublishEditorSemanticProof;
@@ -154,6 +167,8 @@ export function emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic
     pageContextMatchesSession: false,
     origin: null,
     pathname: null,
+    windowInnerWidth: 0,
+    windowInnerHeight: 0,
     source: null,
     from: null,
     target: null,
@@ -161,13 +176,18 @@ export function emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic
     tabs: EMPTY_TABS,
     uploadImageTabTextMatchCount: 0,
     uploadImageTabRenderedCandidateCount: 0,
+    viewportIntersectingUploadImageCandidateCount: 0,
     uploadImageTabNodesSafe: [],
     uploadImageButtonTextMatchCount: 0,
     uploadImageButtonRenderedCandidateCount: 0,
     uploadImageButtonNodesSafe: [],
     visibleCreatorTabCount: 0,
+    renderedCreatorTabCount: 0,
+    viewportIntersectingCreatorTabCount: 0,
     activeCreatorTabCount: 0,
+    viewportIntersectingActiveCreatorTabCount: 0,
     activeCreatorTabLabel: null,
+    viewportIntersectingActiveCreatorTabLabel: null,
     actualSelectedTabSignal: "NOT_PROVEN",
     selectedImageTabProof: "FAIL",
     imageUploadSurfaceProof: "FAIL",
@@ -191,10 +211,10 @@ export async function inspectXiaohongshuPublishEditorSemanticCandidates(page: Pa
       return value === null ? null : safeString(value, 120);
     };
     const boundedNumber = (value: number): number => Math.round(Math.max(-100000, Math.min(100000, value)) * 100) / 100;
-    const getBoundingRect = (element: Element): { x: number; y: number; width: number; height: number } | null => {
+    const getBoundingRect = (element: Element): { x: number; y: number; left: number; top: number; right: number; bottom: number; width: number; height: number } | null => {
       const rect = element.getBoundingClientRect();
-      if (![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite)) return null;
-      return { x: boundedNumber(rect.x), y: boundedNumber(rect.y), width: boundedNumber(rect.width), height: boundedNumber(rect.height) };
+      if (![rect.x, rect.y, rect.left, rect.top, rect.right, rect.bottom, rect.width, rect.height].every(Number.isFinite)) return null;
+      return { x: boundedNumber(rect.x), y: boundedNumber(rect.y), left: boundedNumber(rect.left), top: boundedNumber(rect.top), right: boundedNumber(rect.right), bottom: boundedNumber(rect.bottom), width: boundedNumber(rect.width), height: boundedNumber(rect.height) };
     };
     const classNameSafe = (element: Element): string => safeString(element.getAttribute("class"));
     const role = (element: Element): string | null => safeAttribute(element, "role");
@@ -203,6 +223,15 @@ export async function inspectXiaohongshuPublishEditorSemanticCandidates(page: Pa
       return Number.isFinite(value) ? Math.max(-1, Math.min(1000, Math.trunc(value))) : -1;
     };
     const style = (element: Element): CSSStyleDeclaration => window.getComputedStyle(element);
+    const viewportWidth = Math.max(0, Number.isFinite(window.innerWidth) ? window.innerWidth : 0);
+    const viewportHeight = Math.max(0, Number.isFinite(window.innerHeight) ? window.innerHeight : 0);
+    const intersectsViewport = (rect: ReturnType<typeof getBoundingRect>): boolean => rect !== null
+      && rect.right > 0
+      && rect.bottom > 0
+      && rect.left < viewportWidth
+      && rect.top < viewportHeight
+      && rect.width > 0
+      && rect.height > 0;
     const isPositiveState = (value: string | null): boolean => value !== null && value.toLowerCase() !== "false" && value !== "0";
     const hasClassToken = (element: Element, token: string): boolean => new RegExp(`(?:^|[\\s_-])${token}(?:$|[\\s_-])`, "iu").test(classNameSafe(element));
     const isEnabled = (element: Element): boolean => {
@@ -251,14 +280,16 @@ export async function inspectXiaohongshuPublishEditorSemanticCandidates(page: Pa
       ariaHidden: string | null;
       pointerEvents: string;
       cursor: string;
-      boundingRect: { x: number; y: number; width: number; height: number } | null;
+      boundingRect: { x: number; y: number; left: number; top: number; right: number; bottom: number; width: number; height: number } | null;
       connected: boolean;
       rendered: boolean;
+      intersectsViewport: boolean;
       enabled: boolean;
       active: boolean;
       activeSignal: typeof signal;
     } => {
       const computed = style(element);
+      const rect = getBoundingRect(element);
       return {
         tagName: element.tagName.toUpperCase(),
         role: role(element),
@@ -270,9 +301,10 @@ export async function inspectXiaohongshuPublishEditorSemanticCandidates(page: Pa
         ariaHidden: safeAttribute(element, "aria-hidden"),
         pointerEvents: safeString(computed.pointerEvents, 40),
         cursor: safeString(computed.cursor, 40),
-        boundingRect: getBoundingRect(element),
+        boundingRect: rect,
         connected: element.isConnected,
         rendered: isRendered(element, computed),
+        intersectsViewport: intersectsViewport(rect),
         enabled: isEnabled(element),
         active,
         activeSignal: signal
@@ -316,9 +348,10 @@ export async function inspectXiaohongshuPublishEditorSemanticCandidates(page: Pa
       ariaHidden: string | null;
       pointerEvents: string;
       cursor: string;
-      boundingRect: { x: number; y: number; width: number; height: number } | null;
+      boundingRect: { x: number; y: number; left: number; top: number; right: number; bottom: number; width: number; height: number } | null;
       connected: boolean;
       rendered: boolean;
+      intersectsViewport: boolean;
       active: boolean;
       activeSignal: ReturnType<typeof ancestorActiveSignal>;
       display: string;
@@ -356,9 +389,10 @@ export async function inspectXiaohongshuPublishEditorSemanticCandidates(page: Pa
       display: string;
       visibility: string;
       opacity: string;
-      boundingRect: { x: number; y: number; width: number; height: number } | null;
+      boundingRect: { x: number; y: number; left: number; top: number; right: number; bottom: number; width: number; height: number } | null;
       connected: boolean;
       rendered: boolean;
+      intersectsViewport: boolean;
       enabled: boolean;
       parent: ReturnType<typeof safeElement> | null;
       ancestors: readonly ReturnType<typeof safeElement>[];
@@ -366,6 +400,7 @@ export async function inspectXiaohongshuPublishEditorSemanticCandidates(page: Pa
     } => {
       const computed = style(element);
       const button = uploadButtonAncestor(element);
+      const rect = getBoundingRect(element);
       return {
         nodeIndex,
         tagName: element.tagName.toUpperCase(),
@@ -376,9 +411,10 @@ export async function inspectXiaohongshuPublishEditorSemanticCandidates(page: Pa
         display: safeString(computed.display, 40),
         visibility: safeString(computed.visibility, 40),
         opacity: safeString(computed.opacity, 40),
-        boundingRect: getBoundingRect(element),
+        boundingRect: rect,
         connected: element.isConnected,
         rendered: isRendered(element, computed),
+        intersectsViewport: intersectsViewport(rect),
         enabled: isEnabled(element),
         parent: element.parentElement ? safeElement(element.parentElement, false, "NOT_PROVEN") : null,
         ancestors: ancestorsOf(element).map((ancestor) => safeElement(ancestor, false, "NOT_PROVEN")),
@@ -405,9 +441,16 @@ export async function inspectXiaohongshuPublishEditorSemanticCandidates(page: Pa
       }
     }
     const visibleCreatorTabs = creatorTabs.filter((element) => isRendered(element));
+    const viewportIntersectingCreatorTabs = visibleCreatorTabs.filter((element) => intersectsViewport(getBoundingRect(element)));
     const activeCreatorTabs = visibleCreatorTabs.filter((element) => ancestorActiveSignal(element) !== "NOT_PROVEN");
-    const selectedTabSignal = activeCreatorTabs.length === 1 ? ancestorActiveSignal(activeCreatorTabs[0] as Element) : "NOT_PROVEN";
+    const viewportIntersectingActiveCreatorTabs = viewportIntersectingCreatorTabs.filter((element) => ancestorActiveSignal(element) !== "NOT_PROVEN");
     const imageTabRenderedCount = imageTab?.nodes.filter((node) => node.rendered && node.enabled && node.pointerEvents !== "none").length ?? 0;
+    const viewportIntersectingImageTabCount = imageTab?.nodes.filter((node) => node.rendered
+      && node.enabled
+      && node.pointerEvents !== "none"
+      && node.intersectsViewport
+      && node.nearestCreatorTabAncestor?.rendered
+      && node.nearestCreatorTabAncestor.intersectsViewport).length ?? 0;
     const uploadButtonCandidateCount = uploadImageNodes.filter((node) => node.rendered
       && node.enabled
       && node.pointerEvents !== "none"
@@ -427,7 +470,12 @@ export async function inspectXiaohongshuPublishEditorSemanticCandidates(page: Pa
     });
     const isAcceptableImageInput = (input: typeof fileInputs[number]): boolean => input.type === "file" && !input.disabled && Boolean(input.accept && /(?:^|[,\s])(?:image[/]\*|image|\.(?:jpe?g|png|webp|gif|bmp|avif))(?:$|[,\s])/iu.test(input.accept));
     const acceptableImageFileInputCount = fileInputs.filter(isAcceptableImageInput).length;
-    const selectedImageTabProof = imageTabRenderedCount === 1 && activeCreatorTabs.length === 1 && creatorTabLabels.get(activeCreatorTabs[0] as Element) === "上传图文" ? "PASS" : "FAIL";
+    const selectedViewportTabSignal = viewportIntersectingActiveCreatorTabs.length === 1 ? ancestorActiveSignal(viewportIntersectingActiveCreatorTabs[0] as Element) : "NOT_PROVEN";
+    const selectedImageTabProof = viewportIntersectingImageTabCount === 1
+      && viewportIntersectingActiveCreatorTabs.length === 1
+      && creatorTabLabels.get(viewportIntersectingActiveCreatorTabs[0] as Element) === "上传图文"
+      ? "PASS"
+      : "FAIL";
     const imageUploadSurfaceProof = uploadButtonCandidateCount === 1 && acceptableImageFileInputCount === 1 ? "PASS" : "FAIL";
     const imagePostSemanticProof = window.location.origin === "https://creator.xiaohongshu.com"
       && window.location.pathname === "/publish/publish"
@@ -437,23 +485,31 @@ export async function inspectXiaohongshuPublishEditorSemanticCandidates(page: Pa
       ? "PASS"
       : "FAIL";
     const selectedLabel = activeCreatorTabs.length === 1 ? creatorTabLabels.get(activeCreatorTabs[0] as Element) ?? null : null;
-    const selectedSignal = activeCreatorTabs.length === 1 ? selectedTabSignal : "NOT_PROVEN";
+    const viewportSelectedLabel = viewportIntersectingActiveCreatorTabs.length === 1 ? creatorTabLabels.get(viewportIntersectingActiveCreatorTabs[0] as Element) ?? null : null;
+    const selectedSignal = viewportIntersectingActiveCreatorTabs.length === 1 ? selectedViewportTabSignal : "NOT_PROVEN";
     return {
       origin: window.location.origin,
       pathname: window.location.pathname,
+      windowInnerWidth: viewportWidth,
+      windowInnerHeight: viewportHeight,
       source: new URLSearchParams(window.location.search).get("source"),
       from: new URLSearchParams(window.location.search).get("from"),
       target: new URLSearchParams(window.location.search).get("target"),
       tabs: tabDiagnostics,
       uploadImageTabTextMatchCount: imageTab?.exactTextMatchCount ?? 0,
       uploadImageTabRenderedCandidateCount: imageTabRenderedCount,
+      viewportIntersectingUploadImageCandidateCount: viewportIntersectingImageTabCount,
       uploadImageTabNodesSafe: imageTab?.nodes ?? [],
       uploadImageButtonTextMatchCount: uploadImageElements.length,
       uploadImageButtonRenderedCandidateCount: uploadButtonCandidateCount,
       uploadImageButtonNodesSafe: uploadImageNodes,
       visibleCreatorTabCount: visibleCreatorTabs.length,
+      renderedCreatorTabCount: visibleCreatorTabs.length,
+      viewportIntersectingCreatorTabCount: viewportIntersectingCreatorTabs.length,
       activeCreatorTabCount: activeCreatorTabs.length,
+      viewportIntersectingActiveCreatorTabCount: viewportIntersectingActiveCreatorTabs.length,
       activeCreatorTabLabel: selectedLabel,
+      viewportIntersectingActiveCreatorTabLabel: viewportSelectedLabel,
       actualSelectedTabSignal: selectedSignal,
       selectedImageTabProof,
       imageUploadSurfaceProof,

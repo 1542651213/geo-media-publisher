@@ -16,6 +16,8 @@ async function withFixture(body: string, callback: (page: Page) => Promise<void>
         .creator-tab.active { color: red; }
         .hidden { display: none; }
         .zero, .zero span { display: block; width: 0; height: 0; overflow: hidden; }
+        .offscreen { position: absolute; left: -9710px; top: -9910px; }
+        .partial { position: absolute; left: -20px; top: 20px; }
         .upload-button { display: inline-block; width: 100px; height: 48px; cursor: pointer; }
         .upload-button span { display: inline-block; width: 80px; height: 24px; pointer-events: auto; cursor: pointer; }
       </style>
@@ -106,6 +108,67 @@ describe("XHS publish-editor semantic candidate diagnostic", () => {
       expect(result.acceptableImageFileInputCount).toBe(1);
       expect(result.imageUploadSurfaceProof).toBe("PASS");
       expect(result.imagePostSemanticProof).toBe("PASS");
+    });
+  });
+
+  it.skipIf(!existsSync(chromeExecutable))("excludes an off-screen active clone and keeps one viewport-intersecting image tab", async () => {
+    await withFixture(tabs({ imageCopies: 2, active: "上传图文" }), async (page) => {
+      await page.evaluate(() => {
+        const imageTabs = document.querySelectorAll(".creator-tab");
+        imageTabs[3]?.classList.add("offscreen");
+        imageTabs[4]?.classList.add("active");
+      });
+      const result = await inspectXiaohongshuPublishEditorSemanticCandidates(page);
+      expect(result.uploadImageTabTextMatchCount).toBe(2);
+      expect(result.uploadImageTabRenderedCandidateCount).toBe(2);
+      expect(result.viewportIntersectingUploadImageCandidateCount).toBe(1);
+      expect(result.renderedCreatorTabCount).toBe(5);
+      expect(result.viewportIntersectingCreatorTabCount).toBe(4);
+      expect(result.activeCreatorTabCount).toBe(2);
+      expect(result.viewportIntersectingActiveCreatorTabCount).toBe(1);
+      expect(result.viewportIntersectingActiveCreatorTabLabel).toBe("上传图文");
+      expect(result.selectedImageTabProof).toBe("PASS");
+      expect(result.imagePostSemanticProof).toBe("PASS");
+    });
+  });
+
+  it.skipIf(!existsSync(chromeExecutable))("fails closed when two active creator tabs intersect the viewport", async () => {
+    await withFixture(tabs({ active: "上传图文" }), async (page) => {
+      await page.evaluate(() => {
+        history.replaceState({}, "", "/publish/publish?target=image");
+        document.querySelector(".creator-tab")?.classList.add("active");
+      });
+      const result = await inspectXiaohongshuPublishEditorSemanticCandidates(page);
+      expect(result.viewportIntersectingActiveCreatorTabCount).toBe(2);
+      expect(result.viewportIntersectingActiveCreatorTabLabel).toBeNull();
+      expect(result.selectedImageTabProof).toBe("FAIL");
+      expect(result.imagePostSemanticProof).toBe("FAIL");
+    });
+  });
+
+  it.skipIf(!existsSync(chromeExecutable))("rejects a sole off-screen active image tab", async () => {
+    await withFixture(tabs({ active: "上传图文" }), async (page) => {
+      await page.evaluate(() => {
+        history.replaceState({}, "", "/publish/publish?target=image");
+        document.querySelector(".creator-tab:nth-of-type(4)")?.classList.add("offscreen");
+      });
+      const result = await inspectXiaohongshuPublishEditorSemanticCandidates(page);
+      expect(result.viewportIntersectingActiveCreatorTabCount).toBe(0);
+      expect(result.viewportIntersectingActiveCreatorTabLabel).toBeNull();
+      expect(result.selectedImageTabProof).toBe("FAIL");
+    });
+  });
+
+  it.skipIf(!existsSync(chromeExecutable))("keeps a partially out-of-bounds active image tab when it intersects the viewport", async () => {
+    await withFixture(tabs({ active: "上传图文" }), async (page) => {
+      await page.evaluate(() => {
+        history.replaceState({}, "", "/publish/publish?target=image");
+        document.querySelector(".creator-tab:nth-of-type(4)")?.classList.add("partial");
+      });
+      const result = await inspectXiaohongshuPublishEditorSemanticCandidates(page);
+      expect(result.viewportIntersectingActiveCreatorTabCount).toBe(1);
+      expect(result.viewportIntersectingActiveCreatorTabLabel).toBe("上传图文");
+      expect(result.selectedImageTabProof).toBe("PASS");
     });
   });
 
