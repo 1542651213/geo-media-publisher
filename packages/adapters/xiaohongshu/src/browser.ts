@@ -83,8 +83,10 @@ import { emptyXiaohongshuPublishEditorDomRuntimeDiagnostic, inspectXiaohongshuPu
 import { emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, inspectXiaohongshuPublishEditorSemanticCandidates, type XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic } from "./publish-editor-semantic-diagnostic";
 import { emptyXiaohongshuPostUploadReconciliationDomSnapshot, inspectXiaohongshuPostUploadReconciliationDom, reconcileXiaohongshuPostUploadSnapshot, type XiaohongshuPostUploadReconciliationResult } from "./post-upload-reconciliation-diagnostic";
 import { containsExpectedXiaohongshuSafeFixture, inspectXiaohongshuFileInputState, type XiaohongshuFileInputFixtureMatch, type XiaohongshuFileInputSafeNode } from "./file-input-diagnostic";
+import { readXiaohongshuUploadInputImmediately, type XiaohongshuUploadFileExpectation, type XiaohongshuUploadInputImmediateReadback } from "./upload-delivery-diagnostic";
 export type { XiaohongshuPostUploadBoundingRect, XiaohongshuPostUploadFinalSubmitProof, XiaohongshuPostUploadImageItemSafe, XiaohongshuPostUploadReconciliationDomSnapshot, XiaohongshuPostUploadReconciliationResult, XiaohongshuPostUploadReconciliationState } from "./post-upload-reconciliation-diagnostic";
 export type { XiaohongshuFileInputAncestorFingerprint, XiaohongshuFileInputDomSnapshot, XiaohongshuFileInputFileSafeMetadata, XiaohongshuFileInputFixtureMatch, XiaohongshuFileInputSafeNode } from "./file-input-diagnostic";
+export type { XiaohongshuUploadFileExpectation, XiaohongshuUploadFileMetadata, XiaohongshuUploadFileReadback, XiaohongshuUploadFixtureMatch, XiaohongshuUploadInputFingerprint, XiaohongshuUploadInputImmediateReadback } from "./upload-delivery-diagnostic";
 export type { XhsEditorLoadDiagnosticResult } from "./editor-load-diagnostic";
 export type { XhsEditorNetworkDiagnosticResult } from "./editor-network-diagnostic";
 export type { XiaohongshuContextPageInventory, XiaohongshuContextPageInventoryEntry, XiaohongshuContextPageDomSnapshot, XiaohongshuDocumentReadyState, XiaohongshuVisibilityState } from "./context-page-inventory";
@@ -289,8 +291,8 @@ const XIAOHONGSHU_PUBLISH_ENTRY_CANDIDATE_SELECTOR = 'a, button, [role="button"]
 const XIAOHONGSHU_PUBLISH_ENTRY_CANDIDATE_MAX = 20;
 const XIAOHONGSHU_CONTENT_TYPE_ENTRY_SELECTOR = 'button[data-testid*="content-type-image" i], [role="button"][data-testid*="content-type-image" i], a[data-testid*="content-type-image" i]';
 const XIAOHONGSHU_FILE_SELECTOR = 'input[type="file"]';
-const XIAOHONGSHU_PREVIEW_SELECTOR = 'img[class*="preview" i], img[src*="xhscdn" i], [class*="preview" i], [data-testid*="upload-result" i], [class*="uploaded" i]';
 const XIAOHONGSHU_UPLOAD_BUSY_SELECTOR = '[aria-busy="true"], [class*="loading" i], [class*="uploading" i], progress';
+const TASK10S_SAFE_FIXTURE_EXPECTATION: XiaohongshuUploadFileExpectation = { name: "task10s-safe-test.png", size: 19226, type: "image/png" };
 const XIAOHONGSHU_TITLE_SELECTOR = 'input[placeholder*="标题"], input[aria-label*="标题"], input[name*="title" i], input[id*="title" i]';
 const XIAOHONGSHU_TITLE_FALLBACK_SELECTOR = 'textarea[placeholder*="标题"], textarea[aria-label*="标题"], textarea[name*="title" i], textarea[id*="title" i]';
 const XIAOHONGSHU_BODY_SELECTOR = '[contenteditable="true"][role="textbox"], [contenteditable="true"][data-placeholder], textarea[aria-label*="正文"], textarea[name*="body" i], textarea[id*="body" i]';
@@ -542,7 +544,7 @@ export type XiaohongshuEditorEntryStepName =
 export type XiaohongshuEditorNavigationTrigger = "DIRECT_GOTO" | "PUBLISH_ENTRY_CLICK" | "CONTENT_TYPE_CLICK" | "PLATFORM_REDIRECT" | "UNKNOWN";
 
 export interface XiaohongshuEditorEntryDiagnostic {
-  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED" | "PUBLISH_EXACT_TARGETS_OBSERVED" | "PUBLISH_TARGET_ANCESTOR_CHAINS" | "PUBLISH_CLICK_SURFACE_DIAGNOSTICS" | "PUBLISH_HIT_TEST_OBSERVED" | "PUBLISH_EVENT_LISTENERS_OBSERVED" | "PUBLISH_NOTE_SURFACE_RESOLVED" | "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED" | "PUBLISH_NOTE_NAVIGATION_CLICK_STARTED" | "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED" | "IMAGE_POST_ENTRY_INSPECTION" | "IMAGE_POST_ENTRY_ACTIVATION" | "POST_PUBLISH_NOTE_STATE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_STARTED" | "IMAGE_EDITOR_READINESS_SAMPLE" | "IMAGE_EDITOR_SHELL_READY" | "IMAGE_EDITOR_SHELL_NOT_READY" | "IMAGE_EDITOR_SHELL_TIMEOUT" | "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED" | "IMAGE_EDITOR_CONTROLS_DISCOVERED" | "IMAGE_EDITOR_PHASE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_COMPLETED" | "IMAGE_EDITOR_INSPECTION_FAILED" | "PRE_UPLOAD_GATE_INSPECTION_STARTED" | "PRE_UPLOAD_GATE_RESULT" | "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED" | "IMAGE_UPLOAD_STARTED" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED" | "POST_UPLOAD_EDITOR_READINESS_STARTED" | "POST_UPLOAD_EDITOR_READINESS_SAMPLE" | "POST_UPLOAD_EDITOR_SEMANTIC_INVENTORY_OBSERVED" | "POST_UPLOAD_EDITOR_INTERACTIVE_TOPOLOGY_OBSERVED" | "POST_UPLOAD_EDITOR_MEDIA_PREVIEW_OBSERVED" | "POST_UPLOAD_EDITOR_MODAL_STATE_OBSERVED" | "POST_UPLOAD_EDITOR_PHASE_OBSERVED" | "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED" | "POST_UPLOAD_EDITOR_INSPECTION_FAILED" | "POST_UPLOAD_EDITOR_INSPECTION_COMPLETED" | "XHS_PUBLISH_FLOW_TIMELINE" | "XHS_PUBLISH_FLOW_COMPLETED" | "XHS_PUBLISH_FLOW_BLOCKED" | "XHS_PUBLISH_FLOW_INTERMEDIATE_ACTION";
+  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED" | "PUBLISH_EXACT_TARGETS_OBSERVED" | "PUBLISH_TARGET_ANCESTOR_CHAINS" | "PUBLISH_CLICK_SURFACE_DIAGNOSTICS" | "PUBLISH_HIT_TEST_OBSERVED" | "PUBLISH_EVENT_LISTENERS_OBSERVED" | "PUBLISH_NOTE_SURFACE_RESOLVED" | "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED" | "PUBLISH_NOTE_NAVIGATION_CLICK_STARTED" | "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED" | "IMAGE_POST_ENTRY_INSPECTION" | "IMAGE_POST_ENTRY_ACTIVATION" | "POST_PUBLISH_NOTE_STATE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_STARTED" | "IMAGE_EDITOR_READINESS_SAMPLE" | "IMAGE_EDITOR_SHELL_READY" | "IMAGE_EDITOR_SHELL_NOT_READY" | "IMAGE_EDITOR_SHELL_TIMEOUT" | "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED" | "IMAGE_EDITOR_CONTROLS_DISCOVERED" | "IMAGE_EDITOR_PHASE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_COMPLETED" | "IMAGE_EDITOR_INSPECTION_FAILED" | "PRE_UPLOAD_GATE_INSPECTION_STARTED" | "PRE_UPLOAD_GATE_RESULT" | "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED" | "IMAGE_UPLOAD_STARTED" | "IMAGE_UPLOAD_INPUT_READBACK" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED" | "POST_UPLOAD_EDITOR_READINESS_STARTED" | "POST_UPLOAD_EDITOR_READINESS_SAMPLE" | "POST_UPLOAD_EDITOR_SEMANTIC_INVENTORY_OBSERVED" | "POST_UPLOAD_EDITOR_INTERACTIVE_TOPOLOGY_OBSERVED" | "POST_UPLOAD_EDITOR_MODAL_STATE_OBSERVED" | "POST_UPLOAD_EDITOR_MEDIA_PREVIEW_OBSERVED" | "POST_UPLOAD_EDITOR_PHASE_OBSERVED" | "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED" | "POST_UPLOAD_EDITOR_INSPECTION_FAILED" | "POST_UPLOAD_EDITOR_INSPECTION_COMPLETED" | "XHS_PUBLISH_FLOW_TIMELINE" | "XHS_PUBLISH_FLOW_COMPLETED" | "XHS_PUBLISH_FLOW_BLOCKED" | "XHS_PUBLISH_FLOW_INTERMEDIATE_ACTION";
   timestamp: string;
   operationId: string;
   platformKey: "xiaohongshu";
@@ -625,7 +627,7 @@ export interface XiaohongshuEditorEntryDiagnostic {
   gateFinalSubmitCount?: 0;
   finalSubmitCount?: number;
   navigationClickCount?: number;
-  action?: "PUBLISH_NOTE_NAVIGATION_CLICK" | "IMAGE_UPLOAD_MUTATION" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED" | "XHS_PUBLISH_FLOW_INTERMEDIATE_ACTION";
+  action?: "PUBLISH_NOTE_NAVIGATION_CLICK" | "IMAGE_UPLOAD_MUTATION" | "IMAGE_UPLOAD_INPUT_READBACK" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED" | "XHS_PUBLISH_FLOW_INTERMEDIATE_ACTION";
   status?: string;
   revalidated?: boolean;
   exactSemanticText?: string;
@@ -705,6 +707,11 @@ export interface XiaohongshuEditorEntryDiagnostic {
   mutationType?: "IMAGE_UPLOAD_ONLY";
   selfTestMode?: "POST_UPLOAD_DISCOVERY_ONLY" | "XHS_PUBLISH_FLOW_EXPLORATION";
   uploadMutationCount?: number;
+  fileInputImmediateReadbackStatus?: "PASS" | "FAIL";
+  fileInputFilesLength?: number;
+  fileInputExpectedFixtureMatch?: "YES" | "NO" | "NOT_REQUIRED";
+  fileInputImmediateReadback?: XiaohongshuUploadInputImmediateReadback;
+  previewDetector?: "POST_UPLOAD_EDITOR_SCOPED";
   uploadAttemptIndex?: number;
   finalSubmitVisible?: boolean;
   finalSubmitEnabled?: boolean;
@@ -2524,7 +2531,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     });
 
     try {
-      const imageEvidence = await this.uploadImages(canonical.page, [input.imagePath], { ctx, session: canonical.session, metadata, selfTestMode: "POST_UPLOAD_DISCOVERY_ONLY" });
+      const imageEvidence = await this.uploadImages(canonical.page, [input.imagePath], { ctx, session: canonical.session, metadata, selfTestMode: "POST_UPLOAD_DISCOVERY_ONLY", expectedFileMetadata: TASK10S_SAFE_FIXTURE_EXPECTATION });
       const uploadCompletionObserved = imageEvidence.verified === true;
       if (!uploadCompletionObserved) return failure("UPLOAD_COMPLETION_NOT_OBSERVED", "EDITOR_DISCOVERY", "upload-completion", 1);
       const postUploadInspection = await inspectPostUploadImageEditor(canonical.page, metadata, { emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
@@ -2856,7 +2863,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       const uploadAttemptIndex = counters.uploadAttempts;
       addTimeline("IMAGE_UPLOAD", `UPLOAD_ATTEMPT_${counters.uploadAttempts}`, "STARTED");
       try {
-        const imageEvidence = await this.uploadImages(canonical.page, [input.imagePath], { ctx, session: canonical.session, metadata, selfTestMode: "XHS_PUBLISH_FLOW_EXPLORATION", uploadAttemptIndex, onMutationStarted: () => { counters = { ...counters, uploadMutationCount: counters.uploadMutationCount + 1 }; } });
+        const imageEvidence = await this.uploadImages(canonical.page, [input.imagePath], { ctx, session: canonical.session, metadata, selfTestMode: "XHS_PUBLISH_FLOW_EXPLORATION", uploadAttemptIndex, expectedFileMetadata: TASK10S_SAFE_FIXTURE_EXPECTATION, onMutationStarted: () => { counters = { ...counters, uploadMutationCount: counters.uploadMutationCount + 1 }; } });
         states.push({ phase: "IMAGE_UPLOAD", ...imageEvidence });
         uploadCompleted = imageEvidence.verified === true;
         counters = { ...counters, uploadRetryCount: Math.max(0, counters.uploadAttempts - 1) };
@@ -4951,6 +4958,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       selfTestMode?: "POST_UPLOAD_DISCOVERY_ONLY" | "XHS_PUBLISH_FLOW_EXPLORATION";
       uploadAttemptIndex?: number;
       onMutationStarted?: () => void;
+      expectedFileMetadata?: XiaohongshuUploadFileExpectation;
     }
   ): Promise<Record<string, unknown>> {
     const input = page.locator(XIAOHONGSHU_FILE_SELECTOR);
@@ -4976,14 +4984,37 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     }
     try {
       diagnosticContext?.onMutationStarted?.();
-      await input.setInputFiles(images);
+      const immediateReadback = await readXiaohongshuUploadInputImmediately(input, images, diagnosticContext?.expectedFileMetadata);
+      if (diagnosticContext) {
+        this.emitEditorEntryDiagnostic({
+          code: "IMAGE_UPLOAD_INPUT_READBACK",
+          timestamp: new Date().toISOString(),
+          operationId: diagnosticContext.metadata.operationId,
+          platformKey: "xiaohongshu",
+          accountId: diagnosticContext.ctx.accountId,
+          contextDebugId: diagnosticContext.metadata.contextDebugId,
+          pageDebugId: diagnosticContext.metadata.pageDebugId,
+          sanitizedUrl: sanitizePageUrl(page),
+          action: "IMAGE_UPLOAD_INPUT_READBACK",
+          mutationType: "IMAGE_UPLOAD_ONLY",
+          ...(diagnosticContext.selfTestMode ? { selfTestMode: diagnosticContext.selfTestMode } : {}),
+          uploadMutationCount: 1,
+          ...(diagnosticContext.uploadAttemptIndex === undefined ? {} : { uploadAttemptIndex: diagnosticContext.uploadAttemptIndex }),
+          fileInputImmediateReadbackStatus: immediateReadback.status,
+          fileInputFilesLength: immediateReadback.readback.filesLength,
+          fileInputExpectedFixtureMatch: immediateReadback.expectedFixtureMatch
+        });
+      }
+      if (immediateReadback.status !== "PASS") {
+        throw new XiaohongshuGateError("IMAGE_UPLOAD_NOT_VERIFIED", "UPLOAD_FAILED", `setInputFiles 后同一 file input 即时回读未通过；failure=${immediateReadback.failureCode ?? "FILE_INPUT_READBACK_MISMATCH"}; files=${immediateReadback.readback.filesLength}`);
+      }
       for (let attempt = 0; attempt < 8; attempt += 1) {
         const pageContent = await bodyText(page);
         if (/上传失败|图片上传失败|upload failed/iu.test(pageContent)) throw new XiaohongshuGateError("IMAGE_UPLOAD_NOT_VERIFIED", "UPLOAD_FAILED", "页面显示图片上传失败");
         const busy = page.locator(XIAOHONGSHU_UPLOAD_BUSY_SELECTOR);
-        const preview = page.locator(XIAOHONGSHU_PREVIEW_SELECTOR);
-        const previewCount = await locatorCount(preview);
-        if (previewCount >= images.length && previewCount > 0 && (await isVisible(locatorAt(preview, 0))) && await locatorCount(busy) === 0) {
+        const postUploadSnapshot = await inspectXiaohongshuPostUploadReconciliationDom(page);
+        const previewCount = postUploadSnapshot.visibleImageItemCount;
+        if (previewCount >= images.length && previewCount > 0 && !postUploadSnapshot.processingSignalPresent && await locatorCount(busy) === 0) {
           if (diagnosticContext) {
             this.emitEditorEntryDiagnostic({
               code: "IMAGE_UPLOAD_COMPLETED",
@@ -5000,10 +5031,14 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
               ...(diagnosticContext.uploadAttemptIndex === undefined ? {} : { uploadAttemptIndex: diagnosticContext.uploadAttemptIndex }),
               requestedCount: images.length,
               previewCount,
+              previewDetector: "POST_UPLOAD_EDITOR_SCOPED",
+              fileInputImmediateReadbackStatus: immediateReadback.status,
+              fileInputFilesLength: immediateReadback.readback.filesLength,
+              fileInputExpectedFixtureMatch: immediateReadback.expectedFixtureMatch,
               verified: true
             });
           }
-          return { mechanism: "input[type=file]", requestedCount: images.length, previewCount, previewVisible: true, uploadBusyCount: 0, verified: true };
+          return { mechanism: "input[type=file]", requestedCount: images.length, previewCount, previewVisible: true, previewDetector: "POST_UPLOAD_EDITOR_SCOPED", uploadBusyCount: 0, verified: true, fileInputImmediateReadback: immediateReadback };
         }
         await waitForProbe(page);
       }

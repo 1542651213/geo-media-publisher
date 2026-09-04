@@ -47,6 +47,7 @@ type FixtureOptions = {
   routeWaitTimeout?: boolean;
   fileInputCount?: number;
   intermediateAction?: boolean;
+  editorScopedImageItemCount?: number;
 };
 
 interface Fixture {
@@ -62,6 +63,7 @@ interface Fixture {
   calls: string[];
   session: BrowserSession;
   phaseSnapshot: () => Record<string, unknown>;
+  postUploadSnapshot: () => Record<string, unknown>;
 }
 
 function installSharedConnectionLifecycle(fixture: Fixture): void {
@@ -244,9 +246,30 @@ function setupPage(options: FixtureOptions = {}): Fixture {
     fill: vi.fn(async (value: string) => { bodyValue = value; calls.push("body-fill"); }),
     getAttribute: vi.fn(async (name: string) => ({ role: "textbox", contenteditable: "true", "data-placeholder": "填写正文", class: "note-editor ProseMirror" }[name] ?? null))
   });
+  const fileInputHandle = {
+    setInputFiles: inputSetFiles,
+    evaluate: vi.fn(async (pageFunction: unknown) => {
+      if (String(pageFunction).includes("inputElement.files")) {
+        return {
+          filesLength: imageUploaded ? 1 : 0,
+          files: imageUploaded ? [{ name: "task10s-safe-test.png", size: 19226, type: "image/png", lastModified: 1788393600000 }] : []
+        };
+      }
+      return {
+        tagName: "INPUT",
+        type: "file",
+        accept: "image/*",
+        multiple: false,
+        disabled: false,
+        connected: true,
+        classNameSafe: "upload-input"
+      };
+    })
+  };
   const fileInput = locator({
     count: vi.fn(async () => currentUrl.includes("/publish/") ? options.fileInputCount ?? 1 : 0),
     setInputFiles: inputSetFiles,
+    elementHandle: vi.fn(async () => fileInputHandle),
     getAttribute: vi.fn(async (name: string) => name === "accept" ? "image/*" : name === "aria-label" ? "上传图片" : null)
   });
   const preview = locator({
@@ -431,7 +454,34 @@ function setupPage(options: FixtureOptions = {}): Fixture {
       modalDiagnostics: { dialogCount: 0, modalSignalCount: 0, maskCount: 0, overlayCount: 0, drawerCount: 0, visible: false, ariaModalCount: 0 }
     };
   };
-  const fixture = { page, manager, submitClick, inputSetFiles, entryClick, open, operationPageDebugIds, operationContextDebugIds, operationPages, calls, session, phaseSnapshot };
+  const postUploadSnapshot = (): Record<string, unknown> => {
+    const imageItemPresent = imageUploaded && (options.editorScopedImageItemCount ?? options.imagePreviewCount ?? 1) > 0;
+    const intermediate = imageUploaded && intermediateActionVisible;
+    const titleVisible = imageUploaded && !intermediate && (options.titleCount ?? 1) > 0;
+    const bodyVisible = imageUploaded && !intermediate && (options.bodyCount ?? 1) > 0;
+    const submitCount = imageUploaded && !intermediate ? options.submitCount ?? 1 : 0;
+    return {
+      origin: "https://creator.xiaohongshu.com",
+      pathname: "/publish/publish",
+      readyState: "complete",
+      editorRegionPresent: imageItemPresent || (titleVisible && bodyVisible),
+      imageItems: imageItemPresent ? [{ tagName: "IMG", classNameSafe: "image-item", boundingRect: { x: 20, y: 80, width: 160, height: 160 }, display: "block", visibility: "visible", pointerEvents: "auto", imgPresent: true, imgNaturalWidth: 1080, imgNaturalHeight: 1440, complete: true, blobUrlPresent: true, dataUrlPresent: false, backgroundImagePresent: false, connected: true, visible: true }] : [],
+      visibleImageItemCount: imageItemPresent ? 1 : 0,
+      imageCounterTextSafe: imageItemPresent ? "1/18" : null,
+      addImageControlPresent: imageUploaded,
+      deleteImageControlCount: imageItemPresent ? 1 : 0,
+      titleControlMatchCount: titleVisible ? 1 : 0,
+      titleControlVisible: titleVisible,
+      bodyControlMatchCount: bodyVisible ? 1 : 0,
+      bodyControlVisible: bodyVisible,
+      finalSubmitCandidateCount: submitCount,
+      finalSubmitVisibleCount: submitCount,
+      finalSubmitProof: submitCount === 1 ? "PASS" : submitCount > 1 ? "AMBIGUOUS" : "NOT_PROVEN",
+      explicitUploadErrorSignals: options.imageFailed ? ["图片上传失败"] : [],
+      processingSignalPresent: Boolean(options.imageLoading)
+    };
+  };
+  const fixture = { page, manager, submitClick, inputSetFiles, entryClick, open, operationPageDebugIds, operationContextDebugIds, operationPages, calls, session, phaseSnapshot, postUploadSnapshot };
   installSharedConnectionLifecycle(fixture);
   installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
   return fixture;
@@ -447,6 +497,7 @@ function installPageEvidence(fixture: Fixture, options: {
 }): void {
   (fixture.page as unknown as { evaluate: (pageFunction: () => unknown) => Promise<unknown> }).evaluate = vi.fn(async (pageFunction?: () => unknown) => {
     if (typeof pageFunction === "function" && String(pageFunction).includes("phaseTopology")) return fixture.phaseSnapshot();
+    if (typeof pageFunction === "function" && String(pageFunction).includes("imageCandidateElements")) return fixture.postUploadSnapshot();
     if (typeof pageFunction === "function" && /^\(\)\s*=>\s*location\.href\s*$/u.test(String(pageFunction).trim())) return options.domLocationHref ?? fixture.page.url();
     return ({
     available: true,
@@ -1616,6 +1667,16 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
     await adapter.connectAccount(context());
     await expect(adapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "UPLOAD_FAILED", message: expect.stringContaining("IMAGE_UPLOAD_NOT_VERIFIED") });
+    expect(fixture.submitClick).not.toHaveBeenCalled();
+  });
+
+  it("does not treat a global avatar or logo preview as an editor-scoped uploaded image", async () => {
+    const fixture = setupPage({ imagePreviewCount: 2, editorScopedImageItemCount: 0 });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context());
+
+    await expect(adapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "UPLOAD_FAILED", message: expect.stringContaining("IMAGE_UPLOAD_NOT_VERIFIED") });
+    expect(fixture.inputSetFiles).toHaveBeenCalledTimes(1);
     expect(fixture.submitClick).not.toHaveBeenCalled();
   });
 

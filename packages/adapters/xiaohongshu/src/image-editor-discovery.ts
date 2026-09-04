@@ -1357,7 +1357,13 @@ async function readSnapshot(page: Page): Promise<ImageEditorDomSnapshot> {
     const semanticControls = semanticElements.map(semanticText).join(" ");
     const intermediateActionElements = semanticElements.filter((element) => visible(element) && /完成|确认|下一步|继续|done|confirm|next|continue/iu.test(semanticText(element)));
     const mediaEditingSignalPresent = semanticElements.some((element) => visible(element) && /裁剪|编辑图片|编辑照片|crop|edit image/iu.test(semanticText(element)));
-    const previewElements = Array.from(document.querySelectorAll('img[class*="preview" i], img[src*="xhscdn" i], [class*="preview" i], [data-testid*="upload-result" i], [class*="uploaded" i]'));
+    const editorRoots = Array.from(document.querySelectorAll('[data-testid*="editor" i], [class*="editor" i], [data-testid*="publish" i], [class*="publish" i]')).filter((root) => {
+      const hasEditorField = Boolean(root.querySelector('input[placeholder*="标题"], input[aria-label*="标题"], textarea[placeholder*="标题"], [contenteditable="true"], input[type="file"]'));
+      const hasImageEditSignal = normalize(root.textContent ?? "").includes("图片编辑") || Boolean(root.querySelector('[data-testid*="upload-result" i], [class*="image-item" i], [class*="media-item" i]'));
+      return hasEditorField || hasImageEditSignal;
+    });
+    const inEditor = (element: Element): boolean => editorRoots.length > 0 && editorRoots.some((root) => root.contains(element));
+    const previewElements = Array.from(document.querySelectorAll('img[class*="preview" i], img[src^="blob:" i], img[src^="data:image" i], [data-testid*="upload-result" i], [data-testid*="preview" i], [class*="image-item" i], [class*="media-item" i]')).filter(inEditor);
     const previewReady = previewElements.some(visible);
     const previewGeometry = previewElements.map((element) => {
       const rect = element.getBoundingClientRect();
@@ -1654,7 +1660,13 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
       };
       const capability = uploadControlRelationships.filter((relationship) => relationship.enabled && relationship.usableSurface);
       const uploadBusy = document.querySelector('[aria-busy="true"], [class*="loading" i], [class*="uploading" i], progress') !== null;
-      const previewReady = Array.from(document.querySelectorAll('img[class*="preview" i], img[src*="xhscdn" i], [class*="preview" i], [data-testid*="upload-result" i], [class*="uploaded" i]')).some(visible);
+      const editorRoots = Array.from(document.querySelectorAll('[data-testid*="editor" i], [class*="editor" i], [data-testid*="publish" i], [class*="publish" i]')).filter((root) => {
+        const hasEditorField = Boolean(root.querySelector('input[placeholder*="标题"], input[aria-label*="标题"], textarea[placeholder*="标题"], [contenteditable="true"], input[type="file"]'));
+        const hasImageEditSignal = normalize(root.textContent ?? "").includes("图片编辑") || Boolean(root.querySelector('[data-testid*="upload-result" i], [class*="image-item" i], [class*="media-item" i]'));
+        return hasEditorField || hasImageEditSignal;
+      });
+      const inEditor = (element: Element): boolean => editorRoots.length > 0 && editorRoots.some((root) => root.contains(element));
+      const previewReady = Array.from(document.querySelectorAll('img[class*="preview" i], img[src^="blob:" i], img[src^="data:image" i], [data-testid*="upload-result" i], [data-testid*="preview" i], [class*="image-item" i], [class*="media-item" i]')).filter(inEditor).some(visible);
       return {
         currentUrl: window.location.href,
         readyState: document.readyState,
