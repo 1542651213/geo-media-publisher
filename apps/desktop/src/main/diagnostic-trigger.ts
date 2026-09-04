@@ -35,6 +35,23 @@ function actionForFlag(value: string | undefined): DiagnosticAction | null {
   return null;
 }
 
+function isKnownElectronLauncherPositional(value: string | undefined): boolean {
+  if (!value) return false;
+  const normalized = value.replaceAll("\\", "/").toLowerCase();
+  const workingDirectory = process.cwd().replaceAll("\\", "/").replace(/\/+$/u, "").toLowerCase();
+  return normalized.endsWith("/app.asar")
+    || normalized.endsWith("/apps/desktop")
+    || normalized.endsWith("/apps/desktop/src/main/main.ts")
+    || normalized.endsWith("/apps/desktop/src/main/main.js")
+    || normalized.endsWith("/out/main/main.js")
+    || normalized === workingDirectory;
+}
+
+export function normalizeSecondInstanceArgv(commandLine: readonly string[]): readonly string[] {
+  const args = commandLine.slice(1);
+  return isKnownElectronLauncherPositional(args[0]) ? args.slice(1) : args;
+}
+
 function parseFixedAdditionalData(additionalData: unknown): DiagnosticAction | null {
   if (!additionalData || typeof additionalData !== "object" || Array.isArray(additionalData)) return null;
   const entries = Object.entries(additionalData);
@@ -43,7 +60,7 @@ function parseFixedAdditionalData(additionalData: unknown): DiagnosticAction | n
 }
 
 export function parseDiagnosticAction(commandLine: readonly string[], additionalData?: unknown): DiagnosticAction | null {
-  const args = commandLine.slice(1);
+  const args = normalizeSecondInstanceArgv(commandLine);
   const cliAction = args.length === 1 ? actionForFlag(args[0]) : null;
   if (additionalData !== undefined) {
     const additionalAction = parseFixedAdditionalData(additionalData);

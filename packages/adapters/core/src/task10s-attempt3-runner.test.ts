@@ -20,6 +20,40 @@ describe("Task10S Attempt 3 fixed runner guard", () => {
     expect(parseDiagnosticAction(["Geo Media Publisher.exe"], { action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, imagePath: "arbitrary" })).toBeNull();
   });
 
+  it("normalizes the packaged Electron app.asar positional argument", () => {
+    expect(parseDiagnosticAction([
+      "Geo Media Publisher.exe",
+      "C:\\GMP116ZhihuL5\\Geo Media Publisher\\resources\\app.asar",
+      XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG
+    ])).toBe(RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3);
+  });
+
+  it("normalizes the dev Electron app entry positional argument", () => {
+    expect(parseDiagnosticAction([
+      "electron.exe",
+      process.cwd(),
+      XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG
+    ])).toBe(RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3);
+  });
+
+  it("keeps the existing read-only probe compatible with packaged Electron argv", () => {
+    expect(parseDiagnosticAction([
+      "Geo Media Publisher.exe",
+      "C:\\GMP116ZhihuL5\\Geo Media Publisher\\resources\\app.asar",
+      "--probe-xhs-canonical-page"
+    ])).toBe("PROBE_XHS_CANONICAL_PAGE");
+  });
+
+  it("rejects unknown, duplicate, conflicting, and caller-supplied positional arguments", () => {
+    const packaged = "C:\\GMP116ZhihuL5\\Geo Media Publisher\\resources\\app.asar";
+    expect(parseDiagnosticAction(["Geo Media Publisher.exe", packaged, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, "--unknown-option"])).toBeNull();
+    expect(parseDiagnosticAction(["Geo Media Publisher.exe", packaged, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG])).toBeNull();
+    expect(parseDiagnosticAction(["Geo Media Publisher.exe", packaged, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, "--probe-xhs-canonical-page"])).toBeNull();
+    expect(parseDiagnosticAction(["Geo Media Publisher.exe", XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, "C:\\private\\fixture.png"])).toBeNull();
+    expect(parseDiagnosticAction(["Geo Media Publisher.exe", XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, "https://example.com"])).toBeNull();
+    expect(parseDiagnosticAction(["Geo Media Publisher.exe", XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, "button"])).toBeNull();
+  });
+
   it("atomically reserves Attempt 3 once and rejects replay", () => {
     const directory = mkdtempSync(join(tmpdir(), "task10s-attempt3-test-"));
     temporaryDirectories.push(directory);
