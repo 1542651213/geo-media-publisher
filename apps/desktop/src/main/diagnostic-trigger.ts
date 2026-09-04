@@ -1,4 +1,4 @@
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 
 export const XHS_CANONICAL_PAGE_PROBE_FLAG = "--probe-xhs-canonical-page" as const;
 export const PROBE_XHS_CANONICAL_PAGE = "PROBE_XHS_CANONICAL_PAGE" as const;
@@ -8,14 +8,16 @@ export const XHS_PUBLISH_ENTRY_DOM_DIAGNOSTIC_FLAG = "--inspect-xhs-publish-entr
 export const INSPECT_XHS_PUBLISH_ENTRY_DOM = "INSPECT_XHS_PUBLISH_ENTRY_DOM" as const;
 export const XHS_POST_UPLOAD_RECONCILIATION_FLAG = "--probe-xhs-post-upload-state" as const;
 export const INSPECT_XHS_POST_UPLOAD_RECONCILIATION = "INSPECT_XHS_POST_UPLOAD_RECONCILIATION" as const;
+export const XHS_FILE_INPUT_STATE_FLAG = "--probe-xhs-file-input-state" as const;
+export const INSPECT_XHS_FILE_INPUT_STATE = "INSPECT_XHS_FILE_INPUT_STATE" as const;
 
-export type DiagnosticAction = typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION;
+export type DiagnosticAction = typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_FILE_INPUT_STATE;
 
 function parseFixedAdditionalData(additionalData: unknown): DiagnosticAction | null {
   if (!additionalData || typeof additionalData !== "object" || Array.isArray(additionalData)) return null;
   const entries = Object.entries(additionalData);
   if (entries.length !== 1 || entries[0]?.[0] !== "action") return null;
-  return entries[0][1] === PROBE_XHS_CANONICAL_PAGE ? PROBE_XHS_CANONICAL_PAGE : entries[0][1] === INSPECT_XHS_CONTEXT_PAGES ? INSPECT_XHS_CONTEXT_PAGES : entries[0][1] === INSPECT_XHS_PUBLISH_ENTRY_DOM ? INSPECT_XHS_PUBLISH_ENTRY_DOM : entries[0][1] === INSPECT_XHS_POST_UPLOAD_RECONCILIATION ? INSPECT_XHS_POST_UPLOAD_RECONCILIATION : null;
+  return entries[0][1] === PROBE_XHS_CANONICAL_PAGE ? PROBE_XHS_CANONICAL_PAGE : entries[0][1] === INSPECT_XHS_CONTEXT_PAGES ? INSPECT_XHS_CONTEXT_PAGES : entries[0][1] === INSPECT_XHS_PUBLISH_ENTRY_DOM ? INSPECT_XHS_PUBLISH_ENTRY_DOM : entries[0][1] === INSPECT_XHS_POST_UPLOAD_RECONCILIATION ? INSPECT_XHS_POST_UPLOAD_RECONCILIATION : entries[0][1] === INSPECT_XHS_FILE_INPUT_STATE ? INSPECT_XHS_FILE_INPUT_STATE : null;
 }
 
 export function parseDiagnosticAction(commandLine: readonly string[], additionalData?: unknown): DiagnosticAction | null {
@@ -29,6 +31,8 @@ export function parseDiagnosticAction(commandLine: readonly string[], additional
           ? INSPECT_XHS_PUBLISH_ENTRY_DOM
           : args[0] === XHS_POST_UPLOAD_RECONCILIATION_FLAG
             ? INSPECT_XHS_POST_UPLOAD_RECONCILIATION
+          : args[0] === XHS_FILE_INPUT_STATE_FLAG
+            ? INSPECT_XHS_FILE_INPUT_STATE
         : null
     : null;
   if (additionalData !== undefined) return parseFixedAdditionalData(additionalData);
@@ -44,6 +48,8 @@ export function createFixedDiagnosticRunner(options: {
   writePublishEntryDomEvidence?: (diagnostic: XiaohongshuPublishEntryDomRuntimeDiagnostic) => void;
   inspectPostUploadReconciliation?: () => Promise<XiaohongshuCurrentPostUploadReconciliation>;
   writePostUploadReconciliationEvidence?: (diagnostic: XiaohongshuCurrentPostUploadReconciliation) => void;
+  inspectFileInputState?: () => Promise<XiaohongshuCurrentFileInputState>;
+  writeFileInputEvidence?: (diagnostic: XiaohongshuCurrentFileInputState) => void;
 }): (action: DiagnosticAction) => Promise<boolean> {
   return async (action: DiagnosticAction): Promise<boolean> => {
     if (action === PROBE_XHS_CANONICAL_PAGE) {
@@ -64,6 +70,11 @@ export function createFixedDiagnosticRunner(options: {
     if (action === INSPECT_XHS_POST_UPLOAD_RECONCILIATION && options.inspectPostUploadReconciliation && options.writePostUploadReconciliationEvidence) {
       const diagnostic = await options.inspectPostUploadReconciliation();
       options.writePostUploadReconciliationEvidence(diagnostic);
+      return true;
+    }
+    if (action === INSPECT_XHS_FILE_INPUT_STATE && options.inspectFileInputState && options.writeFileInputEvidence) {
+      const diagnostic = await options.inspectFileInputState();
+      options.writeFileInputEvidence(diagnostic);
       return true;
     }
     return false;

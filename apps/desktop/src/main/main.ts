@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { readFileSync as readPhysicalFileSync } from "node:original-fs";
 import { join } from "node:path";
 import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { openDatabase, restoreDatabaseSafely } from "@publisher/db";
 import { SafeStorageCredentialStore } from "@publisher/security";
 import { createFileLogger } from "@publisher/logger";
@@ -14,7 +14,7 @@ import { createRuntimeAdapterRegistry } from "./adapter-registry";
 import { runDeepSeekBenchmarkMode } from "./deepseek-benchmark-mode";
 import { createProcessDiagnostics } from "./process-diagnostics";
 import { recordAppStartup } from "./runtime-observability";
-import { createFixedDiagnosticRunner, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticAction, type DiagnosticAction, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
+import { createFixedDiagnosticRunner, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticAction, type DiagnosticAction, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
 
 app.setName("codex-media-publisher");
 const processDiagnostics = createProcessDiagnostics(join(app.getPath("userData"), "production-data", "logs", "main-process-diagnostics.log"));
@@ -387,6 +387,34 @@ async function createWindow(): Promise<void> {
     writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), "utf8");
     logger.info("PLATFORM_SELF_TEST", "XHS_POST_UPLOAD_RECONCILIATION_EVIDENCE_WRITTEN", "小红书 post-upload reconciliation evidence 已写入", { action: INSPECT_XHS_POST_UPLOAD_RECONCILIATION, evidencePath, inspectionStatus: diagnostic.inspectionStatus, postUploadState: diagnostic.postUploadState, imageAssetRenderedCount: diagnostic.imageAssetRenderedCount, titleControlPresent: diagnostic.titleControlPresent, bodyControlPresent: diagnostic.bodyControlPresent, finalSubmitControlPresent: diagnostic.finalSubmitVisibleCount > 0 });
   };
+  const writeFileInputEvidence = (diagnostic: XiaohongshuCurrentFileInputState): void => {
+    mkdirSync(evidenceDirectory, { recursive: true });
+    const timestamp = new Date().toISOString();
+    const evidencePath = join(evidenceDirectory, `xiaohongshu-task10s-file-input-state-${timestamp.replace(/[:.]/gu, "-")}.json`);
+    const evidence = {
+      timestamp,
+      evidencePath,
+      action: INSPECT_XHS_FILE_INPUT_STATE,
+      inspectionStatus: diagnostic.inspectionStatus,
+      failureCode: diagnostic.failureCode,
+      accountId: diagnostic.accountId,
+      contextDebugId: diagnostic.contextDebugId,
+      pageId: diagnostic.pageId,
+      sessionExists: diagnostic.sessionExists,
+      browserConnected: diagnostic.browserConnected,
+      contextExists: diagnostic.contextExists,
+      pageExists: diagnostic.pageExists,
+      pageClosed: diagnostic.pageClosed,
+      pageContextMatchesSession: diagnostic.pageContextMatchesSession,
+      route: { origin: diagnostic.origin, pathname: diagnostic.pathname, sanitizedUrl: diagnostic.sanitizedUrl },
+      readyState: diagnostic.readyState,
+      currentFileInputMatchCount: diagnostic.matchCount,
+      currentFileInputs: diagnostic.inputs,
+      fileInputContainsExpectedFixture: diagnostic.fileInputContainsExpectedFixture
+    };
+    writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), "utf8");
+    logger.info("PLATFORM_SELF_TEST", "XHS_FILE_INPUT_STATE_EVIDENCE_WRITTEN", "小红书 file-input state evidence 已写入", { action: INSPECT_XHS_FILE_INPUT_STATE, evidencePath, inspectionStatus: diagnostic.inspectionStatus, fileInputMatchCount: diagnostic.matchCount, fileInputContainsExpectedFixture: diagnostic.fileInputContainsExpectedFixture, fileInputFilesLengths: diagnostic.inputs.map((input) => input.filesLength) });
+  };
   fixedDiagnosticActionRunner = createFixedDiagnosticRunner({
     probe: async () => {
       logger.info("PLATFORM_SELF_TEST", "XHS_CANONICAL_PAGE_RUNTIME_PROBE_TRIGGER_RECEIVED", "收到固定非 UI 小红书 canonical Page probe trigger", { action: PROBE_XHS_CANONICAL_PAGE, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
@@ -407,7 +435,12 @@ async function createWindow(): Promise<void> {
       logger.info("PLATFORM_SELF_TEST", "XHS_POST_UPLOAD_RECONCILIATION_TRIGGER_RECEIVED", "收到固定非 UI 小红书 post-upload reconciliation trigger", { action: INSPECT_XHS_POST_UPLOAD_RECONCILIATION, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
       return platformSelfTests.inspectCurrentXiaohongshuPostUploadReconciliation();
     },
-    writePostUploadReconciliationEvidence
+    writePostUploadReconciliationEvidence,
+    inspectFileInputState: async () => {
+      logger.info("PLATFORM_SELF_TEST", "XHS_FILE_INPUT_STATE_TRIGGER_RECEIVED", "收到固定非 UI 小红书 file-input state trigger", { action: INSPECT_XHS_FILE_INPUT_STATE, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
+      return platformSelfTests.inspectCurrentXiaohongshuFileInputState();
+    },
+    writeFileInputEvidence
   });
   const pendingDiagnosticAction = queuedDiagnosticAction;
   queuedDiagnosticAction = null;

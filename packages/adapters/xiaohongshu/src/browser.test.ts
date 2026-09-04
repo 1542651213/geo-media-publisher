@@ -544,6 +544,41 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(fixture.submitClick).not.toHaveBeenCalled();
   });
 
+  it("reads the retained canonical file input without mutating the page", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/publish/publish?target=image" });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    const ctx = context("account-a");
+    await adapter.connectAccount(ctx);
+    (fixture.manager as unknown as { getCanonicalPage: ReturnType<typeof vi.fn> }).getCanonicalPage = vi.fn(() => ({ session: fixture.session, page: fixture.page, pageDebugId: "canonical-file-input-page" }));
+    vi.mocked(fixture.page.goto).mockClear();
+    vi.mocked(fixture.page.evaluate).mockResolvedValue({
+      origin: "https://creator.xiaohongshu.com",
+      pathname: "/publish/publish",
+      readyState: "complete",
+      matchCount: 1,
+      inputs: [{
+        type: "file",
+        accept: "image/*",
+        multiple: false,
+        disabled: false,
+        connected: true,
+        classNameSafe: "upload-input",
+        ancestorFingerprint: [{ tagName: "DIV", classNameSafe: "upload-panel" }],
+        filesLength: 1,
+        files: [{ name: "task10s-safe-test.png", size: 19226, type: "image/png", lastModified: 1788393600000, expectedFixtureMatch: true }]
+      }]
+    });
+
+    const diagnostic = (adapter as unknown as { inspectCurrentXiaohongshuFileInputState: (input: AccountContext) => Promise<Record<string, unknown>> }).inspectCurrentXiaohongshuFileInputState;
+    const result = await diagnostic.call(adapter, ctx);
+
+    expect(result).toMatchObject({ inspectionStatus: "PASS", pageId: "canonical-file-input-page", matchCount: 1, fileInputContainsExpectedFixture: "YES" });
+    expect((result.inputs as Array<{ filesLength: number }>)[0]?.filesLength).toBe(1);
+    expect(fixture.page.goto).not.toHaveBeenCalled();
+    expect(fixture.inputSetFiles).not.toHaveBeenCalled();
+    expect(fixture.submitClick).not.toHaveBeenCalled();
+  });
+
   it("fails closed before evaluate for a foreign origin and without an active session", async () => {
     const foreignFixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/publish/publish?target=image" });
     const foreignAdapter = new XiaohongshuBrowserAdapter({ sessionManager: foreignFixture.manager });
@@ -553,6 +588,9 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     vi.mocked(foreignFixture.page.evaluate).mockClear();
     const foreignDiagnostic = (foreignAdapter as unknown as { inspectCurrentXiaohongshuPublishEditorDom: (input: AccountContext) => Promise<Record<string, unknown>> }).inspectCurrentXiaohongshuPublishEditorDom;
     await expect(foreignDiagnostic.call(foreignAdapter, ctx)).resolves.toMatchObject({ inspectionStatus: "FAIL", failureCode: "CANONICAL_PAGE_NOT_XHS_IMAGE_EDITOR_ROUTE", origin: "https://example.com", pathname: "/publish/publish" });
+    expect(foreignFixture.page.evaluate).not.toHaveBeenCalled();
+    const foreignFileInputDiagnostic = (foreignAdapter as unknown as { inspectCurrentXiaohongshuFileInputState: (input: AccountContext) => Promise<Record<string, unknown>> }).inspectCurrentXiaohongshuFileInputState;
+    await expect(foreignFileInputDiagnostic.call(foreignAdapter, ctx)).resolves.toMatchObject({ inspectionStatus: "FAIL", failureCode: "CANONICAL_PAGE_NOT_XHS_IMAGE_EDITOR_ROUTE" });
     expect(foreignFixture.page.evaluate).not.toHaveBeenCalled();
 
     const unavailableFixture = setupPage();

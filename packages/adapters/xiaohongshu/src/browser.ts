@@ -82,7 +82,9 @@ import { emptyXiaohongshuContextPageInventory, inspectXiaohongshuContextPage, ty
 import { emptyXiaohongshuPublishEditorDomRuntimeDiagnostic, inspectXiaohongshuPublishEditorDom, type XiaohongshuPublishEditorDomRuntimeDiagnostic } from "./publish-editor-dom-diagnostic";
 import { emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, inspectXiaohongshuPublishEditorSemanticCandidates, type XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic } from "./publish-editor-semantic-diagnostic";
 import { emptyXiaohongshuPostUploadReconciliationDomSnapshot, inspectXiaohongshuPostUploadReconciliationDom, reconcileXiaohongshuPostUploadSnapshot, type XiaohongshuPostUploadReconciliationResult } from "./post-upload-reconciliation-diagnostic";
+import { containsExpectedXiaohongshuSafeFixture, inspectXiaohongshuFileInputState, type XiaohongshuFileInputFixtureMatch, type XiaohongshuFileInputSafeNode } from "./file-input-diagnostic";
 export type { XiaohongshuPostUploadBoundingRect, XiaohongshuPostUploadFinalSubmitProof, XiaohongshuPostUploadImageItemSafe, XiaohongshuPostUploadReconciliationDomSnapshot, XiaohongshuPostUploadReconciliationResult, XiaohongshuPostUploadReconciliationState } from "./post-upload-reconciliation-diagnostic";
+export type { XiaohongshuFileInputAncestorFingerprint, XiaohongshuFileInputDomSnapshot, XiaohongshuFileInputFileSafeMetadata, XiaohongshuFileInputFixtureMatch, XiaohongshuFileInputSafeNode } from "./file-input-diagnostic";
 export type { XhsEditorLoadDiagnosticResult } from "./editor-load-diagnostic";
 export type { XhsEditorNetworkDiagnosticResult } from "./editor-network-diagnostic";
 export type { XiaohongshuContextPageInventory, XiaohongshuContextPageInventoryEntry, XiaohongshuContextPageDomSnapshot, XiaohongshuDocumentReadyState, XiaohongshuVisibilityState } from "./context-page-inventory";
@@ -143,6 +145,51 @@ export interface XiaohongshuCurrentPostUploadReconciliation extends XiaohongshuP
   from: string | null;
   target: string | null;
   sanitizedUrl: string | null;
+}
+
+export interface XiaohongshuCurrentFileInputState {
+  inspectionStatus: "PASS" | "FAIL";
+  failureCode: string | null;
+  accountId: string;
+  contextDebugId: string | null;
+  pageId: string | null;
+  sessionExists: boolean;
+  browserConnected: boolean;
+  contextExists: boolean;
+  pageExists: boolean;
+  pageClosed: boolean;
+  pageContextMatchesSession: boolean;
+  origin: string | null;
+  pathname: string | null;
+  sanitizedUrl: string | null;
+  readyState: string | null;
+  matchCount: number;
+  inputs: readonly XiaohongshuFileInputSafeNode[];
+  fileInputContainsExpectedFixture: XiaohongshuFileInputFixtureMatch;
+}
+
+function emptyCurrentFileInputState(accountId: string, overrides: Partial<XiaohongshuCurrentFileInputState> = {}): XiaohongshuCurrentFileInputState {
+  return {
+    inspectionStatus: "FAIL",
+    failureCode: "BROWSER_SESSION_UNAVAILABLE",
+    accountId,
+    contextDebugId: null,
+    pageId: null,
+    sessionExists: false,
+    browserConnected: false,
+    contextExists: false,
+    pageExists: false,
+    pageClosed: false,
+    pageContextMatchesSession: false,
+    origin: null,
+    pathname: null,
+    sanitizedUrl: null,
+    readyState: null,
+    matchCount: 0,
+    inputs: [],
+    fileInputContainsExpectedFixture: "NOT_PROVEN",
+    ...overrides
+  };
 }
 export {
   collectCreatorHomeTopology,
@@ -2220,6 +2267,91 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         return fail("PAGE_EVALUATION_FAILED", { ...route, origin: route.origin ?? "", pathname: route.pathname ?? "" });
       }
     }, "inspectCurrentXiaohongshuPostUploadReconciliation");
+  }
+
+  /**
+   * Read-only file-input delivery diagnostic for the retained canonical Page.
+   * It does not accept a file path and never performs a file or UI mutation.
+   */
+  async inspectCurrentXiaohongshuFileInputState(ctx: AccountContext): Promise<XiaohongshuCurrentFileInputState> {
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
+      const activeSession = this.activeBrowserSession(ctx);
+      if (!activeSession) return emptyCurrentFileInputState(ctx.accountId);
+
+      const sessionBase = {
+        accountId: ctx.accountId,
+        contextDebugId: activeSession.contextDebugId ?? null,
+        pageId: activeSession.pageDebugId ?? null,
+        sessionExists: true,
+        browserConnected: this.isBrowserConnected(activeSession),
+        contextExists: Boolean(activeSession.context && typeof activeSession.context.pages === "function"),
+        pageExists: false,
+        pageClosed: this.isCanonicalPageClosed(activeSession.page),
+        pageContextMatchesSession: false
+      };
+      let canonical: Awaited<ReturnType<typeof this.activeCanonicalPage>> = null;
+      try {
+        canonical = await this.activeCanonicalPage(ctx);
+      } catch {
+        return emptyCurrentFileInputState(ctx.accountId, { ...sessionBase, failureCode: "CANONICAL_PAGE_OWNERSHIP_FAILURE" });
+      }
+      if (!canonical) {
+        return emptyCurrentFileInputState(ctx.accountId, {
+          ...sessionBase,
+          failureCode: sessionBase.pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_UNAVAILABLE"
+        });
+      }
+
+      const { session, page, pageDebugId } = canonical;
+      const browserConnected = this.isBrowserConnected(session);
+      const contextExists = Boolean(session.context && typeof session.context.pages === "function");
+      const pageClosed = this.isCanonicalPageClosed(page);
+      let pageExists = false;
+      if (contextExists) {
+        try { pageExists = session.context.pages().includes(page); } catch { pageExists = false; }
+      }
+      const pageContextMatchesSession = !pageClosed && this.pageContextMatchesSession(session, page) && pageExists;
+      const base = {
+        accountId: ctx.accountId,
+        contextDebugId: session.contextDebugId ?? null,
+        pageId: pageDebugId,
+        sessionExists: true,
+        browserConnected,
+        contextExists,
+        pageExists,
+        pageClosed,
+        pageContextMatchesSession
+      };
+      const fail = (failureCode: string, overrides: Partial<XiaohongshuCurrentFileInputState> = {}): XiaohongshuCurrentFileInputState => emptyCurrentFileInputState(ctx.accountId, { ...base, failureCode, ...overrides });
+      if (!browserConnected) return fail("BROWSER_SESSION_DISCONNECTED");
+      if (!contextExists || !pageExists || !pageContextMatchesSession) return fail(pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_OWNERSHIP_FAILURE");
+
+      let rawUrl: string;
+      try { rawUrl = page.url(); } catch { return fail("CANONICAL_PAGE_URL_UNAVAILABLE"); }
+      const route = safeXiaohongshuRouteMetadata(rawUrl);
+      if (route.origin !== "https://creator.xiaohongshu.com" || route.pathname !== "/publish/publish") {
+        return fail("CANONICAL_PAGE_NOT_XHS_IMAGE_EDITOR_ROUTE", { origin: route.origin ?? null, pathname: route.pathname ?? null, sanitizedUrl: sanitizePageUrl(page) });
+      }
+
+      try {
+        const snapshot = await inspectXiaohongshuFileInputState(page);
+        if (snapshot.origin !== route.origin || snapshot.pathname !== route.pathname) return fail("PAGE_ROUTE_CHANGED_DURING_DIAGNOSTIC", { origin: snapshot.origin, pathname: snapshot.pathname, sanitizedUrl: sanitizePageUrl(page) });
+        return {
+          ...base,
+          inspectionStatus: "PASS",
+          failureCode: null,
+          origin: snapshot.origin,
+          pathname: snapshot.pathname,
+          sanitizedUrl: sanitizePageUrl(page),
+          readyState: snapshot.readyState,
+          matchCount: snapshot.matchCount,
+          inputs: snapshot.inputs,
+          fileInputContainsExpectedFixture: containsExpectedXiaohongshuSafeFixture(snapshot.inputs)
+        };
+      } catch {
+        return fail("PAGE_EVALUATION_FAILED", { origin: route.origin ?? null, pathname: route.pathname ?? null, sanitizedUrl: sanitizePageUrl(page) });
+      }
+    }, "inspectCurrentXiaohongshuFileInputState");
   }
 
   /** Read-only identity proof on the retained canonical Page. */

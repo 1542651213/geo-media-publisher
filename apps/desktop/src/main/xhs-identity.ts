@@ -2,7 +2,7 @@ import type { AdapterRegistry } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
 import { ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type Account, type AccountContext, type CreatorIdentityVerificationResult, type PlatformAccountIdentityBinding, type XhsIdentityAcceptance } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentImageEditorReadiness, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentFileInputState, XiaohongshuCurrentImageEditorReadiness, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 
 type IdentityReader = {
   inspectCanonicalPageRuntime?: (ctx: AccountContext) => Promise<XiaohongshuCanonicalPageRuntimeProbe>;
@@ -12,6 +12,7 @@ type IdentityReader = {
   inspectCurrentXiaohongshuPublishEditorDom?: (ctx: AccountContext) => Promise<XiaohongshuPublishEditorDomRuntimeDiagnostic>;
   inspectCurrentXiaohongshuPublishEditorSemanticCandidates?: (ctx: AccountContext) => Promise<XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic>;
   inspectCurrentXiaohongshuPostUploadReconciliation?: (ctx: AccountContext) => Promise<XiaohongshuCurrentPostUploadReconciliation>;
+  inspectCurrentXiaohongshuFileInputState?: (ctx: AccountContext) => Promise<XiaohongshuCurrentFileInputState>;
   readCanonicalCreatorIdentity?: (ctx: AccountContext) => Promise<XiaohongshuCreatorIdentityObservation>;
 };
 
@@ -227,6 +228,34 @@ export class XhsIdentityService {
       bodyControlPresent: diagnostic.bodyControlPresent,
       finalSubmitProof: diagnostic.finalSubmitProof,
       noExplicitUploadError: diagnostic.noExplicitUploadError
+    });
+    return diagnostic;
+  }
+
+  async inspectCurrentXiaohongshuFileInputState(accountId: string): Promise<XiaohongshuCurrentFileInputState> {
+    const account = this.requireAccount(accountId);
+    const adapter = this.options.registry.getForContent("xiaohongshu", "article") as IdentityReader;
+    if (typeof adapter.inspectCurrentXiaohongshuFileInputState !== "function") throw Object.assign(new Error("当前小红书运行时未提供 file-input delivery diagnostic"), { code: "XHS_FILE_INPUT_DIAGNOSTIC_UNAVAILABLE" });
+    const diagnostic = await adapter.inspectCurrentXiaohongshuFileInputState(this.context(account));
+    this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_FILE_INPUT_STATE", "小红书 retained canonical Page file-input 只读 delivery diagnostic 完成", {
+      platformKey: "xiaohongshu",
+      accountId: account.id,
+      inspectionStatus: diagnostic.inspectionStatus,
+      failureCode: diagnostic.failureCode,
+      contextDebugId: diagnostic.contextDebugId,
+      pageId: diagnostic.pageId,
+      sessionExists: diagnostic.sessionExists,
+      browserConnected: diagnostic.browserConnected,
+      contextExists: diagnostic.contextExists,
+      pageExists: diagnostic.pageExists,
+      pageClosed: diagnostic.pageClosed,
+      pageContextMatchesSession: diagnostic.pageContextMatchesSession,
+      origin: diagnostic.origin,
+      pathname: diagnostic.pathname,
+      readyState: diagnostic.readyState,
+      fileInputMatchCount: diagnostic.matchCount,
+      fileInputContainsExpectedFixture: diagnostic.fileInputContainsExpectedFixture,
+      fileInputFilesLengths: diagnostic.inputs.map((input) => input.filesLength)
     });
     return diagnostic;
   }

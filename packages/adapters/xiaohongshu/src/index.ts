@@ -12,6 +12,7 @@ export * from "./context-page-inventory";
 export * from "./publish-editor-dom-diagnostic";
 export * from "./publish-editor-semantic-diagnostic";
 export * from "./post-upload-reconciliation-diagnostic";
+export * from "./file-input-diagnostic";
 export * from "./publish-flow-exploration";
 export * from "./identity";
 
