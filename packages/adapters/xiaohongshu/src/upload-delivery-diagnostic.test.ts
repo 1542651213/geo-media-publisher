@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ElementHandle, Locator } from "playwright-core";
 import {
   readXiaohongshuUploadInputImmediately,
+  type XiaohongshuUploadFileExpectation,
   type XiaohongshuUploadFileReadback,
   type XiaohongshuUploadInputFingerprint
 } from "./upload-delivery-diagnostic";
@@ -45,6 +46,26 @@ describe("XHS upload delivery instrumentation", () => {
     expect(locatorSetInputFiles).not.toHaveBeenCalled();
     expect(evaluate).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({ status: "PASS", fingerprint, readback, expectedFixtureMatch: "YES" });
+  });
+
+  it("fires the controlled mutation-boundary callback immediately before setInputFiles", async () => {
+    const evaluate = vi.fn()
+      .mockResolvedValueOnce(fingerprint)
+      .mockResolvedValueOnce(readback);
+    const events: string[] = [];
+    const setInputFiles = vi.fn(async () => { events.push("setInputFiles"); });
+    const onMutationStarted = () => { events.push("mutationBoundary"); };
+    const readWithCallback = readXiaohongshuUploadInputImmediately as unknown as (
+      input: Locator,
+      images: readonly string[],
+      expected: XiaohongshuUploadFileExpectation,
+      onMutationStarted: () => void
+    ) => Promise<unknown>;
+
+    await readWithCallback(inputWithHandle({ evaluate, setInputFiles }), ["C:/fixtures/task10s-safe-test.png"], expected, onMutationStarted);
+
+    expect(events).toEqual(["mutationBoundary", "setInputFiles"]);
+    expect(setInputFiles).toHaveBeenCalledTimes(1);
   });
 
   it("fails Layer 2 when the same input does not immediately contain the expected file metadata", async () => {

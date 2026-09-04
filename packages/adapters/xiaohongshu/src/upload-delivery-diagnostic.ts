@@ -71,7 +71,8 @@ function safeReadback(readback: XiaohongshuUploadFileReadback, expected: Xiaohon
 export async function readXiaohongshuUploadInputImmediately(
   input: Locator,
   images: readonly string[],
-  expected?: XiaohongshuUploadFileExpectation
+  expected?: XiaohongshuUploadFileExpectation,
+  onMutationStarted?: () => void
 ): Promise<XiaohongshuUploadInputImmediateReadback> {
   let handle: ElementHandle<HTMLInputElement> | null;
   try {
@@ -104,6 +105,7 @@ export async function readXiaohongshuUploadInputImmediately(
   }
 
   try {
+    onMutationStarted?.();
     await handle.setInputFiles(images);
   } catch {
     return failed("SET_INPUT_FILES_FAILED", fingerprint);

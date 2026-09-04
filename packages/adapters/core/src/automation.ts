@@ -300,7 +300,7 @@ export interface AutomationAdapter extends PlatformAdapter {
   /** Optional side-effect-free editor discovery. This must never call preparePublish or mutate content. */
   inspectPublishEditor?(ctx: AccountContext): Promise<PreSubmitGateResult>;
   /** Optional controlled upload-only self-test. It may upload exactly one approved fixture, then must stop before content mutation or final submit. */
-  runControlledPostUploadDiscovery?(ctx: AccountContext, input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE" }): Promise<ControlledPostUploadDiscoveryResult>;
+  runControlledPostUploadDiscovery?(ctx: AccountContext, input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE"; onUploadMutationStarted?: () => void }): Promise<ControlledPostUploadDiscoveryResult>;
   /** Optional bounded XHS exploration. It must never activate final publication. */
   runPublishFlowExploration?(ctx: AccountContext, input: PublishFlowExplorationInput): Promise<PublishFlowExplorationResult>;
   /** Explicit Task10S path. It must be XHS/account/operation scoped and use the supplied guard for the only real submit. */

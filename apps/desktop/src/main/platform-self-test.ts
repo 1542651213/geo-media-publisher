@@ -13,7 +13,7 @@ import { OneShotConfirmationCoordinator } from "./one-shot-confirmation";
 import { OneShotConfirmationReconciliationService } from "./one-shot-reconciliation";
 import { XhsIdentityService } from "./xhs-identity";
 import type { CreatorIdentityVerificationResult, FailedOneShotConfirmationIdentity, OneShotConfirmationReconciliationResult, XhsIdentityAcceptance } from "@publisher/domain";
-import { emptyTask10sControlledUploadAttempt3Result, reserveTask10sAttempt3, TASK10S_CANONICAL_AUTHORIZATION_ID, TASK10S_EXPECTED_CREATOR_ID, TASK10S_SAFE_FIXTURE_NAME, TASK10S_SAFE_FIXTURE_SIZE, TASK10S_SAFE_FIXTURE_SHA256, validateTask10sSafeFixture, type Task10sAttempt3DispatchDryRunResult, type Task10sAttempt3FileInputReadback, type Task10sControlledUploadAttempt3Result } from "./task10s-attempt3";
+import { emptyTask10sControlledUploadAttemptResult, reserveTask10sAttempt, TASK10S_ATTEMPT_3, TASK10S_ATTEMPT_4, TASK10S_CANONICAL_AUTHORIZATION_ID, TASK10S_EXPECTED_CREATOR_ID, TASK10S_SAFE_FIXTURE_NAME, TASK10S_SAFE_FIXTURE_SIZE, TASK10S_SAFE_FIXTURE_SHA256, validateTask10sSafeFixture, type Task10sAttempt3DispatchDryRunResult, type Task10sAttempt3FileInputReadback, type Task10sControlledUploadAttemptResult, type Task10sControlledUploadAttemptSpec } from "./task10s-attempt3";
 
 const ARTICLE_TEST_TITLE = "Geo Media Publisher 发布链路测试";
 const ZHIHU_TEST_TITLE_PREFIX = "Geo Media Publisher 知乎发布测试";
@@ -333,9 +333,25 @@ export class PlatformSelfTestService {
    * as a renderer or IPC method: the only caller is the exact second-instance
    * diagnostic action. It stops after upload delivery/post-upload evidence.
    */
-  async runTask10sControlledUploadAttempt3(): Promise<Task10sControlledUploadAttempt3Result> {
-    const blocked = (failureCode: string, overrides: Partial<Task10sControlledUploadAttempt3Result> = {}): Task10sControlledUploadAttempt3Result => ({
-      ...emptyTask10sControlledUploadAttempt3Result(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID),
+  async runTask10sControlledUploadAttempt3(): Promise<Task10sControlledUploadAttemptResult> {
+    return this.runTask10sControlledUploadAttempt(TASK10S_ATTEMPT_3);
+  }
+
+  /** Main-side fixed Attempt 4 action with its own replay guard. */
+  async runTask10sControlledUploadAttempt4(): Promise<Task10sControlledUploadAttemptResult> {
+    return this.runTask10sControlledUploadAttempt(TASK10S_ATTEMPT_4);
+  }
+
+  private async runTask10sControlledUploadAttempt(attempt: Task10sControlledUploadAttemptSpec): Promise<Task10sControlledUploadAttemptResult> {
+    let attemptConsumed = false;
+    const counts = (): Pick<Task10sControlledUploadAttemptResult, "controlledUploadAttempt3Count" | "controlledUploadAttempt4Count" | "imageUploadAttemptCount"> => ({
+      controlledUploadAttempt3Count: attemptConsumed && attempt.attemptId === "ATTEMPT_3" ? 1 : 0,
+      controlledUploadAttempt4Count: attemptConsumed && attempt.attemptId === "ATTEMPT_4" ? 1 : 0,
+      imageUploadAttemptCount: attemptConsumed ? attempt.imageUploadAttemptCount : attempt.baseImageUploadAttemptCount
+    });
+    const blocked = (failureCode: string, overrides: Partial<Task10sControlledUploadAttemptResult> = {}): Task10sControlledUploadAttemptResult => ({
+      ...emptyTask10sControlledUploadAttemptResult(attempt, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID),
+      ...counts(),
       status: "BLOCKED",
       failureCode,
       ...overrides
@@ -344,12 +360,12 @@ export class PlatformSelfTestService {
       const account = this.options.repository.listAccounts().find((item) => item.id === XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID && item.platformKey === "xiaohongshu");
       if (!account || !account.enabled || account.archivedAt) return blocked("XHS_ACCOUNT_UNAVAILABLE");
       const adapter = this.options.registry.getForContent("xiaohongshu", "article");
-      if (!isAutomationAdapter(adapter) || typeof adapter.runControlledPostUploadDiscovery !== "function" || typeof adapter.getBrowserRuntimeSnapshot !== "function") return blocked("XHS_ATTEMPT3_ADAPTER_CAPABILITY_UNAVAILABLE");
+      if (!isAutomationAdapter(adapter) || typeof adapter.runControlledPostUploadDiscovery !== "function" || typeof adapter.getBrowserRuntimeSnapshot !== "function") return blocked(`${attempt.attemptId}_ADAPTER_CAPABILITY_UNAVAILABLE`);
       const context: AccountContext = {
         accountId: account.id,
         accountName: account.accountAlias || account.name,
         platformKey: "xiaohongshu",
-        settings: { userActionId: "task10s-controlled-upload-attempt3", triggerSource: "CONTROLLED_SELF_TEST", controlledSelfTestMode: "POST_UPLOAD_DISCOVERY_ONLY", browserExecutionMode: "VISIBLE" },
+        settings: { userActionId: `task10s-controlled-upload-${attempt.attemptId.toLowerCase()}`, triggerSource: "CONTROLLED_SELF_TEST", controlledSelfTestMode: "POST_UPLOAD_DISCOVERY_ONLY", browserExecutionMode: "VISIBLE" },
         secrets: this.options.resolveAccountSecrets(account.id, account.platformKey)
       };
       const runtimeBefore = adapter.getBrowserRuntimeSnapshot(context);
@@ -370,7 +386,7 @@ export class PlatformSelfTestService {
         || authorization.finalSubmitRetryCount !== 0
         || authorization.finalSubmitActionStarted
         || authorization.finalSubmitActionCompleted) {
-        return blocked("ATTEMPT3_AUTHORIZATION_NOT_AVAILABLE", { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId });
+        return blocked(`${attempt.attemptId}_AUTHORIZATION_NOT_AVAILABLE`, { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId });
       }
       if (this.controlledOperations.has(account.id)) return blocked("CONTROLLED_SELF_TEST_ALREADY_RUNNING", { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId });
 
@@ -388,25 +404,32 @@ export class PlatformSelfTestService {
       const fixture = validateTask10sSafeFixture();
       if (!fixture.valid) return blocked(fixture.failureCode ?? "SAFE_FIXTURE_INVALID", { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId, evidence: { fixture: { path: fixture.path, exists: fixture.exists, fileName: fixture.fileName, sizeBytes: fixture.sizeBytes, sha256: fixture.sha256, expectedName: TASK10S_SAFE_FIXTURE_NAME, expectedSizeBytes: TASK10S_SAFE_FIXTURE_SIZE, expectedSha256: TASK10S_SAFE_FIXTURE_SHA256 } } });
 
-      const guardPath = join(this.options.evidenceDirectory ?? join(process.cwd(), "output", "task10s-evidence"), "xiaohongshu-task10s-controlled-upload-attempt3-state.json");
-      const reservation = reserveTask10sAttempt3(guardPath, { accountId: account.id, contextDebugId: runtimeBefore.contextDebugId ?? "unknown-context", pageDebugId: runtimeBefore.canonicalPageDebugId ?? "unknown-page" });
-      if (!reservation.acquired) return blocked(reservation.reason, { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId, evidence: { guardPath, reservation: reservation.reason } });
+      const guardPath = join(this.options.evidenceDirectory ?? join(process.cwd(), "output", "task10s-evidence"), attempt.stateFileName);
+      const reserveAtMutationBoundary = (): void => {
+        if (attemptConsumed) throw new Error("CONTROLLED_UPLOAD_ATTEMPT_ALREADY_RESERVED");
+        const reservation = reserveTask10sAttempt(attempt, guardPath, { accountId: account.id, contextDebugId: runtimeBefore.contextDebugId ?? "unknown-context", pageDebugId: runtimeBefore.canonicalPageDebugId ?? "unknown-page" });
+        if (!reservation.acquired) throw new Error(reservation.reason);
+        attemptConsumed = true;
+      };
 
       this.controlledOperations.add(account.id);
       try {
-        this.options.logger?.info("PLATFORM_SELF_TEST", "TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_STARTED", "收到固定 Main-side Task10S Attempt 3；即将只执行一次受控图片上传并停止在上传后证据", { platformKey: "xiaohongshu", accountId: account.id, contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId, attempt3Count: 1 });
-        const controlled = await adapter.runControlledPostUploadDiscovery(context, { imagePath: fixture.path, imageSource: "SAFE_TEST_FIXTURE" });
+        this.options.logger?.info("PLATFORM_SELF_TEST", `TASK10S_CONTROLLED_UPLOAD_${attempt.attemptId}_STARTED`, `收到固定 Main-side Task10S ${attempt.attemptId}；即将只执行一次受控图片上传并停止在上传后证据`, { platformKey: "xiaohongshu", accountId: account.id, contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId, attemptId: attempt.attemptId, attemptCount: attemptConsumed ? 1 : 0 });
+        const controlled = await adapter.runControlledPostUploadDiscovery(context, { imagePath: fixture.path, imageSource: "SAFE_TEST_FIXTURE", onUploadMutationStarted: reserveAtMutationBoundary });
+        if (controlled.uploadMutationCount > 0 && !attemptConsumed) {
+          return blocked(`${attempt.attemptId}_MUTATION_BOUNDARY_NOT_RESERVED`, { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId, authorizedRunStateAfter: "NOT_VERIFIED", evidence: { guardPath, controlled } });
+        }
         const runtimeAfter = adapter.getBrowserRuntimeSnapshot(context);
         const authorizationAfter = this.options.repository.getOneShotPublicationAuthorization(TASK10S_CANONICAL_AUTHORIZATION_ID);
         const authorizedRunStateAfter = authorizationAfter?.state === "AUTHORIZED_UNUSED" && authorizationAfter.publicationTransactionCount === 0 && authorizationAfter.finalSubmitAttemptCount === 0 && authorizationAfter.finalSubmitActionStarted === false && authorizationAfter.finalSubmitActionCompleted === false ? "AUTHORIZED_UNUSED" : "NOT_VERIFIED";
-        return this.summarizeTask10sAttempt3Result(controlled, runtimeBefore, runtimeAfter, authorizedRunStateAfter);
+        return this.summarizeTask10sAttemptResult(controlled, runtimeBefore, runtimeAfter, authorizedRunStateAfter, attempt, attemptConsumed);
       } catch (error) {
-        return blocked(error instanceof Error ? "ATTEMPT3_CONTROLLED_FLOW_FAILED" : "ATTEMPT3_CONTROLLED_FLOW_FAILED", { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId, controlledUploadAttempt3Count: 1, imageUploadAttemptCount: 3, authorizedRunStateAfter: "NOT_VERIFIED", evidence: { errorType: error instanceof Error ? error.name : "UnknownError" } });
+        return blocked(`${attempt.attemptId}_CONTROLLED_FLOW_FAILED`, { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId, authorizedRunStateAfter: "NOT_VERIFIED", evidence: { errorType: error instanceof Error ? error.name : "UnknownError", errorCode: error instanceof Error ? error.message : null, guardPath } });
       } finally {
         this.controlledOperations.delete(account.id);
       }
     } catch (error) {
-      return blocked(error instanceof Error ? "ATTEMPT3_MAIN_GUARD_FAILED" : "ATTEMPT3_MAIN_GUARD_FAILED", { evidence: { errorType: error instanceof Error ? error.name : "UnknownError" } });
+      return blocked(`${attempt.attemptId}_MAIN_GUARD_FAILED`, { evidence: { errorType: error instanceof Error ? error.name : "UnknownError" } });
     }
   }
 
@@ -1172,13 +1195,15 @@ export class PlatformSelfTestService {
     };
   }
 
-  private summarizeTask10sAttempt3Result(
+  private summarizeTask10sAttemptResult(
     controlled: ControlledPostUploadDiscoveryResult,
     runtimeBefore: BrowserSessionRuntimeSnapshot,
     runtimeAfter: BrowserSessionRuntimeSnapshot,
-    authorizedRunStateAfter: "AUTHORIZED_UNUSED" | "NOT_VERIFIED"
-  ): Task10sControlledUploadAttempt3Result {
-    const result = emptyTask10sControlledUploadAttempt3Result(controlled.accountId);
+    authorizedRunStateAfter: "AUTHORIZED_UNUSED" | "NOT_VERIFIED",
+    attempt: Task10sControlledUploadAttemptSpec,
+    attemptConsumed: boolean
+  ): Task10sControlledUploadAttemptResult {
+    const result = emptyTask10sControlledUploadAttemptResult(attempt, controlled.accountId);
     const imageEvidence = safeRecord(controlled.evidence.imageEvidence);
     const immediateReadback = safeImmediateReadback(imageEvidence?.fileInputImmediateReadback);
     const fingerprint = safeFingerprint(immediateReadback.status === "NOT_OBSERVED" ? null : imageEvidence?.fileInputImmediateReadback && safeRecord(imageEvidence.fileInputImmediateReadback)?.fingerprint);
@@ -1210,7 +1235,7 @@ export class PlatformSelfTestService {
       ...result,
       timestamp: new Date().toISOString(),
       status: imageUpload === "PASS" && controlled.status === "PASS" && sameContext === "YES" && sameCanonicalPage === "YES" ? "PASS" : "FAIL",
-      failureCode: imageUpload === "PASS" && controlled.status === "PASS" ? null : controlled.failureCode ?? "ATTEMPT3_UPLOAD_PROOF_INCOMPLETE",
+      failureCode: imageUpload === "PASS" && controlled.status === "PASS" ? null : controlled.failureCode ?? `${attempt.attemptId}_UPLOAD_PROOF_INCOMPLETE`,
       contextDebugId: runtimeBefore.contextDebugId,
       pageDebugId: runtimeBefore.canonicalPageDebugId,
       sameContext,
@@ -1237,8 +1262,9 @@ export class PlatformSelfTestService {
       bodyControlPresent,
       finalSubmitControlPresent,
       imageUpload,
-      controlledUploadAttempt3Count: 1,
-      imageUploadAttemptCount: 3,
+      controlledUploadAttempt3Count: attemptConsumed && attempt.attemptId === "ATTEMPT_3" ? 1 : 0,
+      controlledUploadAttempt4Count: attemptConsumed && attempt.attemptId === "ATTEMPT_4" ? 1 : 0,
+      imageUploadAttemptCount: attemptConsumed ? attempt.imageUploadAttemptCount : attempt.baseImageUploadAttemptCount,
       authorizedRunStateAfter,
       evidence: { controlled, imageEvidence: imageEvidence ?? null, postUploadInspection: postUpload ?? null, runtimeBefore: { contextDebugId: runtimeBefore.contextDebugId, canonicalPageDebugId: runtimeBefore.canonicalPageDebugId }, runtimeAfter: { contextDebugId: runtimeAfter.contextDebugId, canonicalPageDebugId: runtimeAfter.canonicalPageDebugId } }
     };

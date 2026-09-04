@@ -2446,14 +2446,14 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
    * preparePublish: it may mutate only the image input once, then stops at
    * post-upload discovery without filling content or submitting anything.
    */
-  async runControlledPostUploadDiscovery(ctx: AccountContext, input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE" }): Promise<ControlledPostUploadDiscoveryResult> {
+  async runControlledPostUploadDiscovery(ctx: AccountContext, input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE"; onUploadMutationStarted?: () => void }): Promise<ControlledPostUploadDiscoveryResult> {
     const operationId = randomUUID();
     return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, () => this.runControlledPostUploadDiscoveryOnCanonicalPage(ctx, input, operationId), "controlledPostUploadDiscovery");
   }
 
   private async runControlledPostUploadDiscoveryOnCanonicalPage(
     ctx: AccountContext,
-    input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE" },
+    input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE"; onUploadMutationStarted?: () => void },
     operationId: ReturnType<typeof randomUUID>
   ): Promise<ControlledPostUploadDiscoveryResult> {
     const initialCanonical = await this.activeCanonicalPage(ctx).catch(() => null);
@@ -2531,7 +2531,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     });
 
     try {
-      const imageEvidence = await this.uploadImages(canonical.page, [input.imagePath], { ctx, session: canonical.session, metadata, selfTestMode: "POST_UPLOAD_DISCOVERY_ONLY", expectedFileMetadata: TASK10S_SAFE_FIXTURE_EXPECTATION });
+      const imageEvidence = await this.uploadImages(canonical.page, [input.imagePath], { ctx, session: canonical.session, metadata, selfTestMode: "POST_UPLOAD_DISCOVERY_ONLY", expectedFileMetadata: TASK10S_SAFE_FIXTURE_EXPECTATION, onMutationStarted: input.onUploadMutationStarted });
       const uploadCompletionObserved = imageEvidence.verified === true;
       if (!uploadCompletionObserved) return failure("UPLOAD_COMPLETION_NOT_OBSERVED", "EDITOR_DISCOVERY", "upload-completion", 1);
       const postUploadInspection = await inspectPostUploadImageEditor(canonical.page, metadata, { emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
@@ -4983,8 +4983,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       });
     }
     try {
-      diagnosticContext?.onMutationStarted?.();
-      const immediateReadback = await readXiaohongshuUploadInputImmediately(input, images, diagnosticContext?.expectedFileMetadata);
+      const immediateReadback = await readXiaohongshuUploadInputImmediately(input, images, diagnosticContext?.expectedFileMetadata, diagnosticContext?.onMutationStarted);
       if (diagnosticContext) {
         this.emitEditorEntryDiagnostic({
           code: "IMAGE_UPLOAD_INPUT_READBACK",

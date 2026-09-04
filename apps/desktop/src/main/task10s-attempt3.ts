@@ -5,6 +5,8 @@ import { dirname, join } from "node:path";
 
 export const XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG = "--xhs-task10s-controlled-upload-attempt3" as const;
 export const RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 = "RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3" as const;
+export const XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG = "--xhs-task10s-controlled-upload-attempt4" as const;
+export const RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 = "RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4" as const;
 export const XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG = "--xhs-task10s-attempt3-dispatch-dry-run" as const;
 export const RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN = "RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN" as const;
 export const TASK10S_CANONICAL_AUTHORIZATION_ID = "6cb27b65-b122-4430-b8c7-aa83c59c8cac" as const;
@@ -12,6 +14,36 @@ export const TASK10S_EXPECTED_CREATOR_ID = "960803317" as const;
 export const TASK10S_SAFE_FIXTURE_NAME = "task10s-safe-test.png" as const;
 export const TASK10S_SAFE_FIXTURE_SIZE = 19226 as const;
 export const TASK10S_SAFE_FIXTURE_SHA256 = "15E13943897E9D5A781F781C674BCBA0F5DA5E6DF5C696B961CB4F0F3B38A646" as const;
+
+export type Task10sControlledUploadAttemptId = "ATTEMPT_3" | "ATTEMPT_4";
+export type Task10sControlledUploadAction = typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4;
+
+export interface Task10sControlledUploadAttemptSpec {
+  attemptId: Task10sControlledUploadAttemptId;
+  action: Task10sControlledUploadAction;
+  attemptNumber: 3 | 4;
+  stateFileName: string;
+  baseImageUploadAttemptCount: 2 | 3;
+  imageUploadAttemptCount: 3 | 4;
+}
+
+export const TASK10S_ATTEMPT_3: Task10sControlledUploadAttemptSpec = {
+  attemptId: "ATTEMPT_3",
+  action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3,
+  attemptNumber: 3,
+  stateFileName: "xiaohongshu-task10s-controlled-upload-attempt3-state.json",
+  baseImageUploadAttemptCount: 2,
+  imageUploadAttemptCount: 3
+};
+
+export const TASK10S_ATTEMPT_4: Task10sControlledUploadAttemptSpec = {
+  attemptId: "ATTEMPT_4",
+  action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4,
+  attemptNumber: 4,
+  stateFileName: "xiaohongshu-task10s-controlled-upload-attempt4-state.json",
+  baseImageUploadAttemptCount: 3,
+  imageUploadAttemptCount: 4
+};
 
 export interface Task10sAttempt3DispatchDryRunResult {
   status: "PASS";
@@ -29,11 +61,13 @@ export interface Task10sAttempt3DispatchDryRunResult {
   };
 }
 
-export type Task10sAttempt3ReservationReason = "ACQUIRED" | "ATTEMPT_3_ALREADY_USED" | "GUARD_UNAVAILABLE";
+export type Task10sAttemptReservationReason = "ACQUIRED" | "ATTEMPT_3_ALREADY_USED" | "ATTEMPT_4_ALREADY_USED" | "GUARD_UNAVAILABLE";
+export type Task10sAttempt3ReservationReason = Task10sAttemptReservationReason;
 
-export interface Task10sAttempt3State {
+export interface Task10sAttemptState {
   schemaVersion: 1;
-  action: typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3;
+  action: Task10sControlledUploadAction;
+  attemptId: Task10sControlledUploadAttemptId;
   status: "STARTED";
   locked: true;
   attemptCount: 1;
@@ -43,11 +77,15 @@ export interface Task10sAttempt3State {
   pageDebugId: string;
 }
 
-export interface Task10sAttempt3Reservation {
+export type Task10sAttempt3State = Task10sAttemptState;
+
+export interface Task10sAttemptReservation {
   acquired: boolean;
-  reason: Task10sAttempt3ReservationReason;
-  state: Task10sAttempt3State | null;
+  reason: Task10sAttemptReservationReason;
+  state: Task10sAttemptState | null;
 }
+
+export type Task10sAttempt3Reservation = Task10sAttemptReservation;
 
 export interface Task10sSafeFixtureValidation {
   path: string;
@@ -62,11 +100,12 @@ export interface Task10sSafeFixtureValidation {
   failureCode: "FIXTURE_NOT_FOUND" | "FIXTURE_METADATA_MISMATCH" | "FIXTURE_READ_FAILED" | null;
 }
 
-function safeState(value: unknown): Task10sAttempt3State | null {
+function safeState(value: unknown, spec: Task10sControlledUploadAttemptSpec): Task10sAttemptState | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;
   if (candidate.schemaVersion !== 1
-    || candidate.action !== RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3
+    || candidate.action !== spec.action
+    || (candidate.attemptId !== undefined && candidate.attemptId !== spec.attemptId)
     || candidate.status !== "STARTED"
     || candidate.locked !== true
     || candidate.attemptCount !== 1
@@ -76,7 +115,8 @@ function safeState(value: unknown): Task10sAttempt3State | null {
     || typeof candidate.pageDebugId !== "string") return null;
   return {
     schemaVersion: 1,
-    action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3,
+    action: spec.action,
+    attemptId: spec.attemptId,
     status: "STARTED",
     locked: true,
     attemptCount: 1,
@@ -88,14 +128,15 @@ function safeState(value: unknown): Task10sAttempt3State | null {
 }
 
 /**
- * Reserves the only Attempt 3 before the browser mutation. The wx create is
- * the replay boundary: a crash or an uncertain browser result leaves the
- * marker in place and the next invocation fails closed.
+ * Reserves one typed controlled-upload attempt at the mutation boundary. The
+ * wx create is the replay boundary: a crash or uncertain browser result
+ * leaves the marker in place and the next invocation fails closed.
  */
-export function reserveTask10sAttempt3(statePath: string, input: Pick<Task10sAttempt3State, "accountId" | "contextDebugId" | "pageDebugId">): Task10sAttempt3Reservation {
-  const state: Task10sAttempt3State = {
+export function reserveTask10sAttempt(spec: Task10sControlledUploadAttemptSpec, statePath: string, input: Pick<Task10sAttemptState, "accountId" | "contextDebugId" | "pageDebugId">): Task10sAttemptReservation {
+  const state: Task10sAttemptState = {
     schemaVersion: 1,
-    action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3,
+    action: spec.action,
+    attemptId: spec.attemptId,
     status: "STARTED",
     locked: true,
     attemptCount: 1,
@@ -112,12 +153,20 @@ export function reserveTask10sAttempt3(statePath: string, input: Pick<Task10sAtt
     return { acquired: true, reason: "ACQUIRED", state };
   } catch (error) {
     if ((error as { code?: string }).code === "EEXIST") {
-      let existing: Task10sAttempt3State | null = null;
-      try { existing = safeState(JSON.parse(readFileSync(statePath, "utf8")) as unknown); } catch { /* malformed marker still means used */ }
-      return { acquired: false, reason: "ATTEMPT_3_ALREADY_USED", state: existing };
+      let existing: Task10sAttemptState | null = null;
+      try { existing = safeState(JSON.parse(readFileSync(statePath, "utf8")) as unknown, spec); } catch { /* malformed marker still means used */ }
+      return { acquired: false, reason: spec.attemptId === "ATTEMPT_3" ? "ATTEMPT_3_ALREADY_USED" : "ATTEMPT_4_ALREADY_USED", state: existing };
     }
     return { acquired: false, reason: "GUARD_UNAVAILABLE", state: null };
   }
+}
+
+export function reserveTask10sAttempt3(statePath: string, input: Pick<Task10sAttemptState, "accountId" | "contextDebugId" | "pageDebugId">): Task10sAttempt3Reservation {
+  return reserveTask10sAttempt(TASK10S_ATTEMPT_3, statePath, input);
+}
+
+export function reserveTask10sAttempt4(statePath: string, input: Pick<Task10sAttemptState, "accountId" | "contextDebugId" | "pageDebugId">): Task10sAttemptReservation {
+  return reserveTask10sAttempt(TASK10S_ATTEMPT_4, statePath, input);
 }
 
 export function task10sSafeFixturePath(): string {
@@ -157,8 +206,9 @@ export interface Task10sAttempt3FileInputReadback {
   expectedFixtureMatch: "YES" | "NO" | "NOT_OBSERVED";
 }
 
-export interface Task10sControlledUploadAttempt3Result {
-  action: typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3;
+export interface Task10sControlledUploadAttemptResult {
+  action: Task10sControlledUploadAction;
+  attemptId: Task10sControlledUploadAttemptId;
   timestamp: string;
   status: "PASS" | "FAIL" | "BLOCKED";
   failureCode: string | null;
@@ -190,7 +240,8 @@ export interface Task10sControlledUploadAttempt3Result {
   finalSubmitControlPresent: boolean;
   imageUpload: "PASS" | "NOT_VERIFIED" | "NOT_RUN";
   controlledUploadAttempt3Count: 0 | 1;
-  imageUploadAttemptCount: 2 | 3;
+  controlledUploadAttempt4Count: 0 | 1;
+  imageUploadAttemptCount: 2 | 3 | 4;
   titleFillCount: 0;
   bodyFillCount: 0;
   finalSubmitClickCount: 0;
@@ -200,9 +251,13 @@ export interface Task10sControlledUploadAttempt3Result {
   evidence: Record<string, unknown>;
 }
 
-export function emptyTask10sControlledUploadAttempt3Result(accountId: string): Task10sControlledUploadAttempt3Result {
+export type Task10sControlledUploadAttempt3Result = Task10sControlledUploadAttemptResult;
+export type Task10sControlledUploadAttempt4Result = Task10sControlledUploadAttemptResult;
+
+export function emptyTask10sControlledUploadAttemptResult(attempt: Task10sControlledUploadAttemptSpec, accountId: string): Task10sControlledUploadAttemptResult {
   return {
-    action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3,
+    action: attempt.action,
+    attemptId: attempt.attemptId,
     timestamp: new Date().toISOString(),
     status: "BLOCKED",
     failureCode: null,
@@ -234,7 +289,8 @@ export function emptyTask10sControlledUploadAttempt3Result(accountId: string): T
     finalSubmitControlPresent: false,
     imageUpload: "NOT_RUN",
     controlledUploadAttempt3Count: 0,
-    imageUploadAttemptCount: 2,
+    controlledUploadAttempt4Count: 0,
+    imageUploadAttemptCount: attempt.baseImageUploadAttemptCount,
     titleFillCount: 0,
     bodyFillCount: 0,
     finalSubmitClickCount: 0,
@@ -243,4 +299,12 @@ export function emptyTask10sControlledUploadAttempt3Result(accountId: string): T
     newAuthorizationCreated: 0,
     evidence: {}
   };
+}
+
+export function emptyTask10sControlledUploadAttempt3Result(accountId: string): Task10sControlledUploadAttempt3Result {
+  return emptyTask10sControlledUploadAttemptResult(TASK10S_ATTEMPT_3, accountId);
+}
+
+export function emptyTask10sControlledUploadAttempt4Result(accountId: string): Task10sControlledUploadAttempt4Result {
+  return emptyTask10sControlledUploadAttemptResult(TASK10S_ATTEMPT_4, accountId);
 }
