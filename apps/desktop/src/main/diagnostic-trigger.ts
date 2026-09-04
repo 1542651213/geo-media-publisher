@@ -1,4 +1,4 @@
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 
 export const XHS_CANONICAL_PAGE_PROBE_FLAG = "--probe-xhs-canonical-page" as const;
 export const PROBE_XHS_CANONICAL_PAGE = "PROBE_XHS_CANONICAL_PAGE" as const;
@@ -6,14 +6,16 @@ export const XHS_CONTEXT_PAGE_INVENTORY_FLAG = "--inspect-xhs-context-pages" as 
 export const INSPECT_XHS_CONTEXT_PAGES = "INSPECT_XHS_CONTEXT_PAGES" as const;
 export const XHS_PUBLISH_ENTRY_DOM_DIAGNOSTIC_FLAG = "--inspect-xhs-publish-entry-dom" as const;
 export const INSPECT_XHS_PUBLISH_ENTRY_DOM = "INSPECT_XHS_PUBLISH_ENTRY_DOM" as const;
+export const XHS_POST_UPLOAD_RECONCILIATION_FLAG = "--probe-xhs-post-upload-state" as const;
+export const INSPECT_XHS_POST_UPLOAD_RECONCILIATION = "INSPECT_XHS_POST_UPLOAD_RECONCILIATION" as const;
 
-export type DiagnosticAction = typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM;
+export type DiagnosticAction = typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION;
 
 function parseFixedAdditionalData(additionalData: unknown): DiagnosticAction | null {
   if (!additionalData || typeof additionalData !== "object" || Array.isArray(additionalData)) return null;
   const entries = Object.entries(additionalData);
   if (entries.length !== 1 || entries[0]?.[0] !== "action") return null;
-  return entries[0][1] === PROBE_XHS_CANONICAL_PAGE ? PROBE_XHS_CANONICAL_PAGE : entries[0][1] === INSPECT_XHS_CONTEXT_PAGES ? INSPECT_XHS_CONTEXT_PAGES : entries[0][1] === INSPECT_XHS_PUBLISH_ENTRY_DOM ? INSPECT_XHS_PUBLISH_ENTRY_DOM : null;
+  return entries[0][1] === PROBE_XHS_CANONICAL_PAGE ? PROBE_XHS_CANONICAL_PAGE : entries[0][1] === INSPECT_XHS_CONTEXT_PAGES ? INSPECT_XHS_CONTEXT_PAGES : entries[0][1] === INSPECT_XHS_PUBLISH_ENTRY_DOM ? INSPECT_XHS_PUBLISH_ENTRY_DOM : entries[0][1] === INSPECT_XHS_POST_UPLOAD_RECONCILIATION ? INSPECT_XHS_POST_UPLOAD_RECONCILIATION : null;
 }
 
 export function parseDiagnosticAction(commandLine: readonly string[], additionalData?: unknown): DiagnosticAction | null {
@@ -25,6 +27,8 @@ export function parseDiagnosticAction(commandLine: readonly string[], additional
         ? INSPECT_XHS_CONTEXT_PAGES
         : args[0] === XHS_PUBLISH_ENTRY_DOM_DIAGNOSTIC_FLAG
           ? INSPECT_XHS_PUBLISH_ENTRY_DOM
+          : args[0] === XHS_POST_UPLOAD_RECONCILIATION_FLAG
+            ? INSPECT_XHS_POST_UPLOAD_RECONCILIATION
         : null
     : null;
   if (additionalData !== undefined) return parseFixedAdditionalData(additionalData);
@@ -38,6 +42,8 @@ export function createFixedDiagnosticRunner(options: {
   writeContextPageEvidence?: (inventory: XiaohongshuContextPageInventory) => void;
   inspectPublishEntryDom?: () => Promise<XiaohongshuPublishEntryDomRuntimeDiagnostic>;
   writePublishEntryDomEvidence?: (diagnostic: XiaohongshuPublishEntryDomRuntimeDiagnostic) => void;
+  inspectPostUploadReconciliation?: () => Promise<XiaohongshuCurrentPostUploadReconciliation>;
+  writePostUploadReconciliationEvidence?: (diagnostic: XiaohongshuCurrentPostUploadReconciliation) => void;
 }): (action: DiagnosticAction) => Promise<boolean> {
   return async (action: DiagnosticAction): Promise<boolean> => {
     if (action === PROBE_XHS_CANONICAL_PAGE) {
@@ -53,6 +59,11 @@ export function createFixedDiagnosticRunner(options: {
     if (action === INSPECT_XHS_PUBLISH_ENTRY_DOM && options.inspectPublishEntryDom && options.writePublishEntryDomEvidence) {
       const diagnostic = await options.inspectPublishEntryDom();
       options.writePublishEntryDomEvidence(diagnostic);
+      return true;
+    }
+    if (action === INSPECT_XHS_POST_UPLOAD_RECONCILIATION && options.inspectPostUploadReconciliation && options.writePostUploadReconciliationEvidence) {
+      const diagnostic = await options.inspectPostUploadReconciliation();
+      options.writePostUploadReconciliationEvidence(diagnostic);
       return true;
     }
     return false;

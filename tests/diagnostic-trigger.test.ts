@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
-import { createFixedDiagnosticRunner, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_PUBLISH_ENTRY_DOM, PROBE_XHS_CANONICAL_PAGE, XHS_CONTEXT_PAGE_INVENTORY_FLAG, XHS_PUBLISH_ENTRY_DOM_DIAGNOSTIC_FLAG, XHS_CANONICAL_PAGE_PROBE_FLAG, parseDiagnosticAction } from "../apps/desktop/src/main/diagnostic-trigger";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import { createFixedDiagnosticRunner, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_PUBLISH_ENTRY_DOM, PROBE_XHS_CANONICAL_PAGE, XHS_CONTEXT_PAGE_INVENTORY_FLAG, XHS_POST_UPLOAD_RECONCILIATION_FLAG, XHS_PUBLISH_ENTRY_DOM_DIAGNOSTIC_FLAG, XHS_CANONICAL_PAGE_PROBE_FLAG, parseDiagnosticAction } from "../apps/desktop/src/main/diagnostic-trigger";
 
 const unusedProbe: XiaohongshuCanonicalPageRuntimeProbe = {} as XiaohongshuCanonicalPageRuntimeProbe;
 const entryDomDiagnostic: XiaohongshuPublishEntryDomRuntimeDiagnostic = {
@@ -20,6 +20,8 @@ const entryDomDiagnostic: XiaohongshuPublishEntryDomRuntimeDiagnostic = {
   diagnosticClickCount: 0,
   navigationCount: 0
 };
+
+const reconciliationDiagnostic = { inspectionStatus: "PASS", accountId: "account-1" } as XiaohongshuCurrentPostUploadReconciliation;
 
 describe("fixed XHS diagnostic triggers", () => {
   it("accepts only the bounded Context Page inventory flag or action", () => {
@@ -45,5 +47,33 @@ describe("fixed XHS diagnostic triggers", () => {
     await expect(runner(INSPECT_XHS_PUBLISH_ENTRY_DOM)).resolves.toBe(true);
     expect(inspectPublishEntryDom).toHaveBeenCalledTimes(1);
     expect(writePublishEntryDomEvidence).toHaveBeenCalledWith(entryDomDiagnostic);
+  });
+
+  it("accepts only the fixed post-upload reconciliation flag and rejects caller data", () => {
+    expect(parseDiagnosticAction(["Geo Media Publisher.exe", XHS_POST_UPLOAD_RECONCILIATION_FLAG])).toBe(INSPECT_XHS_POST_UPLOAD_RECONCILIATION);
+    expect(parseDiagnosticAction(["Geo Media Publisher.exe", XHS_POST_UPLOAD_RECONCILIATION_FLAG, "selector"])).toBeNull();
+    expect(parseDiagnosticAction(["Geo Media Publisher.exe", XHS_POST_UPLOAD_RECONCILIATION_FLAG], { action: INSPECT_XHS_POST_UPLOAD_RECONCILIATION, selector: "input" })).toBeNull();
+    expect(parseDiagnosticAction(["Geo Media Publisher.exe", XHS_POST_UPLOAD_RECONCILIATION_FLAG], { action: INSPECT_XHS_POST_UPLOAD_RECONCILIATION, pageId: "page-1" })).toBeNull();
+  });
+
+  it("routes the fixed action through the existing read-only reconciliation and evidence callbacks", async () => {
+    const inspectPostUploadReconciliation = vi.fn(async () => reconciliationDiagnostic);
+    const writePostUploadReconciliationEvidence = vi.fn();
+    const runner = createFixedDiagnosticRunner({
+      probe: vi.fn(async () => unusedProbe),
+      writeEvidence: vi.fn(),
+      inspectPostUploadReconciliation,
+      writePostUploadReconciliationEvidence
+    });
+
+    await expect(runner(INSPECT_XHS_POST_UPLOAD_RECONCILIATION)).resolves.toBe(true);
+    expect(inspectPostUploadReconciliation).toHaveBeenCalledTimes(1);
+    expect(writePostUploadReconciliationEvidence).toHaveBeenCalledWith(reconciliationDiagnostic);
+  });
+
+  it("fails closed when the fixed post-upload diagnostic callback is unavailable", async () => {
+    const runner = createFixedDiagnosticRunner({ probe: vi.fn(), writeEvidence: vi.fn() });
+
+    await expect(runner(INSPECT_XHS_POST_UPLOAD_RECONCILIATION)).resolves.toBe(false);
   });
 });
