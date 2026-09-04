@@ -94,6 +94,55 @@ describe("Task10S Attempt 3 fixed runner guard", () => {
     expect(trace.sideEffectCounts).toEqual(expect.objectContaining({ uploadImages: 0, setInputFiles: 0, finalSubmit: 0 }));
   });
 
+  it("classifies exact launcher candidates without relaxing unknown-option rejection", () => {
+    const allowFileAccess = parseDiagnosticActionWithTrace([
+      "Geo Media Publisher.exe",
+      XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG,
+      "--allow-file-access-from-files"
+    ], undefined);
+    expect(allowFileAccess.action).toBeNull();
+    expect(allowFileAccess.trace.unknownOptionLength).toBe(30);
+    expect(allowFileAccess.trace.unknownOptionMatchesAllowFileAccessFromFiles).toBe("YES");
+    expect(allowFileAccess.trace.unknownOptionMatchesOriginalProcessStartTimePrefix).toBe("NO");
+    expect(allowFileAccess.trace.unknownOptionMatchesOtherProvenLauncherFlag).toBe("NO");
+    expect(allowFileAccess.trace.unknownOptionSafeClass).toBe("EXACT_ALLOW_FILE_ACCESS_FROM_FILES_CANDIDATE");
+    expect(allowFileAccess.trace.unknownOptionSha256).toMatch(/^[A-F0-9]{64}$/u);
+
+    const lookalike = parseDiagnosticActionWithTrace([
+      "Geo Media Publisher.exe",
+      XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG,
+      "--allow-file-access-from-filesX"
+    ], undefined);
+    expect(lookalike.action).toBeNull();
+    expect(lookalike.trace.unknownOptionMatchesAllowFileAccessFromFiles).toBe("NO");
+    expect(lookalike.trace.unknownOptionSafeClass).toBe("UNKNOWN_OPTION");
+    expect(lookalike.trace.unknownOptionSha256).toMatch(/^[A-F0-9]{64}$/u);
+
+    const sameLengthUnknown = parseDiagnosticActionWithTrace([
+      "Geo Media Publisher.exe",
+      XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG,
+      "--xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    ], undefined);
+    expect(sameLengthUnknown.action).toBeNull();
+    expect(sameLengthUnknown.trace.unknownOptionLength).toBe(30);
+    expect(sameLengthUnknown.trace.unknownOptionMatchesAllowFileAccessFromFiles).toBe("NO");
+    expect(sameLengthUnknown.trace.unknownOptionSafeClass).toBe("UNKNOWN_OPTION");
+  });
+
+  it("reports the original-process-start-time prefix without exposing its value", () => {
+    const result = parseDiagnosticActionWithTrace([
+      "Geo Media Publisher.exe",
+      XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG,
+      "--original-process-start-time=1234567890"
+    ], undefined);
+
+    expect(result.action).toBeNull();
+    expect(result.trace.unknownOptionMatchesAllowFileAccessFromFiles).toBe("NO");
+    expect(result.trace.unknownOptionMatchesOriginalProcessStartTimePrefix).toBe("YES");
+    expect(result.trace.unknownOptionSafeClass).toBe("ORIGINAL_PROCESS_START_TIME_PREFIX_CANDIDATE");
+    expect(result.trace.rawArgvSafe.every((token) => !(["value", "rawValue"].some((key) => key in token)))).toBe(true);
+  });
+
   it("routes dry-run through the same fixed dispatcher without invoking Attempt 3", async () => {
     const dryRun = vi.fn(async () => ({ status: "PASS" as const, sideEffectCounts: { pageCreated: 0, contextCreated: 0, imagePostEntryClick: 0, uploadImages: 0, setInputFiles: 0, titleFill: 0, bodyFill: 0, finalSubmit: 0, publicationTransaction: 0, newAuthorization: 0 } }));
     const attempt3 = vi.fn(async () => emptyTask10sControlledUploadAttempt3Result("account-1"));

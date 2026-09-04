@@ -429,7 +429,18 @@ async function createWindow(): Promise<void> {
     mkdirSync(evidenceDirectory, { recursive: true });
     const timestamp = new Date().toISOString();
     const evidencePath = join(evidenceDirectory, `xiaohongshu-task10s-attempt3-dispatch-trace-${timestamp.replace(/[:.]/gu, "-")}.json`);
-    const evidence = { ...trace, evidencePath, action: RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, SIDE_EFFECT_COUNTS: trace.sideEffectCounts };
+    const evidence = {
+      ...trace,
+      evidencePath,
+      action: RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN,
+      UNKNOWN_OPTION_LENGTH: trace.unknownOptionLength,
+      UNKNOWN_OPTION_SHA256: trace.unknownOptionSha256,
+      UNKNOWN_OPTION_SAFE_CLASS: trace.unknownOptionSafeClass,
+      UNKNOWN_OPTION_MATCHES_ALLOW_FILE_ACCESS_FROM_FILES: trace.unknownOptionMatchesAllowFileAccessFromFiles,
+      UNKNOWN_OPTION_MATCHES_ORIGINAL_PROCESS_START_TIME_PREFIX: trace.unknownOptionMatchesOriginalProcessStartTimePrefix,
+      UNKNOWN_OPTION_MATCHES_OTHER_PROVEN_LAUNCHER_FLAG: trace.unknownOptionMatchesOtherProvenLauncherFlag,
+      SIDE_EFFECT_COUNTS: trace.sideEffectCounts
+    };
     writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), "utf8");
     logger.info("PLATFORM_SELF_TEST", "TASK10S_ATTEMPT3_DISPATCH_TRACE_WRITTEN", "Task10S Attempt 3 dispatch dry-run trace 已写入", { action: RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, evidencePath, actionParseResult: trace.actionParseResult, dispatchEntered: trace.dispatchEntered, dryRunHandlerReached: trace.dryRunHandlerReached, sideEffectCounts: trace.sideEffectCounts });
   };

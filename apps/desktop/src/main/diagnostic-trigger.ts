@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, type Task10sAttempt3DispatchDryRunResult, type Task10sControlledUploadAttempt3Result } from "./task10s-attempt3";
 export { RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG } from "./task10s-attempt3";
@@ -82,6 +83,12 @@ export interface Task10sAttempt3DispatchTrace {
   dispatchSelectedAction: "DRY_RUN_ATTEMPT3" | null;
   dryRunHandlerReached: "YES" | "NO";
   dispatchFailureStage: string | null;
+  unknownOptionLength: number | null;
+  unknownOptionSha256: string | null;
+  unknownOptionSafeClass: "NONE" | "UNKNOWN_OPTION" | "MULTIPLE_UNKNOWN_OPTIONS" | "EXACT_ALLOW_FILE_ACCESS_FROM_FILES_CANDIDATE" | "ORIGINAL_PROCESS_START_TIME_PREFIX_CANDIDATE";
+  unknownOptionMatchesAllowFileAccessFromFiles: "YES" | "NO";
+  unknownOptionMatchesOriginalProcessStartTimePrefix: "YES" | "NO";
+  unknownOptionMatchesOtherProvenLauncherFlag: "YES" | "NO";
   sideEffectCounts: Task10sAttempt3DispatchDryRunResult["sideEffectCounts"];
 }
 
@@ -120,6 +127,30 @@ function safeArgvTokens(values: readonly string[], indexOffset: number): readonl
   return values.map((value, index) => safeArgvToken(value, index + indexOffset));
 }
 
+function unknownOptionDiagnostics(values: readonly string[]): Pick<Task10sAttempt3DispatchTrace, "unknownOptionLength" | "unknownOptionSha256" | "unknownOptionSafeClass" | "unknownOptionMatchesAllowFileAccessFromFiles" | "unknownOptionMatchesOriginalProcessStartTimePrefix" | "unknownOptionMatchesOtherProvenLauncherFlag"> {
+  const unknownOptions = values.filter((value) => value.startsWith("-") && !actionForFlag(value));
+  const matchesAllowFileAccess = unknownOptions.some((value) => value === "--allow-file-access-from-files");
+  const matchesOriginalProcessStartTime = unknownOptions.some((value) => value.startsWith("--original-process-start-time="));
+  const safeClass = unknownOptions.length === 0
+    ? "NONE"
+    : unknownOptions.length > 1
+      ? "MULTIPLE_UNKNOWN_OPTIONS"
+      : matchesAllowFileAccess
+        ? "EXACT_ALLOW_FILE_ACCESS_FROM_FILES_CANDIDATE"
+        : matchesOriginalProcessStartTime
+          ? "ORIGINAL_PROCESS_START_TIME_PREFIX_CANDIDATE"
+          : "UNKNOWN_OPTION";
+  const singleUnknownOption = unknownOptions.length === 1 ? unknownOptions[0] : undefined;
+  return {
+    unknownOptionLength: singleUnknownOption?.length ?? null,
+    unknownOptionSha256: singleUnknownOption ? createHash("sha256").update(singleUnknownOption, "utf8").digest("hex").toUpperCase() : null,
+    unknownOptionSafeClass: safeClass,
+    unknownOptionMatchesAllowFileAccessFromFiles: matchesAllowFileAccess ? "YES" : "NO",
+    unknownOptionMatchesOriginalProcessStartTimePrefix: matchesOriginalProcessStartTime ? "YES" : "NO",
+    unknownOptionMatchesOtherProvenLauncherFlag: "NO"
+  };
+}
+
 function normalizationTrace(commandLine: readonly string[]): { normalizedArgs: readonly string[]; removedArgs: readonly string[] } {
   const args = commandLine.slice(1);
   if (!isKnownElectronLauncherPositional(args[0])) return { normalizedArgs: args, removedArgs: [] };
@@ -130,6 +161,7 @@ export function buildSecondInstanceDispatchTrace(commandLine: readonly string[],
   const normalization = normalizationTrace(commandLine);
   const normalizedArgs = normalization.normalizedArgs;
   const dryRunAction = XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG;
+  const unknownOptions = unknownOptionDiagnostics(normalizedArgs);
   return {
     secondInstanceEventReceived: "YES",
     activeMainPid,
@@ -148,6 +180,7 @@ export function buildSecondInstanceDispatchTrace(commandLine: readonly string[],
     dispatchSelectedAction: null,
     dryRunHandlerReached: "NO",
     dispatchFailureStage: null,
+    ...unknownOptions,
     sideEffectCounts: { pageCreated: 0, contextCreated: 0, imagePostEntryClick: 0, uploadImages: 0, setInputFiles: 0, titleFill: 0, bodyFill: 0, finalSubmit: 0, publicationTransaction: 0, newAuthorization: 0 }
   };
 }
