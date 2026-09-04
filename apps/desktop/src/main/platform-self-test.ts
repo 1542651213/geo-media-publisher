@@ -13,7 +13,7 @@ import { OneShotConfirmationCoordinator } from "./one-shot-confirmation";
 import { OneShotConfirmationReconciliationService } from "./one-shot-reconciliation";
 import { XhsIdentityService } from "./xhs-identity";
 import type { CreatorIdentityVerificationResult, FailedOneShotConfirmationIdentity, OneShotConfirmationReconciliationResult, XhsIdentityAcceptance } from "@publisher/domain";
-import { emptyTask10sControlledUploadAttempt3Result, reserveTask10sAttempt3, TASK10S_CANONICAL_AUTHORIZATION_ID, TASK10S_EXPECTED_CREATOR_ID, TASK10S_SAFE_FIXTURE_NAME, TASK10S_SAFE_FIXTURE_SIZE, TASK10S_SAFE_FIXTURE_SHA256, validateTask10sSafeFixture, type Task10sAttempt3FileInputReadback, type Task10sControlledUploadAttempt3Result } from "./task10s-attempt3";
+import { emptyTask10sControlledUploadAttempt3Result, reserveTask10sAttempt3, TASK10S_CANONICAL_AUTHORIZATION_ID, TASK10S_EXPECTED_CREATOR_ID, TASK10S_SAFE_FIXTURE_NAME, TASK10S_SAFE_FIXTURE_SIZE, TASK10S_SAFE_FIXTURE_SHA256, validateTask10sSafeFixture, type Task10sAttempt3DispatchDryRunResult, type Task10sAttempt3FileInputReadback, type Task10sControlledUploadAttempt3Result } from "./task10s-attempt3";
 
 const ARTICLE_TEST_TITLE = "Geo Media Publisher 发布链路测试";
 const ZHIHU_TEST_TITLE_PREFIX = "Geo Media Publisher 知乎发布测试";
@@ -315,6 +315,17 @@ export class PlatformSelfTestService {
     } finally {
       this.controlledOperations.delete(account.id);
     }
+  }
+
+  /**
+   * Main-side dispatch-only proof. It does not need an XHS runtime and has no
+   * browser or publication side effects.
+   */
+  async runTask10sAttempt3DispatchDryRun(): Promise<Task10sAttempt3DispatchDryRunResult> {
+    return {
+      status: "PASS",
+      sideEffectCounts: { pageCreated: 0, contextCreated: 0, imagePostEntryClick: 0, uploadImages: 0, setInputFiles: 0, titleFill: 0, bodyFill: 0, finalSubmit: 0, publicationTransaction: 0, newAuthorization: 0 }
+    };
   }
 
   /**

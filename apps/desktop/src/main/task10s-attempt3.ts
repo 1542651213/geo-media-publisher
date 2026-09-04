@@ -5,11 +5,29 @@ import { dirname, join } from "node:path";
 
 export const XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG = "--xhs-task10s-controlled-upload-attempt3" as const;
 export const RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 = "RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3" as const;
+export const XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG = "--xhs-task10s-attempt3-dispatch-dry-run" as const;
+export const RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN = "RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN" as const;
 export const TASK10S_CANONICAL_AUTHORIZATION_ID = "6cb27b65-b122-4430-b8c7-aa83c59c8cac" as const;
 export const TASK10S_EXPECTED_CREATOR_ID = "960803317" as const;
 export const TASK10S_SAFE_FIXTURE_NAME = "task10s-safe-test.png" as const;
 export const TASK10S_SAFE_FIXTURE_SIZE = 19226 as const;
 export const TASK10S_SAFE_FIXTURE_SHA256 = "15E13943897E9D5A781F781C674BCBA0F5DA5E6DF5C696B961CB4F0F3B38A646" as const;
+
+export interface Task10sAttempt3DispatchDryRunResult {
+  status: "PASS";
+  sideEffectCounts: {
+    pageCreated: number;
+    contextCreated: number;
+    imagePostEntryClick: number;
+    uploadImages: number;
+    setInputFiles: number;
+    titleFill: number;
+    bodyFill: number;
+    finalSubmit: number;
+    publicationTransaction: number;
+    newAuthorization: number;
+  };
+}
 
 export type Task10sAttempt3ReservationReason = "ACQUIRED" | "ATTEMPT_3_ALREADY_USED" | "GUARD_UNAVAILABLE";
 

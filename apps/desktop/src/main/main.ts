@@ -14,7 +14,7 @@ import { createRuntimeAdapterRegistry } from "./adapter-registry";
 import { runDeepSeekBenchmarkMode } from "./deepseek-benchmark-mode";
 import { createProcessDiagnostics } from "./process-diagnostics";
 import { recordAppStartup } from "./runtime-observability";
-import { createFixedDiagnosticRunner, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticAction, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, type DiagnosticAction, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
+import { buildSecondInstanceDispatchTrace, createFixedDiagnosticRunner, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticActionWithTrace, RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, parseDiagnosticAction, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, type DiagnosticAction, type FixedDiagnosticInvocationContext, type Task10sAttempt3DispatchTrace, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
 
 app.setName("codex-media-publisher");
 const processDiagnostics = createProcessDiagnostics(join(app.getPath("userData"), "production-data", "logs", "main-process-diagnostics.log"));
@@ -27,8 +27,10 @@ let shutdownReady = false;
 const initialDiagnosticAction = parseDiagnosticAction(process.argv);
 const primaryInstanceLockAcquired = app.requestSingleInstanceLock(initialDiagnosticAction ? { action: initialDiagnosticAction } : undefined);
 let queuedDiagnosticAction: DiagnosticAction | null = initialDiagnosticAction;
-let fixedDiagnosticActionRunner: ((action: DiagnosticAction) => Promise<boolean>) | null = null;
+let queuedDiagnosticInvocationContext: FixedDiagnosticInvocationContext | undefined;
+let fixedDiagnosticActionRunner: ((action: DiagnosticAction, context?: FixedDiagnosticInvocationContext) => Promise<boolean>) | null = null;
 let diagnosticRunInFlight: Promise<boolean> | null = null;
+let writeTask10sAttempt3DispatchDryRunEvidence: ((trace: Task10sAttempt3DispatchTrace) => void) | null = null;
 
 export function isDevelopmentEnvironment(appIsPackaged: boolean, publisherEnv = process.env.PUBLISHER_ENV): boolean { return !appIsPackaged && publisherEnv !== "production"; }
 
@@ -423,6 +425,14 @@ async function createWindow(): Promise<void> {
     writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), "utf8");
     logger.info("PLATFORM_SELF_TEST", "TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_EVIDENCE_WRITTEN", "Task10S Attempt 3 已写入安全证据；流程停止在上传后，不填标题正文、不提交", { action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, evidencePath, status: result.status, failureCode: result.failureCode, uploadLayer2: result.uploadLayer2, uploadLayer4: result.uploadLayer4, finalSubmitClickCount: 0, publicationTransactionCount: 0 });
   };
+  writeTask10sAttempt3DispatchDryRunEvidence = (trace: Task10sAttempt3DispatchTrace): void => {
+    mkdirSync(evidenceDirectory, { recursive: true });
+    const timestamp = new Date().toISOString();
+    const evidencePath = join(evidenceDirectory, `xiaohongshu-task10s-attempt3-dispatch-trace-${timestamp.replace(/[:.]/gu, "-")}.json`);
+    const evidence = { ...trace, evidencePath, action: RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, SIDE_EFFECT_COUNTS: trace.sideEffectCounts };
+    writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), "utf8");
+    logger.info("PLATFORM_SELF_TEST", "TASK10S_ATTEMPT3_DISPATCH_TRACE_WRITTEN", "Task10S Attempt 3 dispatch dry-run trace 已写入", { action: RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, evidencePath, actionParseResult: trace.actionParseResult, dispatchEntered: trace.dispatchEntered, dryRunHandlerReached: trace.dryRunHandlerReached, sideEffectCounts: trace.sideEffectCounts });
+  };
   fixedDiagnosticActionRunner = createFixedDiagnosticRunner({
     probe: async () => {
       logger.info("PLATFORM_SELF_TEST", "XHS_CANONICAL_PAGE_RUNTIME_PROBE_TRIGGER_RECEIVED", "收到固定非 UI 小红书 canonical Page probe trigger", { action: PROBE_XHS_CANONICAL_PAGE, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
@@ -453,11 +463,15 @@ async function createWindow(): Promise<void> {
       logger.info("PLATFORM_SELF_TEST", "TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_TRIGGER_RECEIVED", "收到固定 Main-side Task10S Attempt 3 trigger", { action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
       return platformSelfTests.runTask10sControlledUploadAttempt3();
     },
-    writeTask10sControlledUploadAttempt3Evidence
+    writeTask10sControlledUploadAttempt3Evidence,
+    runTask10sAttempt3DispatchDryRun: () => platformSelfTests.runTask10sAttempt3DispatchDryRun(),
+    writeTask10sAttempt3DispatchDryRunEvidence: (trace) => writeTask10sAttempt3DispatchDryRunEvidence?.(trace)
   });
   const pendingDiagnosticAction = queuedDiagnosticAction;
+  const pendingDiagnosticInvocationContext = queuedDiagnosticInvocationContext;
   queuedDiagnosticAction = null;
-  if (pendingDiagnosticAction) void runFixedDiagnosticAction(pendingDiagnosticAction);
+  queuedDiagnosticInvocationContext = undefined;
+  if (pendingDiagnosticAction) void runFixedDiagnosticAction(pendingDiagnosticAction, pendingDiagnosticInvocationContext);
   scheduler.start();
 
   const window = new BrowserWindow({
@@ -472,10 +486,10 @@ async function createWindow(): Promise<void> {
   else await window.loadFile(join(__dirname, "../renderer/index.html"));
 }
 
-function runFixedDiagnosticAction(action: DiagnosticAction): Promise<boolean> {
+function runFixedDiagnosticAction(action: DiagnosticAction, context?: FixedDiagnosticInvocationContext): Promise<boolean> {
   if (!fixedDiagnosticActionRunner) return Promise.resolve(false);
   if (diagnosticRunInFlight) return diagnosticRunInFlight;
-  diagnosticRunInFlight = fixedDiagnosticActionRunner(action).catch((error: unknown) => {
+  diagnosticRunInFlight = fixedDiagnosticActionRunner(action, context).catch((error: unknown) => {
     processDiagnostics.record("TASK10W_FIXED_DIAGNOSTIC_FAILED", { action, errorType: error instanceof Error ? error.name : "UnknownError" });
     return false;
   }).finally(() => { diagnosticRunInFlight = null; });
@@ -484,14 +498,32 @@ function runFixedDiagnosticAction(action: DiagnosticAction): Promise<boolean> {
 
 if (primaryInstanceLockAcquired) {
   app.on("second-instance", (_event, commandLine, _workingDirectory, additionalData) => {
-    const action = parseDiagnosticAction(commandLine, additionalData);
-    if (!action) return;
-    processDiagnostics.record("TASK10W_FIXED_DIAGNOSTIC_SECOND_INSTANCE", { action, commandLineArgCount: commandLine.length });
-    if (!fixedDiagnosticActionRunner) {
-      queuedDiagnosticAction ??= action;
+    const receivedTrace = buildSecondInstanceDispatchTrace(commandLine, process.pid);
+    processDiagnostics.record("TASK10S_ATTEMPT3_DISPATCH_SECOND_INSTANCE_RECEIVED", {
+      activeMainPid: receivedTrace.activeMainPid,
+      timestamp: receivedTrace.timestamp,
+      argvCount: receivedTrace.argvCount,
+      rawArgvSafe: receivedTrace.rawArgvSafe,
+      normalizedArgvSafe: receivedTrace.normalizedArgvSafe,
+      removedLauncherArgumentsSafe: receivedTrace.removedLauncherArgumentsSafe,
+      expectedDryRunActionPresentRaw: receivedTrace.expectedDryRunActionPresentRaw,
+      expectedDryRunActionPresentNormalized: receivedTrace.expectedDryRunActionPresentNormalized
+    });
+    const parsed = parseDiagnosticActionWithTrace(commandLine, additionalData);
+    if (!parsed.action) {
+      if (receivedTrace.expectedDryRunActionPresentRaw === "YES" || receivedTrace.expectedDryRunActionPresentNormalized === "YES") writeTask10sAttempt3DispatchDryRunEvidence?.(parsed.trace);
       return;
     }
-    void runFixedDiagnosticAction(action);
+    const action = parsed.action;
+    processDiagnostics.record("TASK10W_FIXED_DIAGNOSTIC_SECOND_INSTANCE", { action, commandLineArgCount: commandLine.length });
+    if (!fixedDiagnosticActionRunner) {
+      if (queuedDiagnosticAction === null) {
+        queuedDiagnosticAction = action;
+        queuedDiagnosticInvocationContext = action === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN ? { dispatchTrace: parsed.trace } : undefined;
+      }
+      return;
+    }
+    void runFixedDiagnosticAction(action, action === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN ? { dispatchTrace: parsed.trace } : undefined);
   });
 }
 

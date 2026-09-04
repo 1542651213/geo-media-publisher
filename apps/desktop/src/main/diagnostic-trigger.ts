@@ -1,6 +1,6 @@
 import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
-import { RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, type Task10sControlledUploadAttempt3Result } from "./task10s-attempt3";
-export { RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG } from "./task10s-attempt3";
+import { RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, type Task10sAttempt3DispatchDryRunResult, type Task10sControlledUploadAttempt3Result } from "./task10s-attempt3";
+export { RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG } from "./task10s-attempt3";
 
 export const XHS_CANONICAL_PAGE_PROBE_FLAG = "--probe-xhs-canonical-page" as const;
 export const PROBE_XHS_CANONICAL_PAGE = "PROBE_XHS_CANONICAL_PAGE" as const;
@@ -13,7 +13,7 @@ export const INSPECT_XHS_POST_UPLOAD_RECONCILIATION = "INSPECT_XHS_POST_UPLOAD_R
 export const XHS_FILE_INPUT_STATE_FLAG = "--probe-xhs-file-input-state" as const;
 export const INSPECT_XHS_FILE_INPUT_STATE = "INSPECT_XHS_FILE_INPUT_STATE" as const;
 
-export type DiagnosticAction = typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_FILE_INPUT_STATE | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3;
+export type DiagnosticAction = typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_FILE_INPUT_STATE | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN;
 
 function actionForValue(value: unknown): DiagnosticAction | null {
   if (value === PROBE_XHS_CANONICAL_PAGE) return PROBE_XHS_CANONICAL_PAGE;
@@ -22,6 +22,7 @@ function actionForValue(value: unknown): DiagnosticAction | null {
   if (value === INSPECT_XHS_POST_UPLOAD_RECONCILIATION) return INSPECT_XHS_POST_UPLOAD_RECONCILIATION;
   if (value === INSPECT_XHS_FILE_INPUT_STATE) return INSPECT_XHS_FILE_INPUT_STATE;
   if (value === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3;
+  if (value === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN) return RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN;
   return null;
 }
 
@@ -32,6 +33,7 @@ function actionForFlag(value: string | undefined): DiagnosticAction | null {
   if (value === XHS_POST_UPLOAD_RECONCILIATION_FLAG) return INSPECT_XHS_POST_UPLOAD_RECONCILIATION;
   if (value === XHS_FILE_INPUT_STATE_FLAG) return INSPECT_XHS_FILE_INPUT_STATE;
   if (value === XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3;
+  if (value === XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG) return RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN;
   return null;
 }
 
@@ -48,8 +50,106 @@ function isKnownElectronLauncherPositional(value: string | undefined): boolean {
 }
 
 export function normalizeSecondInstanceArgv(commandLine: readonly string[]): readonly string[] {
+  return normalizationTrace(commandLine).normalizedArgs;
+}
+
+type SafeArgvTokenKind = "EXECUTABLE" | "APP_ASAR" | "KNOWN_FIXED_ACTION" | "KNOWN_DEV_ENTRY" | "UNKNOWN_OPTION" | "UNKNOWN_POSITIONAL";
+
+export interface SafeArgvToken {
+  index: number;
+  kind: SafeArgvTokenKind;
+  length: number;
+  startsWithDash: boolean;
+  basenameSafe?: string;
+  exactKnownAction?: string;
+}
+
+export interface Task10sAttempt3DispatchTrace {
+  secondInstanceEventReceived: "YES";
+  activeMainPid: number;
+  timestamp: string;
+  argvCount: number;
+  rawArgvSafe: readonly SafeArgvToken[];
+  normalizedArgvSafe: readonly SafeArgvToken[];
+  removedLauncherArgumentsSafe: readonly SafeArgvToken[];
+  businessArgvSafe: readonly SafeArgvToken[];
+  expectedDryRunActionPresentRaw: "YES" | "NO";
+  expectedDryRunActionPresentNormalized: "YES" | "NO";
+  actionParseEntered: "YES" | "NO";
+  actionParseResult: "DRY_RUN_ATTEMPT3" | "READONLY_PROBE" | "FIXED_ACTION" | "NONE" | "REJECTED";
+  actionParseRejectionCode: string | null;
+  dispatchEntered: "YES" | "NO";
+  dispatchSelectedAction: "DRY_RUN_ATTEMPT3" | null;
+  dryRunHandlerReached: "YES" | "NO";
+  dispatchFailureStage: string | null;
+  sideEffectCounts: Task10sAttempt3DispatchDryRunResult["sideEffectCounts"];
+}
+
+export interface FixedDiagnosticInvocationContext {
+  dispatchTrace?: Task10sAttempt3DispatchTrace;
+}
+
+function safeBasename(value: string): string | undefined {
+  if (!/[\\/]/u.test(value)) return undefined;
+  const basename = value.split(/[\\/]/u).pop() ?? "";
+  return basename.length <= 80 ? basename : `${basename.slice(0, 77)}...`;
+}
+
+function safeArgvToken(value: string, index: number): SafeArgvToken {
+  const action = actionForFlag(value);
+  const normalized = value.replaceAll("\\", "/").toLowerCase();
+  const kind: SafeArgvTokenKind = index === 0
+    ? "EXECUTABLE"
+    : action
+      ? "KNOWN_FIXED_ACTION"
+      : normalized.endsWith("/app.asar")
+        ? "APP_ASAR"
+        : isKnownElectronLauncherPositional(value)
+          ? "KNOWN_DEV_ENTRY"
+          : value.startsWith("-")
+            ? "UNKNOWN_OPTION"
+            : "UNKNOWN_POSITIONAL";
+  const token: SafeArgvToken = { index, kind, length: value.length, startsWithDash: value.startsWith("-") };
+  const basename = index === 0 && !/[\\/]/u.test(value) && value.length <= 80 ? value : safeBasename(value);
+  if (basename) token.basenameSafe = basename;
+  if (action) token.exactKnownAction = value;
+  return token;
+}
+
+function safeArgvTokens(values: readonly string[], indexOffset: number): readonly SafeArgvToken[] {
+  return values.map((value, index) => safeArgvToken(value, index + indexOffset));
+}
+
+function normalizationTrace(commandLine: readonly string[]): { normalizedArgs: readonly string[]; removedArgs: readonly string[] } {
   const args = commandLine.slice(1);
-  return isKnownElectronLauncherPositional(args[0]) ? args.slice(1) : args;
+  if (!isKnownElectronLauncherPositional(args[0])) return { normalizedArgs: args, removedArgs: [] };
+  return { normalizedArgs: args.slice(1), removedArgs: [args[0] as string] };
+}
+
+export function buildSecondInstanceDispatchTrace(commandLine: readonly string[], activeMainPid: number, timestamp = new Date().toISOString()): Task10sAttempt3DispatchTrace {
+  const normalization = normalizationTrace(commandLine);
+  const normalizedArgs = normalization.normalizedArgs;
+  const dryRunAction = XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG;
+  return {
+    secondInstanceEventReceived: "YES",
+    activeMainPid,
+    timestamp,
+    argvCount: commandLine.length,
+    rawArgvSafe: safeArgvTokens(commandLine, 0),
+    normalizedArgvSafe: safeArgvTokens(normalizedArgs, 1),
+    removedLauncherArgumentsSafe: safeArgvTokens(normalization.removedArgs, 1),
+    businessArgvSafe: safeArgvTokens(normalizedArgs, 1),
+    expectedDryRunActionPresentRaw: commandLine.some((value) => value === dryRunAction) ? "YES" : "NO",
+    expectedDryRunActionPresentNormalized: normalizedArgs.some((value) => value === dryRunAction) ? "YES" : "NO",
+    actionParseEntered: "NO",
+    actionParseResult: "NONE",
+    actionParseRejectionCode: null,
+    dispatchEntered: "NO",
+    dispatchSelectedAction: null,
+    dryRunHandlerReached: "NO",
+    dispatchFailureStage: null,
+    sideEffectCounts: { pageCreated: 0, contextCreated: 0, imagePostEntryClick: 0, uploadImages: 0, setInputFiles: 0, titleFill: 0, bodyFill: 0, finalSubmit: 0, publicationTransaction: 0, newAuthorization: 0 }
+  };
 }
 
 function parseFixedAdditionalData(additionalData: unknown): DiagnosticAction | null {
@@ -59,16 +159,53 @@ function parseFixedAdditionalData(additionalData: unknown): DiagnosticAction | n
   return actionForValue(entries[0][1]);
 }
 
-export function parseDiagnosticAction(commandLine: readonly string[], additionalData?: unknown): DiagnosticAction | null {
+interface DiagnosticActionParseResult {
+  action: DiagnosticAction | null;
+  rejectionCode: string | null;
+}
+
+function parseDiagnosticActionInternal(commandLine: readonly string[], additionalData?: unknown): DiagnosticActionParseResult {
   const args = normalizeSecondInstanceArgv(commandLine);
   const cliAction = args.length === 1 ? actionForFlag(args[0]) : null;
   if (additionalData !== undefined) {
     const additionalAction = parseFixedAdditionalData(additionalData);
-    if (!additionalAction) return null;
-    if (additionalAction === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3) return args.length === 0 || cliAction === additionalAction ? additionalAction : null;
-    return additionalAction;
+    if (!additionalAction) return { action: null, rejectionCode: "INVALID_ADDITIONAL_DATA" };
+    if (additionalAction === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 || additionalAction === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN) {
+      return args.length === 0 || cliAction === additionalAction
+        ? { action: additionalAction, rejectionCode: null }
+        : { action: null, rejectionCode: "UNKNOWN_OR_EXTRA_ARGUMENT" };
+    }
+    return { action: additionalAction, rejectionCode: null };
   }
-  return cliAction;
+  if (cliAction) return { action: cliAction, rejectionCode: null };
+  return { action: null, rejectionCode: args.length === 0 ? "NO_FIXED_ACTION" : "UNKNOWN_OR_EXTRA_ARGUMENT" };
+}
+
+function actionParseResult(action: DiagnosticAction | null, args: readonly string[]): Task10sAttempt3DispatchTrace["actionParseResult"] {
+  if (!action) return args.length === 0 ? "NONE" : "REJECTED";
+  if (action === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN) return "DRY_RUN_ATTEMPT3";
+  if (action === PROBE_XHS_CANONICAL_PAGE) return "READONLY_PROBE";
+  return "FIXED_ACTION";
+}
+
+export function parseDiagnosticActionWithTrace(commandLine: readonly string[], additionalData?: unknown): { action: DiagnosticAction | null; trace: Task10sAttempt3DispatchTrace } {
+  const baseTrace = buildSecondInstanceDispatchTrace(commandLine, process.pid);
+  const parsed = parseDiagnosticActionInternal(commandLine, additionalData);
+  const normalizedArgs = normalizeSecondInstanceArgv(commandLine);
+  return {
+    action: parsed.action,
+    trace: {
+      ...baseTrace,
+      actionParseEntered: "YES",
+      actionParseResult: actionParseResult(parsed.action, normalizedArgs),
+      actionParseRejectionCode: parsed.rejectionCode,
+      dispatchFailureStage: parsed.action ? null : parsed.rejectionCode === "NO_FIXED_ACTION" ? "NO_ACTION" : "ACTION_PARSE_REJECTED"
+    }
+  };
+}
+
+export function parseDiagnosticAction(commandLine: readonly string[], additionalData?: unknown): DiagnosticAction | null {
+  return parseDiagnosticActionInternal(commandLine, additionalData).action;
 }
 
 export function createFixedDiagnosticRunner(options: {
@@ -84,8 +221,10 @@ export function createFixedDiagnosticRunner(options: {
   writeFileInputEvidence?: (diagnostic: XiaohongshuCurrentFileInputState) => void;
   runTask10sControlledUploadAttempt3?: () => Promise<Task10sControlledUploadAttempt3Result>;
   writeTask10sControlledUploadAttempt3Evidence?: (result: Task10sControlledUploadAttempt3Result) => void;
-}): (action: DiagnosticAction) => Promise<boolean> {
-  return async (action: DiagnosticAction): Promise<boolean> => {
+  runTask10sAttempt3DispatchDryRun?: () => Promise<Task10sAttempt3DispatchDryRunResult>;
+  writeTask10sAttempt3DispatchDryRunEvidence?: (trace: Task10sAttempt3DispatchTrace) => void;
+}): (action: DiagnosticAction, context?: FixedDiagnosticInvocationContext) => Promise<boolean> {
+  return async (action: DiagnosticAction, context?: FixedDiagnosticInvocationContext): Promise<boolean> => {
     if (action === PROBE_XHS_CANONICAL_PAGE) {
       const probe = await options.probe();
       options.writeEvidence(probe);
@@ -115,6 +254,19 @@ export function createFixedDiagnosticRunner(options: {
       const result = await options.runTask10sControlledUploadAttempt3();
       options.writeTask10sControlledUploadAttempt3Evidence(result);
       return true;
+    }
+    if (action === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN && options.runTask10sAttempt3DispatchDryRun) {
+      const result = await options.runTask10sAttempt3DispatchDryRun();
+      if (context?.dispatchTrace && options.writeTask10sAttempt3DispatchDryRunEvidence) {
+        options.writeTask10sAttempt3DispatchDryRunEvidence({
+          ...context.dispatchTrace,
+          dispatchEntered: "YES",
+          dispatchSelectedAction: "DRY_RUN_ATTEMPT3",
+          dryRunHandlerReached: "YES",
+          sideEffectCounts: result.sideEffectCounts
+        });
+      }
+      return result.status === "PASS";
     }
     return false;
   };

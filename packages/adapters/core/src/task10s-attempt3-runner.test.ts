@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createFixedDiagnosticRunner, parseDiagnosticAction, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG } from "../../../../apps/desktop/src/main/diagnostic-trigger";
+import { buildSecondInstanceDispatchTrace, createFixedDiagnosticRunner, parseDiagnosticAction, parseDiagnosticActionWithTrace, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG } from "../../../../apps/desktop/src/main/diagnostic-trigger";
 import { emptyTask10sControlledUploadAttempt3Result, reserveTask10sAttempt3, TASK10S_CANONICAL_AUTHORIZATION_ID } from "../../../../apps/desktop/src/main/task10s-attempt3";
 import { PlatformSelfTestService } from "../../../../apps/desktop/src/main/platform-self-test";
 
@@ -42,6 +42,70 @@ describe("Task10S Attempt 3 fixed runner guard", () => {
       "C:\\GMP116ZhihuL5\\Geo Media Publisher\\resources\\app.asar",
       "--probe-xhs-canonical-page"
     ])).toBe("PROBE_XHS_CANONICAL_PAGE");
+  });
+
+  it("accepts the packaged Electron argv shape for the dispatch dry-run action", () => {
+    expect(parseDiagnosticAction([
+      "Geo Media Publisher.exe",
+      "C:\\GMP116ZhihuL5\\Geo Media Publisher\\resources\\app.asar",
+      XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG
+    ])).toBe(RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN);
+  });
+
+  it("accepts the dev Electron app entry shape for the dispatch dry-run action", () => {
+    expect(parseDiagnosticAction([
+      "electron.exe",
+      process.cwd(),
+      XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG
+    ])).toBe(RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN);
+  });
+
+  it("records safe raw and normalized argv plus parser rejection details", () => {
+    const packaged = "C:\\GMP116ZhihuL5\\Geo Media Publisher\\resources\\app.asar";
+    const accepted = parseDiagnosticActionWithTrace(["Geo Media Publisher.exe", packaged, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG], undefined);
+    expect(accepted.action).toBe(RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN);
+    expect(accepted.trace.expectedDryRunActionPresentRaw).toBe("YES");
+    expect(accepted.trace.expectedDryRunActionPresentNormalized).toBe("YES");
+    expect(accepted.trace.normalizedArgvSafe.map((token) => token.kind)).toEqual(["KNOWN_FIXED_ACTION"]);
+    expect(accepted.trace.removedLauncherArgumentsSafe.map((token) => token.kind)).toEqual(["APP_ASAR"]);
+    expect(accepted.trace.rawArgvSafe.every((token) => !("value" in token))).toBe(true);
+
+    const rejected = parseDiagnosticActionWithTrace(["Geo Media Publisher.exe", packaged, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, "--unknown-option"], undefined);
+    expect(rejected.action).toBeNull();
+    expect(rejected.trace.actionParseResult).toBe("REJECTED");
+    expect(rejected.trace.actionParseRejectionCode).toBe("UNKNOWN_OR_EXTRA_ARGUMENT");
+    expect(rejected.trace.dispatchFailureStage).toBe("ACTION_PARSE_REJECTED");
+  });
+
+  it("records the second-instance event before entering the parser", () => {
+    const trace = buildSecondInstanceDispatchTrace([
+      "Geo Media Publisher.exe",
+      "C:\\GMP116ZhihuL5\\Geo Media Publisher\\resources\\app.asar",
+      XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG
+    ], 4242, "2026-09-04T00:00:00.000Z");
+
+    expect(trace.secondInstanceEventReceived).toBe("YES");
+    expect(trace.actionParseEntered).toBe("NO");
+    expect(trace.dispatchEntered).toBe("NO");
+    expect(trace.expectedDryRunActionPresentRaw).toBe("YES");
+    expect(trace.expectedDryRunActionPresentNormalized).toBe("YES");
+    expect(trace.removedLauncherArgumentsSafe).toHaveLength(1);
+    expect(trace.removedLauncherArgumentsSafe[0]?.kind).toBe("APP_ASAR");
+    expect(trace.sideEffectCounts).toEqual(expect.objectContaining({ uploadImages: 0, setInputFiles: 0, finalSubmit: 0 }));
+  });
+
+  it("routes dry-run through the same fixed dispatcher without invoking Attempt 3", async () => {
+    const dryRun = vi.fn(async () => ({ status: "PASS" as const, sideEffectCounts: { pageCreated: 0, contextCreated: 0, imagePostEntryClick: 0, uploadImages: 0, setInputFiles: 0, titleFill: 0, bodyFill: 0, finalSubmit: 0, publicationTransaction: 0, newAuthorization: 0 } }));
+    const attempt3 = vi.fn(async () => emptyTask10sControlledUploadAttempt3Result("account-1"));
+    const write = vi.fn();
+    const runner = createFixedDiagnosticRunner({ probe: vi.fn(), writeEvidence: vi.fn(), runTask10sControlledUploadAttempt3: attempt3, runTask10sAttempt3DispatchDryRun: dryRun, writeTask10sAttempt3DispatchDryRunEvidence: write });
+    const commandLine = ["Geo Media Publisher.exe", "C:\\GMP116ZhihuL5\\Geo Media Publisher\\resources\\app.asar", XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG];
+    const parsed = parseDiagnosticActionWithTrace(commandLine, undefined);
+
+    await expect(runner(parsed.action as typeof RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, { dispatchTrace: parsed.trace })).resolves.toBe(true);
+    expect(dryRun).toHaveBeenCalledTimes(1);
+    expect(attempt3).not.toHaveBeenCalled();
+    expect(write).toHaveBeenCalledWith(expect.objectContaining({ actionParseResult: "DRY_RUN_ATTEMPT3", dispatchEntered: "YES", dispatchSelectedAction: "DRY_RUN_ATTEMPT3", dryRunHandlerReached: "YES", sideEffectCounts: expect.objectContaining({ setInputFiles: 0, finalSubmit: 0 }) }));
   });
 
   it("rejects unknown, duplicate, conflicting, and caller-supplied positional arguments", () => {
