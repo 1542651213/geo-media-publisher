@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { AppRepository } from "@publisher/db";
-import { createOwnerAuthorizedOneShotPublication, isAutomationAdapter, ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type AdapterRegistry, type AutomationAdapter, type ControlledSelfTestMode, type PlatformAdapter, type UserInitiatedAction } from "@publisher/adapters-core";
+import { createOwnerAuthorizedOneShotPublication, isAutomationAdapter, ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type AdapterRegistry, type AutomationAdapter, type BrowserSessionRuntimeSnapshot, type ControlledSelfTestMode, type PlatformAdapter, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { AutomationPrepareResult, ControlledPostUploadDiscoveryResult, PublishFlowExplorationResult } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
 import type { PublisherService } from "@publisher/publisher";
@@ -13,6 +13,7 @@ import { OneShotConfirmationCoordinator } from "./one-shot-confirmation";
 import { OneShotConfirmationReconciliationService } from "./one-shot-reconciliation";
 import { XhsIdentityService } from "./xhs-identity";
 import type { CreatorIdentityVerificationResult, FailedOneShotConfirmationIdentity, OneShotConfirmationReconciliationResult, XhsIdentityAcceptance } from "@publisher/domain";
+import { emptyTask10sControlledUploadAttempt3Result, reserveTask10sAttempt3, TASK10S_CANONICAL_AUTHORIZATION_ID, TASK10S_EXPECTED_CREATOR_ID, TASK10S_SAFE_FIXTURE_NAME, TASK10S_SAFE_FIXTURE_SIZE, TASK10S_SAFE_FIXTURE_SHA256, validateTask10sSafeFixture, type Task10sAttempt3FileInputReadback, type Task10sControlledUploadAttempt3Result } from "./task10s-attempt3";
 
 const ARTICLE_TEST_TITLE = "Geo Media Publisher 发布链路测试";
 const ZHIHU_TEST_TITLE_PREFIX = "Geo Media Publisher 知乎发布测试";
@@ -194,6 +195,63 @@ function selfTestError(error: unknown): { result: PlatformSelfTestResult; errorC
   return { result: "FAILED", errorCode: rawCode, message };
 }
 
+function safeUrlPath(value: string | null): string | null {
+  if (!value) return null;
+  try { return new URL(value).pathname; } catch { return null; }
+}
+
+function safeUrlOrigin(value: string | null): string | null {
+  if (!value) return null;
+  try { return new URL(value).origin; } catch { return null; }
+}
+
+function safeRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function safeBoolean(value: unknown): boolean { return value === true; }
+
+function safeInteger(value: unknown): number | null { return typeof value === "number" && Number.isInteger(value) ? value : null; }
+
+function safeText(value: unknown): string | null { return typeof value === "string" ? value.slice(0, 160) : null; }
+
+function safeFingerprint(value: unknown): Record<string, unknown> | null {
+  const record = safeRecord(value);
+  if (!record) return null;
+  return {
+    tagName: safeText(record.tagName),
+    type: safeText(record.type),
+    accept: safeText(record.accept),
+    multiple: safeBoolean(record.multiple),
+    disabled: safeBoolean(record.disabled),
+    connected: safeBoolean(record.connected),
+    classNameSafe: safeText(record.classNameSafe)
+  };
+}
+
+function safeImmediateReadback(value: unknown): Task10sAttempt3FileInputReadback {
+  const record = safeRecord(value);
+  const readback = safeRecord(record?.readback);
+  const files = Array.isArray(readback?.files) ? readback.files : [];
+  const first = safeRecord(files[0]);
+  const filesLength = safeInteger(readback?.filesLength);
+  const status = record?.status === "PASS" ? "PASS" : record?.status === "FAIL" ? "FAIL" : "NOT_OBSERVED";
+  const expectedFixtureMatch = record?.expectedFixtureMatch === "YES" ? "YES" : record?.expectedFixtureMatch === "NO" ? "NO" : "NOT_OBSERVED";
+  return {
+    filesLength,
+    fileName: safeText(first?.name),
+    fileSize: safeInteger(first?.size),
+    fileType: safeText(first?.type),
+    fileLastModified: safeInteger(first?.lastModified),
+    status,
+    expectedFixtureMatch
+  };
+}
+
+function safePostUploadEvidence(result: ControlledPostUploadDiscoveryResult): Record<string, unknown> | null {
+  return safeRecord(result.evidence.postUploadInspection);
+}
+
 export class PlatformSelfTestService {
   private readonly controlledOperations = new Set<string>();
   private readonly oneShotConfirmations = new OneShotConfirmationCoordinator();
@@ -256,6 +314,88 @@ export class PlatformSelfTestService {
       return result;
     } finally {
       this.controlledOperations.delete(account.id);
+    }
+  }
+
+  /**
+   * Main-side fixed Task10S Attempt 3 runner. It is intentionally not exposed
+   * as a renderer or IPC method: the only caller is the exact second-instance
+   * diagnostic action. It stops after upload delivery/post-upload evidence.
+   */
+  async runTask10sControlledUploadAttempt3(): Promise<Task10sControlledUploadAttempt3Result> {
+    const blocked = (failureCode: string, overrides: Partial<Task10sControlledUploadAttempt3Result> = {}): Task10sControlledUploadAttempt3Result => ({
+      ...emptyTask10sControlledUploadAttempt3Result(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID),
+      status: "BLOCKED",
+      failureCode,
+      ...overrides
+    });
+    try {
+      const account = this.options.repository.listAccounts().find((item) => item.id === XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID && item.platformKey === "xiaohongshu");
+      if (!account || !account.enabled || account.archivedAt) return blocked("XHS_ACCOUNT_UNAVAILABLE");
+      const adapter = this.options.registry.getForContent("xiaohongshu", "article");
+      if (!isAutomationAdapter(adapter) || typeof adapter.runControlledPostUploadDiscovery !== "function" || typeof adapter.getBrowserRuntimeSnapshot !== "function") return blocked("XHS_ATTEMPT3_ADAPTER_CAPABILITY_UNAVAILABLE");
+      const context: AccountContext = {
+        accountId: account.id,
+        accountName: account.accountAlias || account.name,
+        platformKey: "xiaohongshu",
+        settings: { userActionId: "task10s-controlled-upload-attempt3", triggerSource: "CONTROLLED_SELF_TEST", controlledSelfTestMode: "POST_UPLOAD_DISCOVERY_ONLY", browserExecutionMode: "VISIBLE" },
+        secrets: this.options.resolveAccountSecrets(account.id, account.platformKey)
+      };
+      const runtimeBefore = adapter.getBrowserRuntimeSnapshot(context);
+      if (!runtimeBefore.sessionExists || runtimeBefore.browserConnected !== true || !runtimeBefore.contextExists || !runtimeBefore.canonicalPageExists || runtimeBefore.canonicalPageClosed === true || runtimeBefore.runtimeAuthState !== "AUTHENTICATED") {
+        return blocked("XHS_CANONICAL_RUNTIME_UNAVAILABLE", { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId, authorizedRunStateAfter: "NOT_VERIFIED" });
+      }
+      const authorization = this.options.repository.getOneShotPublicationAuthorization(TASK10S_CANONICAL_AUTHORIZATION_ID);
+      if (!authorization
+        || authorization.authorization !== OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH
+        || authorization.state !== "AUTHORIZED_UNUSED"
+        || authorization.platformKey !== "xiaohongshu"
+        || authorization.accountId !== XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID
+        || authorization.operationId !== TASK10S_CANONICAL_AUTHORIZATION_ID
+        || authorization.mode !== ONE_SHOT_REAL_PUBLISH_ACCEPTANCE
+        || authorization.publicationTransactionCount !== 0
+        || authorization.publicationCommitActionCount !== 0
+        || authorization.finalSubmitAttemptCount !== 0
+        || authorization.finalSubmitRetryCount !== 0
+        || authorization.finalSubmitActionStarted
+        || authorization.finalSubmitActionCompleted) {
+        return blocked("ATTEMPT3_AUTHORIZATION_NOT_AVAILABLE", { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId });
+      }
+      if (this.controlledOperations.has(account.id)) return blocked("CONTROLLED_SELF_TEST_ALREADY_RUNNING", { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId });
+
+      const identity = await this.xhsIdentity.verifyCreatorIdentity(account.id);
+      const identityUrl = identity.canonicalPageUrl;
+      const identityRouteValid = safeUrlOrigin(identityUrl) === "https://creator.xiaohongshu.com" && safeUrlPath(identityUrl) === "/new/home";
+      const identityPassed = identity.verified
+        && identity.expectedExternalCreatorId === TASK10S_EXPECTED_CREATOR_ID
+        && identity.observed.externalCreatorId === TASK10S_EXPECTED_CREATOR_ID
+        && identity.canonicalContextId === runtimeBefore.contextDebugId
+        && identity.canonicalPageId === runtimeBefore.canonicalPageDebugId
+        && identityRouteValid;
+      if (!identityPassed) return blocked("CURRENT_RUNTIME_IDENTITY_REVALIDATION_FAILED", { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId, evidence: { expectedCreatorId: TASK10S_EXPECTED_CREATOR_ID, observedCreatorId: identity.observed.externalCreatorId, identityVerified: identity.verified, canonicalRoute: identityRouteValid ? "/new/home" : safeUrlPath(identityUrl) } });
+
+      const fixture = validateTask10sSafeFixture();
+      if (!fixture.valid) return blocked(fixture.failureCode ?? "SAFE_FIXTURE_INVALID", { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId, evidence: { fixture: { path: fixture.path, exists: fixture.exists, fileName: fixture.fileName, sizeBytes: fixture.sizeBytes, sha256: fixture.sha256, expectedName: TASK10S_SAFE_FIXTURE_NAME, expectedSizeBytes: TASK10S_SAFE_FIXTURE_SIZE, expectedSha256: TASK10S_SAFE_FIXTURE_SHA256 } } });
+
+      const guardPath = join(this.options.evidenceDirectory ?? join(process.cwd(), "output", "task10s-evidence"), "xiaohongshu-task10s-controlled-upload-attempt3-state.json");
+      const reservation = reserveTask10sAttempt3(guardPath, { accountId: account.id, contextDebugId: runtimeBefore.contextDebugId ?? "unknown-context", pageDebugId: runtimeBefore.canonicalPageDebugId ?? "unknown-page" });
+      if (!reservation.acquired) return blocked(reservation.reason, { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId, evidence: { guardPath, reservation: reservation.reason } });
+
+      this.controlledOperations.add(account.id);
+      try {
+        this.options.logger?.info("PLATFORM_SELF_TEST", "TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_STARTED", "收到固定 Main-side Task10S Attempt 3；即将只执行一次受控图片上传并停止在上传后证据", { platformKey: "xiaohongshu", accountId: account.id, contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId, attempt3Count: 1 });
+        const controlled = await adapter.runControlledPostUploadDiscovery(context, { imagePath: fixture.path, imageSource: "SAFE_TEST_FIXTURE" });
+        const runtimeAfter = adapter.getBrowserRuntimeSnapshot(context);
+        const authorizationAfter = this.options.repository.getOneShotPublicationAuthorization(TASK10S_CANONICAL_AUTHORIZATION_ID);
+        const authorizedRunStateAfter = authorizationAfter?.state === "AUTHORIZED_UNUSED" && authorizationAfter.publicationTransactionCount === 0 && authorizationAfter.finalSubmitAttemptCount === 0 && authorizationAfter.finalSubmitActionStarted === false && authorizationAfter.finalSubmitActionCompleted === false ? "AUTHORIZED_UNUSED" : "NOT_VERIFIED";
+        return this.summarizeTask10sAttempt3Result(controlled, runtimeBefore, runtimeAfter, authorizedRunStateAfter);
+      } catch (error) {
+        return blocked(error instanceof Error ? "ATTEMPT3_CONTROLLED_FLOW_FAILED" : "ATTEMPT3_CONTROLLED_FLOW_FAILED", { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId, controlledUploadAttempt3Count: 1, imageUploadAttemptCount: 3, authorizedRunStateAfter: "NOT_VERIFIED", evidence: { errorType: error instanceof Error ? error.name : "UnknownError" } });
+      } finally {
+        this.controlledOperations.delete(account.id);
+      }
+    } catch (error) {
+      return blocked(error instanceof Error ? "ATTEMPT3_MAIN_GUARD_FAILED" : "ATTEMPT3_MAIN_GUARD_FAILED", { evidence: { errorType: error instanceof Error ? error.name : "UnknownError" } });
     }
   }
 
@@ -1018,6 +1158,78 @@ export class PlatformSelfTestService {
       platformKey: account.platformKey,
       settings: { userActionId: run.testRunId, triggerSource: "RUN_SELF_TEST", browserExecutionMode: executionMode },
       secrets: this.options.resolveAccountSecrets(account.id, account.platformKey)
+    };
+  }
+
+  private summarizeTask10sAttempt3Result(
+    controlled: ControlledPostUploadDiscoveryResult,
+    runtimeBefore: BrowserSessionRuntimeSnapshot,
+    runtimeAfter: BrowserSessionRuntimeSnapshot,
+    authorizedRunStateAfter: "AUTHORIZED_UNUSED" | "NOT_VERIFIED"
+  ): Task10sControlledUploadAttempt3Result {
+    const result = emptyTask10sControlledUploadAttempt3Result(controlled.accountId);
+    const imageEvidence = safeRecord(controlled.evidence.imageEvidence);
+    const immediateReadback = safeImmediateReadback(imageEvidence?.fileInputImmediateReadback);
+    const fingerprint = safeFingerprint(immediateReadback.status === "NOT_OBSERVED" ? null : imageEvidence?.fileInputImmediateReadback && safeRecord(imageEvidence.fileInputImmediateReadback)?.fingerprint);
+    const postUpload = safePostUploadEvidence(controlled);
+    const mediaPreview = safeRecord(postUpload?.mediaPreviewDiagnostics);
+    const previewCount = safeInteger(postUpload?.visibleImageItemCount) ?? safeInteger(mediaPreview?.previewCount);
+    const assetCount = safeInteger(postUpload?.imageAssetRenderedCount) ?? (mediaPreview?.previewVisible === true ? safeInteger(mediaPreview.previewCount) : null);
+    const processingSignal = typeof postUpload?.processingSignalPresent === "boolean" ? postUpload.processingSignalPresent : null;
+    const explicitErrorSignal = Array.isArray(postUpload?.explicitUploadErrorSignals) && postUpload.explicitUploadErrorSignals.length > 0;
+    const titleControlPresent = safeBoolean(postUpload?.titleControlPresent) || controlled.titleEditorStatus === "FOUND_UNIQUE" || controlled.titleEditorStatus === "READY";
+    const bodyControlPresent = safeBoolean(postUpload?.bodyControlPresent) || controlled.bodyEditorStatus === "FOUND_UNIQUE" || controlled.bodyEditorStatus === "READY";
+    const finalSubmitControlPresent = safeInteger(postUpload?.finalSubmitVisibleCount) !== null && (safeInteger(postUpload?.finalSubmitVisibleCount) ?? 0) > 0
+      || controlled.finalSubmitStatus === "FOUND_UNIQUE"
+      || controlled.finalSubmitStatus === "READY";
+    const layer1 = immediateReadback.status === "PASS" ? "PASS" : immediateReadback.status === "FAIL" ? "FAIL" : "NOT_RUN";
+    const layer2 = immediateReadback.status === "PASS"
+      && immediateReadback.filesLength === 1
+      && immediateReadback.fileName === TASK10S_SAFE_FIXTURE_NAME
+      && immediateReadback.fileSize === TASK10S_SAFE_FIXTURE_SIZE
+      && immediateReadback.fileType === "image/png"
+      && immediateReadback.expectedFixtureMatch === "YES"
+      ? "PASS" : immediateReadback.status === "NOT_OBSERVED" ? "NOT_RUN" : "FAIL";
+    const layer3 = explicitErrorSignal ? "FAIL" : postUpload ? "PASS" : "NOT_RUN";
+    const layer4 = assetCount !== null && assetCount >= 1 ? "PASS" : postUpload ? "FAIL" : "NOT_RUN";
+    const sameContext = controlled.sameContext && runtimeBefore.contextDebugId !== null && runtimeBefore.contextDebugId === runtimeAfter.contextDebugId ? "YES" : "NO";
+    const sameCanonicalPage = controlled.sameCanonicalPage && runtimeBefore.canonicalPageDebugId !== null && runtimeBefore.canonicalPageDebugId === runtimeAfter.canonicalPageDebugId ? "YES" : "NO";
+    const imageUpload = layer2 === "PASS" && layer4 === "PASS" && titleControlPresent && bodyControlPresent && finalSubmitControlPresent ? "PASS" : "NOT_VERIFIED";
+    return {
+      ...result,
+      timestamp: new Date().toISOString(),
+      status: imageUpload === "PASS" && controlled.status === "PASS" && sameContext === "YES" && sameCanonicalPage === "YES" ? "PASS" : "FAIL",
+      failureCode: imageUpload === "PASS" && controlled.status === "PASS" ? null : controlled.failureCode ?? "ATTEMPT3_UPLOAD_PROOF_INCOMPLETE",
+      contextDebugId: runtimeBefore.contextDebugId,
+      pageDebugId: runtimeBefore.canonicalPageDebugId,
+      sameContext,
+      sameCanonicalPage,
+      imagePostEntry: controlled.preUploadGateStatus === "PASS" ? "PASS" : "FAIL",
+      imagePostRouteReadback: safeUrlPath(controlled.sanitizedUrlAfter) === "/publish/publish" ? "PASS" : "FAIL",
+      observedTarget: safeUrlPath(controlled.sanitizedUrlAfter) === "/publish/publish" && controlled.preUploadGateStatus === "PASS" ? "image" : null,
+      preUploadPhaseResult: controlled.preUploadGateStatus === "PASS" ? "PASS" : "FAIL",
+      uploadTargetFileInputFingerprint: fingerprint,
+      fileInputImmediateReadback: immediateReadback,
+      browserFileInputReceivedFixture: layer2 === "PASS" ? "YES" : layer2 === "NOT_RUN" ? "NOT_RUN" : "NO",
+      uploadLayer1: layer1,
+      uploadLayer2: layer2,
+      uploadLayer3: layer3,
+      uploadLayer4: layer4,
+      uploadProcessingSignal: processingSignal,
+      uploadErrorSignal: postUpload ? explicitErrorSignal : null,
+      uploadRetrySignal: null,
+      currentPreviewDetectionRule: postUpload ? "POST_UPLOAD_EDITOR_SCOPED_VISIBLE_IMAGE_ITEMS" : null,
+      currentImageAssetDetectionRule: postUpload ? "EDITOR_SCOPED_IMAGE_ASSET_PROOF_EXCLUDING_GLOBAL_IMAGES" : null,
+      editorScopedImagePreviewCount: previewCount,
+      editorScopedImageAssetCount: assetCount,
+      titleControlPresent,
+      bodyControlPresent,
+      finalSubmitControlPresent,
+      imageUpload,
+      controlledUploadAttempt3Count: 1,
+      imageUploadAttemptCount: 3,
+      authorizedRunStateAfter,
+      evidence: { controlled, imageEvidence: imageEvidence ?? null, postUploadInspection: postUpload ?? null, runtimeBefore: { contextDebugId: runtimeBefore.contextDebugId, canonicalPageDebugId: runtimeBefore.canonicalPageDebugId }, runtimeAfter: { contextDebugId: runtimeAfter.contextDebugId, canonicalPageDebugId: runtimeAfter.canonicalPageDebugId } }
     };
   }
 
