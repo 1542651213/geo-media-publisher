@@ -54,7 +54,10 @@ export function normalizeSecondInstanceArgv(commandLine: readonly string[]): rea
   return normalizationTrace(commandLine).normalizedArgs;
 }
 
-type SafeArgvTokenKind = "EXECUTABLE" | "APP_ASAR" | "KNOWN_FIXED_ACTION" | "KNOWN_DEV_ENTRY" | "UNKNOWN_OPTION" | "UNKNOWN_POSITIONAL";
+const ALLOW_FILE_ACCESS_FROM_FILES_OPTION = "--allow-file-access-from-files" as const;
+const ORIGINAL_PROCESS_START_TIME_PREFIX = "--original-process-start-time=" as const;
+
+type SafeArgvTokenKind = "EXECUTABLE" | "APP_ASAR" | "KNOWN_FIXED_ACTION" | "KNOWN_ELECTRON_LAUNCHER_OPTION" | "KNOWN_DEV_ENTRY" | "UNKNOWN_OPTION" | "UNKNOWN_POSITIONAL";
 
 export interface SafeArgvToken {
   index: number;
@@ -63,6 +66,7 @@ export interface SafeArgvToken {
   startsWithDash: boolean;
   basenameSafe?: string;
   exactKnownAction?: string;
+  knownLauncherOption?: "ALLOW_FILE_ACCESS_FROM_FILES";
 }
 
 export interface Task10sAttempt3DispatchTrace {
@@ -104,11 +108,14 @@ function safeBasename(value: string): string | undefined {
 
 function safeArgvToken(value: string, index: number): SafeArgvToken {
   const action = actionForFlag(value);
+  const launcherOption = knownElectronLauncherOption(value);
   const normalized = value.replaceAll("\\", "/").toLowerCase();
   const kind: SafeArgvTokenKind = index === 0
     ? "EXECUTABLE"
     : action
       ? "KNOWN_FIXED_ACTION"
+      : launcherOption
+        ? "KNOWN_ELECTRON_LAUNCHER_OPTION"
       : normalized.endsWith("/app.asar")
         ? "APP_ASAR"
         : isKnownElectronLauncherPositional(value)
@@ -120,6 +127,7 @@ function safeArgvToken(value: string, index: number): SafeArgvToken {
   const basename = index === 0 && !/[\\/]/u.test(value) && value.length <= 80 ? value : safeBasename(value);
   if (basename) token.basenameSafe = basename;
   if (action) token.exactKnownAction = value;
+  if (launcherOption) token.knownLauncherOption = launcherOption;
   return token;
 }
 
@@ -127,10 +135,14 @@ function safeArgvTokens(values: readonly string[], indexOffset: number): readonl
   return values.map((value, index) => safeArgvToken(value, index + indexOffset));
 }
 
+function knownElectronLauncherOption(value: string): "ALLOW_FILE_ACCESS_FROM_FILES" | null {
+  return value === ALLOW_FILE_ACCESS_FROM_FILES_OPTION ? "ALLOW_FILE_ACCESS_FROM_FILES" : null;
+}
+
 function unknownOptionDiagnostics(values: readonly string[]): Pick<Task10sAttempt3DispatchTrace, "unknownOptionLength" | "unknownOptionSha256" | "unknownOptionSafeClass" | "unknownOptionMatchesAllowFileAccessFromFiles" | "unknownOptionMatchesOriginalProcessStartTimePrefix" | "unknownOptionMatchesOtherProvenLauncherFlag"> {
   const unknownOptions = values.filter((value) => value.startsWith("-") && !actionForFlag(value));
-  const matchesAllowFileAccess = unknownOptions.some((value) => value === "--allow-file-access-from-files");
-  const matchesOriginalProcessStartTime = unknownOptions.some((value) => value.startsWith("--original-process-start-time="));
+  const matchesAllowFileAccess = unknownOptions.some((value) => value === ALLOW_FILE_ACCESS_FROM_FILES_OPTION);
+  const matchesOriginalProcessStartTime = unknownOptions.some((value) => value.startsWith(ORIGINAL_PROCESS_START_TIME_PREFIX));
   const safeClass = unknownOptions.length === 0
     ? "NONE"
     : unknownOptions.length > 1
@@ -153,15 +165,22 @@ function unknownOptionDiagnostics(values: readonly string[]): Pick<Task10sAttemp
 
 function normalizationTrace(commandLine: readonly string[]): { normalizedArgs: readonly string[]; removedArgs: readonly string[] } {
   const args = commandLine.slice(1);
-  if (!isKnownElectronLauncherPositional(args[0])) return { normalizedArgs: args, removedArgs: [] };
-  return { normalizedArgs: args.slice(1), removedArgs: [args[0] as string] };
+  const removedArgs: string[] = [];
+  const launcherArgs = isKnownElectronLauncherPositional(args[0]) ? args.slice(1) : args;
+  if (launcherArgs.length !== args.length && args[0]) removedArgs.push(args[0]);
+  const normalizedArgs = launcherArgs.filter((value) => {
+    if (!knownElectronLauncherOption(value)) return true;
+    removedArgs.push(value);
+    return false;
+  });
+  return { normalizedArgs, removedArgs };
 }
 
 export function buildSecondInstanceDispatchTrace(commandLine: readonly string[], activeMainPid: number, timestamp = new Date().toISOString()): Task10sAttempt3DispatchTrace {
   const normalization = normalizationTrace(commandLine);
   const normalizedArgs = normalization.normalizedArgs;
   const dryRunAction = XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG;
-  const unknownOptions = unknownOptionDiagnostics(normalizedArgs);
+  const unknownOptions = unknownOptionDiagnostics(commandLine.slice(1));
   return {
     secondInstanceEventReceived: "YES",
     activeMainPid,

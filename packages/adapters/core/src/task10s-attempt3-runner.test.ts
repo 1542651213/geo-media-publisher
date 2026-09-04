@@ -100,13 +100,15 @@ describe("Task10S Attempt 3 fixed runner guard", () => {
       XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG,
       "--allow-file-access-from-files"
     ], undefined);
-    expect(allowFileAccess.action).toBeNull();
+    expect(allowFileAccess.action).toBe(RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN);
     expect(allowFileAccess.trace.unknownOptionLength).toBe(30);
     expect(allowFileAccess.trace.unknownOptionMatchesAllowFileAccessFromFiles).toBe("YES");
     expect(allowFileAccess.trace.unknownOptionMatchesOriginalProcessStartTimePrefix).toBe("NO");
     expect(allowFileAccess.trace.unknownOptionMatchesOtherProvenLauncherFlag).toBe("NO");
     expect(allowFileAccess.trace.unknownOptionSafeClass).toBe("EXACT_ALLOW_FILE_ACCESS_FROM_FILES_CANDIDATE");
     expect(allowFileAccess.trace.unknownOptionSha256).toMatch(/^[A-F0-9]{64}$/u);
+    expect(allowFileAccess.trace.normalizedArgvSafe.map((token) => token.kind)).toEqual(["KNOWN_FIXED_ACTION"]);
+    expect(allowFileAccess.trace.removedLauncherArgumentsSafe.map((token) => token.kind)).toContain("KNOWN_ELECTRON_LAUNCHER_OPTION");
 
     const lookalike = parseDiagnosticActionWithTrace([
       "Geo Media Publisher.exe",
