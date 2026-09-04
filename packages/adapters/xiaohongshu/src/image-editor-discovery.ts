@@ -393,6 +393,8 @@ export interface ImagePostEditorInspectionResult {
   imageUploadControlDetected: boolean;
   publishSettingsAreaDetected: boolean;
   finalSubmitControlDetected: boolean;
+  finalSubmitControlPresent: boolean;
+  finalSubmitControlEnabled: boolean;
   securityVerificationPresent: boolean;
   loginPagePresent: boolean;
   sanitizedUrl: string;
@@ -499,6 +501,8 @@ export interface ImagePostEditorPhaseInspectionResult {
 const DEFAULT_MAX_WAIT_MS = 3_000;
 const DEFAULT_PROBE_INTERVAL_MS = 80;
 const DEFAULT_STABLE_SAMPLE_COUNT = 2;
+const DEFAULT_POST_UPLOAD_READINESS_WINDOW_MS = 15_000;
+const DEFAULT_POST_UPLOAD_READINESS_SAMPLE_INTERVAL_MS = 300;
 const MAX_READINESS_WINDOW_MS = 60_000;
 const EDITOR_ROUTE_PATTERN = /^https:\/\/creator\.xiaohongshu\.com\/publish\/publish(?:[/?#]|$)/iu;
 const TITLE_SELECTOR = 'input[placeholder*="标题"], input[aria-label*="标题"], input[name*="title" i], input[id*="title" i], [data-testid*="title" i]';
@@ -726,6 +730,8 @@ function emptyResult(status: ImageEditorInspectionStatus, shellStatus: ImageEdit
     imageUploadControlDetected: false,
     publishSettingsAreaDetected: false,
     finalSubmitControlDetected: false,
+    finalSubmitControlPresent: false,
+    finalSubmitControlEnabled: false,
     securityVerificationPresent: false,
     loginPagePresent: false,
     sanitizedUrl
@@ -743,11 +749,26 @@ function emit(options: ImageEditorInspectionOptions, metadata: ImageEditorInspec
 function controlDiscovery(kind: ImageEditorControlKind, candidates: readonly ImageEditorControlCandidate[]): ImageEditorControlDiscovery {
   const visible = candidates.filter((candidate) => candidate.visible);
   const enabled = visible.filter((candidate) => candidate.enabled);
+  if (kind === "FINAL_SUBMIT_CONTROL") {
+    if (visible.length > 1) return { kind, status: "AMBIGUOUS", detected: false, candidates };
+    if (enabled.length === 1) return { kind, status: "FOUND_UNIQUE", detected: true, candidates };
+    if (candidates.length === 0) return { kind, status: "NOT_FOUND", detected: false, candidates };
+    if (visible.length === 0) return { kind, status: "NOT_VISIBLE", detected: false, candidates };
+    return { kind, status: "DISABLED", detected: false, candidates };
+  }
   if (enabled.length === 1) return { kind, status: "FOUND_UNIQUE", detected: true, candidates };
   if (enabled.length > 1) return { kind, status: "AMBIGUOUS", detected: false, candidates };
   if (candidates.length === 0) return { kind, status: "NOT_FOUND", detected: false, candidates };
   if (visible.length === 0) return { kind, status: "NOT_VISIBLE", detected: false, candidates };
   return { kind, status: "DISABLED", detected: false, candidates };
+}
+
+function finalSubmitControlPresence(candidates: readonly ImageEditorControlCandidate[]): { present: boolean; enabled: boolean } {
+  const visible = candidates.filter((candidate) => candidate.visible);
+  return {
+    present: visible.length === 1,
+    enabled: visible.length === 1 && visible[0]?.enabled === true
+  };
 }
 
 function settingsDiscovery(candidates: readonly ImageEditorControlCandidate[]): ImageEditorSettingsDiscovery {
@@ -1889,7 +1910,9 @@ export async function inspectImagePostEditor(page: Page, metadata: ImageEditorIn
   emit(options, metadata, "IMAGE_EDITOR_CONTROLS_DISCOVERED", { ...baseFields(lastSnapshot), contentType, contentTypeReady, titleEditor, bodyEditor, imageUploadControl, publishSettingsArea, finalSubmitControl });
   const requiredControls = options.requiredControls ?? ["TITLE_EDITOR", "BODY_EDITOR", "IMAGE_UPLOAD_CONTROL", "FINAL_SUBMIT_CONTROL"];
   const controls = [titleEditor, bodyEditor, imageUploadControl, finalSubmitControl].filter((control) => requiredControls.includes(control.kind));
-  const failedControl = controls.find((control) => control.status !== "FOUND_UNIQUE");
+  const failedControl = controls.find((control) => options.postUploadReadiness && control.kind === "FINAL_SUBMIT_CONTROL"
+    ? !finalSubmitControlPresence(control.candidates).present
+    : control.status !== "FOUND_UNIQUE");
   const result = emptyResult(failedControl ? "FAILED" : "READY", "IMAGE_EDITOR_SHELL_READY", sanitizeUrl(lastSnapshot.currentUrl), readinessSamples);
   result.contentType = contentType;
   result.contentTypeReady = contentTypeReady;
@@ -1902,7 +1925,10 @@ export async function inspectImagePostEditor(page: Page, metadata: ImageEditorIn
   result.bodyEditorDetected = bodyEditor.detected;
   result.imageUploadControlDetected = imageUploadControl.detected;
   result.publishSettingsAreaDetected = publishSettingsArea.detected;
-  result.finalSubmitControlDetected = finalSubmitControl.detected;
+  const finalSubmitPresence = finalSubmitControlPresence(finalSubmitControl.candidates);
+  result.finalSubmitControlPresent = finalSubmitPresence.present;
+  result.finalSubmitControlEnabled = finalSubmitPresence.enabled;
+  result.finalSubmitControlDetected = finalSubmitPresence.present;
   result.securityVerificationPresent = lastSnapshot.securityVerificationPresent;
   result.loginPagePresent = lastSnapshot.loginPagePresent;
   result.postUploadSemanticNodes = lastSnapshot.postUploadSemanticNodes;
@@ -1971,8 +1997,12 @@ export async function inspectPostUploadImageEditor(page: Page, metadata: ImageEd
       ...(diagnostic.postUploadIntermediateState === undefined ? {} : { postUploadIntermediateState: diagnostic.postUploadIntermediateState })
     });
   };
+  const readinessWindowMs = options.readinessWindowMs ?? options.maxWaitMs ?? DEFAULT_POST_UPLOAD_READINESS_WINDOW_MS;
+  const readinessSampleIntervalMs = options.readinessSampleIntervalMs ?? options.probeIntervalMs ?? DEFAULT_POST_UPLOAD_READINESS_SAMPLE_INTERVAL_MS;
   const inspected = await inspectImagePostEditor(page, metadata, {
     ...options,
+    readinessWindowMs,
+    readinessSampleIntervalMs,
     postUploadReadiness: true,
     requiredControls: ["TITLE_EDITOR", "BODY_EDITOR", "FINAL_SUBMIT_CONTROL"],
     emit: forwardedEmitter

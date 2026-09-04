@@ -598,6 +598,40 @@ describe("Xiaohongshu image editor discovery", () => {
     ]));
   });
 
+  it("keeps a unique disabled final-submit control present while reporting it as not enabled", async () => {
+    const disabledFinalSubmit = candidate("submit-disabled", { tagName: "BUTTON", semanticSignal: "final-submit-label", enabled: false });
+    const result = await inspectPostUploadImageEditor(pageFor([
+      snapshot({ finalSubmitCandidates: [disabledFinalSubmit] }),
+      snapshot({ finalSubmitCandidates: [disabledFinalSubmit] })
+    ]), metadata, {
+      maxWaitMs: 80,
+      probeIntervalMs: 0,
+      stableSampleCount: 2
+    });
+
+    expect(result).toMatchObject({
+      status: "READY",
+      phase: "IMAGE_POST_POST_UPLOAD_EDITOR",
+      postUploadControlsStatus: "READY",
+      finalSubmitControlPresent: true,
+      finalSubmitControlEnabled: false,
+      finalSubmitControl: { status: "DISABLED" }
+    });
+  });
+
+  it("fails closed when multiple visible final-submit controls make presence ambiguous", async () => {
+    const finalSubmitCandidates = [
+      candidate("submit-0", { tagName: "BUTTON", semanticSignal: "final-submit-label" }),
+      candidate("submit-1", { tagName: "BUTTON", semanticSignal: "final-submit-label" })
+    ];
+    const result = await inspectPostUploadImageEditor(pageFor([
+      snapshot({ finalSubmitCandidates }),
+      snapshot({ finalSubmitCandidates })
+    ]), metadata, { maxWaitMs: 80, probeIntervalMs: 0, stableSampleCount: 2 });
+
+    expect(result).toMatchObject({ status: "FAILED", finalSubmitControlPresent: false, finalSubmitControlEnabled: false, finalSubmitControl: { status: "AMBIGUOUS" } });
+  });
+
   it("fails closed when upload completion remains busy", async () => {
     const result = await inspectPostUploadImageEditor(pageFor([
       snapshot({ uploadBusy: true, previewReady: false }),

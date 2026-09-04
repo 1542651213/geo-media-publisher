@@ -89,6 +89,49 @@ export interface XiaohongshuPublishEditorSemanticFileInputSafe {
   classNameSafe: string;
 }
 
+export interface XiaohongshuPublishEditorSemanticFinalPublishNodeSafe extends XiaohongshuPublishEditorSemanticElementSafe {
+  nodeIndex: number;
+  normalizedText: string;
+  disabled: boolean;
+  ariaDisabled: string | null;
+  display: string;
+  visibility: string;
+  parent: XiaohongshuPublishEditorSemanticElementSafe | null;
+  ancestors: readonly XiaohongshuPublishEditorSemanticElementSafe[];
+}
+
+export interface XiaohongshuPublishEditorSemanticFinalPublishContainerSafe {
+  tagName: string;
+  role: string | null;
+  classNameSafe: string;
+  position: string;
+  disabled: boolean;
+  ariaDisabled: string | null;
+  pointerEvents: string;
+  cursor: string;
+  boundingRect: XiaohongshuPublishEditorSemanticBoundingRect | null;
+}
+
+export type XiaohongshuPublishControlPresence = "YES" | "NO" | "AMBIGUOUS";
+export type XiaohongshuPublishControlEnabled = "YES" | "NO" | "NOT_PROVEN";
+
+export interface XiaohongshuPublishEditorFinalSubmitControlState {
+  present: XiaohongshuPublishControlPresence;
+  enabled: XiaohongshuPublishControlEnabled;
+}
+
+export function resolveXiaohongshuFinalSubmitControlState(
+  candidates: ReadonlyArray<Pick<XiaohongshuPublishEditorSemanticFinalPublishNodeSafe, "connected" | "rendered" | "boundingRect" | "pointerEvents" | "enabled">>
+): XiaohongshuPublishEditorFinalSubmitControlState {
+  const valid = candidates.filter((candidate) => candidate.connected
+    && candidate.rendered
+    && candidate.boundingRect !== null
+    && candidate.pointerEvents !== "none");
+  if (valid.length > 1) return { present: "AMBIGUOUS", enabled: "NOT_PROVEN" };
+  if (valid.length === 0) return { present: "NO", enabled: "NOT_PROVEN" };
+  return { present: "YES", enabled: valid[0]?.enabled === true ? "YES" : "NO" };
+}
+
 export interface XiaohongshuPublishEditorSemanticCandidateSnapshot {
   origin: string;
   pathname: string;
@@ -105,6 +148,13 @@ export interface XiaohongshuPublishEditorSemanticCandidateSnapshot {
   uploadImageButtonTextMatchCount: number;
   uploadImageButtonRenderedCandidateCount: number;
   uploadImageButtonNodesSafe: readonly XiaohongshuPublishEditorSemanticUploadImageNodeSafe[];
+  finalPublishExactTextMatchCount: number;
+  finalPublishNativeButtonMatchCount: number;
+  finalPublishRoleButtonMatchCount: number;
+  finalPublishCandidatesSafe: readonly XiaohongshuPublishEditorSemanticFinalPublishNodeSafe[];
+  finalPublishContainerSafe: XiaohongshuPublishEditorSemanticFinalPublishContainerSafe | null;
+  finalSubmitControlPresent: XiaohongshuPublishControlPresence;
+  finalSubmitControlEnabled: XiaohongshuPublishControlEnabled;
   visibleCreatorTabCount: number;
   renderedCreatorTabCount: number;
   viewportIntersectingCreatorTabCount: number;
@@ -181,6 +231,13 @@ export function emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic
     uploadImageButtonTextMatchCount: 0,
     uploadImageButtonRenderedCandidateCount: 0,
     uploadImageButtonNodesSafe: [],
+    finalPublishExactTextMatchCount: 0,
+    finalPublishNativeButtonMatchCount: 0,
+    finalPublishRoleButtonMatchCount: 0,
+    finalPublishCandidatesSafe: [],
+    finalPublishContainerSafe: null,
+    finalSubmitControlPresent: "NO",
+    finalSubmitControlEnabled: "NOT_PROVEN",
     visibleCreatorTabCount: 0,
     renderedCreatorTabCount: 0,
     viewportIntersectingCreatorTabCount: 0,
@@ -199,7 +256,7 @@ export function emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic
 }
 
 export async function inspectXiaohongshuPublishEditorSemanticCandidates(page: Page): Promise<XiaohongshuPublishEditorSemanticCandidateSnapshot> {
-  return page.evaluate(() => {
+  const snapshot = await page.evaluate(() => {
     const tabLabels = ["上传视频", "上传图文", "写长文", "发播客"] as const;
     const uploadImageLabel = "上传图片";
     const maxStringLength = 160;
@@ -422,6 +479,87 @@ export async function inspectXiaohongshuPublishEditorSemanticCandidates(page: Pa
       };
     };
 
+    const finalPublishLabels = ["发布", "发布笔记", "发表", "提交", "立即发布", "publish", "submit"] as const;
+    const finalPublishLabel = (element: Element): string => {
+      const textLabel = normalize(element.textContent ?? "");
+      if (textLabel.length > 0) return textLabel;
+      const ariaLabel = normalize(element.getAttribute("aria-label") ?? "");
+      if (ariaLabel.length > 0) return ariaLabel;
+      return normalize(element.getAttribute("title") ?? "");
+    };
+    const finalPublishElements = Array.from(document.querySelectorAll('button, [role="button"]')).filter((element) => {
+      const label = finalPublishLabel(element);
+      return finalPublishLabels.some((allowedLabel) => label.toLowerCase() === allowedLabel.toLowerCase()) && !/视频|video/iu.test(label);
+    });
+    const finalPublishNode = (element: Element, nodeIndex: number): {
+      nodeIndex: number;
+      normalizedText: string;
+      tagName: string;
+      role: string | null;
+      tabIndex: number;
+      classNameSafe: string;
+      ariaSelected: string | null;
+      ariaCurrent: string | null;
+      ariaPressed: string | null;
+      ariaHidden: string | null;
+      ariaDisabled: string | null;
+      pointerEvents: string;
+      cursor: string;
+      boundingRect: { x: number; y: number; left: number; top: number; right: number; bottom: number; width: number; height: number } | null;
+      connected: boolean;
+      rendered: boolean;
+      intersectsViewport: boolean;
+      enabled: boolean;
+      disabled: boolean;
+      active: boolean;
+      activeSignal: ReturnType<typeof ancestorActiveSignal>;
+      display: string;
+      visibility: string;
+      parent: ReturnType<typeof safeElement> | null;
+      ancestors: readonly ReturnType<typeof safeElement>[];
+    } => {
+      const computed = style(element);
+      const signal = ancestorActiveSignal(element);
+      const disabledProperty = "disabled" in element && Boolean((element as HTMLButtonElement).disabled);
+      return {
+        nodeIndex,
+        normalizedText: finalPublishLabel(element),
+        ...safeElement(element, signal !== "NOT_PROVEN", signal),
+        ariaDisabled: safeAttribute(element, "aria-disabled"),
+        disabled: disabledProperty || safeAttribute(element, "disabled") !== null,
+        display: safeString(computed.display, 40),
+        visibility: safeString(computed.visibility, 40),
+        parent: element.parentElement ? safeElement(element.parentElement, false, "NOT_PROVEN") : null,
+        ancestors: ancestorsOf(element).map((ancestor) => safeElement(ancestor, false, "NOT_PROVEN"))
+      };
+    };
+    const finalPublishContainer = (element: Element | null): {
+      tagName: string;
+      role: string | null;
+      classNameSafe: string;
+      position: string;
+      disabled: boolean;
+      ariaDisabled: string | null;
+      pointerEvents: string;
+      cursor: string;
+      boundingRect: { x: number; y: number; left: number; top: number; right: number; bottom: number; width: number; height: number } | null;
+    } | null => {
+      if (!element) return null;
+      const computed = style(element);
+      const disabledProperty = "disabled" in element && Boolean((element as HTMLButtonElement).disabled);
+      return {
+        tagName: element.tagName.toUpperCase(),
+        role: role(element),
+        classNameSafe: classNameSafe(element),
+        position: safeString(computed.position, 40),
+        disabled: disabledProperty || safeAttribute(element, "disabled") !== null,
+        ariaDisabled: safeAttribute(element, "aria-disabled"),
+        pointerEvents: safeString(computed.pointerEvents, 40),
+        cursor: safeString(computed.cursor, 40),
+        boundingRect: getBoundingRect(element)
+      };
+    };
+
     const tabDiagnostics = tabLabels.map((label) => {
       const elements = exactElements(label);
       return { label, exactTextMatchCount: elements.length, nodes: elements.map((element, index) => tabNode(label, element, index)) };
@@ -487,6 +625,10 @@ export async function inspectXiaohongshuPublishEditorSemanticCandidates(page: Pa
     const selectedLabel = activeCreatorTabs.length === 1 ? creatorTabLabels.get(activeCreatorTabs[0] as Element) ?? null : null;
     const viewportSelectedLabel = viewportIntersectingActiveCreatorTabs.length === 1 ? creatorTabLabels.get(viewportIntersectingActiveCreatorTabs[0] as Element) ?? null : null;
     const selectedSignal = viewportIntersectingActiveCreatorTabs.length === 1 ? selectedViewportTabSignal : "NOT_PROVEN";
+    const finalPublishCandidatesSafe = finalPublishElements.map(finalPublishNode);
+    const finalPublishRenderedCandidates = finalPublishCandidatesSafe.filter((node) => node.connected && node.rendered && node.boundingRect !== null && node.pointerEvents !== "none");
+    const finalSubmitControlPresent = finalPublishRenderedCandidates.length > 1 ? "AMBIGUOUS" : finalPublishRenderedCandidates.length === 1 ? "YES" : "NO";
+    const finalSubmitControlEnabled = finalPublishRenderedCandidates.length === 1 ? finalPublishRenderedCandidates[0]?.enabled === true ? "YES" : "NO" : "NOT_PROVEN";
     return {
       origin: window.location.origin,
       pathname: window.location.pathname,
@@ -503,6 +645,13 @@ export async function inspectXiaohongshuPublishEditorSemanticCandidates(page: Pa
       uploadImageButtonTextMatchCount: uploadImageElements.length,
       uploadImageButtonRenderedCandidateCount: uploadButtonCandidateCount,
       uploadImageButtonNodesSafe: uploadImageNodes,
+      finalPublishExactTextMatchCount: finalPublishElements.length,
+      finalPublishNativeButtonMatchCount: finalPublishElements.filter((element) => element.tagName.toUpperCase() === "BUTTON").length,
+      finalPublishRoleButtonMatchCount: finalPublishElements.filter((element) => element.getAttribute("role") === "button").length,
+      finalPublishCandidatesSafe,
+      finalPublishContainerSafe: finalPublishRenderedCandidates.length === 1 ? finalPublishContainer(finalPublishElements[finalPublishCandidatesSafe.findIndex((node) => node.connected && node.rendered && node.boundingRect !== null && node.pointerEvents !== "none")]?.parentElement ?? null) : null,
+      finalSubmitControlPresent,
+      finalSubmitControlEnabled,
       visibleCreatorTabCount: visibleCreatorTabs.length,
       renderedCreatorTabCount: visibleCreatorTabs.length,
       viewportIntersectingCreatorTabCount: viewportIntersectingCreatorTabs.length,
@@ -516,6 +665,18 @@ export async function inspectXiaohongshuPublishEditorSemanticCandidates(page: Pa
       fileInputs,
       acceptableImageFileInputCount,
       imagePostSemanticProof
-    };
+    } as const;
   });
+  const finalPublishCandidatesSafe = snapshot.finalPublishCandidatesSafe ?? [];
+  const finalSubmitControlState = resolveXiaohongshuFinalSubmitControlState(finalPublishCandidatesSafe);
+  return {
+    ...snapshot,
+    finalPublishExactTextMatchCount: snapshot.finalPublishExactTextMatchCount ?? 0,
+    finalPublishNativeButtonMatchCount: snapshot.finalPublishNativeButtonMatchCount ?? 0,
+    finalPublishRoleButtonMatchCount: snapshot.finalPublishRoleButtonMatchCount ?? 0,
+    finalPublishCandidatesSafe,
+    finalPublishContainerSafe: snapshot.finalPublishContainerSafe ?? null,
+    finalSubmitControlPresent: finalSubmitControlState.present,
+    finalSubmitControlEnabled: finalSubmitControlState.enabled
+  };
 }

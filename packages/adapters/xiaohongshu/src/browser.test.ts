@@ -1630,7 +1630,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(fixture.inputSetFiles).toHaveBeenCalledTimes(1);
     expect(fixture.calls).not.toContain("title-fill");
     expect(fixture.calls).not.toContain("body-fill");
-  });
+  }, 20_000);
 
   it("returns a passing PRE_UPLOAD Gate without requiring post-upload controls", async () => {
     const fixture = setupPage({ titleCount: 0 });
@@ -2233,7 +2233,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(fixture.calls).not.toContain("title-fill");
     expect(fixture.calls).not.toContain("body-fill");
     expect(fixture.submitClick).not.toHaveBeenCalled();
-  });
+  }, 20_000);
 
   it("reports missing and failed content-type selection as distinct editor-entry failures", async () => {
     const missing = setupPage({ publishEntryMode: "generic-publish", contentTypeEntryCount: 0 });
