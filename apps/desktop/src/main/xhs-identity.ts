@@ -2,7 +2,7 @@ import type { AdapterRegistry } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
 import { ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type Account, type AccountContext, type CreatorIdentityVerificationResult, type PlatformAccountIdentityBinding, type XhsIdentityAcceptance } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentFileInputState, XiaohongshuCurrentImageEditorReadiness, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentFileInputState, XiaohongshuCurrentImageEditorReadiness, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 
 type IdentityReader = {
   inspectCanonicalPageRuntime?: (ctx: AccountContext) => Promise<XiaohongshuCanonicalPageRuntimeProbe>;
@@ -11,6 +11,7 @@ type IdentityReader = {
   inspectCurrentXiaohongshuImageEditorReadiness?: (ctx: AccountContext) => Promise<XiaohongshuCurrentImageEditorReadiness>;
   inspectCurrentXiaohongshuPublishEditorDom?: (ctx: AccountContext) => Promise<XiaohongshuPublishEditorDomRuntimeDiagnostic>;
   inspectCurrentXiaohongshuPublishEditorSemanticCandidates?: (ctx: AccountContext) => Promise<XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic>;
+  inspectCurrentXiaohongshuGlobalExactPublishDom?: (ctx: AccountContext) => Promise<XiaohongshuGlobalExactPublishDomRuntimeDiagnostic>;
   inspectCurrentXiaohongshuPostUploadReconciliation?: (ctx: AccountContext) => Promise<XiaohongshuCurrentPostUploadReconciliation>;
   inspectCurrentXiaohongshuFileInputState?: (ctx: AccountContext) => Promise<XiaohongshuCurrentFileInputState>;
   readCanonicalCreatorIdentity?: (ctx: AccountContext) => Promise<XiaohongshuCreatorIdentityObservation>;
@@ -195,6 +196,27 @@ export class XhsIdentityService {
       fileInputMatchCount: diagnostic.fileInputs.length,
       acceptableImageFileInputCount: diagnostic.acceptableImageFileInputCount,
       imagePostSemanticProof: diagnostic.imagePostSemanticProof
+    });
+    return diagnostic;
+  }
+
+  async inspectCurrentXiaohongshuGlobalExactPublishDom(accountId: string): Promise<XiaohongshuGlobalExactPublishDomRuntimeDiagnostic> {
+    const account = this.requireAccount(accountId);
+    const adapter = this.options.registry.getForContent("xiaohongshu", "article") as IdentityReader;
+    if (typeof adapter.inspectCurrentXiaohongshuGlobalExactPublishDom !== "function") throw Object.assign(new Error("当前小红书运行时未提供 global exact publish DOM diagnostic"), { code: "XHS_GLOBAL_EXACT_PUBLISH_DOM_DIAGNOSTIC_UNAVAILABLE" });
+    const diagnostic = await adapter.inspectCurrentXiaohongshuGlobalExactPublishDom(this.context(account));
+    this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_GLOBAL_EXACT_PUBLISH_DOM_DIAGNOSTIC", "小红书 document-global exact 发布只读 diagnostic 完成", {
+      platformKey: "xiaohongshu",
+      accountId: account.id,
+      inspectionStatus: diagnostic.inspectionStatus,
+      failureCode: diagnostic.failureCode,
+      contextDebugId: diagnostic.contextDebugId,
+      pageId: diagnostic.pageId,
+      origin: diagnostic.origin,
+      pathname: diagnostic.pathname,
+      globalExactPublishTextMatchCount: diagnostic.globalExactPublishTextMatchCount,
+      globalExactPublishUnique: diagnostic.globalExactPublishUnique,
+      maxAncestorDepth: diagnostic.maxAncestorDepth
     });
     return diagnostic;
   }

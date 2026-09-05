@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { readFileSync as readPhysicalFileSync } from "node:original-fs";
 import { join } from "node:path";
 import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { openDatabase, restoreDatabaseSafely } from "@publisher/db";
 import { SafeStorageCredentialStore } from "@publisher/security";
 import { createFileLogger } from "@publisher/logger";
@@ -14,7 +14,7 @@ import { createRuntimeAdapterRegistry } from "./adapter-registry";
 import { runDeepSeekBenchmarkMode } from "./deepseek-benchmark-mode";
 import { createProcessDiagnostics } from "./process-diagnostics";
 import { recordAppStartup } from "./runtime-observability";
-import { buildSecondInstanceDispatchTrace, createFixedDiagnosticRunner, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_FINAL_SUBMIT_DOM, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticActionWithTrace, RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, parseDiagnosticAction, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, type DiagnosticAction, type FixedDiagnosticInvocationContext, type Task10sAttempt3DispatchTrace, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
+import { buildSecondInstanceDispatchTrace, createFixedDiagnosticRunner, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_FINAL_SUBMIT_DOM, INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticActionWithTrace, RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, parseDiagnosticAction, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, type DiagnosticAction, type FixedDiagnosticInvocationContext, type Task10sAttempt3DispatchTrace, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
 
 app.setName("codex-media-publisher");
 const processDiagnostics = createProcessDiagnostics(join(app.getPath("userData"), "production-data", "logs", "main-process-diagnostics.log"));
@@ -438,6 +438,25 @@ async function createWindow(): Promise<void> {
     writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), "utf8");
     logger.info("PLATFORM_SELF_TEST", "XHS_FINAL_SUBMIT_DOM_EVIDENCE_WRITTEN", "小红书 final-submit bounded DOM diagnostic evidence 已写入", { action: INSPECT_XHS_FINAL_SUBMIT_DOM, evidencePath, inspectionStatus: diagnostic.inspectionStatus, finalSubmitControlPresent: diagnostic.finalSubmitControlPresent, finalSubmitControlEnabled: diagnostic.finalSubmitControlEnabled, finalPublishExactTextMatchCount: diagnostic.finalPublishExactTextMatchCount, finalSubmitClickCount: 0 });
   };
+  const writeGlobalExactPublishDomEvidence = (diagnostic: XiaohongshuGlobalExactPublishDomRuntimeDiagnostic): void => {
+    mkdirSync(evidenceDirectory, { recursive: true });
+    const timestamp = new Date().toISOString();
+    const evidencePath = join(evidenceDirectory, `xiaohongshu-task10s-global-exact-publish-dom-diagnostic-${timestamp.replace(/[:.]/gu, "-")}.json`);
+    const evidence = {
+      timestamp,
+      evidencePath,
+      action: INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM,
+      ...diagnostic,
+      GLOBAL_EXACT_PUBLISH_LABEL: "发布",
+      GLOBAL_EXACT_PUBLISH_TEXT_MATCH_COUNT: diagnostic.globalExactPublishTextMatchCount,
+      GLOBAL_EXACT_PUBLISH_UNIQUE: diagnostic.globalExactPublishUnique,
+      GLOBAL_EXACT_PUBLISH_NODES_SAFE: diagnostic.globalExactPublishNodesSafe,
+      MAX_ANCESTOR_DEPTH: diagnostic.maxAncestorDepth,
+      SIDE_EFFECT_COUNTS: { clickCount: 0, setInputFilesCallCount: 0, titleFillCount: 0, bodyFillCount: 0, finalSubmitClickCount: 0, publicationTransactionCount: 0, newAuthorizationCreated: 0 }
+    };
+    writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), "utf8");
+    logger.info("PLATFORM_SELF_TEST", "XHS_GLOBAL_EXACT_PUBLISH_DOM_EVIDENCE_WRITTEN", "小红书 document-global exact 发布只读 diagnostic evidence 已写入", { action: INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM, evidencePath, inspectionStatus: diagnostic.inspectionStatus, globalExactPublishTextMatchCount: diagnostic.globalExactPublishTextMatchCount, globalExactPublishUnique: diagnostic.globalExactPublishUnique });
+  };
   const writeTask10sControlledUploadAttempt3Evidence = (result: Awaited<ReturnType<typeof platformSelfTests.runTask10sControlledUploadAttempt3>>): void => {
     mkdirSync(evidenceDirectory, { recursive: true });
     const timestamp = new Date().toISOString();
@@ -504,6 +523,11 @@ async function createWindow(): Promise<void> {
       return platformSelfTests.inspectCurrentXiaohongshuPublishEditorSemanticCandidates();
     },
     writeFinalSubmitDomEvidence,
+    inspectGlobalExactPublishDom: async () => {
+      logger.info("PLATFORM_SELF_TEST", "XHS_GLOBAL_EXACT_PUBLISH_DOM_TRIGGER_RECEIVED", "收到固定非 UI 小红书 document-global exact 发布只读 diagnostic trigger", { action: INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
+      return platformSelfTests.inspectCurrentXiaohongshuGlobalExactPublishDom();
+    },
+    writeGlobalExactPublishDomEvidence,
     runTask10sControlledUploadAttempt3: async () => {
       logger.info("PLATFORM_SELF_TEST", "TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_TRIGGER_RECEIVED", "收到固定 Main-side Task10S Attempt 3 trigger", { action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
       return platformSelfTests.runTask10sControlledUploadAttempt3();

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG, type Task10sAttempt3DispatchDryRunResult, type Task10sControlledUploadAttemptResult } from "./task10s-attempt3";
 export { RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG } from "./task10s-attempt3";
 
@@ -15,8 +15,10 @@ export const XHS_FILE_INPUT_STATE_FLAG = "--probe-xhs-file-input-state" as const
 export const INSPECT_XHS_FILE_INPUT_STATE = "INSPECT_XHS_FILE_INPUT_STATE" as const;
 export const XHS_FINAL_SUBMIT_DOM_DIAGNOSTIC_FLAG = "--xhs-task10s-final-submit-dom-diagnostic" as const;
 export const INSPECT_XHS_FINAL_SUBMIT_DOM = "INSPECT_XHS_FINAL_SUBMIT_DOM" as const;
+export const XHS_GLOBAL_EXACT_PUBLISH_DOM_DIAGNOSTIC_FLAG = "--xhs-task10s-global-exact-publish-dom-diagnostic" as const;
+export const INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM = "INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM" as const;
 
-export type DiagnosticAction = typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_FILE_INPUT_STATE | typeof INSPECT_XHS_FINAL_SUBMIT_DOM | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 | typeof RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN;
+export type DiagnosticAction = typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_FILE_INPUT_STATE | typeof INSPECT_XHS_FINAL_SUBMIT_DOM | typeof INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 | typeof RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN;
 
 function actionForValue(value: unknown): DiagnosticAction | null {
   if (value === PROBE_XHS_CANONICAL_PAGE) return PROBE_XHS_CANONICAL_PAGE;
@@ -25,6 +27,7 @@ function actionForValue(value: unknown): DiagnosticAction | null {
   if (value === INSPECT_XHS_POST_UPLOAD_RECONCILIATION) return INSPECT_XHS_POST_UPLOAD_RECONCILIATION;
   if (value === INSPECT_XHS_FILE_INPUT_STATE) return INSPECT_XHS_FILE_INPUT_STATE;
   if (value === INSPECT_XHS_FINAL_SUBMIT_DOM) return INSPECT_XHS_FINAL_SUBMIT_DOM;
+  if (value === INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM) return INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM;
   if (value === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3;
   if (value === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4;
   if (value === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN) return RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN;
@@ -38,6 +41,7 @@ function actionForFlag(value: string | undefined): DiagnosticAction | null {
   if (value === XHS_POST_UPLOAD_RECONCILIATION_FLAG) return INSPECT_XHS_POST_UPLOAD_RECONCILIATION;
   if (value === XHS_FILE_INPUT_STATE_FLAG) return INSPECT_XHS_FILE_INPUT_STATE;
   if (value === XHS_FINAL_SUBMIT_DOM_DIAGNOSTIC_FLAG) return INSPECT_XHS_FINAL_SUBMIT_DOM;
+  if (value === XHS_GLOBAL_EXACT_PUBLISH_DOM_DIAGNOSTIC_FLAG) return INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM;
   if (value === XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3;
   if (value === XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4;
   if (value === XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG) return RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN;
@@ -279,6 +283,8 @@ export function createFixedDiagnosticRunner(options: {
   writeFileInputEvidence?: (diagnostic: XiaohongshuCurrentFileInputState) => void;
   inspectFinalSubmitDom?: () => Promise<XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic>;
   writeFinalSubmitDomEvidence?: (diagnostic: XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic) => void;
+  inspectGlobalExactPublishDom?: () => Promise<XiaohongshuGlobalExactPublishDomRuntimeDiagnostic>;
+  writeGlobalExactPublishDomEvidence?: (diagnostic: XiaohongshuGlobalExactPublishDomRuntimeDiagnostic) => void;
   runTask10sControlledUploadAttempt3?: () => Promise<Task10sControlledUploadAttemptResult>;
   writeTask10sControlledUploadAttempt3Evidence?: (result: Task10sControlledUploadAttemptResult) => void;
   runTask10sControlledUploadAttempt4?: () => Promise<Task10sControlledUploadAttemptResult>;
@@ -315,6 +321,11 @@ export function createFixedDiagnosticRunner(options: {
     if (action === INSPECT_XHS_FINAL_SUBMIT_DOM && options.inspectFinalSubmitDom && options.writeFinalSubmitDomEvidence) {
       const diagnostic = await options.inspectFinalSubmitDom();
       options.writeFinalSubmitDomEvidence(diagnostic);
+      return true;
+    }
+    if (action === INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM && options.inspectGlobalExactPublishDom && options.writeGlobalExactPublishDomEvidence) {
+      const diagnostic = await options.inspectGlobalExactPublishDom();
+      options.writeGlobalExactPublishDomEvidence(diagnostic);
       return true;
     }
     if (action === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 && options.runTask10sControlledUploadAttempt3 && options.writeTask10sControlledUploadAttempt3Evidence) {
