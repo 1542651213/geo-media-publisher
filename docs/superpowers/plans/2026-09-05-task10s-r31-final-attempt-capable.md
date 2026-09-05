@@ -209,15 +209,15 @@ Run `pnpm rebuild better-sqlite3; pnpm exec vitest run` and record the complete 
 
 Run `pnpm run typecheck`, `pnpm run lint`, and `pnpm run build`, recording exit code and output summary for each.
 
-- [ ] **Step 4: Package offline r31**
+- [x] **Step 4: Package offline r31**
 
 Run the existing package command that successfully produced r30 (`pnpm exec electron-builder --win dir --projectDir .` after `pnpm run build`) and copy the resulting `release/win-unpacked` plus its package metadata to the next unused `D:\GEO\releases\release-task10s-20260905-r31` directory. Hash `resources/app.asar` with SHA256 and verify the staging hash is stable.
 
-- [ ] **Step 5: Verify no deployment/runtime action occurred**
+- [x] **Step 5: Verify no deployment/runtime action occurred**
 
 Run `git status --short`, `git diff -- packages/adapters/xiaohongshu/src/browser.ts`, and inspect release directory timestamps. Confirm no deploy, restart, BrowserSession/Context/Page creation, upload, title/body fill, final click, authorization creation, or Attempt5 execution was performed.
 
-- [ ] **Step 6: Commit only plan/source/test changes if needed**
+- [x] **Step 6: Commit only plan/source/test changes if needed**
 
 Stage only the plan and r31 source/test files, never generated `release/` artifacts, and commit with `chore: prepare task10s r31 offline release`.
 
