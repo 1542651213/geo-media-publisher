@@ -13,7 +13,7 @@ import { OneShotConfirmationCoordinator } from "./one-shot-confirmation";
 import { OneShotConfirmationReconciliationService } from "./one-shot-reconciliation";
 import { XhsIdentityService } from "./xhs-identity";
 import type { CreatorIdentityVerificationResult, FailedOneShotConfirmationIdentity, OneShotConfirmationReconciliationResult, XhsIdentityAcceptance } from "@publisher/domain";
-import { emptyTask10sControlledUploadAttemptResult, reserveTask10sAttempt, TASK10S_ATTEMPT_3, TASK10S_ATTEMPT_4, TASK10S_CANONICAL_AUTHORIZATION_ID, TASK10S_EXPECTED_CREATOR_ID, TASK10S_SAFE_FIXTURE_NAME, TASK10S_SAFE_FIXTURE_SIZE, TASK10S_SAFE_FIXTURE_SHA256, validateTask10sSafeFixture, type Task10sAttempt3DispatchDryRunResult, type Task10sAttempt3FileInputReadback, type Task10sControlledUploadAttemptResult, type Task10sControlledUploadAttemptSpec } from "./task10s-attempt3";
+import { emptyTask10sControlledUploadAttemptResult, reserveTask10sAttempt, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, TASK10S_ATTEMPT_3, TASK10S_ATTEMPT_4, TASK10S_CANONICAL_AUTHORIZATION_ID, TASK10S_EXPECTED_CREATOR_ID, TASK10S_SAFE_FIXTURE_NAME, TASK10S_SAFE_FIXTURE_SIZE, TASK10S_SAFE_FIXTURE_SHA256, validateTask10sSafeFixture, type Task10sAttempt3DispatchDryRunResult, type Task10sAttempt3FileInputReadback, type Task10sControlledUploadAttemptResult, type Task10sControlledUploadAttemptSpec, type Task10sRetainedEditorCompletionResult } from "./task10s-attempt3";
 
 const ARTICLE_TEST_TITLE = "Geo Media Publisher 发布链路测试";
 const ZHIHU_TEST_TITLE_PREFIX = "Geo Media Publisher 知乎发布测试";
@@ -340,6 +340,106 @@ export class PlatformSelfTestService {
   /** Main-side fixed Attempt 4 action with its own replay guard. */
   async runTask10sControlledUploadAttempt4(): Promise<Task10sControlledUploadAttemptResult> {
     return this.runTask10sControlledUploadAttempt(TASK10S_ATTEMPT_4);
+  }
+
+  /**
+   * Main-side fixed completion action for the already-uploaded retained editor.
+   * It deliberately resolves the account, authorization, run, job, and
+   * prepared record from trusted Main state; no caller may supply a Page,
+   * Context, selector, content, or file path.
+   */
+  async runTask10sCompleteRetainedEditor(): Promise<Task10sRetainedEditorCompletionResult> {
+    const blocked = (failureCode: string, overrides: Record<string, unknown> = {}): Task10sRetainedEditorCompletionResult => ({
+      action: RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR,
+      status: "BLOCKED",
+      failureCode,
+      uploadCallCount: 0,
+      finalSubmitClickCount: 0,
+      ...overrides
+    });
+    try {
+      const account = this.options.repository.listAccounts().find((item) => item.id === XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID && item.platformKey === "xiaohongshu");
+      if (!account || !account.enabled || account.archivedAt) return blocked("XHS_ACCOUNT_UNAVAILABLE", { accountId: account?.id ?? null });
+      const run = this.options.repository.getPlatformSelfTestRun(TASK10S_CANONICAL_AUTHORIZATION_ID);
+      if (!run || run.platformKey !== "xiaohongshu" || run.requestedLevel !== "L5_PUBLISH") return blocked("TASK10S_RETAINED_EDITOR_RUN_UNAVAILABLE", { accountId: account.id });
+      if (!run.publishJobId) return blocked("TASK10S_RETAINED_EDITOR_PREPARED_JOB_MISSING", { accountId: account.id, testRunId: run.testRunId });
+      const job = this.options.repository.getJob(run.publishJobId);
+      const preparedRecord = job ? this.options.repository.getPublishRecordByJob(job.id) : null;
+      if (!job || !["Pending", "Scheduled", "Retry", "NeedsUserAction"].includes(job.status) || !preparedRecord || preparedRecord.status !== "Prepared") {
+        return blocked("TASK10S_RETAINED_EDITOR_PREPARED_JOB_REQUIRED", { accountId: account.id, testRunId: run.testRunId, jobId: job?.id ?? null, jobStatus: job?.status ?? null, preparedRecordStatus: preparedRecord?.status ?? null });
+      }
+      const authorization = this.options.repository.getOneShotPublicationAuthorization(TASK10S_CANONICAL_AUTHORIZATION_ID);
+      if (!authorization
+        || authorization.authorization !== OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH
+        || authorization.state !== "AUTHORIZED_UNUSED"
+        || authorization.platformKey !== "xiaohongshu"
+        || authorization.accountId !== account.id
+        || authorization.operationId !== TASK10S_CANONICAL_AUTHORIZATION_ID
+        || authorization.mode !== ONE_SHOT_REAL_PUBLISH_ACCEPTANCE
+        || authorization.publicationTransactionCount !== 0
+        || authorization.publicationCommitActionCount !== 0
+        || authorization.finalSubmitAttemptCount !== 0
+        || authorization.finalSubmitRetryCount !== 0
+        || authorization.finalSubmitActionStarted
+        || authorization.finalSubmitActionCompleted) {
+        return blocked("TASK10S_RETAINED_EDITOR_AUTHORIZATION_NOT_UNUSED", { accountId: account.id, testRunId: run.testRunId, jobId: job.id, authorizationState: authorization?.state ?? null });
+      }
+      if (this.controlledOperations.has(account.id)) return blocked("TASK10S_RETAINED_EDITOR_ALREADY_RUNNING", { accountId: account.id, testRunId: run.testRunId, jobId: job.id });
+      const adapter = this.options.registry.getForContent("xiaohongshu", "article");
+      if (!isAutomationAdapter(adapter) || typeof adapter.finalSubmit !== "function" || typeof adapter.getBrowserRuntimeSnapshot !== "function") return blocked("TASK10S_RETAINED_EDITOR_ADAPTER_UNAVAILABLE", { accountId: account.id, testRunId: run.testRunId, jobId: job.id });
+      const context = this.context(account, run, "VISIBLE");
+      const runtime = adapter.getBrowserRuntimeSnapshot(context);
+      if (!runtime.sessionExists || runtime.browserConnected !== true || !runtime.contextExists || !runtime.canonicalPageExists || runtime.canonicalPageClosed === true || runtime.runtimeAuthState !== "AUTHENTICATED") {
+        return blocked("TASK10S_RETAINED_EDITOR_RUNTIME_UNAVAILABLE", { accountId: account.id, testRunId: run.testRunId, jobId: job.id, contextDebugId: runtime.contextDebugId, pageDebugId: runtime.canonicalPageDebugId });
+      }
+      const identity = await this.xhsIdentity.verifyCreatorIdentity(account.id);
+      const identityPass = identity.verified
+        && identity.expectedExternalCreatorId === TASK10S_EXPECTED_CREATOR_ID
+        && identity.observed.externalCreatorId === TASK10S_EXPECTED_CREATOR_ID
+        && identity.canonicalContextId === runtime.contextDebugId
+        && identity.canonicalPageId === runtime.canonicalPageDebugId;
+      if (!identityPass) return blocked("TASK10S_RETAINED_EDITOR_IDENTITY_REVALIDATION_FAILED", { accountId: account.id, testRunId: run.testRunId, jobId: job.id, contextDebugId: runtime.contextDebugId, pageDebugId: runtime.canonicalPageDebugId, expectedCreatorId: TASK10S_EXPECTED_CREATOR_ID, observedCreatorId: identity.observed.externalCreatorId ?? null });
+
+      this.controlledOperations.add(account.id);
+      try {
+        const article = this.options.repository.getArticle(job.articleId);
+        if (!article || article.title !== XHS_ONE_SHOT_TITLE || article.body !== XHS_ONE_SHOT_BODY) return blocked("TASK10S_RETAINED_EDITOR_FIXED_CONTENT_MISMATCH", { accountId: account.id, testRunId: run.testRunId, jobId: job.id, contextDebugId: runtime.contextDebugId, pageDebugId: runtime.canonicalPageDebugId });
+        this.options.logger?.info("PLATFORM_SELF_TEST", "TASK10S_COMPLETE_RETAINED_EDITOR_STARTED", "Task10S retained-editor fixed completion action 已通过 Main-side preflight；将复用已有图片编辑器，不执行上传", { action: RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, accountId: account.id, testRunId: run.testRunId, jobId: job.id, contextDebugId: runtime.contextDebugId, pageDebugId: runtime.canonicalPageDebugId, uploadCallCount: 0 });
+        const execution = await this.options.publisher.executeTask10sRetainedEditor(job.id, { userActionId: run.testRunId, triggerSource: "RUN_SELF_TEST" }, "VISIBLE", authorization);
+        const after = this.options.repository.getOneShotPublicationAuthorization(TASK10S_CANONICAL_AUTHORIZATION_ID);
+        const finalSubmitClickCount = after?.finalSubmitAttemptCount === 1 ? 1 as const : 0 as const;
+        const passed = ["Success", "Published", "Publishing"].includes(execution.job.status) && finalSubmitClickCount === 1;
+        return {
+          action: RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR,
+          status: passed ? "PASS" : "BLOCKED",
+          failureCode: passed ? null : execution.job.lastErrorCode ?? "TASK10S_RETAINED_EDITOR_COMPLETION_NOT_VERIFIED",
+          accountId: account.id,
+          testRunId: run.testRunId,
+          jobId: job.id,
+          contextDebugId: runtime.contextDebugId,
+          pageDebugId: runtime.canonicalPageDebugId,
+          uploadCallCount: 0,
+          titleFillCount: passed ? 1 : 0,
+          bodyFillCount: passed ? 1 : 0,
+          finalSubmitClickCount,
+          publicationTransactionCount: after?.publicationTransactionCount === 1 ? 1 : 0,
+          authorizationState: after?.state ?? "NOT_VERIFIED",
+          message: execution.message,
+          jobStatus: execution.job.status,
+          evidence: { identityPass, sameContext: true, samePage: true, fixedTitle: XHS_ONE_SHOT_TITLE, fixedBody: XHS_ONE_SHOT_BODY }
+        };
+      } finally {
+        this.controlledOperations.delete(account.id);
+      }
+    } catch (error) {
+      const after = this.options.repository.getOneShotPublicationAuthorization(TASK10S_CANONICAL_AUTHORIZATION_ID);
+      const finalSubmitStarted = after?.finalSubmitActionStarted === true;
+      return blocked(error instanceof Error ? error.message : "TASK10S_RETAINED_EDITOR_COMPLETION_FAILED", {
+        finalSubmitClickCount: finalSubmitStarted ? 1 : 0,
+        publicationTransactionCount: after?.publicationTransactionCount === 1 ? 1 : 0,
+        authorizationState: after?.state ?? "NOT_VERIFIED"
+      });
+    }
   }
 
   private async runTask10sControlledUploadAttempt(attempt: Task10sControlledUploadAttemptSpec): Promise<Task10sControlledUploadAttemptResult> {

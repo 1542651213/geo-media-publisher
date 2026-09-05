@@ -1,5 +1,6 @@
 import type {
   XiaohongshuGlobalExactPublishAncestorSafe,
+  XiaohongshuGlobalExactPublishDomSnapshot,
   XiaohongshuGlobalExactPublishDomRuntimeDiagnostic,
   XiaohongshuGlobalExactPublishNodeSafe
 } from "./global-exact-publish-diagnostic";
@@ -25,6 +26,8 @@ export interface Task10sFinalSurfaceResolution {
   failureCode: string | null;
 }
 
+export type Task10sFinalSurfaceDiagnostic = XiaohongshuGlobalExactPublishDomSnapshot | XiaohongshuGlobalExactPublishDomRuntimeDiagnostic;
+
 function renderedNode(node: XiaohongshuGlobalExactPublishNodeSafe): boolean {
   const rect = node.boundingRect;
   return node.connected
@@ -37,7 +40,7 @@ function renderedNode(node: XiaohongshuGlobalExactPublishNodeSafe): boolean {
     && rect.height > 0;
 }
 
-function renderedAncestor(node: XiaohongshuGlobalExactPublishAncestorSafe): boolean {
+function renderedSurface(node: Task10sFinalSurfaceCandidate): boolean {
   const rect = node.boundingRect;
   return node.connected
     && node.display !== "none"
@@ -77,8 +80,8 @@ function resolved(status: Task10sFinalSurfaceResolutionStatus, candidate: Task10
   };
 }
 
-export function resolveTask10sExactPublishSurface(diagnostic: XiaohongshuGlobalExactPublishDomRuntimeDiagnostic): Task10sFinalSurfaceResolution {
-  if (diagnostic.inspectionStatus !== "PASS") return resolved("NOT_FOUND", null, diagnostic.failureCode ?? "GLOBAL_EXACT_DIAGNOSTIC_FAILED");
+export function resolveTask10sExactPublishSurface(diagnostic: Task10sFinalSurfaceDiagnostic): Task10sFinalSurfaceResolution {
+  if ("inspectionStatus" in diagnostic && diagnostic.inspectionStatus !== "PASS") return resolved("NOT_FOUND", null, diagnostic.failureCode ?? "GLOBAL_EXACT_DIAGNOSTIC_FAILED");
   if (diagnostic.globalExactPublishTextMatchCount === 0) return resolved("NOT_FOUND", null, "EXACT_PUBLISH_TEXT_NOT_FOUND");
   if (diagnostic.globalExactPublishTextMatchCount !== 1 || diagnostic.globalExactPublishUnique !== "YES" || diagnostic.globalExactPublishNodesSafe.length !== 1) {
     return resolved("AMBIGUOUS", null, "EXACT_PUBLISH_TEXT_NOT_UNIQUE");
@@ -88,10 +91,11 @@ export function resolveTask10sExactPublishSurface(diagnostic: XiaohongshuGlobalE
   if (!exactNode || !renderedNode(exactNode)) return resolved("NOT_VISIBLE", null, "EXACT_PUBLISH_NODE_NOT_RENDERED");
 
   const candidates: Task10sFinalSurfaceCandidate[] = [exactNode, ...exactNode.ancestors.filter((item) => item.depth >= 1 && item.depth <= 5)];
-  const boundedCandidates = candidates.filter((candidate) => renderedAncestor(candidate) && isBoundedClickableSurface(candidate));
+  const boundedCandidates = candidates.filter((candidate) => renderedSurface(candidate) && isBoundedClickableSurface(candidate));
   if (boundedCandidates.length === 0) return resolved("NO_CLICKABLE_SURFACE", null, "NO_UNIQUE_BOUNDED_CLICKABLE_SURFACE");
   if (boundedCandidates.length !== 1) return resolved("AMBIGUOUS", null, "MULTIPLE_BOUNDED_CLICKABLE_SURFACES");
 
   const candidate = boundedCandidates[0];
+  if (!candidate) return resolved("NO_CLICKABLE_SURFACE", null, "NO_UNIQUE_BOUNDED_CLICKABLE_SURFACE");
   return disabled(candidate) ? resolved("DISABLED", candidate, "FINAL_SURFACE_DISABLED") : resolved("FOUND_UNIQUE", candidate);
 }

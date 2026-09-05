@@ -9,6 +9,8 @@ export const XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG = "--xhs-task10s-contro
 export const RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 = "RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4" as const;
 export const XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG = "--xhs-task10s-attempt3-dispatch-dry-run" as const;
 export const RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN = "RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN" as const;
+export const XHS_TASK10S_COMPLETE_RETAINED_EDITOR_FLAG = "--xhs-task10s-complete-retained-editor" as const;
+export const RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR = "RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR" as const;
 export const TASK10S_CANONICAL_AUTHORIZATION_ID = "6cb27b65-b122-4430-b8c7-aa83c59c8cac" as const;
 export const TASK10S_EXPECTED_CREATOR_ID = "960803317" as const;
 export const TASK10S_SAFE_FIXTURE_NAME = "task10s-safe-test.png" as const;
@@ -59,6 +61,15 @@ export interface Task10sAttempt3DispatchDryRunResult {
     publicationTransaction: number;
     newAuthorization: number;
   };
+}
+
+export interface Task10sRetainedEditorCompletionResult {
+  action: typeof RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR;
+  status: "PASS" | "BLOCKED";
+  failureCode: string | null;
+  uploadCallCount: 0;
+  finalSubmitClickCount: 0 | 1;
+  [key: string]: unknown;
 }
 
 export type Task10sAttemptReservationReason = "ACQUIRED" | "ATTEMPT_3_ALREADY_USED" | "ATTEMPT_4_ALREADY_USED" | "GUARD_UNAVAILABLE";

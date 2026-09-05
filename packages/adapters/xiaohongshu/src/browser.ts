@@ -81,7 +81,7 @@ import { runXhsEditorNetworkFailureDiagnostic, type XhsEditorNetworkDiagnosticRe
 import { emptyXiaohongshuContextPageInventory, inspectXiaohongshuContextPage, type XiaohongshuContextPageInventory } from "./context-page-inventory";
 import { emptyXiaohongshuPublishEditorDomRuntimeDiagnostic, inspectXiaohongshuPublishEditorDom, type XiaohongshuPublishEditorDomRuntimeDiagnostic } from "./publish-editor-dom-diagnostic";
 import { emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, inspectXiaohongshuPublishEditorSemanticCandidates, type XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic } from "./publish-editor-semantic-diagnostic";
-import { emptyXiaohongshuGlobalExactPublishDomRuntimeDiagnostic, inspectXiaohongshuGlobalExactPublishDom, type XiaohongshuGlobalExactPublishDomRuntimeDiagnostic } from "./global-exact-publish-diagnostic";
+import { emptyXiaohongshuGlobalExactPublishDomRuntimeDiagnostic, inspectXiaohongshuGlobalExactPublishDom, type XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, type XiaohongshuGlobalExactPublishDomSnapshot } from "./global-exact-publish-diagnostic";
 import { resolveTask10sExactPublishSurface, type Task10sFinalSurfaceResolution } from "./task10s-final-surface";
 import { evaluateTask10sRetainedEditorGate, TASK10S_FIXED_BODY, TASK10S_FIXED_TITLE } from "./task10s-retained-editor-completion";
 import { emptyXiaohongshuPostUploadReconciliationDomSnapshot, inspectXiaohongshuPostUploadReconciliationDom, reconcileXiaohongshuPostUploadSnapshot, type XiaohongshuPostUploadReconciliationResult } from "./post-upload-reconciliation-diagnostic";
@@ -3918,7 +3918,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     };
   }
 
-  private async resolveTask10sFinalPublishLocator(page: Page, diagnostic: XiaohongshuGlobalExactPublishDomRuntimeDiagnostic): Promise<{ locator: Locator; visible: boolean; enabled: boolean; hitTestValid: boolean; resolution: Task10sFinalSurfaceResolution }> {
+  private async resolveTask10sFinalPublishLocator(page: Page, diagnostic: XiaohongshuGlobalExactPublishDomRuntimeDiagnostic | XiaohongshuGlobalExactPublishDomSnapshot): Promise<{ locator: Locator; visible: boolean; enabled: boolean; hitTestValid: boolean; resolution: Task10sFinalSurfaceResolution }> {
     const resolution = resolveTask10sExactPublishSurface(diagnostic);
     if (!resolution.present || !resolution.candidate) throw new XiaohongshuGateError("FINAL_SUBMIT_CONTROL_NOT_VERIFIED", "USER_ACTION_REQUIRED", `Task10S exact 发布 surface 未通过：${resolution.failureCode ?? resolution.status}`);
     const exact = page.getByText("发布", { exact: true });
