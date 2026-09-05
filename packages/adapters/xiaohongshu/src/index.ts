@@ -12,6 +12,7 @@ export * from "./context-page-inventory";
 export * from "./publish-editor-dom-diagnostic";
 export * from "./publish-editor-semantic-diagnostic";
 export * from "./global-exact-publish-diagnostic";
+export * from "./task10s-final-surface";
 export * from "./post-upload-reconciliation-diagnostic";
 export * from "./file-input-diagnostic";
 export * from "./upload-delivery-diagnostic";
