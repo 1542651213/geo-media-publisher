@@ -6,6 +6,8 @@ import type { Logger } from "@publisher/logger";
 export interface PublishExecutionResult { job: PublishJob; message: string; }
 export interface AssistedPrepareResult { job: PublishJob; record: ReturnType<AppRepository["getPublishRecordByJob"]>; message: string; }
 
+type PublisherExecutionMode = "STANDARD" | "TASK10S_RETAINED_EDITOR";
+
 export interface PublisherOptions {
   resolveSecrets?: (accountId: string, platformKey: string) => Record<string, string>;
   accountFailurePauseThreshold?: number;
@@ -212,6 +214,14 @@ export class PublisherService {
   }
 
   async executeJob(jobId: string, action?: UserInitiatedAction, browserExecutionMode?: BrowserExecutionMode, oneShotAuthorization?: OneShotPublicationAuthorization): Promise<PublishExecutionResult> {
+    return this.executeJobInternal(jobId, action, browserExecutionMode, oneShotAuthorization, "STANDARD");
+  }
+
+  async executeTask10sRetainedEditor(jobId: string, action?: UserInitiatedAction, browserExecutionMode?: BrowserExecutionMode, oneShotAuthorization?: OneShotPublicationAuthorization): Promise<PublishExecutionResult> {
+    return this.executeJobInternal(jobId, action, browserExecutionMode, oneShotAuthorization, "TASK10S_RETAINED_EDITOR");
+  }
+
+  private async executeJobInternal(jobId: string, action: UserInitiatedAction | undefined, browserExecutionMode: BrowserExecutionMode | undefined, oneShotAuthorization: OneShotPublicationAuthorization | undefined, executionMode: PublisherExecutionMode): Promise<PublishExecutionResult> {
     const existing = this.repository.getJob(jobId);
     if (!existing) throw new Error("Publish job not found");
     if (existing.status === "NeedsReconciliation") return { job: existing, message: "Submission result is unknown; reconcile before retry" };
@@ -308,7 +318,8 @@ export class PublisherService {
             submissionIntentId: claimedAttempt.id,
             attempt: claimedAttempt.attempt,
             markSubmissionSideEffect: () => { finalSubmitSideEffectTriggered = true; },
-            ...(oneShotGuard ? { oneShotPublicationGuard: oneShotGuard } : {})
+            ...(oneShotGuard ? { oneShotPublicationGuard: oneShotGuard } : {}),
+            ...(executionMode === "TASK10S_RETAINED_EDITOR" ? { task10sRetainedEditor: true as const } : {})
           };
           try {
             result = await withTimeout(adapter.finalSubmit(ctx, input, attempt), this.options.operationTimeoutMs ?? 120_000, "Platform final submit");

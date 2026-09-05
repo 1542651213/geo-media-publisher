@@ -28,6 +28,8 @@ export interface BrowserPublishAttemptContext {
   markSubmissionSideEffect?: () => void;
   /** Present only for the explicitly owner-authorized, XHS one-shot publish path. */
   oneShotPublicationGuard?: OneShotPublicationGuard;
+  /** Present only for the fixed Task10S action completing an already-uploaded retained editor. */
+  task10sRetainedEditor?: true;
 }
 
 export interface BrowserPublishPreflightResult {
