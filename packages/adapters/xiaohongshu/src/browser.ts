@@ -82,6 +82,8 @@ import { emptyXiaohongshuContextPageInventory, inspectXiaohongshuContextPage, ty
 import { emptyXiaohongshuPublishEditorDomRuntimeDiagnostic, inspectXiaohongshuPublishEditorDom, type XiaohongshuPublishEditorDomRuntimeDiagnostic } from "./publish-editor-dom-diagnostic";
 import { emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, inspectXiaohongshuPublishEditorSemanticCandidates, type XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic } from "./publish-editor-semantic-diagnostic";
 import { emptyXiaohongshuGlobalExactPublishDomRuntimeDiagnostic, inspectXiaohongshuGlobalExactPublishDom, type XiaohongshuGlobalExactPublishDomRuntimeDiagnostic } from "./global-exact-publish-diagnostic";
+import { resolveTask10sExactPublishSurface, type Task10sFinalSurfaceResolution } from "./task10s-final-surface";
+import { evaluateTask10sRetainedEditorGate, TASK10S_FIXED_BODY, TASK10S_FIXED_TITLE } from "./task10s-retained-editor-completion";
 import { emptyXiaohongshuPostUploadReconciliationDomSnapshot, inspectXiaohongshuPostUploadReconciliationDom, reconcileXiaohongshuPostUploadSnapshot, type XiaohongshuPostUploadReconciliationResult } from "./post-upload-reconciliation-diagnostic";
 import { containsExpectedXiaohongshuSafeFixture, inspectXiaohongshuFileInputState, type XiaohongshuFileInputFixtureMatch, type XiaohongshuFileInputSafeNode } from "./file-input-diagnostic";
 import { readXiaohongshuUploadInputImmediately, type XiaohongshuUploadFileExpectation, type XiaohongshuUploadInputImmediateReadback } from "./upload-delivery-diagnostic";
@@ -3728,7 +3730,13 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
   async finalSubmit(ctx: AccountContext, article: PublishArticleInput, attempt: BrowserPublishAttemptContext): Promise<PublishResult> {
     const guard = attempt.oneShotPublicationGuard;
     if (!guard) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书最终发布只允许通过 OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH guard；探索路径不会提交");
-    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, () => this.performOneShotFinalSubmit(ctx, article, guard, attempt), "oneShotFinalSubmit");
+    return this.accountOperationMutex.run(
+      `${this.platformKey}:${ctx.accountId}`,
+      () => attempt.task10sRetainedEditor
+        ? this.performTask10sRetainedEditorCompletion(ctx, article, guard, attempt)
+        : this.performOneShotFinalSubmit(ctx, article, guard, attempt),
+      attempt.task10sRetainedEditor ? "task10sRetainedEditorCompletion" : "oneShotFinalSubmit"
+    );
   }
 
   async verifyPublished(ctx: AccountContext, article: PublishArticleInput, result: Pick<PublishResult, "externalId" | "publishedUrl">): Promise<PublishStatusResult> {
@@ -3766,6 +3774,164 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     } catch (error) {
       return { status: "STILL_UNCERTAIN", titleMatch: false, accountMatch: false, timeWindowMatch: false, response: { adapter: this.platformKey, readOnly: true, error: error instanceof Error ? error.message : String(error) }, message: "小红书只读回查失败，保持 NeedsReconciliation" };
     }
+  }
+
+  private async performTask10sRetainedEditorCompletion(ctx: AccountContext, article: PublishArticleInput, guard: OneShotPublicationGuard, attempt: BrowserPublishAttemptContext): Promise<PublishResult> {
+    if (article.title !== TASK10S_FIXED_TITLE || article.body !== TASK10S_FIXED_BODY) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "Task10S retained-editor action 只接受固定标题和正文 contract");
+    const canonical = await this.activeCanonicalPage(ctx);
+    if (!canonical || this.isCanonicalPageClosed(canonical.page) || !this.pageContextMatchesSession(canonical.session, canonical.page)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "Task10S retained-editor action 要求当前 canonical Context/Page");
+    if (!isExactXhsPublishEditorRoute(canonical.page.url())) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "Task10S retained-editor action 要求 /publish/publish 路由");
+    if (!this.isBrowserConnected(canonical.session) || this.getBrowserRuntimeState(ctx).state !== "AUTHENTICATED") throw new BrowserAutomationError("USER_ACTION_REQUIRED", "Task10S retained-editor action 要求 authenticated BrowserSession");
+
+    const postUploadSnapshot = await inspectXiaohongshuPostUploadReconciliationDom(canonical.page);
+    const postUpload = reconcileXiaohongshuPostUploadSnapshot(postUploadSnapshot);
+    if (postUpload.origin !== "https://creator.xiaohongshu.com" || postUpload.pathname !== "/publish/publish") throw new BrowserAutomationError("USER_ACTION_REQUIRED", "Task10S retained-editor action 的 post-upload route proof 失败");
+    if (postUpload.postUploadState !== "EDITOR_READY" || postUpload.imageAssetRenderedCount < 1 || !postUpload.titleControlPresent || !postUpload.bodyControlPresent || !postUpload.noExplicitUploadError) {
+      throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "USER_ACTION_REQUIRED", "Task10S retained-editor action 未取得 post-upload editor-ready proof", { failureCode: "POST_UPLOAD_PHASE_NOT_READY", failureStage: "EDITOR_DISCOVERY", missingSignal: "editor-scoped-image-title-body" });
+    }
+
+    const initialGlobalDiagnostic = await inspectXiaohongshuGlobalExactPublishDom(canonical.page);
+    const initialPublishSurface = resolveTask10sExactPublishSurface({ ...initialGlobalDiagnostic, accountId: ctx.accountId, contextDebugId: canonical.session.contextDebugId ?? null, pageId: canonical.pageDebugId, sessionExists: true, browserConnected: true, contextExists: true, pageExists: true, pageClosed: false, pageContextMatchesSession: true, sanitizedUrl: sanitizePageUrl(canonical.page) });
+    if (!initialPublishSurface.present) throw new XiaohongshuGateError("FINAL_SUBMIT_CONTROL_NOT_VERIFIED", "USER_ACTION_REQUIRED", `Task10S exact 发布 surface 未通过：${initialPublishSurface.failureCode ?? initialPublishSurface.status}`);
+
+    const titleEditor = await this.discoverUniqueEditor(canonical.page, "title");
+    await titleEditor.fill(TASK10S_FIXED_TITLE);
+    const titleReadback = await readEditor(titleEditor, "title");
+    const bodyEditor = await this.discoverUniqueEditor(canonical.page, "body");
+    await bodyEditor.fill(TASK10S_FIXED_BODY);
+    const bodyReadback = await readEditor(bodyEditor, "body");
+    const requiredFieldsPass = !(await this.inspectRequiredFields(canonical.page)).some((field) => field.empty);
+    const finalGlobalDiagnostic = await inspectXiaohongshuGlobalExactPublishDom(canonical.page);
+    const finalPublishSurface = resolveTask10sExactPublishSurface({ ...finalGlobalDiagnostic, accountId: ctx.accountId, contextDebugId: canonical.session.contextDebugId ?? null, pageId: canonical.pageDebugId, sessionExists: true, browserConnected: true, contextExists: true, pageExists: true, pageClosed: false, pageContextMatchesSession: true, sanitizedUrl: sanitizePageUrl(canonical.page) });
+    const identityEvidence = await readXiaohongshuPageEvidence(canonical.page, { failOnEvaluateError: true });
+    const identityPass = normalizeExternalCreatorId(identityEvidence.identity.externalAccountId) === "960803317";
+    const gate = evaluateTask10sRetainedEditorGate({
+      uploadAttemptCount: 1,
+      setInputFilesCallCount: 0,
+      postUploadState: postUpload.postUploadState,
+      imageAssetRenderedCount: postUpload.imageAssetRenderedCount,
+      titleControlPresent: postUpload.titleControlPresent,
+      bodyControlPresent: postUpload.bodyControlPresent,
+      noExplicitUploadError: postUpload.noExplicitUploadError,
+      initialPublishSurface,
+      titleReadback,
+      bodyReadback,
+      requiredFieldsPass,
+      finalPublishSurface,
+      identityPass,
+      sameContext: this.pageContextMatchesSession(canonical.session, canonical.page),
+      samePage: canonical.session.page === canonical.page,
+      authorizationState: guard.authorization.state,
+      finalSubmitClickCount: 0
+    });
+    if (gate.status !== "READY_TO_SUBMIT") throw new XiaohongshuGateError("FINAL_SUBMIT_CONTROL_NOT_VERIFIED", "USER_ACTION_REQUIRED", `Task10S retained-editor final gate 未通过：${gate.failureCode ?? "UNKNOWN"}`);
+
+    const liveFinalSurface = await this.resolveTask10sFinalPublishLocator(canonical.page, finalGlobalDiagnostic);
+    const preflight: OneShotFinalSubmitPreflight = {
+      authorization: guard.authorization.authorization,
+      authorizationState: guard.authorization.state,
+      platformKey: "xiaohongshu",
+      accountId: guard.authorization.accountId,
+      operationId: guard.authorization.operationId,
+      mode: guard.authorization.mode,
+      authenticated: true,
+      sameCanonicalContext: this.pageContextMatchesSession(canonical.session, canonical.page),
+      sameCanonicalPage: canonical.session.page === canonical.page,
+      mutexOwned: this.accountOperationMutex.getState(`${this.platformKey}:${ctx.accountId}`).operationInProgress,
+      editorPhase: "IMAGE_POST_POST_UPLOAD_EDITOR",
+      safeFixtureUploaded: true,
+      titleReadbackVerified: gate.titleReadbackExact,
+      bodyReadbackVerified: gate.bodyReadbackExact,
+      requiredFieldsPass,
+      loginPagePresent: this.isLoginPage(canonical.page.url()),
+      securityVerificationPresent: this.isVerificationUrl(canonical.page.url()),
+      finalSubmitControl: {
+        status: "FOUND_UNIQUE",
+        visible: liveFinalSurface.visible,
+        enabled: liveFinalSurface.enabled,
+        hitTestValid: liveFinalSurface.hitTestValid,
+        label: "发布"
+      }
+    };
+    const beforeUrl = canonical.page.url();
+    try {
+      await guard.startFinalSubmit(preflight, async () => {
+        attempt.markSubmissionSideEffect?.();
+        try {
+          await liveFinalSurface.locator.click();
+        } catch (error) {
+          throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", `Task10S 最终发布 action 已开始但 click 未正常返回：${error instanceof Error ? error.message : String(error)}`);
+        }
+      });
+    } catch (error) {
+      if (error instanceof OneShotPublicationGuardError) throw new BrowserAutomationError("USER_ACTION_REQUIRED", `${error.code}: 未执行 Task10S 最终发布`);
+      throw error;
+    }
+
+    const confirmation = await this.inspectOneShotConfirmationControl(canonical.page);
+    if (confirmation.status === "AMBIGUOUS") throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "Task10S 发布后出现多个确认 modal 候选，未盲点");
+    if (confirmation.status === "FOUND_UNIQUE" && confirmation.candidate) {
+      try {
+        await guard.confirmModal(confirmation.candidate, async () => confirmation.locator.click());
+      } catch (error) {
+        if (error instanceof OneShotPublicationGuardError) throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", `${error.code}: Task10S 确认 modal 未通过安全校验`);
+        throw error;
+      }
+    }
+    const observation = await this.observeOneShotPostSubmit(canonical.page, beforeUrl);
+    const observationStatus = classifyOneShotPostSubmitObservation(observation);
+    if (observationStatus === "PLATFORM_REJECTED") throw new BrowserAutomationError("CONTENT_REJECTED", `小红书平台拒绝了 Task10S 测试发布：${observation.platformError ?? "未提供原因"}`);
+    if (observationStatus !== "PUBLISHED_VERIFIED") throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "Task10S 提交结果不明确；只允许进入只读 reconciliation，不得重试");
+    const publicResult = this.publicResultFromUrl(canonical.page.url());
+    if (!publicResult) throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "Task10S 提交后未取得可靠 External ID/URL；禁止再次提交");
+    guard.markFinalSubmitCompleted();
+    return {
+      success: true,
+      status: "published",
+      externalId: publicResult.externalId,
+      publishedUrl: publicResult.publishedUrl,
+      response: {
+        adapter: this.platformKey,
+        stage: "task10s_retained_editor_final_submitted",
+        ownerFinalSubmitAuthorization: "OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH",
+        finalSubmitAuthorizationState: guard.authorization.state,
+        finalSubmitPreflight: preflight,
+        publicationTransactionCount: guard.authorization.publicationTransactionCount,
+        publicationCommitActionCount: guard.authorization.publicationCommitActionCount,
+        finalSubmitAttemptCount: guard.authorization.finalSubmitAttemptCount,
+        finalSubmitRetryCount: 0,
+        finalSubmitActionStarted: guard.authorization.finalSubmitActionStarted,
+        finalSubmitActionCompleted: guard.authorization.finalSubmitActionCompleted,
+        postSubmitObservation: observation,
+        publicationReconciled: true,
+        externalId: publicResult.externalId,
+        externalUrl: publicResult.publishedUrl,
+        publicPageVerified: true,
+        imageUploaded: true,
+        titleFilled: true,
+        bodyFilled: true,
+        uploadCallCount: 0,
+        beforeUrl,
+        afterUrl: canonical.page.url(),
+        finalSubmitCount: 1
+      }
+    };
+  }
+
+  private async resolveTask10sFinalPublishLocator(page: Page, diagnostic: XiaohongshuGlobalExactPublishDomRuntimeDiagnostic): Promise<{ locator: Locator; visible: boolean; enabled: boolean; hitTestValid: boolean; resolution: Task10sFinalSurfaceResolution }> {
+    const resolution = resolveTask10sExactPublishSurface(diagnostic);
+    if (!resolution.present || !resolution.candidate) throw new XiaohongshuGateError("FINAL_SUBMIT_CONTROL_NOT_VERIFIED", "USER_ACTION_REQUIRED", `Task10S exact 发布 surface 未通过：${resolution.failureCode ?? resolution.status}`);
+    const exact = page.getByText("发布", { exact: true });
+    if (await locatorCount(exact) !== 1) throw new XiaohongshuGateError("FINAL_SUBMIT_CONTROL_NOT_VERIFIED", "USER_ACTION_REQUIRED", "Task10S exact 发布 live locator 不唯一");
+    const depth = "depth" in resolution.candidate ? resolution.candidate.depth : 0;
+    let surface = exact;
+    for (let currentDepth = 0; currentDepth < depth; currentDepth += 1) surface = surface.locator("xpath=..");
+    const visible = await isVisible(surface);
+    const enabled = await isEnabled(surface);
+    const box = await locatorBoundingBox(surface);
+    const hitTestValid = visible && enabled && box !== null && await locatorHitTestValid(surface, box);
+    if (!visible || !enabled || !hitTestValid) throw new XiaohongshuGateError("FINAL_SUBMIT_CONTROL_NOT_VERIFIED", "USER_ACTION_REQUIRED", "Task10S exact 发布 live surface 未通过最终可交互校验");
+    return { locator: surface, visible, enabled, hitTestValid, resolution };
   }
 
   private async performOneShotFinalSubmit(ctx: AccountContext, article: PublishArticleInput, guard: OneShotPublicationGuard, attempt: BrowserPublishAttemptContext): Promise<PublishResult> {
