@@ -81,8 +81,8 @@ import { runXhsEditorNetworkFailureDiagnostic, type XhsEditorNetworkDiagnosticRe
 import { emptyXiaohongshuContextPageInventory, inspectXiaohongshuContextPage, type XiaohongshuContextPageInventory } from "./context-page-inventory";
 import { emptyXiaohongshuPublishEditorDomRuntimeDiagnostic, inspectXiaohongshuPublishEditorDom, type XiaohongshuPublishEditorDomRuntimeDiagnostic } from "./publish-editor-dom-diagnostic";
 import { emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, inspectXiaohongshuPublishEditorSemanticCandidates, type XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic } from "./publish-editor-semantic-diagnostic";
-import { emptyXiaohongshuGlobalExactPublishDomRuntimeDiagnostic, inspectXiaohongshuGlobalExactPublishDom, type XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, type XiaohongshuGlobalExactPublishDomSnapshot } from "./global-exact-publish-diagnostic";
-import { resolveTask10sExactPublishSurface, type Task10sFinalSurfaceResolution } from "./task10s-final-surface";
+import { emptyXiaohongshuGlobalExactPublishDomRuntimeDiagnostic, inspectXiaohongshuGlobalExactPublishDom, type XiaohongshuGlobalExactPublishDomRuntimeDiagnostic } from "./global-exact-publish-diagnostic";
+import { clickTask10sClosedShadowPublishSurface, inspectTask10sClosedShadowPublishSurface } from "./task10s-closed-shadow-final-submit";
 import { evaluateTask10sRetainedEditorGate, TASK10S_FIXED_BODY, TASK10S_FIXED_TITLE } from "./task10s-retained-editor-completion";
 import { emptyXiaohongshuPostUploadReconciliationDomSnapshot, inspectXiaohongshuPostUploadReconciliationDom, reconcileXiaohongshuPostUploadSnapshot, type XiaohongshuPostUploadReconciliationResult } from "./post-upload-reconciliation-diagnostic";
 import { containsExpectedXiaohongshuSafeFixture, inspectXiaohongshuFileInputState, type XiaohongshuFileInputFixtureMatch, type XiaohongshuFileInputSafeNode } from "./file-input-diagnostic";
@@ -3791,8 +3791,8 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     }
 
     const initialGlobalDiagnostic = await inspectXiaohongshuGlobalExactPublishDom(canonical.page);
-    const initialPublishSurface = resolveTask10sExactPublishSurface({ ...initialGlobalDiagnostic, accountId: ctx.accountId, contextDebugId: canonical.session.contextDebugId ?? null, pageId: canonical.pageDebugId, sessionExists: true, browserConnected: true, contextExists: true, pageExists: true, pageClosed: false, pageContextMatchesSession: true, sanitizedUrl: sanitizePageUrl(canonical.page) });
-    if (!initialPublishSurface.present) throw new XiaohongshuGateError("FINAL_SUBMIT_CONTROL_NOT_VERIFIED", "USER_ACTION_REQUIRED", `Task10S exact 发布 surface 未通过：${initialPublishSurface.failureCode ?? initialPublishSurface.status}`);
+    const initialPublishSurface = await inspectTask10sClosedShadowPublishSurface(canonical.page);
+    if (!initialPublishSurface.present) throw new XiaohongshuGateError("FINAL_SUBMIT_CONTROL_NOT_VERIFIED", "USER_ACTION_REQUIRED", `Task10S closed-shadow 发布 surface 未通过：${initialPublishSurface.failureCode ?? initialPublishSurface.status}；main-document exact count=${initialGlobalDiagnostic.globalExactPublishTextMatchCount}`);
 
     const titleEditor = await this.discoverUniqueEditor(canonical.page, "title");
     await titleEditor.fill(TASK10S_FIXED_TITLE);
@@ -3802,7 +3802,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const bodyReadback = await readEditor(bodyEditor, "body");
     const requiredFieldsPass = !(await this.inspectRequiredFields(canonical.page)).some((field) => field.empty);
     const finalGlobalDiagnostic = await inspectXiaohongshuGlobalExactPublishDom(canonical.page);
-    const finalPublishSurface = resolveTask10sExactPublishSurface({ ...finalGlobalDiagnostic, accountId: ctx.accountId, contextDebugId: canonical.session.contextDebugId ?? null, pageId: canonical.pageDebugId, sessionExists: true, browserConnected: true, contextExists: true, pageExists: true, pageClosed: false, pageContextMatchesSession: true, sanitizedUrl: sanitizePageUrl(canonical.page) });
+    const finalPublishSurface = await inspectTask10sClosedShadowPublishSurface(canonical.page);
     const identityEvidence = await readXiaohongshuPageEvidence(canonical.page, { failOnEvaluateError: true });
     const identityPass = normalizeExternalCreatorId(identityEvidence.identity.externalAccountId) === "960803317";
     const gate = evaluateTask10sRetainedEditorGate({
@@ -3826,7 +3826,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     });
     if (gate.status !== "READY_TO_SUBMIT") throw new XiaohongshuGateError("FINAL_SUBMIT_CONTROL_NOT_VERIFIED", "USER_ACTION_REQUIRED", `Task10S retained-editor final gate 未通过：${gate.failureCode ?? "UNKNOWN"}`);
 
-    const liveFinalSurface = await this.resolveTask10sFinalPublishLocator(canonical.page, finalGlobalDiagnostic);
+    if (!finalPublishSurface.present || !finalPublishSurface.enabled) throw new XiaohongshuGateError("FINAL_SUBMIT_CONTROL_NOT_VERIFIED", "USER_ACTION_REQUIRED", `Task10S closed-shadow 发布 surface 未通过最终 enabled 校验：${finalPublishSurface.failureCode ?? finalPublishSurface.status}；main-document exact count=${finalGlobalDiagnostic.globalExactPublishTextMatchCount}`);
     const preflight: OneShotFinalSubmitPreflight = {
       authorization: guard.authorization.authorization,
       authorizationState: guard.authorization.state,
@@ -3847,9 +3847,9 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       securityVerificationPresent: this.isVerificationUrl(canonical.page.url()),
       finalSubmitControl: {
         status: "FOUND_UNIQUE",
-        visible: liveFinalSurface.visible,
-        enabled: liveFinalSurface.enabled,
-        hitTestValid: liveFinalSurface.hitTestValid,
+        visible: Boolean(finalPublishSurface.host?.rendered && finalPublishSurface.innerButton?.rendered),
+        enabled: finalPublishSurface.enabled,
+        hitTestValid: Boolean(finalPublishSurface.innerButton?.boundingRect),
         label: "发布"
       }
     };
@@ -3858,9 +3858,10 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       await guard.startFinalSubmit(preflight, async () => {
         attempt.markSubmissionSideEffect?.();
         try {
-          await liveFinalSurface.locator.click();
+          const clickResult = await clickTask10sClosedShadowPublishSurface(canonical.page);
+          if (clickResult.status !== "CLICK_DISPATCHED") throw new Error(clickResult.failureCode ?? clickResult.status);
         } catch (error) {
-          throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", `Task10S 最终发布 action 已开始但 click 未正常返回：${error instanceof Error ? error.message : String(error)}`);
+          throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", `Task10S closed-shadow 最终发布 action 已开始但 click 未正常返回：${error instanceof Error ? error.message : String(error)}`);
         }
       });
     } catch (error) {
@@ -3916,22 +3917,6 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         finalSubmitCount: 1
       }
     };
-  }
-
-  private async resolveTask10sFinalPublishLocator(page: Page, diagnostic: XiaohongshuGlobalExactPublishDomRuntimeDiagnostic | XiaohongshuGlobalExactPublishDomSnapshot): Promise<{ locator: Locator; visible: boolean; enabled: boolean; hitTestValid: boolean; resolution: Task10sFinalSurfaceResolution }> {
-    const resolution = resolveTask10sExactPublishSurface(diagnostic);
-    if (!resolution.present || !resolution.candidate) throw new XiaohongshuGateError("FINAL_SUBMIT_CONTROL_NOT_VERIFIED", "USER_ACTION_REQUIRED", `Task10S exact 发布 surface 未通过：${resolution.failureCode ?? resolution.status}`);
-    const exact = page.getByText("发布", { exact: true });
-    if (await locatorCount(exact) !== 1) throw new XiaohongshuGateError("FINAL_SUBMIT_CONTROL_NOT_VERIFIED", "USER_ACTION_REQUIRED", "Task10S exact 发布 live locator 不唯一");
-    const depth = "depth" in resolution.candidate ? resolution.candidate.depth : 0;
-    let surface = exact;
-    for (let currentDepth = 0; currentDepth < depth; currentDepth += 1) surface = surface.locator("xpath=..");
-    const visible = await isVisible(surface);
-    const enabled = await isEnabled(surface);
-    const box = await locatorBoundingBox(surface);
-    const hitTestValid = visible && enabled && box !== null && await locatorHitTestValid(surface, box);
-    if (!visible || !enabled || !hitTestValid) throw new XiaohongshuGateError("FINAL_SUBMIT_CONTROL_NOT_VERIFIED", "USER_ACTION_REQUIRED", "Task10S exact 发布 live surface 未通过最终可交互校验");
-    return { locator: surface, visible, enabled, hitTestValid, resolution };
   }
 
   private async performOneShotFinalSubmit(ctx: AccountContext, article: PublishArticleInput, guard: OneShotPublicationGuard, attempt: BrowserPublishAttemptContext): Promise<PublishResult> {
