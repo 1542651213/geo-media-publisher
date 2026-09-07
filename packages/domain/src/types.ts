@@ -437,6 +437,25 @@ export interface CurrentRuntimeIdentityProof {
   verified: true;
 }
 
+/** Short-lived identity proof bound to a live XHS BrowserSession and Context.
+ * The source Page is only the fresh proof origin; later editor Pages may differ.
+ */
+export interface XhsContextIdentityAttestation {
+  accountId: string;
+  platformKey: "xiaohongshu";
+  expectedExternalCreatorId: string;
+  observedExternalCreatorId: string;
+  browserSessionIdentity: string;
+  browserContextIdentity: string;
+  sourcePageIdentity: string;
+  sourceOrigin: "https://creator.xiaohongshu.com";
+  sourcePathname: string;
+  externalAccountId: string | null;
+  issuedAt: string;
+  expiresAt: string;
+  verified: true;
+}
+
 export interface PlatformAccountIdentityBinding {
   id: string;
   platformKey: string;
@@ -661,6 +680,8 @@ export interface AccountContext {
   settings: Record<string, string | number | boolean>;
   /** Main-process-only proof bound to the current canonical browser runtime. */
   runtimeIdentityProof?: CurrentRuntimeIdentityProof;
+  /** Main-process-only proof bound to the current XHS Session and Context. */
+  runtimeIdentityAttestation?: XhsContextIdentityAttestation;
   /** Main-process-only credentials. Never serialize or log this object in the renderer. */
   secrets?: Record<string, string>;
 }

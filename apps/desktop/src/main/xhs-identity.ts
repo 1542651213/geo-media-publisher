@@ -1,8 +1,9 @@
-import type { AdapterRegistry } from "@publisher/adapters-core";
+import type { AdapterRegistry, BrowserSessionRuntimeSnapshot } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
 import { ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type Account, type AccountContext, type CreatorIdentityVerificationResult, type PlatformAccountIdentityBinding, type XhsIdentityAcceptance } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
 import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentFileInputState, XiaohongshuCurrentImageEditorReadiness, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import { createXhsContextIdentityAttestation, validateXhsContextIdentityAttestation, type XhsContextIdentityAttestation, type XhsContextIdentityAttestationResult, type XhsContextIdentityRuntime } from "./xhs-context-identity-attestation";
 
 type IdentityReader = {
   inspectCanonicalPageRuntime?: (ctx: AccountContext) => Promise<XiaohongshuCanonicalPageRuntimeProbe>;
@@ -15,6 +16,7 @@ type IdentityReader = {
   inspectCurrentXiaohongshuPostUploadReconciliation?: (ctx: AccountContext) => Promise<XiaohongshuCurrentPostUploadReconciliation>;
   inspectCurrentXiaohongshuFileInputState?: (ctx: AccountContext) => Promise<XiaohongshuCurrentFileInputState>;
   readCanonicalCreatorIdentity?: (ctx: AccountContext) => Promise<XiaohongshuCreatorIdentityObservation>;
+  getBrowserRuntimeSnapshot?: (ctx: AccountContext) => BrowserSessionRuntimeSnapshot;
 };
 
 export interface XhsIdentityServiceOptions {
@@ -24,6 +26,15 @@ export interface XhsIdentityServiceOptions {
 }
 
 const BLOCKED_ROUTE_CLASSES = new Set<XiaohongshuCreatorIdentityObservation["routeClass"]>(["LOGIN", "SECURITY_VERIFICATION", "UNKNOWN"]);
+
+function safeUrlParts(value: string): { origin: string; pathname: string } {
+  try {
+    const parsed = new URL(value);
+    return { origin: parsed.origin, pathname: parsed.pathname };
+  } catch {
+    return { origin: "", pathname: "" };
+  }
+}
 
 function observationFromRuntimeProbe(probe: XiaohongshuCanonicalPageRuntimeProbe): XiaohongshuCreatorIdentityObservation {
   if (probe.probeStatus !== "PASS" || probe.domLocationEvaluateStatus !== "PASS" || probe.pageUrlConsistency !== "PASS") {
@@ -58,7 +69,73 @@ function observationFromRuntimeProbe(probe: XiaohongshuCanonicalPageRuntimeProbe
 }
 
 export class XhsIdentityService {
+  private readonly contextIdentityAttestations = new Map<string, XhsContextIdentityAttestation>();
+
   constructor(private readonly options: XhsIdentityServiceOptions) {}
+
+  async establishContextIdentityAttestation(accountId: string): Promise<XhsContextIdentityAttestationResult> {
+    const account = this.requireAccount(accountId);
+    const adapter = this.options.registry.getForContent("xiaohongshu", "article") as IdentityReader;
+    if (typeof adapter.getBrowserRuntimeSnapshot !== "function") throw Object.assign(new Error("当前小红书运行时未提供 BrowserSession runtime snapshot"), { code: "XHS_RUNTIME_SNAPSHOT_UNAVAILABLE" });
+    const context = this.context(account);
+    const runtime = adapter.getBrowserRuntimeSnapshot(context);
+    const identity = await this.verifyCreatorIdentity(accountId);
+    const parsedSourceUrl = safeUrlParts(identity.canonicalPageUrl);
+    const result = createXhsContextIdentityAttestation({
+      accountId: account.id,
+      expectedExternalCreatorId: identity.expectedExternalCreatorId,
+      observedExternalCreatorId: identity.observed.externalCreatorId,
+      identityObservationStatus: identity.verified ? "PASS" : "NOT_VERIFIED",
+      browserSessionIdentity: runtime.browserSessionIdentity ?? null,
+      browserContextIdentity: runtime.contextDebugId,
+      sourcePageIdentity: identity.canonicalPageId,
+      sourceOrigin: parsedSourceUrl.origin,
+      sourcePathname: parsedSourceUrl.pathname,
+      browserConnected: runtime.browserConnected === true,
+      pageClosed: runtime.canonicalPageClosed === true,
+      runtimeAuthState: runtime.runtimeAuthState,
+      externalAccountId: account.externalAccountId
+    });
+    if (result.status === "PASS" && (identity.canonicalContextId !== runtime.contextDebugId || identity.canonicalPageId !== runtime.canonicalPageDebugId)) {
+      this.contextIdentityAttestations.delete(account.id);
+      return { status: "BLOCKED", failureCode: "IDENTITY_RUNTIME_SCOPE_MISMATCH" };
+    }
+    if (result.status === "PASS") this.contextIdentityAttestations.set(account.id, result.attestation);
+    else this.contextIdentityAttestations.delete(account.id);
+    return result;
+  }
+
+  async validateContextIdentityAttestation(accountId: string): Promise<ReturnType<typeof validateXhsContextIdentityAttestation>> {
+    const account = this.requireAccount(accountId);
+    const attestation = this.contextIdentityAttestations.get(account.id);
+    if (!attestation) return { valid: false, failureCode: "CONTEXT_IDENTITY_ATTESTATION_MISSING" };
+    const adapter = this.options.registry.getForContent("xiaohongshu", "article") as IdentityReader;
+    if (typeof adapter.getBrowserRuntimeSnapshot !== "function") return { valid: false, failureCode: "XHS_RUNTIME_SNAPSHOT_UNAVAILABLE" };
+    const runtime = adapter.getBrowserRuntimeSnapshot(this.context(account));
+    const binding = this.options.repository.getPlatformAccountIdentityBinding("xiaohongshu", account.id);
+    const expectedCreatorId = binding?.externalCreatorId ?? account.externalAccountId ?? null;
+    const current: XhsContextIdentityRuntime = {
+      accountId: account.id,
+      browserSessionIdentity: runtime.browserSessionIdentity ?? null,
+      browserContextIdentity: runtime.contextDebugId,
+      currentPageExists: runtime.canonicalPageExists,
+      currentPageClosed: runtime.canonicalPageClosed === true,
+      browserConnected: runtime.browserConnected === true,
+      runtimeAuthState: runtime.runtimeAuthState,
+      observedExternalCreatorId: expectedCreatorId
+    };
+    const validation = validateXhsContextIdentityAttestation(attestation, current);
+    if (!validation.valid) this.contextIdentityAttestations.delete(account.id);
+    return validation;
+  }
+
+  getContextIdentityAttestation(accountId: string): XhsContextIdentityAttestation | null {
+    return this.contextIdentityAttestations.get(accountId) ?? null;
+  }
+
+  invalidateContextIdentityAttestation(accountId: string): void {
+    this.contextIdentityAttestations.delete(accountId);
+  }
 
   async inspectCanonicalPageRuntime(accountId: string): Promise<XiaohongshuCanonicalPageRuntimeProbe> {
     const account = this.requireAccount(accountId);

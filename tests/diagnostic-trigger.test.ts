@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
-import { createFixedDiagnosticRunner, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_FINAL_SUBMIT_DOM, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_PUBLISH_ENTRY_DOM, PROBE_XHS_CANONICAL_PAGE, XHS_CONTEXT_PAGE_INVENTORY_FLAG, XHS_FILE_INPUT_STATE_FLAG, XHS_FINAL_SUBMIT_DOM_DIAGNOSTIC_FLAG, XHS_POST_UPLOAD_RECONCILIATION_FLAG, XHS_PUBLISH_ENTRY_DOM_DIAGNOSTIC_FLAG, XHS_CANONICAL_PAGE_PROBE_FLAG, parseDiagnosticAction } from "../apps/desktop/src/main/diagnostic-trigger";
+import { createFixedDiagnosticRunner, ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_FINAL_SUBMIT_DOM, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_PUBLISH_ENTRY_DOM, PROBE_XHS_CANONICAL_PAGE, XHS_CONTEXT_IDENTITY_ATTESTATION_FLAG, XHS_CONTEXT_PAGE_INVENTORY_FLAG, XHS_FILE_INPUT_STATE_FLAG, XHS_FINAL_SUBMIT_DOM_DIAGNOSTIC_FLAG, XHS_POST_UPLOAD_RECONCILIATION_FLAG, XHS_PUBLISH_ENTRY_DOM_DIAGNOSTIC_FLAG, XHS_CANONICAL_PAGE_PROBE_FLAG, parseDiagnosticAction } from "../apps/desktop/src/main/diagnostic-trigger";
 
 const unusedProbe: XiaohongshuCanonicalPageRuntimeProbe = {} as XiaohongshuCanonicalPageRuntimeProbe;
 const entryDomDiagnostic: XiaohongshuPublishEntryDomRuntimeDiagnostic = {
@@ -24,6 +24,7 @@ const entryDomDiagnostic: XiaohongshuPublishEntryDomRuntimeDiagnostic = {
 const reconciliationDiagnostic = { inspectionStatus: "PASS", accountId: "account-1" } as XiaohongshuCurrentPostUploadReconciliation;
 const fileInputDiagnostic = { inspectionStatus: "PASS", accountId: "account-1" } as XiaohongshuCurrentFileInputState;
 const finalSubmitDiagnostic = { inspectionStatus: "PASS", accountId: "account-1" } as XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic;
+const attestationResult = { status: "PASS", attestation: { accountId: "account-1" } } as never;
 
 describe("fixed XHS diagnostic triggers", () => {
   it("accepts only the bounded Context Page inventory flag or action", () => {
@@ -32,6 +33,19 @@ describe("fixed XHS diagnostic triggers", () => {
     expect(parseDiagnosticAction(["publisher.exe", XHS_CONTEXT_PAGE_INVENTORY_FLAG, "--unexpected"])).toBeNull();
     expect(parseDiagnosticAction(["publisher.exe"], { action: INSPECT_XHS_CONTEXT_PAGES })).toBe(INSPECT_XHS_CONTEXT_PAGES);
     expect(parseDiagnosticAction(["publisher.exe"], { action: INSPECT_XHS_CONTEXT_PAGES, extra: true })).toBeNull();
+  });
+
+  it("dispatches the fixed no-argument Context identity attestation action and rejects caller data", async () => {
+    expect(parseDiagnosticAction(["publisher.exe", XHS_CONTEXT_IDENTITY_ATTESTATION_FLAG])).toBe(ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION);
+    expect(parseDiagnosticAction(["publisher.exe", XHS_CONTEXT_IDENTITY_ATTESTATION_FLAG, "--page-id=page-1"])).toBeNull();
+    expect(parseDiagnosticAction(["publisher.exe"], { action: ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, pageId: "page-1" })).toBeNull();
+    const establish = vi.fn(async () => attestationResult);
+    const write = vi.fn();
+    const runner = createFixedDiagnosticRunner({ probe: vi.fn(async () => unusedProbe), writeEvidence: vi.fn(), establishXhsContextIdentityAttestation: establish, writeXhsContextIdentityAttestationEvidence: write });
+    await expect(runner(ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION)).resolves.toBe(true);
+    expect(establish).toHaveBeenCalledTimes(1);
+    expect(establish).toHaveBeenCalledWith();
+    expect(write).toHaveBeenCalledWith(attestationResult);
   });
 
   it("accepts only the fixed publish-entry DOM diagnostic action", () => {

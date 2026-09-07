@@ -3803,8 +3803,17 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const requiredFieldsPass = !(await this.inspectRequiredFields(canonical.page)).some((field) => field.empty);
     const finalGlobalDiagnostic = await inspectXiaohongshuGlobalExactPublishDom(canonical.page);
     const finalPublishSurface = await inspectTask10sClosedShadowPublishSurface(canonical.page);
-    const identityEvidence = await readXiaohongshuPageEvidence(canonical.page, { failOnEvaluateError: true });
-    const identityPass = normalizeExternalCreatorId(identityEvidence.identity.externalAccountId) === "960803317";
+    const runtimeSnapshot = this.getBrowserRuntimeSnapshot(ctx);
+    const contextIdentityAttestationPass = Boolean(
+      ctx.runtimeIdentityAttestation?.verified === true
+      && new Date(ctx.runtimeIdentityAttestation.expiresAt).getTime() > Date.now()
+      && runtimeSnapshot.browserConnected === true
+      && runtimeSnapshot.runtimeAuthState === "AUTHENTICATED"
+      && runtimeSnapshot.browserSessionIdentity === ctx.runtimeIdentityAttestation.browserSessionIdentity
+      && runtimeSnapshot.contextDebugId === ctx.runtimeIdentityAttestation.browserContextIdentity
+      && canonical.session.runtimeSessionIdentity === ctx.runtimeIdentityAttestation.browserSessionIdentity
+      && canonical.session.contextDebugId === ctx.runtimeIdentityAttestation.browserContextIdentity
+    );
     const gate = evaluateTask10sRetainedEditorGate({
       // A reopened server-backed draft is proved by the current page DOM;
       // historical upload attempts are deliberately not a completion gate.
@@ -3821,9 +3830,8 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       bodyReadback,
       requiredFieldsPass,
       finalPublishSurface,
-      identityPass,
+      contextIdentityAttestationPass,
       sameContext: this.pageContextMatchesSession(canonical.session, canonical.page),
-      samePage: canonical.session.page === canonical.page,
       authorizationState: guard.authorization.state,
       finalSubmitClickCount: 0
     });

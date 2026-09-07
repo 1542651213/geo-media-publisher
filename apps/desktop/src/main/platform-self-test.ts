@@ -397,13 +397,10 @@ export class PlatformSelfTestService {
       if (!runtime.sessionExists || runtime.browserConnected !== true || !runtime.contextExists || !runtime.canonicalPageExists || runtime.canonicalPageClosed === true || runtime.runtimeAuthState !== "AUTHENTICATED") {
         return blocked("TASK10S_RETAINED_EDITOR_RUNTIME_UNAVAILABLE", { accountId: account.id, testRunId: run.testRunId, jobId: job.id, contextDebugId: runtime.contextDebugId, pageDebugId: runtime.canonicalPageDebugId });
       }
-      const identity = await this.xhsIdentity.verifyCreatorIdentity(account.id);
-      const identityPass = identity.verified
-        && identity.expectedExternalCreatorId === TASK10S_EXPECTED_CREATOR_ID
-        && identity.observed.externalCreatorId === TASK10S_EXPECTED_CREATOR_ID
-        && identity.canonicalContextId === runtime.contextDebugId
-        && identity.canonicalPageId === runtime.canonicalPageDebugId;
-      if (!identityPass) return blocked("TASK10S_RETAINED_EDITOR_IDENTITY_REVALIDATION_FAILED", { accountId: account.id, testRunId: run.testRunId, jobId: job.id, contextDebugId: runtime.contextDebugId, pageDebugId: runtime.canonicalPageDebugId, expectedCreatorId: TASK10S_EXPECTED_CREATOR_ID, observedCreatorId: identity.observed.externalCreatorId ?? null });
+      const identityAttestation = await this.xhsIdentity.validateContextIdentityAttestation(account.id);
+      const identityAttestationPass = identityAttestation.valid;
+      const attestation = this.xhsIdentity.getContextIdentityAttestation(account.id);
+      if (!identityAttestationPass || !attestation) return blocked("TASK10S_RETAINED_EDITOR_CONTEXT_IDENTITY_ATTESTATION_FAILED", { accountId: account.id, testRunId: run.testRunId, jobId: job.id, contextDebugId: runtime.contextDebugId, pageDebugId: runtime.canonicalPageDebugId, expectedCreatorId: TASK10S_EXPECTED_CREATOR_ID, failureCode: identityAttestation.failureCode });
 
       this.controlledOperations.add(account.id);
       try {
@@ -431,7 +428,7 @@ export class PlatformSelfTestService {
           authorizationState: after?.state ?? "NOT_VERIFIED",
           message: execution.message,
           jobStatus: execution.job.status,
-          evidence: { identityPass, sameContext: true, samePage: true, fixedTitle: XHS_ONE_SHOT_TITLE, fixedBody: XHS_ONE_SHOT_BODY }
+          evidence: { contextIdentityAttestationPass: identityAttestationPass, sameContext: true, sourcePageIdentity: attestation.sourcePageIdentity, currentPageIdentity: runtime.canonicalPageDebugId, fixedTitle: XHS_ONE_SHOT_TITLE, fixedBody: XHS_ONE_SHOT_BODY }
         };
       } finally {
         this.controlledOperations.delete(account.id);
@@ -749,6 +746,18 @@ export class PlatformSelfTestService {
 
   verifyXhsCreatorIdentity(accountId: string): Promise<CreatorIdentityVerificationResult> {
     return this.xhsIdentity.verifyCreatorIdentity(accountId);
+  }
+
+  establishXhsContextIdentityAttestation(accountId: string = XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID) {
+    return this.xhsIdentity.establishContextIdentityAttestation(accountId);
+  }
+
+  invalidateXhsContextIdentityAttestation(accountId: string): void {
+    this.xhsIdentity.invalidateContextIdentityAttestation(accountId);
+  }
+
+  getXhsContextIdentityAttestation(accountId: string = XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID) {
+    return this.xhsIdentity.getContextIdentityAttestation(accountId);
   }
 
   inspectCanonicalXhsPageRuntime(accountId: string): Promise<XiaohongshuCanonicalPageRuntimeProbe> {

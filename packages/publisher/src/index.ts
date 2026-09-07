@@ -1,6 +1,6 @@
 import { isAutomationAdapter, OneShotPublicationGuard, withUserInitiatedActionSettings, type AdapterRegistry, type BrowserExecutionMode, type BrowserPublishAttemptContext, type OneShotPublicationAuthorization, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
-import { canReuseArticle, decideFailure, validatePlatformArticle, type Account, type AdapterManifest, type ErrorCode, type PlatformCapability, type PublishJob, type PublishMode, type PublishResult, type PublishVideoInput } from "@publisher/domain";
+import { canReuseArticle, decideFailure, validatePlatformArticle, type Account, type AccountContext, type AdapterManifest, type ErrorCode, type PlatformCapability, type PublishJob, type PublishMode, type PublishResult, type PublishVideoInput, type XhsContextIdentityAttestation } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
 
 export interface PublishExecutionResult { job: PublishJob; message: string; }
@@ -10,6 +10,7 @@ type PublisherExecutionMode = "STANDARD" | "TASK10S_RETAINED_EDITOR";
 
 export interface PublisherOptions {
   resolveSecrets?: (accountId: string, platformKey: string) => Record<string, string>;
+  resolveRuntimeIdentityAttestation?: (accountId: string) => XhsContextIdentityAttestation | null;
   accountFailurePauseThreshold?: number;
   platformFailurePauseThreshold?: number;
   operationTimeoutMs?: number;
@@ -265,11 +266,15 @@ export class PublisherService {
         if (nextAllowedAt.getTime() > Date.now()) throw Object.assign(new Error("Account publish rate limit has not elapsed"), { code: "RATE_LIMITED" });
       }
       const effectiveBrowserExecutionMode = this.resolveBrowserExecutionMode(job.platformKey, browserExecutionMode, job.contentKind ?? "article");
-      const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({
+      const ctx: AccountContext = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({
         dryRun: job.dryRun,
         manualConfirmationRequired: job.manualConfirmationRequired,
         ...(oneShotAuthorization ? { oneShotImageSource: "SAFE_TEST_FIXTURE", oneShotOperationId: oneShotAuthorization.operationId } : {})
       }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
+      if (executionMode === "TASK10S_RETAINED_EDITOR" && job.platformKey === "xiaohongshu") {
+        const attestation = this.options.resolveRuntimeIdentityAttestation?.(account.id) ?? null;
+        if (attestation) ctx.runtimeIdentityAttestation = attestation;
+      }
       const preparedRecord = this.repository.getPublishRecordByJob(job.id);
       if (preparedRecord?.response.OWNER_FINAL_SUBMIT_AUTHORIZATION === "OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH" && !oneShotAuthorization) throw Object.assign(new Error("ONE_SHOT_AUTHORIZATION_REQUIRED"), { code: "USER_ACTION_REQUIRED" });
       const usePlatformFinalSubmit = !job.dryRun && typeof adapter.finalSubmit === "function" && preparedRecord?.status === "Prepared";

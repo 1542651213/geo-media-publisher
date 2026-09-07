@@ -20,7 +20,7 @@ function base(overrides: Partial<Task10sRetainedEditorGateInput> = {}): Task10sR
     bodyReadback: TASK10S_FIXED_BODY,
     requiredFieldsPass: true,
     finalPublishSurface: enabled,
-    identityPass: true,
+    contextIdentityAttestationPass: true,
     sameContext: true,
     samePage: true,
     authorizationState: "AUTHORIZED_UNUSED",
@@ -40,13 +40,16 @@ describe("Task10S r31 final completion gate", () => {
       [{ postUploadState: "AMBIGUOUS" }, "POST_UPLOAD_EDITOR_NOT_READY"],
       [{ titleReadback: "caller supplied title" }, "TITLE_READBACK_NOT_EXACT"],
       [{ bodyReadback: "caller supplied body" }, "BODY_READBACK_NOT_EXACT"],
-      [{ identityPass: false }, "IDENTITY_REVALIDATION_FAILED"],
+      [{ contextIdentityAttestationPass: false }, "CONTEXT_IDENTITY_ATTESTATION_INVALID"],
       [{ authorizationState: "CONSUMED" }, "AUTHORIZATION_NOT_UNUSED"],
       [{ sameContext: false }, "SAME_CONTEXT_REQUIRED"],
-      [{ samePage: false }, "SAME_PAGE_REQUIRED"],
+      [{ samePage: false }, ""],
       [{ finalPublishSurface: disabled }, "FINAL_SURFACE_NOT_ENABLED"]
     ];
-    for (const [override, failureCode] of cases) expect(evaluateTask10sRetainedEditorGate(base(override))).toMatchObject({ status: "BLOCKED", failureCode });
+    for (const [override, failureCode] of cases) {
+      if (failureCode) expect(evaluateTask10sRetainedEditorGate(base(override))).toMatchObject({ status: "BLOCKED", failureCode });
+      else expect(evaluateTask10sRetainedEditorGate(base(override))).toMatchObject({ status: "READY_TO_SUBMIT" });
+    }
   });
 
   it("does not turn an observed final click or upload API call into a retry", () => {

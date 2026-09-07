@@ -156,4 +156,66 @@ describe("Task10V XHS identity proof", () => {
       mismatch: false
     });
   });
+
+  it("creates a Context-bound attestation from the fresh shared proof and validates it on a later Page", async () => {
+    const reader = {
+      readCanonicalCreatorIdentity: vi.fn(async () => observation("960803317")),
+      getBrowserRuntimeSnapshot: vi.fn(() => ({
+        platformKey: "xiaohongshu",
+        accountId: account.id,
+        sessionExists: true,
+        browserSessionIdentity: "session-a",
+        contextDebugId: "context-1",
+        canonicalPageDebugId: "page-home",
+        browserConnected: true,
+        contextExists: true,
+        contextPageCount: 2,
+        canonicalPageExists: true,
+        canonicalPageClosed: false,
+        canonicalPageContextMatchesSession: true,
+        runtimeAuthState: "AUTHENTICATED" as const,
+        contextLaunchCount: 1,
+        canonicalPagePromotionCount: 1,
+        activeOperation: null,
+        mutexLocked: false,
+        operationInProgress: false,
+        lastDisconnectAt: null,
+        lastDisconnectContextDebugId: null,
+        lastDisconnectReason: null
+      }))
+    };
+    const repository = {
+      getAccountById: vi.fn(() => account),
+      getPlatformAccountIdentityBinding: vi.fn(() => binding("960803317")),
+      bindPlatformAccountIdentity: vi.fn(),
+      convergeUnusedOneShotAuthorization: vi.fn()
+    };
+    const registry = { getForContent: vi.fn(() => reader) } as unknown as AdapterRegistry;
+    const service = new XhsIdentityService({ repository, registry });
+
+    await expect(service.establishContextIdentityAttestation(account.id)).resolves.toMatchObject({ status: "PASS", attestation: { browserSessionIdentity: "session-a", browserContextIdentity: "context-1", sourcePageIdentity: "page-1" } });
+    await expect(service.validateContextIdentityAttestation(account.id)).resolves.toMatchObject({ valid: true });
+    expect(service.getContextIdentityAttestation(account.id)).toMatchObject({ sourcePageIdentity: "page-1" });
+  });
+
+  it("fails closed when the current runtime is rebound to a different Session", async () => {
+    const reader = {
+      readCanonicalCreatorIdentity: vi.fn(async () => observation("960803317")),
+      getBrowserRuntimeSnapshot: vi.fn()
+        .mockReturnValueOnce({ sessionExists: true, browserSessionIdentity: "session-a", contextDebugId: "context-1", canonicalPageDebugId: "page-1", browserConnected: true, contextExists: true, contextPageCount: 1, canonicalPageExists: true, canonicalPageClosed: false, canonicalPageContextMatchesSession: true, runtimeAuthState: "AUTHENTICATED" as const })
+        .mockReturnValueOnce({ sessionExists: true, browserSessionIdentity: "session-b", contextDebugId: "context-1", canonicalPageDebugId: "page-draft", browserConnected: true, contextExists: true, contextPageCount: 1, canonicalPageExists: true, canonicalPageClosed: false, canonicalPageContextMatchesSession: true, runtimeAuthState: "AUTHENTICATED" as const })
+    };
+    const repository = {
+      getAccountById: vi.fn(() => account),
+      getPlatformAccountIdentityBinding: vi.fn(() => binding("960803317")),
+      bindPlatformAccountIdentity: vi.fn(),
+      convergeUnusedOneShotAuthorization: vi.fn()
+    };
+    const registry = { getForContent: vi.fn(() => reader) } as unknown as AdapterRegistry;
+    const service = new XhsIdentityService({ repository, registry });
+
+    await expect(service.establishContextIdentityAttestation(account.id)).resolves.toMatchObject({ status: "PASS" });
+    await expect(service.validateContextIdentityAttestation(account.id)).resolves.toMatchObject({ valid: false, failureCode: "BROWSER_SESSION_REBOUND" });
+    expect(service.getContextIdentityAttestation(account.id)).toBeNull();
+  });
 });

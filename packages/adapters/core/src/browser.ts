@@ -99,6 +99,8 @@ export interface BrowserSession {
   page: Page;
   hasStoredSession: boolean;
   sessionIdHash: string;
+  /** Process-memory-only identity for this live BrowserSession instance. */
+  runtimeSessionIdentity: string;
   executionMode: BrowserExecutionMode;
   headless: boolean;
   storageMode: BrowserSessionStorageMode;
@@ -227,6 +229,8 @@ export interface BrowserSessionRuntimeSnapshot {
   platformKey: string;
   accountId: string;
   sessionExists: boolean;
+  /** Process-memory-safe stable key for the active BrowserSession. */
+  browserSessionIdentity?: string | null;
   contextDebugId: string | null;
   canonicalPageDebugId: string | null;
   browserConnected: boolean | null;
@@ -404,7 +408,7 @@ export class PlaywrightSessionManager {
         }, { reason: "OPEN_FAILURE_CLEANUP", callerOperation: "PlaywrightSessionManager.openFresh" });
         throw new BrowserRuntimeError({ errorCode: "BROWSER_RUNTIME_LAUNCH_FAILED", module: "BrowserSessionManager", timestamp: new Date().toISOString(), attemptedChannels: [...SYSTEM_BROWSER_CHANNELS] });
       }
-      const session = { browser, context, page, hasStoredSession: Boolean(storageState) || profileInitialized, sessionIdHash: browserSessionIdHash(identity), executionMode, headless, storageMode: "PERSISTENT_PROFILE" as const, profilePath: persistentProfilePath, browserChannel: persistentLaunch.channel, credentialSnapshotInjected: shouldInjectCredentialSnapshot, contextDebugId: randomUUID(), pageDebugId: randomUUID() };
+      const session = { browser, context, page, hasStoredSession: Boolean(storageState) || profileInitialized, sessionIdHash: browserSessionIdHash(identity), runtimeSessionIdentity: randomUUID(), executionMode, headless, storageMode: "PERSISTENT_PROFILE" as const, profilePath: persistentProfilePath, browserChannel: persistentLaunch.channel, credentialSnapshotInjected: shouldInjectCredentialSnapshot, contextDebugId: randomUUID(), pageDebugId: randomUUID() };
       if (closeAllGeneration !== this.closeAllGeneration) {
         await this.closeUnregisteredSession(identity, session, { reason: "APP_SHUTDOWN", callerOperation: "PlaywrightSessionManager.closeAll" });
         throw new Error("Browser session open was cancelled by closeAll");
@@ -441,7 +445,7 @@ export class PlaywrightSessionManager {
       }, { reason: "OPEN_FAILURE_CLEANUP", callerOperation: "PlaywrightSessionManager.openFresh" });
       throw new BrowserRuntimeError({ errorCode: "BROWSER_RUNTIME_LAUNCH_FAILED", module: "BrowserSessionManager", timestamp: new Date().toISOString(), attemptedChannels: [...SYSTEM_BROWSER_CHANNELS] });
     }
-    const session = { browser, context, page, hasStoredSession: Boolean(storageState), sessionIdHash: browserSessionIdHash(identity), executionMode, headless, storageMode: "EPHEMERAL_STORAGE_STATE" as const, profilePath: null, browserChannel: browserLaunch.channel, credentialSnapshotInjected: Boolean(storageState), contextDebugId: randomUUID(), pageDebugId: randomUUID() };
+    const session = { browser, context, page, hasStoredSession: Boolean(storageState), sessionIdHash: browserSessionIdHash(identity), runtimeSessionIdentity: randomUUID(), executionMode, headless, storageMode: "EPHEMERAL_STORAGE_STATE" as const, profilePath: null, browserChannel: browserLaunch.channel, credentialSnapshotInjected: Boolean(storageState), contextDebugId: randomUUID(), pageDebugId: randomUUID() };
     return this.registerOpenSession(identity, session, closeAllGeneration);
   }
 
@@ -621,6 +625,7 @@ export class PlaywrightSessionManager {
       platformKey: identity.platformKey,
       accountId: identity.accountId,
       sessionExists: session !== null,
+      browserSessionIdentity: session?.runtimeSessionIdentity ?? null,
       contextDebugId: session?.contextDebugId ?? runtimeState.contextDebugId ?? null,
       canonicalPageDebugId: session?.pageDebugId ?? null,
       browserConnected: session ? this.browserConnected(session.browser) : null,

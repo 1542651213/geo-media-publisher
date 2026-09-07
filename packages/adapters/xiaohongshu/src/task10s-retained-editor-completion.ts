@@ -20,9 +20,10 @@ export interface Task10sRetainedEditorGateInput {
   bodyReadback: string;
   requiredFieldsPass: boolean;
   finalPublishSurface: Task10sFinalSurfaceResolution;
-  identityPass: boolean;
+  contextIdentityAttestationPass: boolean;
   sameContext: boolean;
-  samePage: boolean;
+  /** Retained-editor Page identity is intentionally not required to match the source Page. */
+  samePage?: boolean;
   authorizationState: string;
   finalSubmitClickCount: number;
 }
@@ -63,9 +64,8 @@ export function evaluateTask10sRetainedEditorGate(input: Task10sRetainedEditorGa
   if (input.titleReadback !== TASK10S_FIXED_TITLE) return blocked("TITLE_READBACK_NOT_EXACT");
   if (input.bodyReadback !== TASK10S_FIXED_BODY) return blocked("BODY_READBACK_NOT_EXACT");
   if (!input.requiredFieldsPass) return blocked("REQUIRED_FIELDS_NOT_VERIFIED");
-  if (!input.identityPass) return blocked("IDENTITY_REVALIDATION_FAILED");
+  if (!input.contextIdentityAttestationPass) return blocked("CONTEXT_IDENTITY_ATTESTATION_INVALID");
   if (!input.sameContext) return blocked("SAME_CONTEXT_REQUIRED");
-  if (!input.samePage) return blocked("SAME_PAGE_REQUIRED");
   if (input.authorizationState !== "AUTHORIZED_UNUSED") return blocked("AUTHORIZATION_NOT_UNUSED");
   if (input.finalSubmitClickCount !== 0) return blocked("FINAL_SUBMIT_ALREADY_CLICKED");
   if (!input.finalPublishSurface.present) return blocked("FINAL_SURFACE_NOT_PRESENT");

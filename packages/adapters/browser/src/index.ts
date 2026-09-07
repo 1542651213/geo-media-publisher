@@ -400,6 +400,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
       platformKey: identity.platformKey,
       accountId: identity.accountId,
       sessionExists: false,
+      browserSessionIdentity: null,
       contextDebugId: runtimeState.contextDebugId,
       canonicalPageDebugId: null,
       browserConnected: null,

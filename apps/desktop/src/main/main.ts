@@ -14,7 +14,8 @@ import { createRuntimeAdapterRegistry } from "./adapter-registry";
 import { runDeepSeekBenchmarkMode } from "./deepseek-benchmark-mode";
 import { createProcessDiagnostics } from "./process-diagnostics";
 import { recordAppStartup } from "./runtime-observability";
-import { buildSecondInstanceDispatchTrace, createFixedDiagnosticRunner, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_FINAL_SUBMIT_DOM, INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticActionWithTrace, RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, parseDiagnosticAction, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, type DiagnosticAction, type FixedDiagnosticInvocationContext, type Task10sAttempt3DispatchTrace, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
+import type { PlatformSelfTestService } from "./platform-self-test";
+import { buildSecondInstanceDispatchTrace, createFixedDiagnosticRunner, ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_FINAL_SUBMIT_DOM, INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticActionWithTrace, RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, parseDiagnosticAction, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, type DiagnosticAction, type FixedDiagnosticInvocationContext, type Task10sAttempt3DispatchTrace, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
 
 app.setName("codex-media-publisher");
 const processDiagnostics = createProcessDiagnostics(join(app.getPath("userData"), "production-data", "logs", "main-process-diagnostics.log"));
@@ -309,9 +310,14 @@ async function createWindow(): Promise<void> {
     const keys = [...new Set([...adapter.getCredentialSchema().map((field) => field.key), "oauthAccessToken"])]
     return Object.fromEntries(keys.map((key) => [key, credentials.get(`account:${accountId}:${platformKey}:${key}`) ?? ""]));
   };
-  const publisher = new PublisherService(database.repository, registry, logger, { resolveSecrets: resolveAccountSecrets });
+  const platformSelfTestsRef: { current?: PlatformSelfTestService } = {};
+  const publisher = new PublisherService(database.repository, registry, logger, {
+    resolveSecrets: resolveAccountSecrets,
+    resolveRuntimeIdentityAttestation: (accountId) => platformSelfTestsRef.current?.getXhsContextIdentityAttestation(accountId) ?? null
+  });
   scheduler = new PersistentScheduler(database.repository, publisher, logger);
   const platformSelfTests = registerIpc({ repository: database.repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir: join(dataDirectory, "covers"), logger, credentials, aiCredentials: credentials, appLogPath, databasePath, processDiagnostics, restoreDatabase: (backupPath) => { scheduler?.stop(); restoreDatabaseSafely(database.db, databasePath, backupPath); app.relaunch(); app.exit(0); } });
+  platformSelfTestsRef.current = platformSelfTests;
   const targetAccount = database.repository.getAccountById(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, "xiaohongshu");
   const targetBinding = targetAccount ? database.repository.getPlatformAccountIdentityBinding("xiaohongshu", targetAccount.id) : null;
   const expectedCreatorId = targetBinding?.externalCreatorId ?? targetAccount?.externalAccountId ?? null;
@@ -457,6 +463,14 @@ async function createWindow(): Promise<void> {
     writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), "utf8");
     logger.info("PLATFORM_SELF_TEST", "XHS_GLOBAL_EXACT_PUBLISH_DOM_EVIDENCE_WRITTEN", "小红书 document-global exact 发布只读 diagnostic evidence 已写入", { action: INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM, evidencePath, inspectionStatus: diagnostic.inspectionStatus, globalExactPublishTextMatchCount: diagnostic.globalExactPublishTextMatchCount, globalExactPublishUnique: diagnostic.globalExactPublishUnique });
   };
+  const writeXhsContextIdentityAttestationEvidence = (result: Awaited<ReturnType<typeof platformSelfTests.establishXhsContextIdentityAttestation>>): void => {
+    mkdirSync(evidenceDirectory, { recursive: true });
+    const timestamp = new Date().toISOString();
+    const evidencePath = join(evidenceDirectory, `xiaohongshu-task10s-context-identity-attestation-${timestamp.replace(/[:.]/gu, "-")}.json`);
+    const evidence = { timestamp, evidencePath, action: ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, ...result, sideEffectCounts: { pageCreated: 0, contextCreated: 0, navigation: 0, reload: 0, uploadImages: 0, setInputFiles: 0, titleFill: 0, bodyFill: 0, finalSubmitClick: 0, publicationTransaction: 0, newAuthorizationCreated: 0 } };
+    writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), "utf8");
+    logger.info("PLATFORM_SELF_TEST", "XHS_CONTEXT_IDENTITY_ATTESTATION_EVIDENCE_WRITTEN", "小红书 Context-bound identity attestation evidence 已写入", { action: ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, evidencePath, status: result.status, failureCode: result.status === "BLOCKED" ? result.failureCode : null });
+  };
   const writeTask10sControlledUploadAttempt3Evidence = (result: Awaited<ReturnType<typeof platformSelfTests.runTask10sControlledUploadAttempt3>>): void => {
     mkdirSync(evidenceDirectory, { recursive: true });
     const timestamp = new Date().toISOString();
@@ -558,6 +572,11 @@ async function createWindow(): Promise<void> {
       return platformSelfTests.inspectCurrentXiaohongshuGlobalExactPublishDom();
     },
     writeGlobalExactPublishDomEvidence,
+    establishXhsContextIdentityAttestation: async () => {
+      logger.info("PLATFORM_SELF_TEST", "XHS_CONTEXT_IDENTITY_ATTESTATION_TRIGGER_RECEIVED", "收到固定 Main-side 小红书 Context-bound identity attestation trigger", { action: ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
+      return platformSelfTests.establishXhsContextIdentityAttestation();
+    },
+    writeXhsContextIdentityAttestationEvidence,
     runTask10sControlledUploadAttempt3: async () => {
       logger.info("PLATFORM_SELF_TEST", "TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_TRIGGER_RECEIVED", "收到固定 Main-side Task10S Attempt 3 trigger", { action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
       return platformSelfTests.runTask10sControlledUploadAttempt3();

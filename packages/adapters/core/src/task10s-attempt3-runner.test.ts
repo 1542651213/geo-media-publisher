@@ -252,7 +252,7 @@ describe("Task10S Attempt 3 fixed runner guard", () => {
       connectAccount: vi.fn(),
       checkSession: vi.fn(),
       preparePublish: vi.fn(),
-      getBrowserRuntimeSnapshot: vi.fn(() => ({ sessionExists: false, browserConnected: false, contextExists: false, canonicalPageExists: false, canonicalPageClosed: true, runtimeAuthState: "UNVERIFIED", contextDebugId: null, canonicalPageDebugId: null })),
+      getBrowserRuntimeSnapshot: vi.fn(() => ({ sessionExists: false, browserSessionIdentity: null, browserConnected: false, contextExists: false, canonicalPageExists: false, canonicalPageClosed: true, runtimeAuthState: "UNVERIFIED", contextDebugId: null, canonicalPageDebugId: null })),
       runControlledPostUploadDiscovery: vi.fn()
     };
     const instance = new PlatformSelfTestService({
@@ -325,7 +325,7 @@ describe("Task10S Attempt 3 fixed runner guard", () => {
     const accountId = "54b390ac-d81e-440a-baeb-d00f9f346cc3";
     const account = { id: accountId, platformAccountId: accountId, platformKey: "xiaohongshu", accountAlias: "XHS", accountName: "XHS", name: "XHS", enabled: true, archivedAt: null, externalAccountId: "960803317" };
     const runtime = {
-      platformKey: "xiaohongshu", accountId, sessionExists: true, contextDebugId: "context-1", canonicalPageDebugId: "page-1", browserConnected: true, contextExists: true, contextPageCount: 1, canonicalPageExists: true, canonicalPageClosed: false, canonicalPageContextMatchesSession: true, runtimeAuthState: "AUTHENTICATED", contextLaunchCount: 1, canonicalPagePromotionCount: 1, activeOperation: null, mutexLocked: false, operationInProgress: false, lastDisconnectAt: null, lastDisconnectContextDebugId: null, lastDisconnectReason: null
+      platformKey: "xiaohongshu", accountId, sessionExists: true, browserSessionIdentity: "session-1", contextDebugId: "context-1", canonicalPageDebugId: "page-1", browserConnected: true, contextExists: true, contextPageCount: 1, canonicalPageExists: true, canonicalPageClosed: false, canonicalPageContextMatchesSession: true, runtimeAuthState: "AUTHENTICATED", contextLaunchCount: 1, canonicalPagePromotionCount: 1, activeOperation: null, mutexLocked: false, operationInProgress: false, lastDisconnectAt: null, lastDisconnectContextDebugId: null, lastDisconnectReason: null
     };
     const probe = {
       probeStatus: "PASS", failureStage: null, failureCode: null, failureErrorClass: null, canonicalContextId: "context-1", canonicalPageId: "page-1", probedContextId: "context-1", probedPageId: "page-1", pageContextMatchesSession: true, createdNewPage: false, browserConnected: true, pageClosed: false, runtimeAuthState: "AUTHENTICATED", playwrightPageUrl: "https://creator.xiaohongshu.com/new/home", domLocationHref: "https://creator.xiaohongshu.com/new/home", domLocationEvaluateStatus: "PASS", domLocationEvaluateErrorClass: null, pageUrlConsistency: "PASS", routeClass: "CREATOR_HOME", identityObservationStatus: "PASS", identitySourceCandidates: [{ stableIdentifierPresent: true }], identityDomDiagnosticMatchCount: 1, identityDomDiagnosticMatches: [], observedCreatorIdRaw: "960803317", observedCreatorIdNormalized: "960803317", observedDisplayName: "XHS", observedProfileUrl: null

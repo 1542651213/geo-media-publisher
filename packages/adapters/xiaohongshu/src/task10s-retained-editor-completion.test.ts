@@ -35,7 +35,7 @@ function input(overrides: Partial<Task10sRetainedEditorGateInput> = {}): Task10s
     bodyReadback: TASK10S_FIXED_BODY,
     requiredFieldsPass: true,
     finalPublishSurface: enabledSurface,
-    identityPass: true,
+    contextIdentityAttestationPass: true,
     sameContext: true,
     samePage: true,
     authorizationState: "AUTHORIZED_UNUSED",
@@ -63,17 +63,20 @@ describe("Task10S retained-editor completion gate", () => {
     expect(evaluateTask10sRetainedEditorGate(input({ bodyReadback: "其他正文" }))).toMatchObject({ status: "BLOCKED", failureCode: "BODY_READBACK_NOT_EXACT" });
   });
 
-  it("blocks final submit on identity, authorization, page, upload, or final-surface failures", () => {
+  it("blocks final submit on identity, authorization, context, upload, or final-surface failures", () => {
     const cases: Array<[keyof Task10sRetainedEditorGateInput, unknown, string]> = [
       ["setInputFilesCallCount", 1, "UPLOAD_CALL_OBSERVED"],
-      ["identityPass", false, "IDENTITY_REVALIDATION_FAILED"],
+      ["contextIdentityAttestationPass", false, "CONTEXT_IDENTITY_ATTESTATION_INVALID"],
       ["sameContext", false, "SAME_CONTEXT_REQUIRED"],
-      ["samePage", false, "SAME_PAGE_REQUIRED"],
       ["authorizationState", "CONSUMED", "AUTHORIZATION_NOT_UNUSED"],
       ["finalSubmitClickCount", 1, "FINAL_SUBMIT_ALREADY_CLICKED"]
     ];
     for (const [field, value, failureCode] of cases) expect(evaluateTask10sRetainedEditorGate(input({ [field]: value } as Partial<Task10sRetainedEditorGateInput>))).toMatchObject({ status: "BLOCKED", failureCode });
     expect(evaluateTask10sRetainedEditorGate(input({ finalPublishSurface: disabledSurface }))).toMatchObject({ status: "BLOCKED", failureCode: "FINAL_SURFACE_NOT_ENABLED" });
+  });
+
+  it("allows the retained editor Page to differ from the attestation source Page", () => {
+    expect(evaluateTask10sRetainedEditorGate(input({ samePage: false }))).toMatchObject({ status: "READY_TO_SUBMIT" });
   });
 
   it("requires a valid current editor image counter for a reopened server-backed draft", () => {

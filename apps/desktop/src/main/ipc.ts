@@ -634,6 +634,7 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
       throw new Error("COMPLETE_LOGIN_ACCOUNT_ID_MISMATCH: Renderer pendingLogin 与请求账号不一致");
     }
     const adapter = registry.getForConnection(input.platformKey);
+    if (input.platformKey === "xiaohongshu") platformSelfTests.invalidateXhsContextIdentityAttestation(input.accountId);
     if (isAutomationAdapter(adapter)) {
       const completedContext = accountContext(input.accountId, input.platformKey, action);
       const debugState = adapter.getBrowserConnectionDebugState?.(completedContext);
@@ -676,6 +677,7 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
       if (archivedAccount) {
         if (!adapter.rebindAccountSession) throw new Error("无法安全恢复归档账号：Adapter 不支持 Session 重绑定");
         repository.restoreArchivedAccountByExternalId(input.platformKey, profile?.accountId ?? "");
+        if (input.platformKey === "xiaohongshu") platformSelfTests.invalidateXhsContextIdentityAttestation(effectiveAccountId);
         adapter.rebindAccountSession(completedContext, effectiveContext);
       }
       await adapter.persistConnectionSession?.(effectiveContext);

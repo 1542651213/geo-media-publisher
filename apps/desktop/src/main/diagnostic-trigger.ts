@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, XHS_TASK10S_COMPLETE_RETAINED_EDITOR_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5_FLAG, type Task10sAttempt3DispatchDryRunResult, type Task10sControlledUploadAttemptResult, type Task10sRetainedEditorCompletionResult } from "./task10s-attempt3";
+import type { XhsContextIdentityAttestationResult } from "./xhs-context-identity-attestation";
 export { RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, XHS_TASK10S_COMPLETE_RETAINED_EDITOR_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5_FLAG } from "./task10s-attempt3";
 
 export const XHS_CANONICAL_PAGE_PROBE_FLAG = "--probe-xhs-canonical-page" as const;
@@ -17,8 +18,10 @@ export const XHS_FINAL_SUBMIT_DOM_DIAGNOSTIC_FLAG = "--xhs-task10s-final-submit-
 export const INSPECT_XHS_FINAL_SUBMIT_DOM = "INSPECT_XHS_FINAL_SUBMIT_DOM" as const;
 export const XHS_GLOBAL_EXACT_PUBLISH_DOM_DIAGNOSTIC_FLAG = "--xhs-task10s-global-exact-publish-dom-diagnostic" as const;
 export const INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM = "INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM" as const;
+export const XHS_CONTEXT_IDENTITY_ATTESTATION_FLAG = "--xhs-task10s-establish-context-identity-attestation" as const;
+export const ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION = "ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION" as const;
 
-export type DiagnosticAction = typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_FILE_INPUT_STATE | typeof INSPECT_XHS_FINAL_SUBMIT_DOM | typeof INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 | typeof RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN | typeof RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR;
+export type DiagnosticAction = typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_FILE_INPUT_STATE | typeof INSPECT_XHS_FINAL_SUBMIT_DOM | typeof INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM | typeof ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 | typeof RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN | typeof RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR;
 
 function actionForValue(value: unknown): DiagnosticAction | null {
   if (value === PROBE_XHS_CANONICAL_PAGE) return PROBE_XHS_CANONICAL_PAGE;
@@ -28,6 +31,7 @@ function actionForValue(value: unknown): DiagnosticAction | null {
   if (value === INSPECT_XHS_FILE_INPUT_STATE) return INSPECT_XHS_FILE_INPUT_STATE;
   if (value === INSPECT_XHS_FINAL_SUBMIT_DOM) return INSPECT_XHS_FINAL_SUBMIT_DOM;
   if (value === INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM) return INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM;
+  if (value === ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION) return ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION;
   if (value === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3;
   if (value === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4;
   if (value === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5;
@@ -44,6 +48,7 @@ function actionForFlag(value: string | undefined): DiagnosticAction | null {
   if (value === XHS_FILE_INPUT_STATE_FLAG) return INSPECT_XHS_FILE_INPUT_STATE;
   if (value === XHS_FINAL_SUBMIT_DOM_DIAGNOSTIC_FLAG) return INSPECT_XHS_FINAL_SUBMIT_DOM;
   if (value === XHS_GLOBAL_EXACT_PUBLISH_DOM_DIAGNOSTIC_FLAG) return INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM;
+  if (value === XHS_CONTEXT_IDENTITY_ATTESTATION_FLAG) return ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION;
   if (value === XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3;
   if (value === XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4;
   if (value === XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5_FLAG) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5;
@@ -289,6 +294,8 @@ export function createFixedDiagnosticRunner(options: {
   writeFinalSubmitDomEvidence?: (diagnostic: XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic) => void;
   inspectGlobalExactPublishDom?: () => Promise<XiaohongshuGlobalExactPublishDomRuntimeDiagnostic>;
   writeGlobalExactPublishDomEvidence?: (diagnostic: XiaohongshuGlobalExactPublishDomRuntimeDiagnostic) => void;
+  establishXhsContextIdentityAttestation?: () => Promise<XhsContextIdentityAttestationResult>;
+  writeXhsContextIdentityAttestationEvidence?: (result: XhsContextIdentityAttestationResult) => void;
   runTask10sControlledUploadAttempt3?: () => Promise<Task10sControlledUploadAttemptResult>;
   writeTask10sControlledUploadAttempt3Evidence?: (result: Task10sControlledUploadAttemptResult) => void;
   runTask10sControlledUploadAttempt4?: () => Promise<Task10sControlledUploadAttemptResult>;
@@ -335,6 +342,11 @@ export function createFixedDiagnosticRunner(options: {
       const diagnostic = await options.inspectGlobalExactPublishDom();
       options.writeGlobalExactPublishDomEvidence(diagnostic);
       return true;
+    }
+    if (action === ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION && options.establishXhsContextIdentityAttestation && options.writeXhsContextIdentityAttestationEvidence) {
+      const result = await options.establishXhsContextIdentityAttestation();
+      options.writeXhsContextIdentityAttestationEvidence(result);
+      return result.status === "PASS";
     }
     if (action === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 && options.runTask10sControlledUploadAttempt3 && options.writeTask10sControlledUploadAttempt3Evidence) {
       const result = await options.runTask10sControlledUploadAttempt3();
