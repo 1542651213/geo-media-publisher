@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
 import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, XHS_TASK10S_COMPLETE_RETAINED_EDITOR_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5_FLAG, type Task10sAttempt3DispatchDryRunResult, type Task10sControlledUploadAttemptResult, type Task10sRetainedEditorCompletionResult } from "./task10s-attempt3";
+import { RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, XHS_TASK10S_FRESH_PUBLISH_FLOW_FLAG } from "./task10s-fresh-publish-flow";
 import type { XhsContextIdentityAttestationResult } from "./xhs-context-identity-attestation";
+import type { Task10sFreshPublishFlowResult } from "./task10s-fresh-publish-flow";
 export { RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, XHS_TASK10S_COMPLETE_RETAINED_EDITOR_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5_FLAG } from "./task10s-attempt3";
+export { RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, XHS_TASK10S_FRESH_PUBLISH_FLOW_FLAG } from "./task10s-fresh-publish-flow";
 
 export const XHS_CANONICAL_PAGE_PROBE_FLAG = "--probe-xhs-canonical-page" as const;
 export const PROBE_XHS_CANONICAL_PAGE = "PROBE_XHS_CANONICAL_PAGE" as const;
@@ -21,7 +24,7 @@ export const INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM = "INSPECT_XHS_GLOBAL_EXACT_PU
 export const XHS_CONTEXT_IDENTITY_ATTESTATION_FLAG = "--xhs-task10s-establish-context-identity-attestation" as const;
 export const ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION = "ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION" as const;
 
-export type DiagnosticAction = typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_FILE_INPUT_STATE | typeof INSPECT_XHS_FINAL_SUBMIT_DOM | typeof INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM | typeof ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 | typeof RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN | typeof RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR;
+export type DiagnosticAction = typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_FILE_INPUT_STATE | typeof INSPECT_XHS_FINAL_SUBMIT_DOM | typeof INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM | typeof ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 | typeof RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN | typeof RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR | typeof RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW;
 
 function actionForValue(value: unknown): DiagnosticAction | null {
   if (value === PROBE_XHS_CANONICAL_PAGE) return PROBE_XHS_CANONICAL_PAGE;
@@ -37,6 +40,7 @@ function actionForValue(value: unknown): DiagnosticAction | null {
   if (value === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5;
   if (value === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN) return RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN;
   if (value === RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR) return RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR;
+  if (value === RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW) return RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW;
   return null;
 }
 
@@ -54,6 +58,7 @@ function actionForFlag(value: string | undefined): DiagnosticAction | null {
   if (value === XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5_FLAG) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5;
   if (value === XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG) return RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN;
   if (value === XHS_TASK10S_COMPLETE_RETAINED_EDITOR_FLAG) return RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR;
+  if (value === XHS_TASK10S_FRESH_PUBLISH_FLOW_FLAG) return RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW;
   return null;
 }
 
@@ -306,6 +311,8 @@ export function createFixedDiagnosticRunner(options: {
   writeTask10sAttempt3DispatchDryRunEvidence?: (trace: Task10sAttempt3DispatchTrace) => void;
   runTask10sCompleteRetainedEditor?: () => Promise<Task10sRetainedEditorCompletionResult>;
   writeTask10sCompleteRetainedEditorEvidence?: (result: Task10sRetainedEditorCompletionResult) => void;
+  runTask10sFreshPublishFlow?: () => Promise<Task10sFreshPublishFlowResult>;
+  writeTask10sFreshPublishFlowEvidence?: (result: Task10sFreshPublishFlowResult) => void;
 }): (action: DiagnosticAction, context?: FixedDiagnosticInvocationContext) => Promise<boolean> {
   return async (action: DiagnosticAction, context?: FixedDiagnosticInvocationContext): Promise<boolean> => {
     if (action === PROBE_XHS_CANONICAL_PAGE) {
@@ -380,6 +387,11 @@ export function createFixedDiagnosticRunner(options: {
       const result = await options.runTask10sCompleteRetainedEditor();
       options.writeTask10sCompleteRetainedEditorEvidence(result);
       return result.status === "PASS";
+    }
+    if (action === RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW && options.runTask10sFreshPublishFlow && options.writeTask10sFreshPublishFlowEvidence) {
+      const result = await options.runTask10sFreshPublishFlow();
+      options.writeTask10sFreshPublishFlowEvidence(result);
+      return result.status === "PASS_READY_FOR_FINAL_SUBMIT" && result.readyForFinalSubmit;
     }
     return false;
   };

@@ -13,7 +13,8 @@ import { OneShotConfirmationCoordinator } from "./one-shot-confirmation";
 import { OneShotConfirmationReconciliationService } from "./one-shot-reconciliation";
 import { XhsIdentityService } from "./xhs-identity";
 import type { CreatorIdentityVerificationResult, FailedOneShotConfirmationIdentity, OneShotConfirmationReconciliationResult, XhsIdentityAcceptance } from "@publisher/domain";
-import { emptyTask10sControlledUploadAttemptResult, reserveTask10sAttempt, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, TASK10S_ATTEMPT_3, TASK10S_ATTEMPT_4, TASK10S_ATTEMPT_5, TASK10S_CANONICAL_AUTHORIZATION_ID, TASK10S_EXPECTED_CREATOR_ID, TASK10S_SAFE_FIXTURE_NAME, TASK10S_SAFE_FIXTURE_SIZE, TASK10S_SAFE_FIXTURE_SHA256, validateTask10sSafeFixture, type Task10sAttempt3DispatchDryRunResult, type Task10sAttempt3FileInputReadback, type Task10sControlledUploadAttemptResult, type Task10sControlledUploadAttemptSpec, type Task10sRetainedEditorCompletionResult } from "./task10s-attempt3";
+import { emptyTask10sControlledUploadAttemptResult, reserveTask10sAttempt, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, TASK10S_ATTEMPT_3, TASK10S_ATTEMPT_4, TASK10S_ATTEMPT_5, TASK10S_CANONICAL_AUTHORIZATION_ID, TASK10S_EXPECTED_CREATOR_ID, TASK10S_SAFE_FIXTURE_NAME, TASK10S_SAFE_FIXTURE_SIZE, TASK10S_SAFE_FIXTURE_SHA256, task10sSafeFixturePath, validateTask10sSafeFixture, type Task10sAttempt3DispatchDryRunResult, type Task10sAttempt3FileInputReadback, type Task10sControlledUploadAttemptResult, type Task10sControlledUploadAttemptSpec, type Task10sRetainedEditorCompletionResult } from "./task10s-attempt3";
+import { blockedTask10sFreshPublishFlowResult, buildTask10sFreshPublishFlowInput, isTask10sFreshPublishFlowReady, isTask10sFreshPublishStartPath, RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, XHS_TASK10S_FRESH_PUBLISH_FLOW_BODY, XHS_TASK10S_FRESH_PUBLISH_FLOW_TITLE, type Task10sFreshPublishFlowResult } from "./task10s-fresh-publish-flow";
 
 const ARTICLE_TEST_TITLE = "Geo Media Publisher 发布链路测试";
 const ZHIHU_TEST_TITLE_PREFIX = "Geo Media Publisher 知乎发布测试";
@@ -581,6 +582,114 @@ export class PlatformSelfTestService {
       writeFileSync(join(outputDirectory, XHS_EXPLORATION_EVIDENCE_FILE), JSON.stringify(persisted, null, 2), "utf8");
       this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_PUBLISH_FLOW_EXPLORATION_COMPLETED", "小红书发布流程探索完成；未执行最终发布", { platformKey: "xiaohongshu", platformAccountId, operationId: persistedResult.operationId, status: persistedResult.status, readyForFinalSubmit: persistedResult.readyForFinalSubmit, finalSubmitCount: persistedResult.finalSubmitCount, output: XHS_EXPLORATION_EVIDENCE_FILE, publishDomainUnchanged });
       return persisted;
+    } finally {
+      this.controlledOperations.delete(account.id);
+    }
+  }
+
+  /**
+   * Runs the fixed fresh-publish diagnostic from Creator Home.  This is a
+   * separate action from the historical retained-editor and controlled-upload
+   * attempts: it rejects an existing editor route before it can reuse a draft,
+   * uses the repository-owned safe fixture and fixed content, and never
+   * invokes the final submit action.
+   */
+  async runTask10sFreshPublishFlow(): Promise<Task10sFreshPublishFlowResult> {
+    const operationId = randomUUID();
+    const account = this.options.repository.listAccounts().find((item) => item.id === XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID && item.platformKey === "xiaohongshu");
+    if (!account || !account.enabled || account.archivedAt) return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account?.id ?? null, failureCode: "XHS_ACCOUNT_UNAVAILABLE" });
+
+    const adapter = this.options.registry.getForContent("xiaohongshu", "article");
+    if (!isAutomationAdapter(adapter) || typeof adapter.runPublishFlowExploration !== "function" || typeof adapter.getBrowserRuntimeSnapshot !== "function" || typeof adapter.getBrowserSessionEvidence !== "function") {
+      return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_ADAPTER_UNAVAILABLE" });
+    }
+
+    const context: AccountContext = {
+      accountId: account.id,
+      accountName: account.accountAlias || account.name,
+      platformKey: "xiaohongshu",
+      settings: { userActionId: operationId, triggerSource: "CONTROLLED_SELF_TEST", controlledSelfTestMode: "XHS_PUBLISH_FLOW_EXPLORATION", browserExecutionMode: "VISIBLE" },
+      secrets: this.options.resolveAccountSecrets(account.id, account.platformKey)
+    };
+    const runtime = adapter.getBrowserRuntimeSnapshot(context);
+    const sessionEvidence = await adapter.getBrowserSessionEvidence(context).catch(() => null);
+    const pathname = safeUrlPath(sessionEvidence?.pageUrl ?? null);
+    const origin = safeUrlOrigin(sessionEvidence?.pageUrl ?? null);
+    if (!runtime.sessionExists || runtime.browserConnected !== true || !runtime.contextExists || !runtime.canonicalPageExists || runtime.canonicalPageClosed === true || runtime.runtimeAuthState !== "AUTHENTICATED") {
+      return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_RUNTIME_UNAVAILABLE" });
+    }
+    if (origin !== "https://creator.xiaohongshu.com" || !isTask10sFreshPublishStartPath(pathname ?? "")) {
+      return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account.id, failureCode: "FRESH_PUBLISH_REQUIRES_CREATOR_HOME" });
+    }
+
+    const identity = await this.xhsIdentity.establishContextIdentityAttestation(account.id);
+    if (identity.status !== "PASS") {
+      const identityEvidence = { status: "BLOCKED" as const, creatorId: null, contextId: runtime.contextDebugId, failureCode: identity.failureCode };
+      return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account.id, failureCode: identity.failureCode, identityAttestation: identityEvidence });
+    }
+    const attestation = identity.attestation;
+    const identityEvidence = { status: "PASS" as const, creatorId: attestation.observedExternalCreatorId, contextId: attestation.browserContextIdentity, failureCode: null };
+
+    const fixture = validateTask10sSafeFixture();
+    const fixtureEvidence: Task10sFreshPublishFlowResult["fixture"] = {
+      path: fixture.path,
+      expectedName: fixture.expectedName,
+      expectedSizeBytes: fixture.expectedSizeBytes,
+      expectedSha256: fixture.expectedSha256,
+      valid: fixture.valid,
+      failureCode: fixture.failureCode
+    };
+    if (!fixture.valid) {
+      return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account.id, failureCode: fixture.failureCode ?? "FIXTURE_INVALID", fixture: fixtureEvidence, identityAttestation: identityEvidence });
+    }
+    if (this.controlledOperations.has(account.id)) return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_ALREADY_RUNNING", fixture: fixtureEvidence, identityAttestation: identityEvidence });
+
+    const before = this.options.repository.getPublishDomainCounts();
+    this.controlledOperations.add(account.id);
+    try {
+      this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_TASK10S_FRESH_PUBLISH_FLOW_STARTED", "开始固定小红书 fresh publish flow diagnostic；从 Creator Home 进入并在最终发布前停止", { action: RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, accountId: account.id, operationId, pathname, contextDebugId: runtime.contextDebugId, imageSource: "SAFE_TEST_FIXTURE" });
+      const exploration = await adapter.runPublishFlowExploration(context, buildTask10sFreshPublishFlowInput(task10sSafeFixturePath(), operationId));
+      const after = this.options.repository.getPublishDomainCounts();
+      const publishDomainUnchanged = publishDomainCountsEqual(before, after);
+      const safetyViolation = !publishDomainUnchanged || exploration.finalSubmitCount !== 0 || exploration.counters.finalSubmitCount !== 0 || exploration.forbiddenMutationObserved;
+      const persistedExploration = safetyViolation
+        ? { ...exploration, status: "SAFETY_BOUNDARY_VIOLATION" as const, blocker: "TASK10S_FRESH_PUBLISH_FLOW_SAFETY_BOUNDARY", failureCode: "TASK10S_FRESH_PUBLISH_FLOW_SAFETY_BOUNDARY", readyForFinalSubmit: false }
+        : exploration;
+      const newPublishEntry = persistedExploration.timeline.some((item) => item.phase === "IMAGE_POST_PRE_UPLOAD" && item.action === "PUBLISH_NOTE_NAVIGATION" && item.result === "PASS") ? "PASS" as const : "FAIL" as const;
+      const finalPublishButtonMatchCount = persistedExploration.finalSubmit.status === "FOUND_UNIQUE"
+        ? 1
+        : persistedExploration.finalSubmit.status === "AMBIGUOUS" ? 2 : 0;
+      const readyForFinalSubmit = persistedExploration.status === "PASS_READY_FOR_FINAL_SUBMIT"
+        && persistedExploration.readyForFinalSubmit
+        && isTask10sFreshPublishFlowReady({
+          identityVerified: true,
+          newPublishEntryPass: newPublishEntry === "PASS",
+          uploadProofPass: persistedExploration.uploadAttempts === 1 && persistedExploration.uploadMutationCount === 1,
+          titleReadbackExact: persistedExploration.titleReadbackVerified,
+          bodyReadbackExact: persistedExploration.bodyReadbackVerified,
+          finalPublishButtonMatchCount,
+          finalPublishEnabled: persistedExploration.finalSubmit.visible && persistedExploration.finalSubmit.enabled && persistedExploration.finalSubmit.hitTestValid,
+          finalSubmitCount: persistedExploration.finalSubmitCount
+        })
+        && !safetyViolation;
+      const result: Task10sFreshPublishFlowResult = {
+        action: RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW,
+        status: persistedExploration.status,
+        operationId,
+        accountId: account.id,
+        newPublishEntry,
+        identityAttestation: identityEvidence,
+        fixture: fixtureEvidence,
+        fixedContent: { title: XHS_TASK10S_FRESH_PUBLISH_FLOW_TITLE, body: XHS_TASK10S_FRESH_PUBLISH_FLOW_BODY },
+        exploration: persistedExploration,
+        readyForFinalSubmit,
+        safety: { uploadAttempts: persistedExploration.uploadAttempts, titleMutationCount: persistedExploration.titleMutationCount, bodyMutationCount: persistedExploration.bodyMutationCount, finalSubmitCount: 0, publicationTransactionCount: 0, newAuthorizationCreated: 0 },
+        failureCode: safetyViolation ? "TASK10S_FRESH_PUBLISH_FLOW_SAFETY_BOUNDARY" : (persistedExploration.failureCode ?? null)
+      };
+      this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_TASK10S_FRESH_PUBLISH_FLOW_COMPLETED", "小红书 fresh publish flow diagnostic 已完成；未执行最终发布", { action: RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, accountId: account.id, operationId, status: result.status, readyForFinalSubmit, newPublishEntry, uploadAttempts: result.safety.uploadAttempts, titleMutationCount: result.safety.titleMutationCount, bodyMutationCount: result.safety.bodyMutationCount, finalSubmitCount: 0, publicationTransactionCount: 0, publishDomainUnchanged });
+      return result;
+    } catch (error) {
+      return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account.id, failureCode: error instanceof Error ? error.message : "XHS_FRESH_PUBLISH_FLOW_FAILED", fixture: fixtureEvidence, identityAttestation: identityEvidence });
     } finally {
       this.controlledOperations.delete(account.id);
     }

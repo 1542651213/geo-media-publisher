@@ -15,7 +15,7 @@ import { runDeepSeekBenchmarkMode } from "./deepseek-benchmark-mode";
 import { createProcessDiagnostics } from "./process-diagnostics";
 import { recordAppStartup } from "./runtime-observability";
 import type { PlatformSelfTestService } from "./platform-self-test";
-import { buildSecondInstanceDispatchTrace, createFixedDiagnosticRunner, ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_FINAL_SUBMIT_DOM, INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticActionWithTrace, RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, parseDiagnosticAction, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, type DiagnosticAction, type FixedDiagnosticInvocationContext, type Task10sAttempt3DispatchTrace, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
+import { buildSecondInstanceDispatchTrace, createFixedDiagnosticRunner, ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_FINAL_SUBMIT_DOM, INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticActionWithTrace, RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, parseDiagnosticAction, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, type DiagnosticAction, type FixedDiagnosticInvocationContext, type Task10sAttempt3DispatchTrace, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
 
 app.setName("codex-media-publisher");
 const processDiagnostics = createProcessDiagnostics(join(app.getPath("userData"), "production-data", "logs", "main-process-diagnostics.log"));
@@ -517,6 +517,26 @@ async function createWindow(): Promise<void> {
     writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), "utf8");
     logger.info("PLATFORM_SELF_TEST", "TASK10S_COMPLETE_RETAINED_EDITOR_EVIDENCE_WRITTEN", "Task10S retained-editor completion action evidence 已写入", { action: RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, evidencePath, status: result.status, failureCode: result.failureCode, uploadCallCount: result.uploadCallCount, finalSubmitClickCount: result.finalSubmitClickCount });
   };
+  const writeTask10sFreshPublishFlowEvidence = (result: Awaited<ReturnType<typeof platformSelfTests.runTask10sFreshPublishFlow>>): void => {
+    mkdirSync(evidenceDirectory, { recursive: true });
+    const timestamp = new Date().toISOString();
+    const evidencePath = join(evidenceDirectory, `xiaohongshu-task10s-fresh-publish-flow-${timestamp.replace(/[:.]/gu, "-")}.json`);
+    const evidence = {
+      timestamp,
+      evidencePath,
+      ...result,
+      safety: {
+        ...result.safety,
+        setInputFilesCallCount: result.safety.uploadAttempts,
+        uploadImagesCallCount: result.safety.uploadAttempts,
+        finalSubmitClickCount: 0,
+        publicationTransactionCount: 0,
+        newAuthorizationCreated: 0
+      }
+    };
+    writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), "utf8");
+    logger.info("PLATFORM_SELF_TEST", "XHS_TASK10S_FRESH_PUBLISH_FLOW_EVIDENCE_WRITTEN", "小红书 fresh publish flow diagnostic evidence 已写入；未执行最终发布", { action: RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, evidencePath, status: result.status, failureCode: result.failureCode, newPublishEntry: result.newPublishEntry, readyForFinalSubmit: result.readyForFinalSubmit, uploadAttempts: result.safety.uploadAttempts, titleMutationCount: result.safety.titleMutationCount, bodyMutationCount: result.safety.bodyMutationCount, finalSubmitCount: 0 });
+  };
   writeTask10sAttempt3DispatchDryRunEvidence = (trace: Task10sAttempt3DispatchTrace): void => {
     mkdirSync(evidenceDirectory, { recursive: true });
     const timestamp = new Date().toISOString();
@@ -597,6 +617,11 @@ async function createWindow(): Promise<void> {
       return platformSelfTests.runTask10sCompleteRetainedEditor();
     },
     writeTask10sCompleteRetainedEditorEvidence,
+    runTask10sFreshPublishFlow: async () => {
+      logger.info("PLATFORM_SELF_TEST", "TASK10S_FRESH_PUBLISH_FLOW_TRIGGER_RECEIVED", "收到固定 Main-side Task10S fresh publish flow trigger", { action: RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
+      return platformSelfTests.runTask10sFreshPublishFlow();
+    },
+    writeTask10sFreshPublishFlowEvidence,
     runTask10sAttempt3DispatchDryRun: () => platformSelfTests.runTask10sAttempt3DispatchDryRun(),
     writeTask10sAttempt3DispatchDryRunEvidence: (trace) => writeTask10sAttempt3DispatchDryRunEvidence?.(trace)
   });
