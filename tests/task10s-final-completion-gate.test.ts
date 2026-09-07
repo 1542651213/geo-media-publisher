@@ -11,6 +11,7 @@ function base(overrides: Partial<Task10sRetainedEditorGateInput> = {}): Task10sR
     setInputFilesCallCount: 0,
     postUploadState: "EDITOR_READY",
     imageAssetRenderedCount: 1,
+    imageCounterTextSafe: "1/18",
     titleControlPresent: true,
     bodyControlPresent: true,
     noExplicitUploadError: true,

@@ -1,4 +1,5 @@
 import type { Task10sFinalSurfaceResolution } from "./task10s-final-surface";
+import { parseXiaohongshuImageCounterText } from "./post-upload-reconciliation-diagnostic";
 
 export const TASK10S_FIXED_TITLE = "自动化发布测试｜请忽略" as const;
 export const TASK10S_FIXED_BODY = "这是一条 GEO Media Publisher 小红书自动发布链路测试内容，请忽略。" as const;
@@ -10,6 +11,7 @@ export interface Task10sRetainedEditorGateInput {
   setInputFilesCallCount: number;
   postUploadState: Task10sRetainedEditorPostUploadState;
   imageAssetRenderedCount: number;
+  imageCounterTextSafe: string | null;
   titleControlPresent: boolean;
   bodyControlPresent: boolean;
   noExplicitUploadError: boolean;
@@ -27,6 +29,7 @@ export interface Task10sRetainedEditorGateInput {
 
 export interface Task10sRetainedEditorGateResult {
   status: "READY_TO_SUBMIT" | "BLOCKED";
+  currentDraftImageProof: boolean;
   titleReadbackExact: boolean;
   bodyReadbackExact: boolean;
   finalSubmitPresent: boolean;
@@ -36,6 +39,7 @@ export interface Task10sRetainedEditorGateResult {
 
 const blocked = (failureCode: string): Task10sRetainedEditorGateResult => ({
   status: "BLOCKED",
+  currentDraftImageProof: false,
   titleReadbackExact: false,
   bodyReadbackExact: false,
   finalSubmitPresent: false,
@@ -48,10 +52,10 @@ const blocked = (failureCode: string): Task10sRetainedEditorGateResult => ({
  * browser or upload operation; all mutations remain in the adapter/Main path.
  */
 export function evaluateTask10sRetainedEditorGate(input: Task10sRetainedEditorGateInput): Task10sRetainedEditorGateResult {
-  if (input.uploadAttemptCount !== 1) return blocked("UPLOAD_ATTEMPT_COUNT_NOT_ONE");
   if (input.setInputFilesCallCount !== 0) return blocked("UPLOAD_CALL_OBSERVED");
   if (input.postUploadState !== "EDITOR_READY") return blocked("POST_UPLOAD_EDITOR_NOT_READY");
   if (input.imageAssetRenderedCount < 1) return blocked("IMAGE_ASSET_NOT_PROVEN");
+  if (!parseXiaohongshuImageCounterText(input.imageCounterTextSafe)) return blocked("IMAGE_COUNTER_NOT_VALID");
   if (!input.titleControlPresent) return blocked("TITLE_CONTROL_NOT_FOUND");
   if (!input.bodyControlPresent) return blocked("BODY_CONTROL_NOT_FOUND");
   if (!input.noExplicitUploadError) return blocked("EXPLICIT_UPLOAD_ERROR");
@@ -68,6 +72,7 @@ export function evaluateTask10sRetainedEditorGate(input: Task10sRetainedEditorGa
   if (!input.finalPublishSurface.enabled) return blocked("FINAL_SURFACE_NOT_ENABLED");
   return {
     status: "READY_TO_SUBMIT",
+    currentDraftImageProof: true,
     titleReadbackExact: true,
     bodyReadbackExact: true,
     finalSubmitPresent: true,

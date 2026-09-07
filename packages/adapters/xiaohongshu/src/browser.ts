@@ -3806,10 +3806,13 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const identityEvidence = await readXiaohongshuPageEvidence(canonical.page, { failOnEvaluateError: true });
     const identityPass = normalizeExternalCreatorId(identityEvidence.identity.externalAccountId) === "960803317";
     const gate = evaluateTask10sRetainedEditorGate({
-      uploadAttemptCount: 1,
+      // A reopened server-backed draft is proved by the current page DOM;
+      // historical upload attempts are deliberately not a completion gate.
+      uploadAttemptCount: 0,
       setInputFilesCallCount: 0,
       postUploadState: postUpload.postUploadState,
       imageAssetRenderedCount: postUpload.imageAssetRenderedCount,
+      imageCounterTextSafe: postUpload.imageCounterTextSafe,
       titleControlPresent: postUpload.titleControlPresent,
       bodyControlPresent: postUpload.bodyControlPresent,
       noExplicitUploadError: postUpload.noExplicitUploadError,
@@ -3856,36 +3859,47 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const beforeUrl = canonical.page.url();
     try {
       await guard.startFinalSubmit(preflight, async () => {
-        attempt.markSubmissionSideEffect?.();
         try {
-          const clickResult = await clickTask10sClosedShadowPublishSurface(canonical.page);
+          const clickResult = await clickTask10sClosedShadowPublishSurface(canonical.page, {
+            beforeMousePress: async () => {
+              await guard.beginFinalMousePress();
+              attempt.markSubmissionSideEffect?.();
+            }
+          });
           if (clickResult.status !== "CLICK_DISPATCHED") throw new Error(clickResult.failureCode ?? clickResult.status);
         } catch (error) {
           throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", `Task10S closed-shadow 最终发布 action 已开始但 click 未正常返回：${error instanceof Error ? error.message : String(error)}`);
         }
       });
     } catch (error) {
+      if (guard.hasFinalMousePressStarted()) await guard.markSubmissionReconciliationRequired().catch(() => undefined);
       if (error instanceof OneShotPublicationGuardError) throw new BrowserAutomationError("USER_ACTION_REQUIRED", `${error.code}: 未执行 Task10S 最终发布`);
       throw error;
     }
-
-    const confirmation = await this.inspectOneShotConfirmationControl(canonical.page);
-    if (confirmation.status === "AMBIGUOUS") throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "Task10S 发布后出现多个确认 modal 候选，未盲点");
-    if (confirmation.status === "FOUND_UNIQUE" && confirmation.candidate) {
-      try {
-        await guard.confirmModal(confirmation.candidate, async () => confirmation.locator.click());
-      } catch (error) {
-        if (error instanceof OneShotPublicationGuardError) throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", `${error.code}: Task10S 确认 modal 未通过安全校验`);
-        throw error;
+    let observation: OneShotPostSubmitObservation;
+    let publicResult: { externalId: string; publishedUrl: string } | null = null;
+    try {
+      const confirmation = await this.inspectOneShotConfirmationControl(canonical.page);
+      if (confirmation.status === "AMBIGUOUS") throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "Task10S 发布后出现多个确认 modal 候选，未盲点");
+      if (confirmation.status === "FOUND_UNIQUE" && confirmation.candidate) {
+        try {
+          await guard.confirmModal(confirmation.candidate, async () => confirmation.locator.click());
+        } catch (error) {
+          if (error instanceof OneShotPublicationGuardError) throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", `${error.code}: Task10S 确认 modal 未通过安全校验`);
+          throw error;
+        }
       }
+      observation = await this.observeOneShotPostSubmit(canonical.page, beforeUrl);
+      const observationStatus = classifyOneShotPostSubmitObservation(observation);
+      if (observationStatus === "PLATFORM_REJECTED") throw new BrowserAutomationError("CONTENT_REJECTED", `小红书平台拒绝了 Task10S 测试发布：${observation.platformError ?? "未提供原因"}`);
+      if (observationStatus !== "PUBLISHED_VERIFIED") throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "Task10S 提交结果不明确；只允许进入只读 reconciliation，不得重试");
+      publicResult = this.publicResultFromUrl(canonical.page.url());
+      if (!publicResult) throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "Task10S 提交后未取得可靠 External ID/URL；禁止再次提交");
+      guard.markFinalSubmitCompleted();
+    } catch (error) {
+      await guard.markSubmissionReconciliationRequired().catch(() => undefined);
+      throw error;
     }
-    const observation = await this.observeOneShotPostSubmit(canonical.page, beforeUrl);
-    const observationStatus = classifyOneShotPostSubmitObservation(observation);
-    if (observationStatus === "PLATFORM_REJECTED") throw new BrowserAutomationError("CONTENT_REJECTED", `小红书平台拒绝了 Task10S 测试发布：${observation.platformError ?? "未提供原因"}`);
-    if (observationStatus !== "PUBLISHED_VERIFIED") throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "Task10S 提交结果不明确；只允许进入只读 reconciliation，不得重试");
-    const publicResult = this.publicResultFromUrl(canonical.page.url());
-    if (!publicResult) throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "Task10S 提交后未取得可靠 External ID/URL；禁止再次提交");
-    guard.markFinalSubmitCompleted();
     return {
       success: true,
       status: "published",

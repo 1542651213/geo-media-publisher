@@ -716,7 +716,15 @@ export const OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH = "OWNER_AUTHORIZED_ONE_SHOT
 export const ONE_SHOT_REAL_PUBLISH_ACCEPTANCE = "ONE_SHOT_REAL_PUBLISH_ACCEPTANCE" as const;
 export const XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID = "54b390ac-d81e-440a-baeb-d00f9f346cc3" as const;
 
-export type OneShotPublicationAuthorizationState = "NOT_AUTHORIZED" | "AUTHORIZED_UNUSED" | "CONSUMED" | "SUPERSEDED_UNUSED";
+export type OneShotPublicationAuthorizationState =
+  | "NOT_AUTHORIZED"
+  | "AUTHORIZED_UNUSED"
+  | "ARMED"
+  | "FINAL_MOUSEPRESS_DISPATCH_STARTED"
+  | "SUBMIT_RECONCILIATION_REQUIRED"
+  | "CONSUMED"
+  | "COMPLETED"
+  | "SUPERSEDED_UNUSED";
 
 export interface OneShotPublicationAuthorization {
   authorization: typeof OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH;

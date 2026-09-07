@@ -60,6 +60,8 @@ export interface OneShotConfirmationCandidate {
 
 export interface OneShotPublicationGuardHooks {
   onConsumed?: (authorization: OneShotPublicationAuthorization) => void | boolean | Promise<void | boolean>;
+  onFinalMousePressDispatchStarted?: (authorization: OneShotPublicationAuthorization) => void | boolean | Promise<void | boolean>;
+  onSubmissionReconciliationRequired?: (authorization: OneShotPublicationAuthorization) => void | boolean | Promise<void | boolean>;
   onConfirmationCommit?: (authorization: OneShotPublicationAuthorization) => void | boolean | Promise<void | boolean>;
 }
 
@@ -146,14 +148,32 @@ export class OneShotPublicationGuard {
     return { ...this.current };
   }
 
-  async startFinalSubmit<T>(preflight: OneShotFinalSubmitPreflight, action: () => Promise<T>): Promise<T> {
+  async startFinalSubmit<T>(preflight: OneShotFinalSubmitPreflight, action: () => Promise<T>, options: { deferDispatchLock?: boolean } = {}): Promise<T> {
     if (this.current.state !== "AUTHORIZED_UNUSED" || this.current.finalSubmitAttemptCount >= MAX_FINAL_SUBMIT_ATTEMPTS || this.current.publicationTransactionCount >= MAX_PUBLICATION_TRANSACTIONS || this.current.finalSubmitRetryCount !== FINAL_SUBMIT_RETRY_COUNT) {
       throw new OneShotPublicationGuardError("FINAL_SUBMIT_ALREADY_USED");
     }
     ensurePreflight(this.current, preflight);
-    const consumed: OneShotPublicationAuthorization = {
+    const previous = this.current;
+    this.current = {
       ...this.current,
-      state: "CONSUMED",
+      state: "ARMED"
+    };
+    if (!options.deferDispatchLock) await this.beginFinalMousePress();
+    try {
+      return await action();
+    } catch (error) {
+      if (this.current.state === "ARMED") this.current = previous;
+      throw error;
+    }
+  }
+
+  async beginFinalMousePress(): Promise<OneShotPublicationAuthorization> {
+    if (this.current.state !== "ARMED" || this.current.finalSubmitAttemptCount >= MAX_FINAL_SUBMIT_ATTEMPTS || this.current.publicationTransactionCount >= MAX_PUBLICATION_TRANSACTIONS) {
+      throw new OneShotPublicationGuardError("FINAL_SUBMIT_ALREADY_USED");
+    }
+    const started: OneShotPublicationAuthorization = {
+      ...this.current,
+      state: this.hooks.onFinalMousePressDispatchStarted ? "FINAL_MOUSEPRESS_DISPATCH_STARTED" : "CONSUMED",
       publicationTransactionCount: 1,
       publicationCommitActionCount: 1,
       finalSubmitAttemptCount: 1,
@@ -161,14 +181,29 @@ export class OneShotPublicationGuard {
       finalSubmitActionStarted: true,
       consumedAt: new Date().toISOString()
     };
-    const persisted = await this.hooks.onConsumed?.(consumed);
+    const persisted = this.hooks.onFinalMousePressDispatchStarted
+      ? await this.hooks.onFinalMousePressDispatchStarted(started)
+      : await this.hooks.onConsumed?.(started);
     if (persisted === false) throw new OneShotPublicationGuardError("AUTHORIZATION_CONSUMPTION_FAILED");
-    this.current = consumed;
-    return action();
+    this.current = started;
+    return this.authorization;
+  }
+
+  hasFinalMousePressStarted(): boolean {
+    return this.current.state === "FINAL_MOUSEPRESS_DISPATCH_STARTED" || this.current.state === "SUBMIT_RECONCILIATION_REQUIRED" || this.current.state === "CONSUMED" || this.current.state === "COMPLETED";
+  }
+
+  async markSubmissionReconciliationRequired(): Promise<OneShotPublicationAuthorization> {
+    if (this.current.state !== "FINAL_MOUSEPRESS_DISPATCH_STARTED") return this.authorization;
+    const pending: OneShotPublicationAuthorization = { ...this.current, state: "SUBMIT_RECONCILIATION_REQUIRED" };
+    const persisted = await this.hooks.onSubmissionReconciliationRequired?.(pending);
+    if (persisted === false) throw new OneShotPublicationGuardError("AUTHORIZATION_CONSUMPTION_FAILED");
+    this.current = pending;
+    return this.authorization;
   }
 
   async confirmModal<T>(candidate: OneShotConfirmationCandidate, action: () => Promise<T>): Promise<T> {
-    if (this.current.state !== "CONSUMED" || this.current.publicationTransactionCount !== 1 || this.current.finalSubmitAttemptCount !== 1) {
+    if (!["CONSUMED", "FINAL_MOUSEPRESS_DISPATCH_STARTED"].includes(this.current.state) || this.current.publicationTransactionCount !== 1 || this.current.finalSubmitAttemptCount !== 1) {
       throw new OneShotPublicationGuardError("FINAL_SUBMIT_ALREADY_USED");
     }
     if (this.current.publicationCommitActionCount >= MAX_PUBLICATION_COMMIT_ACTIONS) throw new OneShotPublicationGuardError("PUBLICATION_COMMIT_ACTION_LIMIT");
@@ -183,7 +218,10 @@ export class OneShotPublicationGuard {
   }
 
   markFinalSubmitCompleted(): OneShotPublicationAuthorization {
-    this.current = { ...this.current, finalSubmitActionCompleted: true };
+    const state = this.current.state === "FINAL_MOUSEPRESS_DISPATCH_STARTED" || this.current.state === "SUBMIT_RECONCILIATION_REQUIRED"
+      ? "COMPLETED"
+      : this.current.state;
+    this.current = { ...this.current, state, finalSubmitActionCompleted: true };
     return this.authorization;
   }
 }

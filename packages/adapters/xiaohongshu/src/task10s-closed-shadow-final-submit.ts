@@ -73,6 +73,12 @@ export interface Task10sClosedShadowPublishClickResult {
   failureCode: string | null;
 }
 
+export interface Task10sClosedShadowPublishClickOptions {
+  /** Invoked after fresh DOM resolution, scroll, and box-model validation,
+   * immediately before the single CDP mousePressed dispatch. */
+  beforeMousePress?: () => Promise<void>;
+}
+
 interface CdpSessionLike {
   send(method: string, params?: Record<string, unknown>): Promise<unknown>;
   detach?: () => Promise<void>;
@@ -342,7 +348,7 @@ function center(rect: Task10sClosedShadowBoundingRect): { x: number; y: number }
   return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
 }
 
-export async function clickTask10sClosedShadowPublishSurface(page: Page): Promise<Task10sClosedShadowPublishClickResult> {
+export async function clickTask10sClosedShadowPublishSurface(page: Page, options: Task10sClosedShadowPublishClickOptions = {}): Promise<Task10sClosedShadowPublishClickResult> {
   let session: CdpSessionLike | null = null;
   let pressed = false;
   try {
@@ -357,6 +363,7 @@ export async function clickTask10sClosedShadowPublishSurface(page: Page): Promis
       return { status: "NOT_VISIBLE", resolution: notVisible, mousePressedCount: 0, mouseReleasedCount: 0, failureCode: notVisible.failureCode };
     }
     const point = center(box);
+    await options.beforeMousePress?.();
     await session.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 });
     pressed = true;
     await session.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 });

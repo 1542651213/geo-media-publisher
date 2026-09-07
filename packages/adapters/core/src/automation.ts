@@ -10,7 +10,7 @@ import type {
 } from "@publisher/domain";
 import type { BrowserSessionRuntimeSnapshot, BrowserSessionRuntimeState } from "./browser";
 import type { PlatformAdapter } from "./index";
-import type { OneShotPublicationAuthorization, OneShotPublicationGuard } from "./one-shot-publication";
+import type { OneShotPublicationAuthorization, OneShotPublicationAuthorizationState, OneShotPublicationGuard } from "./one-shot-publication";
 export type { OneShotPublicationAuthorization, OneShotPublicationGuard } from "./one-shot-publication";
 
 export interface AutomationPrepareResult {
@@ -43,7 +43,7 @@ export interface OneShotRealPublishAcceptanceInput extends PublishFlowExploratio
 export interface OneShotRealPublishAcceptanceResult {
   operationId: string;
   status: "PUBLISHED_VERIFIED" | "NEEDS_RECONCILIATION" | "PLATFORM_REJECTED" | "BLOCKED";
-  authorizationState: "AUTHORIZED_UNUSED" | "CONSUMED";
+  authorizationState: OneShotPublicationAuthorizationState;
   publicationTransactionCount: number;
   publicationCommitActionCount: number;
   finalSubmitAttemptCount: number;

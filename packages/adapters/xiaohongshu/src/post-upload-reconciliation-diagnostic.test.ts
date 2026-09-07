@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Page } from "playwright-core";
 import {
   inspectXiaohongshuPostUploadReconciliationDom,
+  parseXiaohongshuImageCounterText,
   reconcileXiaohongshuPostUploadSnapshot,
   type XiaohongshuPostUploadReconciliationDomSnapshot
 } from "./post-upload-reconciliation-diagnostic";
@@ -49,6 +50,24 @@ function snapshot(overrides: Partial<XiaohongshuPostUploadReconciliationDomSnaps
 }
 
 describe("Xiaohongshu post-upload reconciliation diagnostic", () => {
+  it("accepts only a sane editor image counter", () => {
+    expect(parseXiaohongshuImageCounterText("1/18")).toEqual({ current: 1, total: 18 });
+    expect(parseXiaohongshuImageCounterText("7 / 18")).toEqual({ current: 7, total: 18 });
+    expect(parseXiaohongshuImageCounterText("0/18")).toBeNull();
+    expect(parseXiaohongshuImageCounterText("1/0")).toBeNull();
+    expect(parseXiaohongshuImageCounterText("1/18 ordinary page text")).toBeNull();
+    expect(parseXiaohongshuImageCounterText(null)).toBeNull();
+  });
+
+  it("supports a server-backed reopened draft without blob or historical file evidence", () => {
+    const result = reconcileXiaohongshuPostUploadSnapshot(snapshot({
+      imageItems: [{ ...visibleImageItem, blobUrlPresent: false, dataUrlPresent: false, classNameSafe: "draft-server-image-preview" }],
+      imageCounterTextSafe: "1/18"
+    }));
+    expect(result.imageUploadReconciliation).toBe("PASS");
+    expect(result.imageItems[0]).toMatchObject({ blobUrlPresent: false, dataUrlPresent: false });
+    expect(parseXiaohongshuImageCounterText(result.imageCounterTextSafe)).not.toBeNull();
+  });
   it("confirms one rendered image with title/body without requiring final submit proof", () => {
     const result = reconcileXiaohongshuPostUploadSnapshot(snapshot());
 

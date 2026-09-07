@@ -86,4 +86,23 @@ describe("Task10S authorization persistence", () => {
     expect(database.repository.consumeOneShotPublicationAuthorization(authorization.operationId, authorization.accountId, authorization.platformKey)).toBe(false);
     expect(database.repository.getOneShotPublicationAuthorization(authorization.operationId)).toMatchObject({ state: "CONSUMED", finalSubmitAttemptCount: 1, publicationTransactionCount: 1, publicationCommitActionCount: 1, finalSubmitRetryCount: 0, finalSubmitActionStarted: true });
   });
+
+  it("atomically locks authorization and submission intent at the final mouse boundary", () => {
+    const { database, authorization, run } = fixture();
+    database.repository.confirmPlatformSelfTestOneShotAtomically(run.testRunId, authorization);
+    const job = database.repository.createPlatformSelfTestPublishJob({ testRunId: run.testRunId, title: "自动化发布测试｜请忽略", body: "这是一条测试正文。", dryRun: false });
+    const intent = database.repository.prepareSubmissionIntent(job.id);
+
+    expect(database.repository.startOneShotFinalMousePress(authorization.operationId, authorization.accountId, authorization.platformKey, intent.id)).toBe(true);
+    expect(database.repository.getOneShotPublicationAuthorization(authorization.operationId)).toMatchObject({ state: "FINAL_MOUSEPRESS_DISPATCH_STARTED", finalSubmitAttemptCount: 1, publicationTransactionCount: 1, publicationCommitActionCount: 1, finalSubmitActionStarted: true });
+    expect(database.repository.getSubmissionIntentByJob(job.id)).toMatchObject({ state: "Submitting", finalSubmitCount: 1 });
+    expect(database.repository.startOneShotFinalMousePress(authorization.operationId, authorization.accountId, authorization.platformKey, intent.id)).toBe(false);
+  });
+
+  it("rolls back the authorization lock when the intent cannot be claimed", () => {
+    const { database, authorization } = fixture();
+    database.repository.createOneShotPublicationAuthorization(authorization);
+    expect(database.repository.startOneShotFinalMousePress(authorization.operationId, authorization.accountId, authorization.platformKey, "missing-intent")).toBe(false);
+    expect(database.repository.getOneShotPublicationAuthorization(authorization.operationId)).toMatchObject({ state: "AUTHORIZED_UNUSED", finalSubmitAttemptCount: 0, publicationTransactionCount: 0 });
+  });
 });

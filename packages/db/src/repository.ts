@@ -2637,15 +2637,48 @@ export class AppRepository {
     return result.changes === 1;
   }
 
+  /**
+   * Atomically claims the final submission intent together with the durable
+   * one-shot authorization immediately before the only mousePressed dispatch.
+   * A rollback leaves both records reusable when browser-side preparation
+   * fails before that boundary.
+   */
+  startOneShotFinalMousePress(operationId: string, accountId: string, platformKey: string, intentId: string): boolean {
+    const timestamp = now();
+    const transaction = this.db.transaction(() => {
+      const authorization = this.db.prepare(`UPDATE one_shot_publication_authorizations SET
+        state='FINAL_MOUSEPRESS_DISPATCH_STARTED', publication_transaction_count=1, publication_commit_action_count=1,
+        final_submit_attempt_count=1, final_submit_retry_count=0, final_submit_action_started=1,
+        consumed_at=?, updated_at=? WHERE operation_id=? AND account_id=? AND platform_key=?
+        AND authorization='OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH' AND mode='ONE_SHOT_REAL_PUBLISH_ACCEPTANCE'
+        AND state='AUTHORIZED_UNUSED' AND publication_transaction_count=0 AND publication_commit_action_count=0
+        AND final_submit_attempt_count=0 AND final_submit_retry_count=0`).run(timestamp, timestamp, operationId, accountId, platformKey);
+      if (authorization.changes !== 1) throw new Error("One-shot authorization was already used or is not available");
+      const intent = this.db.prepare("UPDATE submission_intents SET final_submit_count=final_submit_count+1,state='Submitting',updated_at=? WHERE id=? AND state='Prepared' AND final_submit_count=0").run(timestamp, intentId);
+      if (intent.changes !== 1) throw new Error("The persisted publish attempt has already been used or is not ready for final submit");
+    });
+    try {
+      transaction();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  markOneShotFinalMousePressReconciliationRequired(operationId: string): boolean {
+    const result = this.db.prepare("UPDATE one_shot_publication_authorizations SET state='SUBMIT_RECONCILIATION_REQUIRED', updated_at=? WHERE operation_id=? AND state='FINAL_MOUSEPRESS_DISPATCH_STARTED' AND final_submit_attempt_count=1").run(now(), operationId);
+    return result.changes === 1;
+  }
+
   recordOneShotPublicationConfirmationAction(operationId: string): boolean {
     const result = this.db.prepare(`UPDATE one_shot_publication_authorizations SET publication_commit_action_count=2, updated_at=?
-      WHERE operation_id=? AND state='CONSUMED' AND publication_transaction_count=1
+      WHERE operation_id=? AND state IN ('CONSUMED','FINAL_MOUSEPRESS_DISPATCH_STARTED') AND publication_transaction_count=1
       AND final_submit_attempt_count=1 AND publication_commit_action_count=1`).run(now(), operationId);
     return result.changes === 1;
   }
 
   completeOneShotPublicationAuthorization(operationId: string): boolean {
-    const result = this.db.prepare("UPDATE one_shot_publication_authorizations SET final_submit_action_completed=1, updated_at=? WHERE operation_id=? AND state='CONSUMED' AND final_submit_attempt_count=1").run(now(), operationId);
+    const result = this.db.prepare("UPDATE one_shot_publication_authorizations SET state=CASE WHEN state IN ('FINAL_MOUSEPRESS_DISPATCH_STARTED','SUBMIT_RECONCILIATION_REQUIRED') THEN 'COMPLETED' ELSE state END, final_submit_action_completed=1, updated_at=? WHERE operation_id=? AND state IN ('CONSUMED','FINAL_MOUSEPRESS_DISPATCH_STARTED','SUBMIT_RECONCILIATION_REQUIRED') AND final_submit_attempt_count=1").run(now(), operationId);
     return result.changes === 1;
   }
 

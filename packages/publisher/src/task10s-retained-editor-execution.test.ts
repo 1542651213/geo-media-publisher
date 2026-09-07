@@ -76,7 +76,8 @@ describe("Task10S retained-editor transaction mode", () => {
     expect(adapter.retainedEditorMarkerSeen).toBe(true);
     expect(adapter.guardSeen?.authorization.state).toBe("AUTHORIZED_UNUSED");
     expect(adapter.finalSubmitCount).toBe(1);
-    expect(database.repository.getSubmissionIntentByJob(jobId)?.finalSubmitCount).toBe(1);
+    expect(database.repository.getSubmissionIntentByJob(jobId)?.finalSubmitCount).toBe(0);
+    expect(database.repository.getOneShotPublicationAuthorization(authorization.operationId)?.state).toBe("AUTHORIZED_UNUSED");
   });
 
   it("does not mark the ordinary generic executeJob path", async () => {

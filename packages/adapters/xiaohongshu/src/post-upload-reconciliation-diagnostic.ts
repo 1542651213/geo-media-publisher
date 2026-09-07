@@ -60,6 +60,19 @@ export interface XiaohongshuPostUploadReconciliationResult extends XiaohongshuPo
   noExplicitUploadError: boolean;
 }
 
+/** Validate only the bounded current/total image counter used by the retained
+ * draft gate. Ordinary page text, missing counters, and zero-based counters
+ * are intentionally rejected. */
+export function parseXiaohongshuImageCounterText(value: string | null): { current: number; total: number } | null {
+  if (typeof value !== "string") return null;
+  const match = /^([1-9]\d{0,2})\s*\/\s*([1-9]\d{0,2})$/u.exec(value.trim());
+  if (!match) return null;
+  const current = Number(match[1]);
+  const total = Number(match[2]);
+  if (!Number.isSafeInteger(current) || !Number.isSafeInteger(total) || current < 1 || current > total || total > 100) return null;
+  return { current, total };
+}
+
 const EMPTY_SNAPSHOT: XiaohongshuPostUploadReconciliationDomSnapshot = {
   origin: "",
   pathname: "",
@@ -183,7 +196,9 @@ export async function inspectXiaohongshuPostUploadReconciliationDom(page: Page):
       };
     });
     const visibleImageItemCount = imageItems.filter((item) => item.visible).length;
-    const counterTextSafe = Array.from(document.querySelectorAll("main * , [role=main] *"))
+    const editorCounterCandidates = fixedEditorRoots.flatMap((root) => [root, ...Array.from(root.querySelectorAll("*"))]);
+    const counterTextSafe = Array.from(new Set(editorCounterCandidates))
+      .filter((element) => visible(element) && (element.children.length === 0 || !Array.from(element.children).some((child) => normalize(child.textContent ?? "") === normalize(element.textContent ?? ""))))
       .map((element) => normalize(element.textContent ?? ""))
       .find((text) => /^\d{1,3}\s*\/\s*\d{1,3}$/u.test(text)) ?? null;
     const actionElements = Array.from(document.querySelectorAll('button, [role="button"], [aria-label], [title]')).filter(inEditor);

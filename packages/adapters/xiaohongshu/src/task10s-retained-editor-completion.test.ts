@@ -26,6 +26,7 @@ function input(overrides: Partial<Task10sRetainedEditorGateInput> = {}): Task10s
     setInputFilesCallCount: 0,
     postUploadState: "EDITOR_READY",
     imageAssetRenderedCount: 1,
+    imageCounterTextSafe: "1/18",
     titleControlPresent: true,
     bodyControlPresent: true,
     noExplicitUploadError: true,
@@ -41,6 +42,10 @@ function input(overrides: Partial<Task10sRetainedEditorGateInput> = {}): Task10s
     finalSubmitClickCount: 0,
     ...overrides
   };
+}
+
+function inputWithDraftCounter(imageCounterTextSafe: string | null, overrides: Partial<Task10sRetainedEditorGateInput> = {}): Task10sRetainedEditorGateInput {
+  return { ...input(overrides), imageCounterTextSafe } as Task10sRetainedEditorGateInput;
 }
 
 describe("Task10S retained-editor completion gate", () => {
@@ -69,6 +74,14 @@ describe("Task10S retained-editor completion gate", () => {
     ];
     for (const [field, value, failureCode] of cases) expect(evaluateTask10sRetainedEditorGate(input({ [field]: value } as Partial<Task10sRetainedEditorGateInput>))).toMatchObject({ status: "BLOCKED", failureCode });
     expect(evaluateTask10sRetainedEditorGate(input({ finalPublishSurface: disabledSurface }))).toMatchObject({ status: "BLOCKED", failureCode: "FINAL_SURFACE_NOT_ENABLED" });
+  });
+
+  it("requires a valid current editor image counter for a reopened server-backed draft", () => {
+    expect(evaluateTask10sRetainedEditorGate(inputWithDraftCounter("1/18"))).toMatchObject({ status: "READY_TO_SUBMIT" });
+    expect(evaluateTask10sRetainedEditorGate(inputWithDraftCounter("1/18", { uploadAttemptCount: 0 }))).toMatchObject({ status: "READY_TO_SUBMIT", currentDraftImageProof: true });
+    expect(evaluateTask10sRetainedEditorGate(inputWithDraftCounter("0/18"))).toMatchObject({ status: "BLOCKED", failureCode: "IMAGE_COUNTER_NOT_VALID" });
+    expect(evaluateTask10sRetainedEditorGate(inputWithDraftCounter(null))).toMatchObject({ status: "BLOCKED", failureCode: "IMAGE_COUNTER_NOT_VALID" });
+    expect(evaluateTask10sRetainedEditorGate(inputWithDraftCounter("1/18", { imageAssetRenderedCount: 0 }))).toMatchObject({ status: "BLOCKED", failureCode: "IMAGE_ASSET_NOT_PROVEN" });
   });
 
   it("keeps nonstandard publish surface resolution separate from the completion gate", () => {

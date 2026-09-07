@@ -159,6 +159,19 @@ describe("Task10S closed-shadow CDP click", () => {
     expect(calls.some((call) => call.method === "DOM.scrollIntoViewIfNeeded")).toBe(true);
   });
 
+  it("runs the durable boundary callback after box-model resolution and before mousePressed", async () => {
+    const { session, calls } = fakeCdpSession();
+    const page = { context: () => ({ newCDPSession: async () => session }) } as never;
+    const order: string[] = [];
+    const result = await clickTask10sClosedShadowPublishSurface(page, {
+      beforeMousePress: async () => { order.push("durable-lock"); }
+    });
+    order.push("returned");
+    expect(result.status).toBe("CLICK_DISPATCHED");
+    expect(order).toEqual(["durable-lock", "returned"]);
+    expect(calls.findIndex((call) => call.method === "DOM.getBoxModel")).toBeLessThan(calls.findIndex((call) => call.method === "Input.dispatchMouseEvent" && call.params?.type === "mousePressed"));
+  });
+
   it("does not retry after the one-shot mouse press/release boundary", async () => {
     const { session, calls } = fakeCdpSession({ releaseFails: true });
     const page = { context: () => ({ newCDPSession: async () => session }) } as never;

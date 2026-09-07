@@ -244,10 +244,19 @@ export class PublisherService {
       const adapter = this.adapters.getForContent(job.platformKey, job.contentKind ?? "article");
       const oneShotOperationId = oneShotAuthorization?.operationId;
       const oneShotGuard = oneShotAuthorization
-        ? new OneShotPublicationGuard(oneShotAuthorization, {
-          onConsumed: (authorization) => this.repository.consumeOneShotPublicationAuthorization(authorization.operationId, authorization.accountId, authorization.platformKey),
-          onConfirmationCommit: (authorization) => this.repository.recordOneShotPublicationConfirmationAction(authorization.operationId)
-        })
+        ? new OneShotPublicationGuard(oneShotAuthorization, executionMode === "TASK10S_RETAINED_EDITOR"
+          ? {
+            onFinalMousePressDispatchStarted: (authorization) => {
+              const intent = this.repository.getSubmissionIntentByJob(job.id);
+              return intent ? this.repository.startOneShotFinalMousePress(authorization.operationId, authorization.accountId, authorization.platformKey, intent.id) : false;
+            },
+            onSubmissionReconciliationRequired: (authorization) => this.repository.markOneShotFinalMousePressReconciliationRequired(authorization.operationId),
+            onConfirmationCommit: (authorization) => this.repository.recordOneShotPublicationConfirmationAction(authorization.operationId)
+          }
+          : {
+            onConsumed: (authorization) => this.repository.consumeOneShotPublicationAuthorization(authorization.operationId, authorization.accountId, authorization.platformKey),
+            onConfirmationCommit: (authorization) => this.repository.recordOneShotPublicationConfirmationAction(authorization.operationId)
+          })
         : undefined;
       if (oneShotAuthorization && (job.dryRun || !isAutomationAdapter(adapter) || typeof adapter.finalSubmit !== "function")) throw Object.assign(new Error("ONE_SHOT_FINAL_SUBMIT_PATH_REQUIRED"), { code: "USER_ACTION_REQUIRED" });
       if (!job.dryRun && job.manualConfirmationRequired) throw Object.assign(new Error("Formal publishing requires user confirmation"), { code: "USER_ACTION_REQUIRED" });
@@ -312,7 +321,9 @@ export class PublisherService {
           if (adapter.prepareFinalSubmit) await withTimeout(adapter.prepareFinalSubmit(ctx, input), this.options.operationTimeoutMs ?? 120_000, "Platform final-submit preflight");
           const intent = this.repository.getSubmissionIntentByJob(job.id);
           if (!intent) throw new Error("Persisted submission intent is missing before platform final submit");
-          const claimedAttempt = this.repository.claimFinalSubmitAttempt(intent.id);
+          const claimedAttempt = executionMode === "TASK10S_RETAINED_EDITOR"
+            ? { id: intent.id, jobId: intent.jobId, attempt: intent.attempt }
+            : this.repository.claimFinalSubmitAttempt(intent.id);
           const attempt: BrowserPublishAttemptContext = {
             jobId: job.id,
             submissionIntentId: claimedAttempt.id,

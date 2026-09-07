@@ -72,6 +72,58 @@ describe("Task10S one-shot publication contract", () => {
     await expect(guard.startFinalSubmit(preflight({ authorizationState: "CONSUMED" }), async () => "must-not-run")).rejects.toThrow("FINAL_SUBMIT_ALREADY_USED");
   });
 
+  it("defers one-shot persistence until the explicit mousePressed dispatch boundary", async () => {
+    const order: string[] = [];
+    const persisted: string[] = [];
+    const guard = new OneShotPublicationGuard(authorization(), {
+      onFinalMousePressDispatchStarted: () => { order.push("persist"); persisted.push("started"); }
+    });
+    const start = guard.startFinalSubmit.bind(guard) as unknown as (preflight: OneShotFinalSubmitPreflight, action: () => Promise<unknown>, options: { deferDispatchLock: true }) => Promise<unknown>;
+
+    await expect(start(preflight(), async () => {
+      order.push("before-boundary");
+      expect(guard.authorization.state).toBe("ARMED");
+      await guard.beginFinalMousePress();
+      order.push("mousePressed");
+      return "done";
+    }, { deferDispatchLock: true })).resolves.toBe("done");
+
+    expect(order).toEqual(["before-boundary", "persist", "mousePressed"]);
+    expect(persisted).toEqual(["started"]);
+    expect(guard.authorization.state).toBe("FINAL_MOUSEPRESS_DISPATCH_STARTED");
+    expect(guard.authorization.finalSubmitAttemptCount).toBe(1);
+  });
+
+  it("leaves authorization unused when deferred pre-dispatch validation fails", async () => {
+    const persisted = vi.fn();
+    const guard = new OneShotPublicationGuard(authorization(), { onFinalMousePressDispatchStarted: persisted });
+    const start = guard.startFinalSubmit.bind(guard) as unknown as (preflight: OneShotFinalSubmitPreflight, action: () => Promise<unknown>, options: { deferDispatchLock: true }) => Promise<unknown>;
+
+    await expect(start(preflight(), async () => { throw new Error("box model unavailable"); }, { deferDispatchLock: true })).rejects.toThrow("box model unavailable");
+    expect(persisted).not.toHaveBeenCalled();
+    expect(guard.authorization.state).toBe("AUTHORIZED_UNUSED");
+    expect(guard.authorization.finalSubmitAttemptCount).toBe(0);
+  });
+
+  it("locks once before mousePressed and enters reconciliation without retry after dispatch failure", async () => {
+    const persisted: string[] = [];
+    const guard = new OneShotPublicationGuard(authorization(), {
+      onFinalMousePressDispatchStarted: () => { persisted.push("started"); },
+      onSubmissionReconciliationRequired: () => { persisted.push("reconciliation"); }
+    });
+    const start = guard.startFinalSubmit.bind(guard) as unknown as (preflight: OneShotFinalSubmitPreflight, action: () => Promise<unknown>, options: { deferDispatchLock: true }) => Promise<unknown>;
+    await expect(start(preflight(), async () => {
+      await guard.beginFinalMousePress();
+      throw new Error("mousePressed timeout");
+    }, { deferDispatchLock: true })).rejects.toThrow("mousePressed timeout");
+    expect(persisted).toEqual(["started"]);
+    expect(guard.authorization.finalSubmitAttemptCount).toBe(1);
+    expect(guard.authorization.state).toBe("FINAL_MOUSEPRESS_DISPATCH_STARTED");
+    await guard.markSubmissionReconciliationRequired();
+    expect(guard.authorization.state).toBe("SUBMIT_RECONCILIATION_REQUIRED");
+    await expect(guard.startFinalSubmit(preflight(), async () => "must-not-retry")).rejects.toThrow("FINAL_SUBMIT_ALREADY_USED");
+  });
+
   it("allows one high-confidence confirmation action in the same transaction only", async () => {
     const guard = new OneShotPublicationGuard(authorization());
     await guard.startFinalSubmit(preflight(), async () => "submitted");
