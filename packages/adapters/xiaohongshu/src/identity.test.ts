@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
+import type { Page } from "playwright-core";
 import { describe, expect, it } from "vitest";
-import { extractCreatorIdFromAccountLabel, resolveCreatorIdentityCandidates, type XiaohongshuCreatorIdentityCandidate } from "./identity";
+import { extractCreatorIdFromAccountLabel, resolveCreatorIdentityCandidates, verifyIdentityOnPage, type XiaohongshuCreatorIdentityCandidate } from "./identity";
 
 function candidate(rawValue: string): XiaohongshuCreatorIdentityCandidate {
   return {
@@ -9,6 +10,25 @@ function candidate(rawValue: string): XiaohongshuCreatorIdentityCandidate {
     normalizedCreatorId: rawValue.trim(),
     semanticAnchor: "xiaohongshu-account-id-label"
   };
+}
+
+function identityPage(url: string, closed = false): Page {
+  const leaf = {
+    isVisible: async () => true,
+    getAttribute: async (name: string) => name === "href" ? "https://creator.xiaohongshu.com/user/profile/960803317" : null,
+    innerText: async () => "测试账号",
+    evaluate: async () => "A",
+    nth: () => leaf
+  };
+  const locator = {
+    count: async () => 1,
+    nth: () => leaf
+  };
+  return {
+    url: () => url,
+    isClosed: () => closed,
+    locator: (selector: string) => selector === "text=小红书账号" ? { count: async () => 0 } : locator
+  } as unknown as Page;
 }
 
 describe("Xiaohongshu bounded Creator ID identity reader", () => {
@@ -56,6 +76,43 @@ describe("Xiaohongshu bounded Creator ID identity reader", () => {
       candidates: [],
       failureCode: "CREATOR_ID_NOT_FOUND"
     });
+  });
+
+  it("returns a typed proof for an existing official identity Page", async () => {
+    const result = await verifyIdentityOnPage(identityPage("https://creator.xiaohongshu.com/new/home"), {
+      browserSessionId: "session-a",
+      contextId: "context-1",
+      pageId: "page-a"
+    });
+
+    expect(result.status).toBe("PASS");
+    if (result.status === "PASS") {
+      expect(result.proof).toMatchObject({
+        browserSessionId: "session-a",
+        contextId: "context-1",
+        pageId: "page-a",
+        pageOrigin: "https://creator.xiaohongshu.com",
+        pagePathname: "/new/home",
+        creatorId: "960803317"
+      });
+      expect(new Date(result.proof.expiresAt).getTime() - new Date(result.proof.verifiedAt).getTime()).toBe(300_000);
+    }
+  });
+
+  it("rejects a publish editor as an identity source even when its DOM is otherwise available", async () => {
+    await expect(verifyIdentityOnPage(identityPage("https://creator.xiaohongshu.com/publish/publish"), {
+      browserSessionId: "session-a",
+      contextId: "context-1",
+      pageId: "page-b"
+    })).resolves.toEqual({ status: "FAIL", failureCode: "PUBLISH_EDITOR_CANNOT_BE_IDENTITY_SOURCE", proof: null });
+  });
+
+  it("fails closed for a closed identity Page", async () => {
+    await expect(verifyIdentityOnPage(identityPage("https://creator.xiaohongshu.com/new/home", true), {
+      browserSessionId: "session-a",
+      contextId: "context-1",
+      pageId: "page-a"
+    })).resolves.toEqual({ status: "FAIL", failureCode: "IDENTITY_PAGE_CLOSED", proof: null });
   });
 
   it("keeps the shared reader bounded and read-only", () => {

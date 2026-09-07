@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AdapterRegistry } from "@publisher/adapters-core";
 import type { Account, PlatformAccountIdentityBinding } from "@publisher/domain";
 import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
-import type { XiaohongshuCreatorIdentityObservation } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuPageScopedIdentityVerification } from "@publisher/adapters-xiaohongshu/browser";
 import { XhsIdentityService } from "../apps/desktop/src/main/xhs-identity";
 
 const account: Account = {
@@ -31,21 +31,6 @@ const account: Account = {
   lastUsedAt: null,
   archivedAt: null
 };
-
-function identity(): XiaohongshuCreatorIdentityObservation {
-  return {
-    canonicalContextId: "context-a",
-    canonicalPageId: "home-page",
-    canonicalPageUrl: "https://creator.xiaohongshu.com/new/home",
-    domLocationHref: "https://creator.xiaohongshu.com/new/home",
-    pageUrlConsistency: "PASS",
-    routeClass: "CREATOR_HOME",
-    runtimeAuthState: "AUTHENTICATED",
-    browserConnected: true,
-    pageClosed: false,
-    proof: { platformKey: "xiaohongshu", externalCreatorId: "960803317", displayName: "测试账号", profileUrl: null, source: "CREATOR_ACCOUNT_SURFACE", stable: true }
-  };
-}
 
 function binding(): PlatformAccountIdentityBinding {
   const timestamp = new Date().toISOString();
@@ -78,9 +63,25 @@ function runtime(session = "session-a", context = "context-a", page = "home-page
   };
 }
 
+function scopedIdentityProof(overrides: Partial<NonNullable<XiaohongshuPageScopedIdentityVerification["proof"]>> = {}): NonNullable<XiaohongshuPageScopedIdentityVerification["proof"]> {
+  return {
+    browserSessionId: "session-a",
+    contextId: "context-a",
+    pageId: "home-page",
+    pageOrigin: "https://creator.xiaohongshu.com",
+    pagePathname: "/new/home",
+    creatorId: "960803317",
+    verifiedAt: "2026-09-07T08:00:00.000Z",
+    expiresAt: "2026-09-07T08:05:00.000Z",
+    ...overrides
+  };
+}
+
 function setup(observedCreatorId: string | null = "960803317") {
   const reader = {
-    readCanonicalCreatorIdentity: vi.fn(async () => ({ ...identity(), proof: { ...identity().proof, externalCreatorId: observedCreatorId, stable: observedCreatorId !== null } })),
+    verifyIdentityOnContextPage: vi.fn(async () => observedCreatorId === null
+      ? { status: "FAIL", failureCode: "CREATOR_ID_NOT_FOUND", proof: null }
+      : { status: "PASS", failureCode: null, proof: scopedIdentityProof({ creatorId: observedCreatorId }) } satisfies XiaohongshuPageScopedIdentityVerification),
     getBrowserRuntimeSnapshot: vi.fn(() => runtime())
   };
   const repository = {
@@ -93,11 +94,11 @@ function setup(observedCreatorId: string | null = "960803317") {
   return { reader, service: new XhsIdentityService({ repository, registry }) };
 }
 
-describe("r35 XHS Context-bound identity service", () => {
-  it("uses the unchanged shared verifier before creating the attestation", async () => {
+describe("r36 XHS Context-bound identity service", () => {
+  it("uses the scoped identity verifier before creating the attestation", async () => {
     const fixture = setup();
     await expect(fixture.service.establishContextIdentityAttestation(account.id)).resolves.toMatchObject({ status: "PASS" });
-    expect(fixture.reader.readCanonicalCreatorIdentity).toHaveBeenCalledTimes(1);
+    expect(fixture.reader.verifyIdentityOnContextPage).toHaveBeenCalledTimes(1);
   });
 
   it.each([null, "different-creator"])("fails closed when the fresh Creator ID is %s", async (observedCreatorId) => {
@@ -114,5 +115,12 @@ describe("r35 XHS Context-bound identity service", () => {
     await expect(fixture.service.validateContextIdentityAttestation(account.id)).resolves.toMatchObject({ valid: true });
     fixture.reader.getBrowserRuntimeSnapshot.mockReturnValue(runtime("session-b", "context-a", "draft-page"));
     await expect(fixture.service.validateContextIdentityAttestation(account.id)).resolves.toMatchObject({ valid: false, failureCode: "BROWSER_SESSION_REBOUND" });
+  });
+
+  it("accepts a publish editor without identity DOM when the Context attestation came from /new/home", async () => {
+    const fixture = setup();
+    await expect(fixture.service.establishContextIdentityAttestation(account.id)).resolves.toMatchObject({ status: "PASS", attestation: { sourcePageIdentity: "home-page", sourcePathname: "/new/home" } });
+    fixture.reader.getBrowserRuntimeSnapshot.mockReturnValue(runtime("session-a", "context-a", "draft-page"));
+    await expect(fixture.service.validateContextIdentityAttestation(account.id)).resolves.toEqual({ valid: true, failureCode: null });
   });
 });

@@ -75,7 +75,7 @@ import {
   selectSafeIntermediateAction,
   type XhsIntermediateActionCandidate
 } from "./publish-flow-exploration";
-import { readXiaohongshuCreatorIdentity, type XiaohongshuIdentityDomDiagnosticMatch, type XiaohongshuCreatorIdentityCandidate } from "./identity";
+import { isXiaohongshuIdentitySourcePath, readXiaohongshuCreatorIdentity, verifyIdentityOnPage, type XiaohongshuIdentityDomDiagnosticMatch, type XiaohongshuCreatorIdentityCandidate, type XiaohongshuPageScopedIdentityVerification } from "./identity";
 import { isExactXhsPublishEditorRoute, runXhsEditorLoadDiagnostic, type XhsEditorLoadDiagnosticResult } from "./editor-load-diagnostic";
 import { runXhsEditorNetworkFailureDiagnostic, type XhsEditorNetworkDiagnosticResult } from "./editor-network-diagnostic";
 import { emptyXiaohongshuContextPageInventory, inspectXiaohongshuContextPage, type XiaohongshuContextPageInventory } from "./context-page-inventory";
@@ -96,6 +96,8 @@ export type { XiaohongshuContextPageInventory, XiaohongshuContextPageInventoryEn
 export type { XiaohongshuPublishEditorDomRuntimeDiagnostic } from "./publish-editor-dom-diagnostic";
 export type { XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic } from "./publish-editor-semantic-diagnostic";
 export type { XiaohongshuGlobalExactPublishAncestorSafe, XiaohongshuGlobalExactPublishBoundingRect, XiaohongshuGlobalExactPublishClickableSignal, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuGlobalExactPublishDomSnapshot, XiaohongshuGlobalExactPublishNodeSafe, XiaohongshuGlobalExactPublishUnique } from "./global-exact-publish-diagnostic";
+export { verifyIdentityOnPage } from "./identity";
+export type { XiaohongshuPageIdentityScope, XiaohongshuPageScopedIdentityProof, XiaohongshuPageScopedIdentityVerification } from "./identity";
 
 export interface XiaohongshuCurrentImageEditorReadiness {
   inspectionStatus: "PASS" | "FAIL";
@@ -1933,6 +1935,47 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         pageCreationEvents: [...(this.activeContextPageLifecycleEvents(ctx) ?? [])]
       };
     }, "inspectXhsContextPages");
+  }
+
+  /**
+   * Establish identity from the unique already-open identity-capable Page in
+   * this account-owned Context. The canonical Page may be a publish editor;
+   * identity is bound to the Session and Context, never to that Page.
+   */
+  async verifyIdentityOnContextPage(ctx: AccountContext): Promise<XiaohongshuPageScopedIdentityVerification> {
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
+      const session = this.activeBrowserSession(ctx);
+      if (!session) return { status: "FAIL", failureCode: "BROWSER_SESSION_UNAVAILABLE", proof: null };
+      if (!this.isBrowserConnected(session)) return { status: "FAIL", failureCode: "BROWSER_SESSION_DISCONNECTED", proof: null };
+
+      let pages: Awaited<ReturnType<typeof this.activeContextPages>>;
+      try {
+        pages = this.activeContextPages(ctx);
+      } catch {
+        return { status: "FAIL", failureCode: "CONTEXT_PAGE_OWNERSHIP_FAILURE", proof: null };
+      }
+      if (!pages) return { status: "FAIL", failureCode: "CONTEXT_PAGE_UNAVAILABLE", proof: null };
+
+      const identityPages = pages.filter((entry) => {
+        try {
+          if (entry.page.isClosed() || !this.pageContextMatchesSession(session, entry.page)) return false;
+          const parsed = new URL(entry.page.url());
+          return parsed.origin === "https://creator.xiaohongshu.com" && isXiaohongshuIdentitySourcePath(parsed.pathname);
+        } catch {
+          return false;
+        }
+      });
+      if (identityPages.length === 0) return { status: "FAIL", failureCode: "IDENTITY_PAGE_NOT_FOUND", proof: null };
+      if (identityPages.length !== 1) return { status: "FAIL", failureCode: "IDENTITY_PAGE_AMBIGUOUS", proof: null };
+
+      const identityPage = identityPages[0];
+      if (!identityPage) return { status: "FAIL", failureCode: "IDENTITY_PAGE_NOT_FOUND", proof: null };
+      return verifyIdentityOnPage(identityPage.page, {
+        browserSessionId: session.runtimeSessionIdentity,
+        contextId: session.contextDebugId ?? "",
+        pageId: identityPage.pageDebugId
+      });
+    }, "verifyIdentityOnContextPage");
   }
 
   /**

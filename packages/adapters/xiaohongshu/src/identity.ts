@@ -56,6 +56,84 @@ export type XiaohongshuBoundedCreatorIdentityRead = XiaohongshuCreatorIdentityRe
   diagnostic: XiaohongshuIdentityDomDiagnostic;
 };
 
+/** Context-bound identity proofs deliberately outlive the identity source Page. */
+export const XIAOHONGSHU_PAGE_SCOPED_IDENTITY_PROOF_TTL_MS = 300_000;
+
+export interface XiaohongshuPageScopedIdentityProof {
+  browserSessionId: string;
+  contextId: string;
+  pageId: string;
+  pageOrigin: "https://creator.xiaohongshu.com";
+  pagePathname: string;
+  creatorId: string;
+  verifiedAt: string;
+  expiresAt: string;
+}
+
+export type XiaohongshuPageScopedIdentityVerification =
+  | { status: "PASS"; failureCode: null; proof: XiaohongshuPageScopedIdentityProof }
+  | { status: "FAIL"; failureCode: string; proof: null };
+
+export interface XiaohongshuPageIdentityScope {
+  browserSessionId: string;
+  contextId: string;
+  pageId: string;
+}
+
+export function isXiaohongshuIdentitySourcePath(pathname: string): boolean {
+  return pathname === "/new/home"
+    || /^\/(?:publish\/manage|content|note|notes)(?:[/?#]|$)/iu.test(pathname);
+}
+
+/**
+ * Verify one already-owned Page using only the bounded DOM identity reader.
+ * Page ownership and the scope metadata are supplied by the adapter's Main
+ * process caller; this helper accepts no selectors, scripts, URLs, or Page IDs
+ * from Renderer code.
+ */
+export async function verifyIdentityOnPage(page: Page, scope: XiaohongshuPageIdentityScope): Promise<XiaohongshuPageScopedIdentityVerification> {
+  if (!scope.browserSessionId || !scope.contextId || !scope.pageId) return { status: "FAIL", failureCode: "IDENTITY_SCOPE_METADATA_MISSING", proof: null };
+
+  let pageUrl: string;
+  try {
+    if (page.isClosed()) return { status: "FAIL", failureCode: "IDENTITY_PAGE_CLOSED", proof: null };
+    pageUrl = page.url();
+  } catch {
+    return { status: "FAIL", failureCode: "IDENTITY_PAGE_UNAVAILABLE", proof: null };
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(pageUrl);
+  } catch {
+    return { status: "FAIL", failureCode: "IDENTITY_PAGE_URL_UNAVAILABLE", proof: null };
+  }
+  if (parsed.origin !== "https://creator.xiaohongshu.com") return { status: "FAIL", failureCode: "IDENTITY_PAGE_ORIGIN_NOT_ALLOWED", proof: null };
+  if (parsed.pathname === "/publish/publish") return { status: "FAIL", failureCode: "PUBLISH_EDITOR_CANNOT_BE_IDENTITY_SOURCE", proof: null };
+  if (!isXiaohongshuIdentitySourcePath(parsed.pathname)) return { status: "FAIL", failureCode: "IDENTITY_PAGE_ROUTE_NOT_ALLOWED", proof: null };
+
+  const identity = await readXiaohongshuCreatorIdentity(page);
+  if (identity.status !== "PASS" || !identity.normalizedCreatorId) {
+    return { status: "FAIL", failureCode: identity.failureCode ?? "CREATOR_ID_NOT_FOUND", proof: null };
+  }
+
+  const verifiedAt = new Date();
+  return {
+    status: "PASS",
+    failureCode: null,
+    proof: {
+      browserSessionId: scope.browserSessionId,
+      contextId: scope.contextId,
+      pageId: scope.pageId,
+      pageOrigin: "https://creator.xiaohongshu.com",
+      pagePathname: parsed.pathname,
+      creatorId: identity.normalizedCreatorId,
+      verifiedAt: verifiedAt.toISOString(),
+      expiresAt: new Date(verifiedAt.getTime() + XIAOHONGSHU_PAGE_SCOPED_IDENTITY_PROOF_TTL_MS).toISOString()
+    }
+  };
+}
+
 function compact(value: string): string {
   return value.normalize("NFKC").replace(/[\s]+/gu, " ").trim();
 }

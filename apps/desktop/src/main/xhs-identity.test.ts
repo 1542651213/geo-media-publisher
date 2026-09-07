@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AdapterRegistry } from "@publisher/adapters-core";
 import type { Account, PlatformAccountIdentityBinding } from "@publisher/domain";
 import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
-import type { XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentImageEditorReadiness } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentImageEditorReadiness, XiaohongshuPageScopedIdentityVerification } from "@publisher/adapters-xiaohongshu/browser";
 import { XhsIdentityService } from "./xhs-identity";
 
 const account: Account = {
@@ -50,6 +50,47 @@ function observation(externalCreatorId: string | null, runtimeAuthState: Xiaohon
 function binding(externalCreatorId: string): PlatformAccountIdentityBinding {
   const timestamp = new Date().toISOString();
   return { id: "binding-1", platformKey: "xiaohongshu", accountId: account.id, externalCreatorId, displayName: "测试账号", profileUrl: "https://creator.xiaohongshu.com/user/profile/960803317", bindingSource: "LEGACY_ACCOUNT_EXTERNAL_ID_MATCH", boundAt: timestamp, createdAt: timestamp, updatedAt: timestamp };
+}
+
+function pageScopedIdentityProof(overrides: Partial<NonNullable<XiaohongshuPageScopedIdentityVerification["proof"]>> = {}): NonNullable<XiaohongshuPageScopedIdentityVerification["proof"]> {
+  return {
+    browserSessionId: "session-a",
+    contextId: "context-1",
+    pageId: "page-home",
+    pageOrigin: "https://creator.xiaohongshu.com",
+    pagePathname: "/new/home",
+    creatorId: "960803317",
+    verifiedAt: "2026-09-07T08:00:00.000Z",
+    expiresAt: "2026-09-07T08:05:00.000Z",
+    ...overrides
+  };
+}
+
+function runtimeSnapshot(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    platformKey: "xiaohongshu",
+    accountId: account.id,
+    sessionExists: true,
+    browserSessionIdentity: "session-a",
+    contextDebugId: "context-1",
+    canonicalPageDebugId: "page-draft",
+    browserConnected: true,
+    contextExists: true,
+    contextPageCount: 2,
+    canonicalPageExists: true,
+    canonicalPageClosed: false,
+    canonicalPageContextMatchesSession: true,
+    runtimeAuthState: "AUTHENTICATED",
+    contextLaunchCount: 1,
+    canonicalPagePromotionCount: 1,
+    activeOperation: null,
+    mutexLocked: false,
+    operationInProgress: false,
+    lastDisconnectAt: null,
+    lastDisconnectContextDebugId: null,
+    lastDisconnectReason: null,
+    ...overrides
+  };
 }
 
 function setup(input: { observedId: string | null; expectedId?: string | null; existingBinding?: PlatformAccountIdentityBinding | null; runtimeAuthState?: XiaohongshuCreatorIdentityObservation["runtimeAuthState"] } = { observedId: "960803317" }) {
@@ -159,30 +200,8 @@ describe("Task10V XHS identity proof", () => {
 
   it("creates a Context-bound attestation from the fresh shared proof and validates it on a later Page", async () => {
     const reader = {
-      readCanonicalCreatorIdentity: vi.fn(async () => observation("960803317")),
-      getBrowserRuntimeSnapshot: vi.fn(() => ({
-        platformKey: "xiaohongshu",
-        accountId: account.id,
-        sessionExists: true,
-        browserSessionIdentity: "session-a",
-        contextDebugId: "context-1",
-        canonicalPageDebugId: "page-home",
-        browserConnected: true,
-        contextExists: true,
-        contextPageCount: 2,
-        canonicalPageExists: true,
-        canonicalPageClosed: false,
-        canonicalPageContextMatchesSession: true,
-        runtimeAuthState: "AUTHENTICATED" as const,
-        contextLaunchCount: 1,
-        canonicalPagePromotionCount: 1,
-        activeOperation: null,
-        mutexLocked: false,
-        operationInProgress: false,
-        lastDisconnectAt: null,
-        lastDisconnectContextDebugId: null,
-        lastDisconnectReason: null
-      }))
+      verifyIdentityOnContextPage: vi.fn(async () => ({ status: "PASS", failureCode: null, proof: pageScopedIdentityProof() } satisfies XiaohongshuPageScopedIdentityVerification)),
+      getBrowserRuntimeSnapshot: vi.fn(() => runtimeSnapshot())
     };
     const repository = {
       getAccountById: vi.fn(() => account),
@@ -193,14 +212,112 @@ describe("Task10V XHS identity proof", () => {
     const registry = { getForContent: vi.fn(() => reader) } as unknown as AdapterRegistry;
     const service = new XhsIdentityService({ repository, registry });
 
-    await expect(service.establishContextIdentityAttestation(account.id)).resolves.toMatchObject({ status: "PASS", attestation: { browserSessionIdentity: "session-a", browserContextIdentity: "context-1", sourcePageIdentity: "page-1" } });
+    await expect(service.establishContextIdentityAttestation(account.id)).resolves.toMatchObject({ status: "PASS", attestation: { browserSessionIdentity: "session-a", browserContextIdentity: "context-1", sourcePageIdentity: "page-home", sourcePathname: "/new/home" } });
     await expect(service.validateContextIdentityAttestation(account.id)).resolves.toMatchObject({ valid: true });
-    expect(service.getContextIdentityAttestation(account.id)).toMatchObject({ sourcePageIdentity: "page-1" });
+    expect(service.getContextIdentityAttestation(account.id)).toMatchObject({ sourcePageIdentity: "page-home" });
+  });
+
+  it("accepts identity Page A and a different publish-editor Page B in the same Context", async () => {
+    const reader = {
+      verifyIdentityOnContextPage: vi.fn(async () => ({ status: "PASS", failureCode: null, proof: pageScopedIdentityProof({ pageId: "page-a-home" }) } satisfies XiaohongshuPageScopedIdentityVerification)),
+      getBrowserRuntimeSnapshot: vi.fn(() => runtimeSnapshot({ canonicalPageDebugId: "page-b-draft" }))
+    };
+    const repository = {
+      getAccountById: vi.fn(() => account),
+      getPlatformAccountIdentityBinding: vi.fn(() => binding("960803317")),
+      bindPlatformAccountIdentity: vi.fn(),
+      convergeUnusedOneShotAuthorization: vi.fn()
+    };
+    const registry = { getForContent: vi.fn(() => reader) } as unknown as AdapterRegistry;
+    const service = new XhsIdentityService({ repository, registry });
+
+    await expect(service.establishContextIdentityAttestation(account.id)).resolves.toMatchObject({ status: "PASS", attestation: { sourcePageIdentity: "page-a-home" } });
+    await expect(service.validateContextIdentityAttestation(account.id)).resolves.toEqual({ valid: true, failureCode: null });
+  });
+
+  it("fails closed when the identity Page is closed", async () => {
+    const reader = {
+      verifyIdentityOnContextPage: vi.fn(async () => ({ status: "FAIL", failureCode: "IDENTITY_PAGE_CLOSED", proof: null } satisfies XiaohongshuPageScopedIdentityVerification)),
+      getBrowserRuntimeSnapshot: vi.fn(() => runtimeSnapshot())
+    };
+    const repository = {
+      getAccountById: vi.fn(() => account),
+      getPlatformAccountIdentityBinding: vi.fn(() => binding("960803317")),
+      bindPlatformAccountIdentity: vi.fn(),
+      convergeUnusedOneShotAuthorization: vi.fn()
+    };
+    const registry = { getForContent: vi.fn(() => reader) } as unknown as AdapterRegistry;
+    const service = new XhsIdentityService({ repository, registry });
+
+    await expect(service.establishContextIdentityAttestation(account.id)).resolves.toEqual({ status: "BLOCKED", failureCode: "IDENTITY_PAGE_CLOSED" });
+    expect(service.getContextIdentityAttestation(account.id)).toBeNull();
+  });
+
+  it("fails closed when the current Context changes after identity proof", async () => {
+    const reader = {
+      verifyIdentityOnContextPage: vi.fn(async () => ({ status: "PASS", failureCode: null, proof: pageScopedIdentityProof() } satisfies XiaohongshuPageScopedIdentityVerification)),
+      getBrowserRuntimeSnapshot: vi.fn()
+        .mockReturnValueOnce(runtimeSnapshot())
+        .mockReturnValueOnce(runtimeSnapshot({ contextDebugId: "context-b" }))
+    };
+    const repository = {
+      getAccountById: vi.fn(() => account),
+      getPlatformAccountIdentityBinding: vi.fn(() => binding("960803317")),
+      bindPlatformAccountIdentity: vi.fn(),
+      convergeUnusedOneShotAuthorization: vi.fn()
+    };
+    const registry = { getForContent: vi.fn(() => reader) } as unknown as AdapterRegistry;
+    const service = new XhsIdentityService({ repository, registry });
+
+    await expect(service.establishContextIdentityAttestation(account.id)).resolves.toMatchObject({ status: "PASS" });
+    await expect(service.validateContextIdentityAttestation(account.id)).resolves.toEqual({ valid: false, failureCode: "BROWSER_CONTEXT_CHANGED" });
+  });
+
+  it("fails closed when the scoped identity Creator ID mismatches the binding", async () => {
+    const reader = {
+      verifyIdentityOnContextPage: vi.fn(async () => ({ status: "PASS", failureCode: null, proof: pageScopedIdentityProof({ creatorId: "123456789" }) } satisfies XiaohongshuPageScopedIdentityVerification)),
+      getBrowserRuntimeSnapshot: vi.fn(() => runtimeSnapshot())
+    };
+    const repository = {
+      getAccountById: vi.fn(() => account),
+      getPlatformAccountIdentityBinding: vi.fn(() => binding("960803317")),
+      bindPlatformAccountIdentity: vi.fn(),
+      convergeUnusedOneShotAuthorization: vi.fn()
+    };
+    const registry = { getForContent: vi.fn(() => reader) } as unknown as AdapterRegistry;
+    const service = new XhsIdentityService({ repository, registry });
+
+    await expect(service.establishContextIdentityAttestation(account.id)).resolves.toEqual({ status: "BLOCKED", failureCode: "CREATOR_ID_MISMATCH" });
+  });
+
+  it("fails closed when the Context-bound attestation has expired", async () => {
+    const reader = {
+      verifyIdentityOnContextPage: vi.fn(async () => ({ status: "PASS", failureCode: null, proof: pageScopedIdentityProof() } satisfies XiaohongshuPageScopedIdentityVerification)),
+      getBrowserRuntimeSnapshot: vi.fn(() => runtimeSnapshot())
+    };
+    const repository = {
+      getAccountById: vi.fn(() => account),
+      getPlatformAccountIdentityBinding: vi.fn(() => binding("960803317")),
+      bindPlatformAccountIdentity: vi.fn(),
+      convergeUnusedOneShotAuthorization: vi.fn()
+    };
+    const registry = { getForContent: vi.fn(() => reader) } as unknown as AdapterRegistry;
+    const service = new XhsIdentityService({ repository, registry });
+
+    await expect(service.establishContextIdentityAttestation(account.id)).resolves.toMatchObject({ status: "PASS" });
+    const attestation = service.getContextIdentityAttestation(account.id);
+    expect(attestation).not.toBeNull();
+    if (attestation) attestation.expiresAt = "2020-01-01T00:00:00.000Z";
+    await expect(service.validateContextIdentityAttestation(account.id)).resolves.toEqual({ valid: false, failureCode: "ATTESTATION_EXPIRED" });
   });
 
   it("fails closed when the current runtime is rebound to a different Session", async () => {
     const reader = {
-      readCanonicalCreatorIdentity: vi.fn(async () => observation("960803317")),
+      verifyIdentityOnContextPage: vi.fn(async () => ({
+        status: "PASS",
+        failureCode: null,
+        proof: pageScopedIdentityProof({ browserSessionId: "session-a" })
+      } satisfies XiaohongshuPageScopedIdentityVerification)),
       getBrowserRuntimeSnapshot: vi.fn()
         .mockReturnValueOnce({ sessionExists: true, browserSessionIdentity: "session-a", contextDebugId: "context-1", canonicalPageDebugId: "page-1", browserConnected: true, contextExists: true, contextPageCount: 1, canonicalPageExists: true, canonicalPageClosed: false, canonicalPageContextMatchesSession: true, runtimeAuthState: "AUTHENTICATED" as const })
         .mockReturnValueOnce({ sessionExists: true, browserSessionIdentity: "session-b", contextDebugId: "context-1", canonicalPageDebugId: "page-draft", browserConnected: true, contextExists: true, contextPageCount: 1, canonicalPageExists: true, canonicalPageClosed: false, canonicalPageContextMatchesSession: true, runtimeAuthState: "AUTHENTICATED" as const })

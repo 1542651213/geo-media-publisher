@@ -956,6 +956,52 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(fixture.page.goto).toHaveBeenCalledTimes(1);
   });
 
+  it("verifies identity on Page A and leaves a different publish-editor Page B usable in the same Context", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountLabelText: "小红书账号：960803317" });
+    const identityPage = fixture.page;
+    const draftPage = {
+      url: vi.fn(() => "https://creator.xiaohongshu.com/publish/publish"),
+      isClosed: vi.fn(() => false),
+      context: vi.fn(() => fixture.session.context)
+    } as unknown as Page;
+    (fixture.session as unknown as { runtimeSessionIdentity: string }).runtimeSessionIdentity = "runtime-session-a";
+    (fixture.manager as unknown as { getContextPages: ReturnType<typeof vi.fn> }).getContextPages = vi.fn(() => [
+      { session: fixture.session, page: identityPage, pageIndex: 0, pageDebugId: "identity-page-a", isCanonical: false },
+      { session: fixture.session, page: draftPage, pageIndex: 1, pageDebugId: "draft-page-b", isCanonical: true }
+    ]);
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context("account-a"));
+
+    const result = await adapter.verifyIdentityOnContextPage(context("account-a"));
+
+    expect(result).toMatchObject({ status: "PASS", proof: { browserSessionId: "runtime-session-a", contextId: "context-debug-id", pageId: "identity-page-a", pagePathname: "/new/home", creatorId: "960803317" } });
+    expect(identityPage.isClosed).toHaveBeenCalled();
+    expect(draftPage.url).toHaveBeenCalled();
+    expect(fixture.entryClick).not.toHaveBeenCalled();
+    expect(fixture.inputSetFiles).not.toHaveBeenCalled();
+    expect(fixture.submitClick).not.toHaveBeenCalled();
+  });
+
+  it("rejects an ambiguous set of identity-capable Pages", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountLabelText: "小红书账号：960803317" });
+    (fixture.session as unknown as { runtimeSessionIdentity: string }).runtimeSessionIdentity = "runtime-session-a";
+    const secondIdentityPage = {
+      url: vi.fn(() => "https://creator.xiaohongshu.com/new/home"),
+      isClosed: vi.fn(() => false),
+      context: vi.fn(() => fixture.session.context)
+    } as unknown as Page;
+    (fixture.manager as unknown as { getContextPages: ReturnType<typeof vi.fn> }).getContextPages = vi.fn(() => [
+      { session: fixture.session, page: fixture.page, pageIndex: 0, pageDebugId: "identity-page-a", isCanonical: false },
+      { session: fixture.session, page: secondIdentityPage, pageIndex: 1, pageDebugId: "identity-page-b", isCanonical: true }
+    ]);
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context("account-a"));
+
+    await expect(adapter.verifyIdentityOnContextPage(context("account-a"))).resolves.toEqual({ status: "FAIL", failureCode: "IDENTITY_PAGE_AMBIGUOUS", proof: null });
+    expect(fixture.entryClick).not.toHaveBeenCalled();
+    expect(fixture.inputSetFiles).not.toHaveBeenCalled();
+  });
+
   it("consumes a same-runtime identity proof when the home page has only one generic login signal", async () => {
     const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountLabelText: "小红书账号: 960803317" });
     installPageEvidence(fixture, { positiveSignals: ["发布笔记"] });

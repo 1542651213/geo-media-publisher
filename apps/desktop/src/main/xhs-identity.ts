@@ -2,12 +2,13 @@ import type { AdapterRegistry, BrowserSessionRuntimeSnapshot } from "@publisher/
 import type { AppRepository } from "@publisher/db";
 import { ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type Account, type AccountContext, type CreatorIdentityVerificationResult, type PlatformAccountIdentityBinding, type XhsIdentityAcceptance } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentFileInputState, XiaohongshuCurrentImageEditorReadiness, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentFileInputState, XiaohongshuCurrentImageEditorReadiness, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPageScopedIdentityVerification, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { createXhsContextIdentityAttestation, validateXhsContextIdentityAttestation, type XhsContextIdentityAttestation, type XhsContextIdentityAttestationResult, type XhsContextIdentityRuntime } from "./xhs-context-identity-attestation";
 
 type IdentityReader = {
   inspectCanonicalPageRuntime?: (ctx: AccountContext) => Promise<XiaohongshuCanonicalPageRuntimeProbe>;
   inspectXhsContextPages?: (ctx: AccountContext) => Promise<XiaohongshuContextPageInventory>;
+  verifyIdentityOnContextPage?: (ctx: AccountContext) => Promise<XiaohongshuPageScopedIdentityVerification>;
   inspectXhsPublishEntryDom?: (ctx: AccountContext) => Promise<XiaohongshuPublishEntryDomRuntimeDiagnostic>;
   inspectCurrentXiaohongshuImageEditorReadiness?: (ctx: AccountContext) => Promise<XiaohongshuCurrentImageEditorReadiness>;
   inspectCurrentXiaohongshuPublishEditorDom?: (ctx: AccountContext) => Promise<XiaohongshuPublishEditorDomRuntimeDiagnostic>;
@@ -26,15 +27,6 @@ export interface XhsIdentityServiceOptions {
 }
 
 const BLOCKED_ROUTE_CLASSES = new Set<XiaohongshuCreatorIdentityObservation["routeClass"]>(["LOGIN", "SECURITY_VERIFICATION", "UNKNOWN"]);
-
-function safeUrlParts(value: string): { origin: string; pathname: string } {
-  try {
-    const parsed = new URL(value);
-    return { origin: parsed.origin, pathname: parsed.pathname };
-  } catch {
-    return { origin: "", pathname: "" };
-  }
-}
 
 function observationFromRuntimeProbe(probe: XiaohongshuCanonicalPageRuntimeProbe): XiaohongshuCreatorIdentityObservation {
   if (probe.probeStatus !== "PASS" || probe.domLocationEvaluateStatus !== "PASS" || probe.pageUrlConsistency !== "PASS") {
@@ -79,27 +71,34 @@ export class XhsIdentityService {
     if (typeof adapter.getBrowserRuntimeSnapshot !== "function") throw Object.assign(new Error("当前小红书运行时未提供 BrowserSession runtime snapshot"), { code: "XHS_RUNTIME_SNAPSHOT_UNAVAILABLE" });
     const context = this.context(account);
     const runtime = adapter.getBrowserRuntimeSnapshot(context);
-    const identity = await this.verifyCreatorIdentity(accountId);
-    const parsedSourceUrl = safeUrlParts(identity.canonicalPageUrl);
+    const identity = typeof adapter.verifyIdentityOnContextPage === "function"
+      ? await adapter.verifyIdentityOnContextPage(context)
+      : { status: "FAIL", failureCode: "XHS_CONTEXT_IDENTITY_PAGE_VERIFIER_UNAVAILABLE", proof: null } satisfies XiaohongshuPageScopedIdentityVerification;
+    if (identity.status !== "PASS") {
+      this.contextIdentityAttestations.delete(account.id);
+      return { status: "BLOCKED", failureCode: identity.failureCode };
+    }
+    if (identity.proof.browserSessionId !== (runtime.browserSessionIdentity ?? null) || identity.proof.contextId !== runtime.contextDebugId) {
+      this.contextIdentityAttestations.delete(account.id);
+      return { status: "BLOCKED", failureCode: "IDENTITY_RUNTIME_SCOPE_MISMATCH" };
+    }
+    const binding = this.options.repository.getPlatformAccountIdentityBinding("xiaohongshu", account.id);
+    const expectedExternalCreatorId = binding?.externalCreatorId ?? account.externalAccountId ?? null;
     const result = createXhsContextIdentityAttestation({
       accountId: account.id,
-      expectedExternalCreatorId: identity.expectedExternalCreatorId,
-      observedExternalCreatorId: identity.observed.externalCreatorId,
-      identityObservationStatus: identity.verified ? "PASS" : "NOT_VERIFIED",
-      browserSessionIdentity: runtime.browserSessionIdentity ?? null,
-      browserContextIdentity: runtime.contextDebugId,
-      sourcePageIdentity: identity.canonicalPageId,
-      sourceOrigin: parsedSourceUrl.origin,
-      sourcePathname: parsedSourceUrl.pathname,
+      expectedExternalCreatorId,
+      observedExternalCreatorId: identity.proof.creatorId,
+      identityObservationStatus: "PASS",
+      browserSessionIdentity: identity.proof.browserSessionId,
+      browserContextIdentity: identity.proof.contextId,
+      sourcePageIdentity: identity.proof.pageId,
+      sourceOrigin: identity.proof.pageOrigin,
+      sourcePathname: identity.proof.pagePathname,
       browserConnected: runtime.browserConnected === true,
       pageClosed: runtime.canonicalPageClosed === true,
       runtimeAuthState: runtime.runtimeAuthState,
       externalAccountId: account.externalAccountId
     });
-    if (result.status === "PASS" && (identity.canonicalContextId !== runtime.contextDebugId || identity.canonicalPageId !== runtime.canonicalPageDebugId)) {
-      this.contextIdentityAttestations.delete(account.id);
-      return { status: "BLOCKED", failureCode: "IDENTITY_RUNTIME_SCOPE_MISMATCH" };
-    }
     if (result.status === "PASS") this.contextIdentityAttestations.set(account.id, result.attestation);
     else this.contextIdentityAttestations.delete(account.id);
     return result;
