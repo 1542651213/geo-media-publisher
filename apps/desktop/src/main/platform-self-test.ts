@@ -8,7 +8,7 @@ import type { AutomationPrepareResult, ControlledPostUploadDiscoveryResult, Publ
 import type { Logger } from "@publisher/logger";
 import type { PublisherService } from "@publisher/publisher";
 import type { Account, AccountContext, BackgroundAutomationStatus, CurrentRuntimeIdentityProof, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PublishArticleInput, Task10SPrepublishResult } from "@publisher/domain";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentImageEditorReadiness, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentImageEditorReadiness, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuCurrentPostUploadTerminalReadiness, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { OneShotConfirmationCoordinator } from "./one-shot-confirmation";
 import { OneShotConfirmationReconciliationService } from "./one-shot-reconciliation";
 import { XhsIdentityService } from "./xhs-identity";
@@ -895,6 +895,10 @@ export class PlatformSelfTestService {
 
   inspectCurrentXiaohongshuPostUploadReconciliation(): Promise<XiaohongshuCurrentPostUploadReconciliation> {
     return this.xhsIdentity.inspectCurrentXiaohongshuPostUploadReconciliation(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
+  }
+
+  inspectCurrentXiaohongshuPostUploadTerminalReadiness(): Promise<XiaohongshuCurrentPostUploadTerminalReadiness> {
+    return this.xhsIdentity.inspectCurrentXiaohongshuPostUploadTerminalReadiness(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
   }
 
   inspectCurrentXiaohongshuFileInputState(): Promise<XiaohongshuCurrentFileInputState> {

@@ -85,9 +85,12 @@ import { emptyXiaohongshuGlobalExactPublishDomRuntimeDiagnostic, inspectXiaohong
 import { clickTask10sClosedShadowPublishSurface, inspectTask10sClosedShadowPublishSurface } from "./task10s-closed-shadow-final-submit";
 import { evaluateTask10sRetainedEditorGate, TASK10S_FIXED_BODY, TASK10S_FIXED_TITLE } from "./task10s-retained-editor-completion";
 import { emptyXiaohongshuPostUploadReconciliationDomSnapshot, inspectXiaohongshuPostUploadReconciliationDom, reconcileXiaohongshuPostUploadSnapshot, type XiaohongshuPostUploadReconciliationResult } from "./post-upload-reconciliation-diagnostic";
+import type { XiaohongshuPostUploadTerminalReadiness } from "./post-upload-terminal-readiness";
 import { containsExpectedXiaohongshuSafeFixture, inspectXiaohongshuFileInputState, type XiaohongshuFileInputFixtureMatch, type XiaohongshuFileInputSafeNode } from "./file-input-diagnostic";
 import { readXiaohongshuUploadInputImmediately, type XiaohongshuUploadFileExpectation, type XiaohongshuUploadInputImmediateReadback } from "./upload-delivery-diagnostic";
 export type { XiaohongshuPostUploadBoundingRect, XiaohongshuPostUploadFinalSubmitProof, XiaohongshuPostUploadImageItemSafe, XiaohongshuPostUploadReconciliationDomSnapshot, XiaohongshuPostUploadReconciliationResult, XiaohongshuPostUploadReconciliationState } from "./post-upload-reconciliation-diagnostic";
+export { classifyXiaohongshuPostUploadTerminalReadiness } from "./post-upload-terminal-readiness";
+export type { XiaohongshuPostUploadTerminalReadiness, XiaohongshuPostUploadTerminalReadinessBlocker, XiaohongshuPostUploadTerminalReadinessInput } from "./post-upload-terminal-readiness";
 export type { XiaohongshuFileInputAncestorFingerprint, XiaohongshuFileInputDomSnapshot, XiaohongshuFileInputFileSafeMetadata, XiaohongshuFileInputFixtureMatch, XiaohongshuFileInputSafeNode } from "./file-input-diagnostic";
 export type { XiaohongshuUploadFileExpectation, XiaohongshuUploadFileMetadata, XiaohongshuUploadFileReadback, XiaohongshuUploadFixtureMatch, XiaohongshuUploadInputFingerprint, XiaohongshuUploadInputImmediateReadback } from "./upload-delivery-diagnostic";
 export type { XhsEditorLoadDiagnosticResult } from "./editor-load-diagnostic";
@@ -153,6 +156,10 @@ export interface XiaohongshuCurrentPostUploadReconciliation extends XiaohongshuP
   from: string | null;
   target: string | null;
   sanitizedUrl: string | null;
+}
+
+export interface XiaohongshuCurrentPostUploadTerminalReadiness extends XiaohongshuCurrentPostUploadReconciliation {
+  terminalReadiness: XiaohongshuPostUploadTerminalReadiness;
 }
 
 export interface XiaohongshuCurrentFileInputState {

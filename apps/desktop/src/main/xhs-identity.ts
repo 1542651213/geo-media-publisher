@@ -2,7 +2,8 @@ import type { AdapterRegistry, BrowserSessionRuntimeSnapshot } from "@publisher/
 import type { AppRepository } from "@publisher/db";
 import { ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type Account, type AccountContext, type CreatorIdentityVerificationResult, type PlatformAccountIdentityBinding, type XhsIdentityAcceptance } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentFileInputState, XiaohongshuCurrentImageEditorReadiness, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPageScopedIdentityVerification, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import { classifyXiaohongshuPostUploadTerminalReadiness } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentFileInputState, XiaohongshuCurrentImageEditorReadiness, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuCurrentPostUploadTerminalReadiness, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPageScopedIdentityVerification, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { createXhsContextIdentityAttestation, validateXhsContextIdentityAttestation, type XhsContextIdentityAttestation, type XhsContextIdentityAttestationResult, type XhsContextIdentityRuntime } from "./xhs-context-identity-attestation";
 
 type IdentityReader = {
@@ -328,6 +329,37 @@ export class XhsIdentityService {
       noExplicitUploadError: diagnostic.noExplicitUploadError
     });
     return diagnostic;
+  }
+
+  async inspectCurrentXiaohongshuPostUploadTerminalReadiness(accountId: string): Promise<XiaohongshuCurrentPostUploadTerminalReadiness> {
+    const diagnostic = await this.inspectCurrentXiaohongshuPostUploadReconciliation(accountId);
+    const terminalReadiness = classifyXiaohongshuPostUploadTerminalReadiness({
+      originalPostUploadState: diagnostic.postUploadState,
+      editorScopedImageAssetCount: diagnostic.imageAssetRenderedCount,
+      imageCounterTextSafe: diagnostic.imageCounterTextSafe,
+      titleControlPresent: diagnostic.titleControlPresent,
+      bodyControlPresent: diagnostic.bodyControlPresent,
+      uploadErrorSignalPresent: diagnostic.explicitUploadErrorSignals.length > 0,
+      busySignalPresent: diagnostic.processingSignalPresent
+    });
+    this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_POST_UPLOAD_TERMINAL_READINESS", "小红书 post-upload terminal readiness 只读 diagnostic 完成", {
+      platformKey: "xiaohongshu",
+      accountId: diagnostic.accountId,
+      inspectionStatus: diagnostic.inspectionStatus,
+      contextDebugId: diagnostic.contextDebugId,
+      pageId: diagnostic.pageId,
+      editorScopedImageAssetCount: terminalReadiness.editorScopedImageAssetCount,
+      imageCounterTextSafe: terminalReadiness.imageCounterTextSafe,
+      imageCounterValid: terminalReadiness.imageCounterValid,
+      titleControlPresent: terminalReadiness.titleControlPresent,
+      bodyControlPresent: terminalReadiness.bodyControlPresent,
+      uploadErrorSignalPresent: terminalReadiness.uploadErrorSignalPresent,
+      busySignalPresent: terminalReadiness.busySignalPresent,
+      postUploadState: terminalReadiness.postUploadState,
+      ready: terminalReadiness.ready,
+      blockerCodes: terminalReadiness.blockerCodes
+    });
+    return { ...diagnostic, terminalReadiness };
   }
 
   async inspectCurrentXiaohongshuFileInputState(accountId: string): Promise<XiaohongshuCurrentFileInputState> {

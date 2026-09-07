@@ -16,6 +16,7 @@ export * from "./task10s-final-surface";
 export * from "./task10s-closed-shadow-final-submit";
 export * from "./task10s-retained-editor-completion";
 export * from "./post-upload-reconciliation-diagnostic";
+export * from "./post-upload-terminal-readiness";
 export * from "./file-input-diagnostic";
 export * from "./upload-delivery-diagnostic";
 export * from "./publish-flow-exploration";

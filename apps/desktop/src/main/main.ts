@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { readFileSync as readPhysicalFileSync } from "node:original-fs";
 import { join } from "node:path";
 import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuCurrentPostUploadTerminalReadiness, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { openDatabase, restoreDatabaseSafely } from "@publisher/db";
 import { SafeStorageCredentialStore } from "@publisher/security";
 import { createFileLogger } from "@publisher/logger";
@@ -15,7 +15,7 @@ import { runDeepSeekBenchmarkMode } from "./deepseek-benchmark-mode";
 import { createProcessDiagnostics } from "./process-diagnostics";
 import { recordAppStartup } from "./runtime-observability";
 import type { PlatformSelfTestService } from "./platform-self-test";
-import { buildSecondInstanceDispatchTrace, createFixedDiagnosticRunner, ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_FINAL_SUBMIT_DOM, INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticActionWithTrace, RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, parseDiagnosticAction, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, type DiagnosticAction, type FixedDiagnosticInvocationContext, type Task10sAttempt3DispatchTrace, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
+import { buildSecondInstanceDispatchTrace, createFixedDiagnosticRunner, ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_FINAL_SUBMIT_DOM, INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticActionWithTrace, RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, parseDiagnosticAction, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, type DiagnosticAction, type FixedDiagnosticInvocationContext, type Task10sAttempt3DispatchTrace, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
 
 app.setName("codex-media-publisher");
 const processDiagnostics = createProcessDiagnostics(join(app.getPath("userData"), "production-data", "logs", "main-process-diagnostics.log"));
@@ -395,6 +395,42 @@ async function createWindow(): Promise<void> {
     writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), "utf8");
     logger.info("PLATFORM_SELF_TEST", "XHS_POST_UPLOAD_RECONCILIATION_EVIDENCE_WRITTEN", "小红书 post-upload reconciliation evidence 已写入", { action: INSPECT_XHS_POST_UPLOAD_RECONCILIATION, evidencePath, inspectionStatus: diagnostic.inspectionStatus, postUploadState: diagnostic.postUploadState, imageAssetRenderedCount: diagnostic.imageAssetRenderedCount, titleControlPresent: diagnostic.titleControlPresent, bodyControlPresent: diagnostic.bodyControlPresent, finalSubmitControlPresent: diagnostic.finalSubmitVisibleCount > 0 });
   };
+  const writePostUploadTerminalReadinessEvidence = (diagnostic: XiaohongshuCurrentPostUploadTerminalReadiness): void => {
+    mkdirSync(evidenceDirectory, { recursive: true });
+    const timestamp = new Date().toISOString();
+    const evidencePath = join(evidenceDirectory, `xiaohongshu-task10s-post-upload-terminal-readiness-${timestamp.replace(/[:.]/gu, "-")}.json`);
+    const evidence = {
+      timestamp,
+      evidencePath,
+      action: INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS,
+      inspectionStatus: diagnostic.inspectionStatus,
+      failureCode: diagnostic.failureCode,
+      accountId: diagnostic.accountId,
+      contextDebugId: diagnostic.contextDebugId,
+      pageId: diagnostic.pageId,
+      sessionExists: diagnostic.sessionExists,
+      browserConnected: diagnostic.browserConnected,
+      contextExists: diagnostic.contextExists,
+      pageExists: diagnostic.pageExists,
+      pageClosed: diagnostic.pageClosed,
+      pageContextMatchesSession: diagnostic.pageContextMatchesSession,
+      route: { origin: diagnostic.origin, pathname: diagnostic.pathname, source: diagnostic.source, from: diagnostic.from, target: diagnostic.target, sanitizedUrl: diagnostic.sanitizedUrl },
+      readyState: diagnostic.readyState,
+      postUploadState: diagnostic.terminalReadiness.postUploadState,
+      imageAssetRenderedCount: diagnostic.terminalReadiness.editorScopedImageAssetCount,
+      imageCounterTextSafe: diagnostic.terminalReadiness.imageCounterTextSafe,
+      imageCounterValid: diagnostic.terminalReadiness.imageCounterValid,
+      titleControlPresent: diagnostic.terminalReadiness.titleControlPresent,
+      bodyControlPresent: diagnostic.terminalReadiness.bodyControlPresent,
+      uploadErrorSignalPresent: diagnostic.terminalReadiness.uploadErrorSignalPresent,
+      busySignalPresent: diagnostic.terminalReadiness.busySignalPresent,
+      postUploadTerminalReadiness: diagnostic.terminalReadiness,
+      finalSubmitClickCount: 0,
+      publicationTransactionCount: 0
+    };
+    writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), "utf8");
+    logger.info("PLATFORM_SELF_TEST", "XHS_POST_UPLOAD_TERMINAL_READINESS_EVIDENCE_WRITTEN", "小红书 post-upload terminal readiness evidence 已写入", { action: INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS, evidencePath, status: diagnostic.terminalReadiness.ready ? "EDITOR_READY" : "NOT_READY", blockerCodes: diagnostic.terminalReadiness.blockerCodes });
+  };
   const writeFileInputEvidence = (diagnostic: XiaohongshuCurrentFileInputState): void => {
     mkdirSync(evidenceDirectory, { recursive: true });
     const timestamp = new Date().toISOString();
@@ -577,6 +613,11 @@ async function createWindow(): Promise<void> {
       return platformSelfTests.inspectCurrentXiaohongshuPostUploadReconciliation();
     },
     writePostUploadReconciliationEvidence,
+    inspectPostUploadTerminalReadiness: async () => {
+      logger.info("PLATFORM_SELF_TEST", "XHS_POST_UPLOAD_TERMINAL_READINESS_TRIGGER_RECEIVED", "收到固定非 UI 小红书 post-upload terminal readiness trigger", { action: INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
+      return platformSelfTests.inspectCurrentXiaohongshuPostUploadTerminalReadiness();
+    },
+    writePostUploadTerminalReadinessEvidence,
     inspectFileInputState: async () => {
       logger.info("PLATFORM_SELF_TEST", "XHS_FILE_INPUT_STATE_TRIGGER_RECEIVED", "收到固定非 UI 小红书 file-input state trigger", { action: INSPECT_XHS_FILE_INPUT_STATE, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
       return platformSelfTests.inspectCurrentXiaohongshuFileInputState();

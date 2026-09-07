@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuCurrentPostUploadTerminalReadiness, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, XHS_TASK10S_COMPLETE_RETAINED_EDITOR_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5_FLAG, type Task10sAttempt3DispatchDryRunResult, type Task10sControlledUploadAttemptResult, type Task10sRetainedEditorCompletionResult } from "./task10s-attempt3";
 import { RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, XHS_TASK10S_FRESH_PUBLISH_FLOW_FLAG } from "./task10s-fresh-publish-flow";
 import type { XhsContextIdentityAttestationResult } from "./xhs-context-identity-attestation";
@@ -15,6 +15,8 @@ export const XHS_PUBLISH_ENTRY_DOM_DIAGNOSTIC_FLAG = "--inspect-xhs-publish-entr
 export const INSPECT_XHS_PUBLISH_ENTRY_DOM = "INSPECT_XHS_PUBLISH_ENTRY_DOM" as const;
 export const XHS_POST_UPLOAD_RECONCILIATION_FLAG = "--probe-xhs-post-upload-state" as const;
 export const INSPECT_XHS_POST_UPLOAD_RECONCILIATION = "INSPECT_XHS_POST_UPLOAD_RECONCILIATION" as const;
+export const XHS_POST_UPLOAD_TERMINAL_READINESS_FLAG = "--xhs-task10s-post-upload-terminal-readiness" as const;
+export const INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS = "INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS" as const;
 export const XHS_FILE_INPUT_STATE_FLAG = "--probe-xhs-file-input-state" as const;
 export const INSPECT_XHS_FILE_INPUT_STATE = "INSPECT_XHS_FILE_INPUT_STATE" as const;
 export const XHS_FINAL_SUBMIT_DOM_DIAGNOSTIC_FLAG = "--xhs-task10s-final-submit-dom-diagnostic" as const;
@@ -24,13 +26,14 @@ export const INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM = "INSPECT_XHS_GLOBAL_EXACT_PU
 export const XHS_CONTEXT_IDENTITY_ATTESTATION_FLAG = "--xhs-task10s-establish-context-identity-attestation" as const;
 export const ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION = "ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION" as const;
 
-export type DiagnosticAction = typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_FILE_INPUT_STATE | typeof INSPECT_XHS_FINAL_SUBMIT_DOM | typeof INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM | typeof ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 | typeof RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN | typeof RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR | typeof RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW;
+export type DiagnosticAction = typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS | typeof INSPECT_XHS_FILE_INPUT_STATE | typeof INSPECT_XHS_FINAL_SUBMIT_DOM | typeof INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM | typeof ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 | typeof RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN | typeof RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR | typeof RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW;
 
 function actionForValue(value: unknown): DiagnosticAction | null {
   if (value === PROBE_XHS_CANONICAL_PAGE) return PROBE_XHS_CANONICAL_PAGE;
   if (value === INSPECT_XHS_CONTEXT_PAGES) return INSPECT_XHS_CONTEXT_PAGES;
   if (value === INSPECT_XHS_PUBLISH_ENTRY_DOM) return INSPECT_XHS_PUBLISH_ENTRY_DOM;
   if (value === INSPECT_XHS_POST_UPLOAD_RECONCILIATION) return INSPECT_XHS_POST_UPLOAD_RECONCILIATION;
+  if (value === INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS) return INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS;
   if (value === INSPECT_XHS_FILE_INPUT_STATE) return INSPECT_XHS_FILE_INPUT_STATE;
   if (value === INSPECT_XHS_FINAL_SUBMIT_DOM) return INSPECT_XHS_FINAL_SUBMIT_DOM;
   if (value === INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM) return INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM;
@@ -49,6 +52,7 @@ function actionForFlag(value: string | undefined): DiagnosticAction | null {
   if (value === XHS_CONTEXT_PAGE_INVENTORY_FLAG) return INSPECT_XHS_CONTEXT_PAGES;
   if (value === XHS_PUBLISH_ENTRY_DOM_DIAGNOSTIC_FLAG) return INSPECT_XHS_PUBLISH_ENTRY_DOM;
   if (value === XHS_POST_UPLOAD_RECONCILIATION_FLAG) return INSPECT_XHS_POST_UPLOAD_RECONCILIATION;
+  if (value === XHS_POST_UPLOAD_TERMINAL_READINESS_FLAG) return INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS;
   if (value === XHS_FILE_INPUT_STATE_FLAG) return INSPECT_XHS_FILE_INPUT_STATE;
   if (value === XHS_FINAL_SUBMIT_DOM_DIAGNOSTIC_FLAG) return INSPECT_XHS_FINAL_SUBMIT_DOM;
   if (value === XHS_GLOBAL_EXACT_PUBLISH_DOM_DIAGNOSTIC_FLAG) return INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM;
@@ -293,6 +297,8 @@ export function createFixedDiagnosticRunner(options: {
   writePublishEntryDomEvidence?: (diagnostic: XiaohongshuPublishEntryDomRuntimeDiagnostic) => void;
   inspectPostUploadReconciliation?: () => Promise<XiaohongshuCurrentPostUploadReconciliation>;
   writePostUploadReconciliationEvidence?: (diagnostic: XiaohongshuCurrentPostUploadReconciliation) => void;
+  inspectPostUploadTerminalReadiness?: () => Promise<XiaohongshuCurrentPostUploadTerminalReadiness>;
+  writePostUploadTerminalReadinessEvidence?: (diagnostic: XiaohongshuCurrentPostUploadTerminalReadiness) => void;
   inspectFileInputState?: () => Promise<XiaohongshuCurrentFileInputState>;
   writeFileInputEvidence?: (diagnostic: XiaohongshuCurrentFileInputState) => void;
   inspectFinalSubmitDom?: () => Promise<XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic>;
@@ -333,6 +339,11 @@ export function createFixedDiagnosticRunner(options: {
     if (action === INSPECT_XHS_POST_UPLOAD_RECONCILIATION && options.inspectPostUploadReconciliation && options.writePostUploadReconciliationEvidence) {
       const diagnostic = await options.inspectPostUploadReconciliation();
       options.writePostUploadReconciliationEvidence(diagnostic);
+      return true;
+    }
+    if (action === INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS && options.inspectPostUploadTerminalReadiness && options.writePostUploadTerminalReadinessEvidence) {
+      const diagnostic = await options.inspectPostUploadTerminalReadiness();
+      options.writePostUploadTerminalReadinessEvidence(diagnostic);
       return true;
     }
     if (action === INSPECT_XHS_FILE_INPUT_STATE && options.inspectFileInputState && options.writeFileInputEvidence) {

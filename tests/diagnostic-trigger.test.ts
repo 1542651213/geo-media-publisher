@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
-import { createFixedDiagnosticRunner, ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_FINAL_SUBMIT_DOM, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_PUBLISH_ENTRY_DOM, PROBE_XHS_CANONICAL_PAGE, XHS_CONTEXT_IDENTITY_ATTESTATION_FLAG, XHS_CONTEXT_PAGE_INVENTORY_FLAG, XHS_FILE_INPUT_STATE_FLAG, XHS_FINAL_SUBMIT_DOM_DIAGNOSTIC_FLAG, XHS_POST_UPLOAD_RECONCILIATION_FLAG, XHS_PUBLISH_ENTRY_DOM_DIAGNOSTIC_FLAG, XHS_CANONICAL_PAGE_PROBE_FLAG, parseDiagnosticAction } from "../apps/desktop/src/main/diagnostic-trigger";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuCurrentPostUploadTerminalReadiness, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import { createFixedDiagnosticRunner, ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_FINAL_SUBMIT_DOM, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS, INSPECT_XHS_PUBLISH_ENTRY_DOM, PROBE_XHS_CANONICAL_PAGE, XHS_CONTEXT_IDENTITY_ATTESTATION_FLAG, XHS_CONTEXT_PAGE_INVENTORY_FLAG, XHS_FILE_INPUT_STATE_FLAG, XHS_FINAL_SUBMIT_DOM_DIAGNOSTIC_FLAG, XHS_POST_UPLOAD_RECONCILIATION_FLAG, XHS_POST_UPLOAD_TERMINAL_READINESS_FLAG, XHS_PUBLISH_ENTRY_DOM_DIAGNOSTIC_FLAG, XHS_CANONICAL_PAGE_PROBE_FLAG, parseDiagnosticAction } from "../apps/desktop/src/main/diagnostic-trigger";
 
 const unusedProbe: XiaohongshuCanonicalPageRuntimeProbe = {} as XiaohongshuCanonicalPageRuntimeProbe;
 const entryDomDiagnostic: XiaohongshuPublishEntryDomRuntimeDiagnostic = {
@@ -22,6 +22,7 @@ const entryDomDiagnostic: XiaohongshuPublishEntryDomRuntimeDiagnostic = {
 };
 
 const reconciliationDiagnostic = { inspectionStatus: "PASS", accountId: "account-1" } as XiaohongshuCurrentPostUploadReconciliation;
+const terminalReadinessDiagnostic = { inspectionStatus: "PASS", accountId: "account-1", terminalReadiness: { ready: true, postUploadState: "EDITOR_READY", blockerCodes: [] } } as unknown as XiaohongshuCurrentPostUploadTerminalReadiness;
 const fileInputDiagnostic = { inspectionStatus: "PASS", accountId: "account-1" } as XiaohongshuCurrentFileInputState;
 const finalSubmitDiagnostic = { inspectionStatus: "PASS", accountId: "account-1" } as XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic;
 const attestationResult = { status: "PASS", attestation: { accountId: "account-1" } } as never;
@@ -91,6 +92,23 @@ describe("fixed XHS diagnostic triggers", () => {
     const runner = createFixedDiagnosticRunner({ probe: vi.fn(), writeEvidence: vi.fn() });
 
     await expect(runner(INSPECT_XHS_POST_UPLOAD_RECONCILIATION)).resolves.toBe(false);
+  });
+
+  it("dispatches the fixed readonly post-upload terminal-readiness action", async () => {
+    expect(parseDiagnosticAction(["publisher.exe", XHS_POST_UPLOAD_TERMINAL_READINESS_FLAG])).toBe(INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS);
+    expect(parseDiagnosticAction(["publisher.exe", XHS_POST_UPLOAD_TERMINAL_READINESS_FLAG, "selector"])).toBeNull();
+    const inspectPostUploadTerminalReadiness = vi.fn(async () => terminalReadinessDiagnostic);
+    const writePostUploadTerminalReadinessEvidence = vi.fn();
+    const runner = createFixedDiagnosticRunner({
+      probe: vi.fn(async () => unusedProbe),
+      writeEvidence: vi.fn(),
+      inspectPostUploadTerminalReadiness,
+      writePostUploadTerminalReadinessEvidence
+    });
+
+    await expect(runner(INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS)).resolves.toBe(true);
+    expect(inspectPostUploadTerminalReadiness).toHaveBeenCalledTimes(1);
+    expect(writePostUploadTerminalReadinessEvidence).toHaveBeenCalledWith(terminalReadinessDiagnostic);
   });
 
   it("accepts only the fixed final-submit DOM diagnostic flag and rejects caller data", () => {
