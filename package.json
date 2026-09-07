@@ -8,14 +8,15 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "installer": "pnpm build && pnpm rebuild:native && electron-builder --win nsis --x64",
+    "installer": "pnpm rebuild:native && pnpm build && electron-builder --win nsis --x64",
+    "package:dir": "pnpm rebuild:native && pnpm build && electron-builder --win dir --x64",
     "test:stress": "pnpm rebuild better-sqlite3 && tsx scripts/stress-test.mts",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx scripts/test-with-native.mts",
     "test:watch": "vitest",
     "db:migrate": "tsx scripts/migrate-dev.ts",
-    "rebuild:native": "electron-rebuild -f -w better-sqlite3"
+    "rebuild:native": "electron-rebuild -f -w better-sqlite3 -v 37.10.3"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.1",

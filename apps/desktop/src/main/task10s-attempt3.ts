@@ -7,6 +7,8 @@ export const XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG = "--xhs-task10s-contro
 export const RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 = "RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3" as const;
 export const XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG = "--xhs-task10s-controlled-upload-attempt4" as const;
 export const RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 = "RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4" as const;
+export const XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5_FLAG = "--xhs-task10s-controlled-upload-attempt5" as const;
+export const RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 = "RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5" as const;
 export const XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG = "--xhs-task10s-attempt3-dispatch-dry-run" as const;
 export const RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN = "RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN" as const;
 export const XHS_TASK10S_COMPLETE_RETAINED_EDITOR_FLAG = "--xhs-task10s-complete-retained-editor" as const;
@@ -17,16 +19,16 @@ export const TASK10S_SAFE_FIXTURE_NAME = "task10s-safe-test.png" as const;
 export const TASK10S_SAFE_FIXTURE_SIZE = 19226 as const;
 export const TASK10S_SAFE_FIXTURE_SHA256 = "15E13943897E9D5A781F781C674BCBA0F5DA5E6DF5C696B961CB4F0F3B38A646" as const;
 
-export type Task10sControlledUploadAttemptId = "ATTEMPT_3" | "ATTEMPT_4";
-export type Task10sControlledUploadAction = typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4;
+export type Task10sControlledUploadAttemptId = "ATTEMPT_3" | "ATTEMPT_4" | "ATTEMPT_5";
+export type Task10sControlledUploadAction = typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5;
 
 export interface Task10sControlledUploadAttemptSpec {
   attemptId: Task10sControlledUploadAttemptId;
   action: Task10sControlledUploadAction;
-  attemptNumber: 3 | 4;
+  attemptNumber: 3 | 4 | 5;
   stateFileName: string;
-  baseImageUploadAttemptCount: 2 | 3;
-  imageUploadAttemptCount: 3 | 4;
+  baseImageUploadAttemptCount: 2 | 3 | 4;
+  imageUploadAttemptCount: 3 | 4 | 5;
 }
 
 export const TASK10S_ATTEMPT_3: Task10sControlledUploadAttemptSpec = {
@@ -45,6 +47,15 @@ export const TASK10S_ATTEMPT_4: Task10sControlledUploadAttemptSpec = {
   stateFileName: "xiaohongshu-task10s-controlled-upload-attempt4-state.json",
   baseImageUploadAttemptCount: 3,
   imageUploadAttemptCount: 4
+};
+
+export const TASK10S_ATTEMPT_5: Task10sControlledUploadAttemptSpec = {
+  attemptId: "ATTEMPT_5",
+  action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5,
+  attemptNumber: 5,
+  stateFileName: "xiaohongshu-task10s-controlled-upload-attempt5-state.json",
+  baseImageUploadAttemptCount: 4,
+  imageUploadAttemptCount: 5
 };
 
 export interface Task10sAttempt3DispatchDryRunResult {
@@ -72,7 +83,7 @@ export interface Task10sRetainedEditorCompletionResult {
   [key: string]: unknown;
 }
 
-export type Task10sAttemptReservationReason = "ACQUIRED" | "ATTEMPT_3_ALREADY_USED" | "ATTEMPT_4_ALREADY_USED" | "GUARD_UNAVAILABLE";
+export type Task10sAttemptReservationReason = "ACQUIRED" | "ATTEMPT_3_ALREADY_USED" | "ATTEMPT_4_ALREADY_USED" | "ATTEMPT_5_ALREADY_USED" | "GUARD_UNAVAILABLE";
 export type Task10sAttempt3ReservationReason = Task10sAttemptReservationReason;
 
 export interface Task10sAttemptState {
@@ -166,7 +177,12 @@ export function reserveTask10sAttempt(spec: Task10sControlledUploadAttemptSpec, 
     if ((error as { code?: string }).code === "EEXIST") {
       let existing: Task10sAttemptState | null = null;
       try { existing = safeState(JSON.parse(readFileSync(statePath, "utf8")) as unknown, spec); } catch { /* malformed marker still means used */ }
-      return { acquired: false, reason: spec.attemptId === "ATTEMPT_3" ? "ATTEMPT_3_ALREADY_USED" : "ATTEMPT_4_ALREADY_USED", state: existing };
+      const reason = spec.attemptId === "ATTEMPT_3"
+        ? "ATTEMPT_3_ALREADY_USED"
+        : spec.attemptId === "ATTEMPT_4"
+          ? "ATTEMPT_4_ALREADY_USED"
+          : "ATTEMPT_5_ALREADY_USED";
+      return { acquired: false, reason, state: existing };
     }
     return { acquired: false, reason: "GUARD_UNAVAILABLE", state: null };
   }
@@ -178,6 +194,10 @@ export function reserveTask10sAttempt3(statePath: string, input: Pick<Task10sAtt
 
 export function reserveTask10sAttempt4(statePath: string, input: Pick<Task10sAttemptState, "accountId" | "contextDebugId" | "pageDebugId">): Task10sAttemptReservation {
   return reserveTask10sAttempt(TASK10S_ATTEMPT_4, statePath, input);
+}
+
+export function reserveTask10sAttempt5(statePath: string, input: Pick<Task10sAttemptState, "accountId" | "contextDebugId" | "pageDebugId">): Task10sAttemptReservation {
+  return reserveTask10sAttempt(TASK10S_ATTEMPT_5, statePath, input);
 }
 
 export function task10sSafeFixturePath(): string {
@@ -252,7 +272,8 @@ export interface Task10sControlledUploadAttemptResult {
   imageUpload: "PASS" | "NOT_VERIFIED" | "NOT_RUN";
   controlledUploadAttempt3Count: 0 | 1;
   controlledUploadAttempt4Count: 0 | 1;
-  imageUploadAttemptCount: 2 | 3 | 4;
+  controlledUploadAttempt5Count: 0 | 1;
+  imageUploadAttemptCount: 2 | 3 | 4 | 5;
   titleFillCount: 0;
   bodyFillCount: 0;
   finalSubmitClickCount: 0;
@@ -264,6 +285,7 @@ export interface Task10sControlledUploadAttemptResult {
 
 export type Task10sControlledUploadAttempt3Result = Task10sControlledUploadAttemptResult;
 export type Task10sControlledUploadAttempt4Result = Task10sControlledUploadAttemptResult;
+export type Task10sControlledUploadAttempt5Result = Task10sControlledUploadAttemptResult;
 
 export function emptyTask10sControlledUploadAttemptResult(attempt: Task10sControlledUploadAttemptSpec, accountId: string): Task10sControlledUploadAttemptResult {
   return {
@@ -301,6 +323,7 @@ export function emptyTask10sControlledUploadAttemptResult(attempt: Task10sContro
     imageUpload: "NOT_RUN",
     controlledUploadAttempt3Count: 0,
     controlledUploadAttempt4Count: 0,
+    controlledUploadAttempt5Count: 0,
     imageUploadAttemptCount: attempt.baseImageUploadAttemptCount,
     titleFillCount: 0,
     bodyFillCount: 0,
@@ -318,4 +341,8 @@ export function emptyTask10sControlledUploadAttempt3Result(accountId: string): T
 
 export function emptyTask10sControlledUploadAttempt4Result(accountId: string): Task10sControlledUploadAttempt4Result {
   return emptyTask10sControlledUploadAttemptResult(TASK10S_ATTEMPT_4, accountId);
+}
+
+export function emptyTask10sControlledUploadAttempt5Result(accountId: string): Task10sControlledUploadAttempt5Result {
+  return emptyTask10sControlledUploadAttemptResult(TASK10S_ATTEMPT_5, accountId);
 }

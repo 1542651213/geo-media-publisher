@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
-import { RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, XHS_TASK10S_COMPLETE_RETAINED_EDITOR_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG, type Task10sAttempt3DispatchDryRunResult, type Task10sControlledUploadAttemptResult, type Task10sRetainedEditorCompletionResult } from "./task10s-attempt3";
-export { RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, XHS_TASK10S_COMPLETE_RETAINED_EDITOR_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG } from "./task10s-attempt3";
+import { RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, XHS_TASK10S_COMPLETE_RETAINED_EDITOR_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5_FLAG, type Task10sAttempt3DispatchDryRunResult, type Task10sControlledUploadAttemptResult, type Task10sRetainedEditorCompletionResult } from "./task10s-attempt3";
+export { RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, XHS_TASK10S_COMPLETE_RETAINED_EDITOR_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5_FLAG } from "./task10s-attempt3";
 
 export const XHS_CANONICAL_PAGE_PROBE_FLAG = "--probe-xhs-canonical-page" as const;
 export const PROBE_XHS_CANONICAL_PAGE = "PROBE_XHS_CANONICAL_PAGE" as const;
@@ -18,7 +18,7 @@ export const INSPECT_XHS_FINAL_SUBMIT_DOM = "INSPECT_XHS_FINAL_SUBMIT_DOM" as co
 export const XHS_GLOBAL_EXACT_PUBLISH_DOM_DIAGNOSTIC_FLAG = "--xhs-task10s-global-exact-publish-dom-diagnostic" as const;
 export const INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM = "INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM" as const;
 
-export type DiagnosticAction = typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_FILE_INPUT_STATE | typeof INSPECT_XHS_FINAL_SUBMIT_DOM | typeof INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 | typeof RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN | typeof RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR;
+export type DiagnosticAction = typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_FILE_INPUT_STATE | typeof INSPECT_XHS_FINAL_SUBMIT_DOM | typeof INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 | typeof RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN | typeof RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR;
 
 function actionForValue(value: unknown): DiagnosticAction | null {
   if (value === PROBE_XHS_CANONICAL_PAGE) return PROBE_XHS_CANONICAL_PAGE;
@@ -30,6 +30,7 @@ function actionForValue(value: unknown): DiagnosticAction | null {
   if (value === INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM) return INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM;
   if (value === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3;
   if (value === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4;
+  if (value === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5;
   if (value === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN) return RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN;
   if (value === RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR) return RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR;
   return null;
@@ -45,6 +46,7 @@ function actionForFlag(value: string | undefined): DiagnosticAction | null {
   if (value === XHS_GLOBAL_EXACT_PUBLISH_DOM_DIAGNOSTIC_FLAG) return INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM;
   if (value === XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3;
   if (value === XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4;
+  if (value === XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5_FLAG) return RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5;
   if (value === XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG) return RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN;
   if (value === XHS_TASK10S_COMPLETE_RETAINED_EDITOR_FLAG) return RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR;
   return null;
@@ -234,7 +236,7 @@ function parseDiagnosticActionInternal(commandLine: readonly string[], additiona
   if (additionalData !== undefined) {
     const additionalAction = parseFixedAdditionalData(additionalData);
     if (!additionalAction) return { action: null, rejectionCode: "INVALID_ADDITIONAL_DATA" };
-    if (additionalAction === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 || additionalAction === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 || additionalAction === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN) {
+    if (additionalAction === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 || additionalAction === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 || additionalAction === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 || additionalAction === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN) {
       return args.length === 0 || cliAction === additionalAction
         ? { action: additionalAction, rejectionCode: null }
         : { action: null, rejectionCode: "UNKNOWN_OR_EXTRA_ARGUMENT" };
@@ -291,6 +293,8 @@ export function createFixedDiagnosticRunner(options: {
   writeTask10sControlledUploadAttempt3Evidence?: (result: Task10sControlledUploadAttemptResult) => void;
   runTask10sControlledUploadAttempt4?: () => Promise<Task10sControlledUploadAttemptResult>;
   writeTask10sControlledUploadAttempt4Evidence?: (result: Task10sControlledUploadAttemptResult) => void;
+  runTask10sControlledUploadAttempt5?: () => Promise<Task10sControlledUploadAttemptResult>;
+  writeTask10sControlledUploadAttempt5Evidence?: (result: Task10sControlledUploadAttemptResult) => void;
   runTask10sAttempt3DispatchDryRun?: () => Promise<Task10sAttempt3DispatchDryRunResult>;
   writeTask10sAttempt3DispatchDryRunEvidence?: (trace: Task10sAttempt3DispatchTrace) => void;
   runTask10sCompleteRetainedEditor?: () => Promise<Task10sRetainedEditorCompletionResult>;
@@ -340,6 +344,11 @@ export function createFixedDiagnosticRunner(options: {
     if (action === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 && options.runTask10sControlledUploadAttempt4 && options.writeTask10sControlledUploadAttempt4Evidence) {
       const result = await options.runTask10sControlledUploadAttempt4();
       options.writeTask10sControlledUploadAttempt4Evidence(result);
+      return true;
+    }
+    if (action === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 && options.runTask10sControlledUploadAttempt5 && options.writeTask10sControlledUploadAttempt5Evidence) {
+      const result = await options.runTask10sControlledUploadAttempt5();
+      options.writeTask10sControlledUploadAttempt5Evidence(result);
       return true;
     }
     if (action === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN && options.runTask10sAttempt3DispatchDryRun) {

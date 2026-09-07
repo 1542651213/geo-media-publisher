@@ -14,7 +14,7 @@ import { createRuntimeAdapterRegistry } from "./adapter-registry";
 import { runDeepSeekBenchmarkMode } from "./deepseek-benchmark-mode";
 import { createProcessDiagnostics } from "./process-diagnostics";
 import { recordAppStartup } from "./runtime-observability";
-import { buildSecondInstanceDispatchTrace, createFixedDiagnosticRunner, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_FINAL_SUBMIT_DOM, INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticActionWithTrace, RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, parseDiagnosticAction, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, type DiagnosticAction, type FixedDiagnosticInvocationContext, type Task10sAttempt3DispatchTrace, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
+import { buildSecondInstanceDispatchTrace, createFixedDiagnosticRunner, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_FINAL_SUBMIT_DOM, INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticActionWithTrace, RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, parseDiagnosticAction, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, type DiagnosticAction, type FixedDiagnosticInvocationContext, type Task10sAttempt3DispatchTrace, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
 
 app.setName("codex-media-publisher");
 const processDiagnostics = createProcessDiagnostics(join(app.getPath("userData"), "production-data", "logs", "main-process-diagnostics.log"));
@@ -473,6 +473,14 @@ async function createWindow(): Promise<void> {
     writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), "utf8");
     logger.info("PLATFORM_SELF_TEST", "TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_EVIDENCE_WRITTEN", "Task10S Attempt 4 已写入安全证据；流程停止在上传后，不填标题正文、不提交", { action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, evidencePath, status: result.status, failureCode: result.failureCode, uploadLayer2: result.uploadLayer2, uploadLayer4: result.uploadLayer4, finalSubmitClickCount: 0, publicationTransactionCount: 0 });
   };
+  const writeTask10sControlledUploadAttempt5Evidence = (result: Awaited<ReturnType<typeof platformSelfTests.runTask10sControlledUploadAttempt5>>): void => {
+    mkdirSync(evidenceDirectory, { recursive: true });
+    const timestamp = new Date().toISOString();
+    const evidencePath = join(evidenceDirectory, `xiaohongshu-task10s-controlled-upload-attempt5-${timestamp.replace(/[:.]/gu, "-")}.json`);
+    const evidence = { ...result, evidencePath, action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, safety: { titleFillCount: 0, bodyFillCount: 0, finalSubmitClickCount: 0, publicationTransactionCount: 0, newAuthorizationCreated: 0 } };
+    writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), "utf8");
+    logger.info("PLATFORM_SELF_TEST", "TASK10S_CONTROLLED_UPLOAD_ATTEMPT5_EVIDENCE_WRITTEN", "Task10S Attempt 5 已写入安全证据；流程停止在上传后，不填标题正文、不提交", { action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, evidencePath, status: result.status, failureCode: result.failureCode, uploadLayer2: result.uploadLayer2, uploadLayer4: result.uploadLayer4, finalSubmitClickCount: 0, publicationTransactionCount: 0 });
+  };
   const writeTask10sCompleteRetainedEditorEvidence = (result: Awaited<ReturnType<typeof platformSelfTests.runTask10sCompleteRetainedEditor>>): void => {
     mkdirSync(evidenceDirectory, { recursive: true });
     const timestamp = new Date().toISOString();
@@ -560,6 +568,11 @@ async function createWindow(): Promise<void> {
       return platformSelfTests.runTask10sControlledUploadAttempt4();
     },
     writeTask10sControlledUploadAttempt4Evidence,
+    runTask10sControlledUploadAttempt5: async () => {
+      logger.info("PLATFORM_SELF_TEST", "TASK10S_CONTROLLED_UPLOAD_ATTEMPT5_TRIGGER_RECEIVED", "收到固定 Main-side Task10S Attempt 5 trigger", { action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
+      return platformSelfTests.runTask10sControlledUploadAttempt5();
+    },
+    writeTask10sControlledUploadAttempt5Evidence,
     runTask10sCompleteRetainedEditor: async () => {
       logger.info("PLATFORM_SELF_TEST", "TASK10S_COMPLETE_RETAINED_EDITOR_TRIGGER_RECEIVED", "收到固定 Main-side Task10S retained-editor completion trigger", { action: RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
       return platformSelfTests.runTask10sCompleteRetainedEditor();

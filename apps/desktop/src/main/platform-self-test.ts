@@ -13,7 +13,7 @@ import { OneShotConfirmationCoordinator } from "./one-shot-confirmation";
 import { OneShotConfirmationReconciliationService } from "./one-shot-reconciliation";
 import { XhsIdentityService } from "./xhs-identity";
 import type { CreatorIdentityVerificationResult, FailedOneShotConfirmationIdentity, OneShotConfirmationReconciliationResult, XhsIdentityAcceptance } from "@publisher/domain";
-import { emptyTask10sControlledUploadAttemptResult, reserveTask10sAttempt, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, TASK10S_ATTEMPT_3, TASK10S_ATTEMPT_4, TASK10S_CANONICAL_AUTHORIZATION_ID, TASK10S_EXPECTED_CREATOR_ID, TASK10S_SAFE_FIXTURE_NAME, TASK10S_SAFE_FIXTURE_SIZE, TASK10S_SAFE_FIXTURE_SHA256, validateTask10sSafeFixture, type Task10sAttempt3DispatchDryRunResult, type Task10sAttempt3FileInputReadback, type Task10sControlledUploadAttemptResult, type Task10sControlledUploadAttemptSpec, type Task10sRetainedEditorCompletionResult } from "./task10s-attempt3";
+import { emptyTask10sControlledUploadAttemptResult, reserveTask10sAttempt, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, TASK10S_ATTEMPT_3, TASK10S_ATTEMPT_4, TASK10S_ATTEMPT_5, TASK10S_CANONICAL_AUTHORIZATION_ID, TASK10S_EXPECTED_CREATOR_ID, TASK10S_SAFE_FIXTURE_NAME, TASK10S_SAFE_FIXTURE_SIZE, TASK10S_SAFE_FIXTURE_SHA256, validateTask10sSafeFixture, type Task10sAttempt3DispatchDryRunResult, type Task10sAttempt3FileInputReadback, type Task10sControlledUploadAttemptResult, type Task10sControlledUploadAttemptSpec, type Task10sRetainedEditorCompletionResult } from "./task10s-attempt3";
 
 const ARTICLE_TEST_TITLE = "Geo Media Publisher 发布链路测试";
 const ZHIHU_TEST_TITLE_PREFIX = "Geo Media Publisher 知乎发布测试";
@@ -342,6 +342,11 @@ export class PlatformSelfTestService {
     return this.runTask10sControlledUploadAttempt(TASK10S_ATTEMPT_4);
   }
 
+  /** Main-side fixed Attempt 5 action with its own replay guard. */
+  async runTask10sControlledUploadAttempt5(): Promise<Task10sControlledUploadAttemptResult> {
+    return this.runTask10sControlledUploadAttempt(TASK10S_ATTEMPT_5);
+  }
+
   /**
    * Main-side fixed completion action for the already-uploaded retained editor.
    * It deliberately resolves the account, authorization, run, job, and
@@ -444,9 +449,10 @@ export class PlatformSelfTestService {
 
   private async runTask10sControlledUploadAttempt(attempt: Task10sControlledUploadAttemptSpec): Promise<Task10sControlledUploadAttemptResult> {
     let attemptConsumed = false;
-    const counts = (): Pick<Task10sControlledUploadAttemptResult, "controlledUploadAttempt3Count" | "controlledUploadAttempt4Count" | "imageUploadAttemptCount"> => ({
+    const counts = (): Pick<Task10sControlledUploadAttemptResult, "controlledUploadAttempt3Count" | "controlledUploadAttempt4Count" | "controlledUploadAttempt5Count" | "imageUploadAttemptCount"> => ({
       controlledUploadAttempt3Count: attemptConsumed && attempt.attemptId === "ATTEMPT_3" ? 1 : 0,
       controlledUploadAttempt4Count: attemptConsumed && attempt.attemptId === "ATTEMPT_4" ? 1 : 0,
+      controlledUploadAttempt5Count: attemptConsumed && attempt.attemptId === "ATTEMPT_5" ? 1 : 0,
       imageUploadAttemptCount: attemptConsumed ? attempt.imageUploadAttemptCount : attempt.baseImageUploadAttemptCount
     });
     const blocked = (failureCode: string, overrides: Partial<Task10sControlledUploadAttemptResult> = {}): Task10sControlledUploadAttemptResult => ({
@@ -1368,6 +1374,7 @@ export class PlatformSelfTestService {
       imageUpload,
       controlledUploadAttempt3Count: attemptConsumed && attempt.attemptId === "ATTEMPT_3" ? 1 : 0,
       controlledUploadAttempt4Count: attemptConsumed && attempt.attemptId === "ATTEMPT_4" ? 1 : 0,
+      controlledUploadAttempt5Count: attemptConsumed && attempt.attemptId === "ATTEMPT_5" ? 1 : 0,
       imageUploadAttemptCount: attemptConsumed ? attempt.imageUploadAttemptCount : attempt.baseImageUploadAttemptCount,
       authorizedRunStateAfter,
       evidence: { controlled, imageEvidence: imageEvidence ?? null, postUploadInspection: postUpload ?? null, runtimeBefore: { contextDebugId: runtimeBefore.contextDebugId, canonicalPageDebugId: runtimeBefore.canonicalPageDebugId }, runtimeAfter: { contextDebugId: runtimeAfter.contextDebugId, canonicalPageDebugId: runtimeAfter.canonicalPageDebugId } }

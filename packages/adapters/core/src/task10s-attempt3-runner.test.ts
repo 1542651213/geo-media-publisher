@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,12 +8,27 @@ import * as task10sAttemptModule from "../../../../apps/desktop/src/main/task10s
 import { PlatformSelfTestService } from "../../../../apps/desktop/src/main/platform-self-test";
 
 const temporaryDirectories: string[] = [];
+const ATTEMPT5_FLAG = "--xhs-task10s-controlled-upload-attempt5";
+const ATTEMPT5_ACTION = "RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5";
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
 describe("Task10S Attempt 3 fixed runner guard", () => {
+  it("accepts only the dedicated Attempt 5 action and rejects conflicts or caller data", () => {
+    const attempt3Flag = XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG;
+    const attempt4Flag = "--xhs-task10s-controlled-upload-attempt4";
+
+    expect(parseDiagnosticAction(["Geo Media Publisher.exe", ATTEMPT5_FLAG])).toBe(ATTEMPT5_ACTION);
+    expect(parseDiagnosticAction(["Geo Media Publisher.exe", "C:\\GMP116ZhihuL5\\Geo Media Publisher\\resources\\app.asar", ATTEMPT5_FLAG])).toBe(ATTEMPT5_ACTION);
+    expect(parseDiagnosticAction(["Geo Media Publisher.exe", ATTEMPT5_FLAG, ATTEMPT5_FLAG])).toBeNull();
+    expect(parseDiagnosticAction(["Geo Media Publisher.exe", attempt3Flag, ATTEMPT5_FLAG])).toBeNull();
+    expect(parseDiagnosticAction(["Geo Media Publisher.exe", attempt4Flag, ATTEMPT5_FLAG])).toBeNull();
+    expect(parseDiagnosticAction(["Geo Media Publisher.exe", ATTEMPT5_FLAG, "5"])).toBeNull();
+    expect(parseDiagnosticAction(["Geo Media Publisher.exe"], { action: ATTEMPT5_ACTION, attemptNumber: 5 })).toBeNull();
+  });
+
   it("accepts the dedicated Attempt 4 action while rejecting duplicates, conflicts, and caller attempt data", () => {
     const attempt4Flag = "--xhs-task10s-controlled-upload-attempt4";
     const attempt4Action = "RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4";
@@ -209,6 +224,52 @@ describe("Task10S Attempt 3 fixed runner guard", () => {
     expect(module.reserveTask10sAttempt4(join(directory, "attempt4.json"), input)).toMatchObject({ acquired: false, reason: "ATTEMPT_4_ALREADY_USED" });
   });
 
+  it("allows Attempt 5 after Attempts 3 and 4 are used, with an independent replay guard", () => {
+    type Reserve = (statePath: string, input: { accountId: string; contextDebugId: string; pageDebugId: string }) => { acquired: boolean; reason: string };
+    const module = task10sAttemptModule as unknown as { reserveTask10sAttempt3?: Reserve; reserveTask10sAttempt4?: Reserve; reserveTask10sAttempt5?: Reserve };
+    expect(typeof module.reserveTask10sAttempt3).toBe("function");
+    expect(typeof module.reserveTask10sAttempt4).toBe("function");
+    expect(typeof module.reserveTask10sAttempt5).toBe("function");
+    if (typeof module.reserveTask10sAttempt3 !== "function" || typeof module.reserveTask10sAttempt4 !== "function" || typeof module.reserveTask10sAttempt5 !== "function") return;
+
+    const directory = mkdtempSync(join(tmpdir(), "task10s-attempt5-guards-test-"));
+    temporaryDirectories.push(directory);
+    const input = { accountId: "account-1", contextDebugId: "context-1", pageDebugId: "page-1" };
+    expect(module.reserveTask10sAttempt3(join(directory, "attempt3.json"), input)).toMatchObject({ acquired: true });
+    expect(module.reserveTask10sAttempt4(join(directory, "attempt4.json"), input)).toMatchObject({ acquired: true });
+    expect(module.reserveTask10sAttempt5(join(directory, "attempt5.json"), input)).toMatchObject({ acquired: true, reason: "ACQUIRED" });
+    expect(module.reserveTask10sAttempt5(join(directory, "attempt5.json"), input)).toMatchObject({ acquired: false, reason: "ATTEMPT_5_ALREADY_USED" });
+    expect(module.reserveTask10sAttempt3(join(directory, "attempt3.json"), input)).toMatchObject({ acquired: false, reason: "ATTEMPT_3_ALREADY_USED" });
+    expect(module.reserveTask10sAttempt4(join(directory, "attempt4.json"), input)).toMatchObject({ acquired: false, reason: "ATTEMPT_4_ALREADY_USED" });
+  });
+
+  it("does not consume Attempt 5 when runtime preflight fails before mutation", async () => {
+    const accountId = "54b390ac-d81e-440a-baeb-d00f9f346cc3";
+    const evidenceDirectory = mkdtempSync(join(tmpdir(), "task10s-attempt5-preflight-test-"));
+    temporaryDirectories.push(evidenceDirectory);
+    const account = { id: accountId, platformAccountId: accountId, platformKey: "xiaohongshu", accountAlias: "XHS", accountName: "XHS", name: "XHS", enabled: true, archivedAt: null, externalAccountId: "960803317" };
+    const adapter = {
+      connectAccount: vi.fn(),
+      checkSession: vi.fn(),
+      preparePublish: vi.fn(),
+      getBrowserRuntimeSnapshot: vi.fn(() => ({ sessionExists: false, browserConnected: false, contextExists: false, canonicalPageExists: false, canonicalPageClosed: true, runtimeAuthState: "UNVERIFIED", contextDebugId: null, canonicalPageDebugId: null })),
+      runControlledPostUploadDiscovery: vi.fn()
+    };
+    const instance = new PlatformSelfTestService({
+      repository: { listAccounts: () => [account] } as never,
+      registry: { getForContent: vi.fn(() => adapter) } as never,
+      publisher: {} as never,
+      resolveAccountSecrets: vi.fn(() => ({})),
+      evidenceDirectory
+    });
+    const run = (instance as unknown as { runTask10sControlledUploadAttempt5?: () => Promise<Record<string, unknown>> }).runTask10sControlledUploadAttempt5;
+    expect(typeof run).toBe("function");
+    if (typeof run !== "function") return;
+
+    await expect(run.call(instance)).resolves.toMatchObject({ status: "BLOCKED", failureCode: "XHS_CANONICAL_RUNTIME_UNAVAILABLE", controlledUploadAttempt5Count: 0, imageUploadAttemptCount: 4 });
+    expect(existsSync(join(evidenceDirectory, "xiaohongshu-task10s-controlled-upload-attempt5-state.json"))).toBe(false);
+  });
+
   it("fails closed when the replay marker is malformed", () => {
     const directory = mkdtempSync(join(tmpdir(), "task10s-attempt3-test-"));
     temporaryDirectories.push(directory);
@@ -241,6 +302,22 @@ describe("Task10S Attempt 3 fixed runner guard", () => {
 
     await expect(runner("RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4" as never)).resolves.toBe(true);
     expect(runAttempt4).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispatches the dedicated Attempt 5 command to the shared Main-owned runner", async () => {
+    const runAttempt5 = vi.fn(async () => ({ status: "PASS" as const }));
+    const write = vi.fn();
+    const options = {
+      probe: vi.fn(),
+      writeEvidence: vi.fn(),
+      runTask10sControlledUploadAttempt5: runAttempt5,
+      writeTask10sControlledUploadAttempt5Evidence: write
+    } as unknown as Parameters<typeof createFixedDiagnosticRunner>[0];
+    const runner = createFixedDiagnosticRunner(options);
+
+    await expect(runner(ATTEMPT5_ACTION as never)).resolves.toBe(true);
+    expect(runAttempt5).toHaveBeenCalledTimes(1);
     expect(write).toHaveBeenCalledTimes(1);
   });
 
