@@ -183,6 +183,57 @@ export interface XiaohongshuCurrentFileInputState {
   fileInputContainsExpectedFixture: XiaohongshuFileInputFixtureMatch;
 }
 
+export interface XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic {
+  inspectionStatus: "PASS" | "FAIL";
+  failureCode: string | null;
+  accountId: string;
+  contextDebugId: string | null;
+  pageId: string | null;
+  sessionExists: boolean;
+  browserConnected: boolean;
+  contextExists: boolean;
+  pageExists: boolean;
+  pageClosed: boolean;
+  pageContextMatchesSession: boolean;
+  origin: string | null;
+  pathname: string | null;
+  sanitizedUrl: string | null;
+  cdpSessionCreated: "YES" | "NO" | "NOT_PROVEN";
+  cdpGetDocumentSuccess: "YES" | "NO" | "NOT_PROVEN";
+  cdpGetDocumentDepth: -1;
+  cdpGetDocumentPierce: true;
+  piercedXhsPublishBtnCount: number;
+  hostNodeName: "XHS-PUBLISH-BTN" | null;
+  hostAttributesSafe: {
+    isPublish: string | null;
+    isSaveDraft: string | null;
+    submitText: string | null;
+    saveText: string | null;
+    submitDisabled: string | null;
+    submitLoading: string | null;
+  } | null;
+  hostIsPublish: string | null;
+  hostSubmitText: string | null;
+  hostSubmitDisabled: string | null;
+  hostSubmitLoading: string | null;
+  hostDescendantButtonCount: number;
+  exactPublishNativeButtonCount: number;
+  buttonNodeName: "BUTTON" | null;
+  buttonTextSafe: "发布" | null;
+  buttonType: string | null;
+  buttonClassSafe: string | null;
+  buttonAriaDisabled: string | null;
+  buttonAriaBusy: string | null;
+  buttonBoxModelPresent: "YES" | "NO" | "NOT_PROVEN";
+  buttonCenterXSafe: number | null;
+  buttonCenterYSafe: number | null;
+  finalSubmitControlPresent: "YES" | "NO" | "NOT_PROVEN";
+  finalSubmitControlEnabled: "YES" | "NO" | "NOT_PROVEN";
+  closedShadowFinalSubmitSurface: "PASS" | "FAIL";
+  saveDraftSurfacePresent: "NOT_INSPECTED";
+  finalResolverSelectedSaveDraft: "NO";
+}
+
 function emptyCurrentFileInputState(accountId: string, overrides: Partial<XiaohongshuCurrentFileInputState> = {}): XiaohongshuCurrentFileInputState {
   return {
     inspectionStatus: "FAIL",
@@ -203,6 +254,53 @@ function emptyCurrentFileInputState(accountId: string, overrides: Partial<Xiaoho
     matchCount: 0,
     inputs: [],
     fileInputContainsExpectedFixture: "NOT_PROVEN",
+    ...overrides
+  };
+}
+
+function emptyClosedShadowFinalSubmitRuntimeDiagnostic(accountId: string, overrides: Partial<XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic> = {}): XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic {
+  return {
+    inspectionStatus: "FAIL",
+    failureCode: "BROWSER_SESSION_UNAVAILABLE",
+    accountId,
+    contextDebugId: null,
+    pageId: null,
+    sessionExists: false,
+    browserConnected: false,
+    contextExists: false,
+    pageExists: false,
+    pageClosed: true,
+    pageContextMatchesSession: false,
+    origin: null,
+    pathname: null,
+    sanitizedUrl: null,
+    cdpSessionCreated: "NOT_PROVEN",
+    cdpGetDocumentSuccess: "NOT_PROVEN",
+    cdpGetDocumentDepth: -1,
+    cdpGetDocumentPierce: true,
+    piercedXhsPublishBtnCount: 0,
+    hostNodeName: null,
+    hostAttributesSafe: null,
+    hostIsPublish: null,
+    hostSubmitText: null,
+    hostSubmitDisabled: null,
+    hostSubmitLoading: null,
+    hostDescendantButtonCount: 0,
+    exactPublishNativeButtonCount: 0,
+    buttonNodeName: null,
+    buttonTextSafe: null,
+    buttonType: null,
+    buttonClassSafe: null,
+    buttonAriaDisabled: null,
+    buttonAriaBusy: null,
+    buttonBoxModelPresent: "NOT_PROVEN",
+    buttonCenterXSafe: null,
+    buttonCenterYSafe: null,
+    finalSubmitControlPresent: "NOT_PROVEN",
+    finalSubmitControlEnabled: "NOT_PROVEN",
+    closedShadowFinalSubmitSurface: "FAIL",
+    saveDraftSurfacePresent: "NOT_INSPECTED",
+    finalResolverSelectedSaveDraft: "NO",
     ...overrides
   };
 }
@@ -2246,6 +2344,120 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         return fail("PAGE_EVALUATION_FAILED", { ...route });
       }
     }, "inspectCurrentXiaohongshuPublishEditorSemanticCandidates");
+  }
+
+  /**
+   * Read-only fixed Task10S evidence for the publish host's closed shadow
+   * surface. The existing resolver owns all CDP tree traversal and matching.
+   */
+  async inspectCurrentXiaohongshuClosedShadowFinalSubmit(ctx: AccountContext): Promise<XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic> {
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
+      const activeSession = this.activeBrowserSession(ctx);
+      if (!activeSession) return emptyClosedShadowFinalSubmitRuntimeDiagnostic(ctx.accountId);
+
+      const sessionBase = {
+        accountId: ctx.accountId,
+        contextDebugId: activeSession.contextDebugId ?? null,
+        pageId: activeSession.pageDebugId ?? null,
+        sessionExists: true,
+        browserConnected: this.isBrowserConnected(activeSession),
+        contextExists: Boolean(activeSession.context && typeof activeSession.context.pages === "function"),
+        pageExists: false,
+        pageClosed: this.isCanonicalPageClosed(activeSession.page),
+        pageContextMatchesSession: false
+      };
+
+      let canonical: Awaited<ReturnType<typeof this.activeCanonicalPage>> = null;
+      try {
+        canonical = await this.activeCanonicalPage(ctx);
+      } catch {
+        return emptyClosedShadowFinalSubmitRuntimeDiagnostic(ctx.accountId, { ...sessionBase, failureCode: "CANONICAL_PAGE_OWNERSHIP_FAILURE" });
+      }
+      if (!canonical) {
+        return emptyClosedShadowFinalSubmitRuntimeDiagnostic(ctx.accountId, {
+          ...sessionBase,
+          failureCode: sessionBase.pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_UNAVAILABLE"
+        });
+      }
+
+      const { session, page, pageDebugId } = canonical;
+      const browserConnected = this.isBrowserConnected(session);
+      const contextExists = Boolean(session.context && typeof session.context.pages === "function");
+      const pageClosed = this.isCanonicalPageClosed(page);
+      let pageExists = false;
+      if (contextExists) {
+        try { pageExists = session.context.pages().includes(page); } catch { pageExists = false; }
+      }
+      const pageContextMatchesSession = !pageClosed && this.pageContextMatchesSession(session, page) && pageExists;
+      const base = {
+        accountId: ctx.accountId,
+        contextDebugId: session.contextDebugId ?? null,
+        pageId: pageDebugId,
+        sessionExists: true,
+        browserConnected,
+        contextExists,
+        pageExists,
+        pageClosed,
+        pageContextMatchesSession
+      };
+      const fail = (failureCode: string, overrides: Partial<XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic> = {}): XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic => emptyClosedShadowFinalSubmitRuntimeDiagnostic(ctx.accountId, { ...base, failureCode, ...overrides });
+      if (!browserConnected) return fail("BROWSER_SESSION_DISCONNECTED");
+      if (!contextExists || !pageExists || !pageContextMatchesSession) return fail(pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_OWNERSHIP_FAILURE");
+
+      let rawUrl: string;
+      try { rawUrl = page.url(); } catch { return fail("CANONICAL_PAGE_URL_UNAVAILABLE"); }
+      const route = safeXiaohongshuRouteMetadata(rawUrl);
+      if (route.origin !== "https://creator.xiaohongshu.com" || route.pathname !== "/publish/publish") {
+        return fail("CANONICAL_PAGE_NOT_XHS_IMAGE_EDITOR_ROUTE", { ...route });
+      }
+
+      const resolution = await inspectTask10sClosedShadowPublishSurface(page);
+      const host = resolution.host;
+      const button = resolution.innerButton;
+      const buttonRect = button?.boundingRect ?? null;
+      const cdpSessionCreated = resolution.failureCode === "TASK10S_CDP_SESSION_UNAVAILABLE" ? "NO" : "YES";
+      const cdpGetDocumentSuccess = resolution.failureCode === null ? "YES" : resolution.failureCode === "CDP_DOM_DOCUMENT_UNAVAILABLE" ? "NO" : "NOT_PROVEN";
+      return {
+        ...base,
+        inspectionStatus: "PASS",
+        failureCode: resolution.failureCode,
+        ...route,
+        cdpSessionCreated,
+        cdpGetDocumentSuccess,
+        cdpGetDocumentDepth: -1,
+        cdpGetDocumentPierce: true,
+        piercedXhsPublishBtnCount: resolution.hostMatchCount,
+        hostNodeName: host?.tagName ?? null,
+        hostAttributesSafe: host ? {
+          isPublish: host.isPublish,
+          isSaveDraft: host.isSaveDraft,
+          submitText: host.submitText,
+          saveText: host.saveText,
+          submitDisabled: host.submitDisabled,
+          submitLoading: host.submitLoading
+        } : null,
+        hostIsPublish: host?.isPublish ?? null,
+        hostSubmitText: host?.submitText ?? null,
+        hostSubmitDisabled: host?.submitDisabled ?? null,
+        hostSubmitLoading: host?.submitLoading ?? null,
+        hostDescendantButtonCount: resolution.innerButtonMatchCount,
+        exactPublishNativeButtonCount: resolution.innerButtonMatchCount,
+        buttonNodeName: button?.tagName ?? null,
+        buttonTextSafe: button?.exactText ?? null,
+        buttonType: button?.type ?? null,
+        buttonClassSafe: button?.classNameSafe ?? null,
+        buttonAriaDisabled: button?.ariaDisabled ?? null,
+        buttonAriaBusy: button?.ariaBusy ?? null,
+        buttonBoxModelPresent: button ? (buttonRect ? "YES" : "NO") : "NOT_PROVEN",
+        buttonCenterXSafe: buttonRect ? buttonRect.x + buttonRect.width / 2 : null,
+        buttonCenterYSafe: buttonRect ? buttonRect.y + buttonRect.height / 2 : null,
+        finalSubmitControlPresent: resolution.present ? "YES" : "NO",
+        finalSubmitControlEnabled: resolution.enabled ? "YES" : resolution.present ? "NO" : "NOT_PROVEN",
+        closedShadowFinalSubmitSurface: resolution.present && resolution.enabled ? "PASS" : "FAIL",
+        saveDraftSurfacePresent: "NOT_INSPECTED",
+        finalResolverSelectedSaveDraft: "NO"
+      };
+    }, "inspectCurrentXiaohongshuClosedShadowFinalSubmit");
   }
 
   /**

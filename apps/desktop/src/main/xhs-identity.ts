@@ -3,7 +3,7 @@ import type { AppRepository } from "@publisher/db";
 import { ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type Account, type AccountContext, type CreatorIdentityVerificationResult, type PlatformAccountIdentityBinding, type XhsIdentityAcceptance } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
 import { classifyXiaohongshuPostUploadTerminalReadiness } from "@publisher/adapters-xiaohongshu/browser";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentFileInputState, XiaohongshuCurrentImageEditorReadiness, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuCurrentPostUploadTerminalReadiness, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPageScopedIdentityVerification, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentFileInputState, XiaohongshuCurrentImageEditorReadiness, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuCurrentPostUploadTerminalReadiness, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPageScopedIdentityVerification, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { createXhsContextIdentityAttestation, validateXhsContextIdentityAttestation, type XhsContextIdentityAttestation, type XhsContextIdentityAttestationResult, type XhsContextIdentityRuntime } from "./xhs-context-identity-attestation";
 
 type IdentityReader = {
@@ -15,6 +15,7 @@ type IdentityReader = {
   inspectCurrentXiaohongshuPublishEditorDom?: (ctx: AccountContext) => Promise<XiaohongshuPublishEditorDomRuntimeDiagnostic>;
   inspectCurrentXiaohongshuPublishEditorSemanticCandidates?: (ctx: AccountContext) => Promise<XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic>;
   inspectCurrentXiaohongshuGlobalExactPublishDom?: (ctx: AccountContext) => Promise<XiaohongshuGlobalExactPublishDomRuntimeDiagnostic>;
+  inspectCurrentXiaohongshuClosedShadowFinalSubmit?: (ctx: AccountContext) => Promise<XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic>;
   inspectCurrentXiaohongshuPostUploadReconciliation?: (ctx: AccountContext) => Promise<XiaohongshuCurrentPostUploadReconciliation>;
   inspectCurrentXiaohongshuFileInputState?: (ctx: AccountContext) => Promise<XiaohongshuCurrentFileInputState>;
   readCanonicalCreatorIdentity?: (ctx: AccountContext) => Promise<XiaohongshuCreatorIdentityObservation>;
@@ -294,6 +295,30 @@ export class XhsIdentityService {
       globalExactPublishTextMatchCount: diagnostic.globalExactPublishTextMatchCount,
       globalExactPublishUnique: diagnostic.globalExactPublishUnique,
       maxAncestorDepth: diagnostic.maxAncestorDepth
+    });
+    return diagnostic;
+  }
+
+  async inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId: string): Promise<XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic> {
+    const account = this.requireAccount(accountId);
+    const adapter = this.options.registry.getForContent("xiaohongshu", "article") as IdentityReader;
+    if (typeof adapter.inspectCurrentXiaohongshuClosedShadowFinalSubmit !== "function") throw Object.assign(new Error("当前小红书运行时未提供 closed-shadow final-submit diagnostic"), { code: "XHS_CLOSED_SHADOW_FINAL_SUBMIT_DIAGNOSTIC_UNAVAILABLE" });
+    const diagnostic = await adapter.inspectCurrentXiaohongshuClosedShadowFinalSubmit(this.context(account));
+    this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_CLOSED_SHADOW_FINAL_SUBMIT_DIAGNOSTIC", "小红书 closed-shadow final-submit 只读 diagnostic 完成", {
+      platformKey: "xiaohongshu",
+      accountId: account.id,
+      inspectionStatus: diagnostic.inspectionStatus,
+      failureCode: diagnostic.failureCode,
+      contextDebugId: diagnostic.contextDebugId,
+      pageId: diagnostic.pageId,
+      origin: diagnostic.origin,
+      pathname: diagnostic.pathname,
+      cdpSessionCreated: diagnostic.cdpSessionCreated,
+      cdpGetDocumentSuccess: diagnostic.cdpGetDocumentSuccess,
+      hostMatchCount: diagnostic.piercedXhsPublishBtnCount,
+      exactPublishNativeButtonCount: diagnostic.exactPublishNativeButtonCount,
+      finalSubmitControlPresent: diagnostic.finalSubmitControlPresent,
+      finalSubmitControlEnabled: diagnostic.finalSubmitControlEnabled
     });
     return diagnostic;
   }
