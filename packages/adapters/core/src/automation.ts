@@ -33,6 +33,7 @@ export interface PublishFlowExplorationInput {
   title: string;
   body: string;
   operationId?: string;
+  postUploadReadinessStrategy?: "LEGACY" | "TERMINAL_CLASSIFIER";
   budgets?: Partial<PublishFlowExplorationBudgets>;
 }
 

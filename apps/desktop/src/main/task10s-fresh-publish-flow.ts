@@ -71,6 +71,7 @@ export function buildTask10sFreshPublishFlowInput(imagePath: string, operationId
     title: XHS_TASK10S_FRESH_PUBLISH_FLOW_TITLE,
     body: XHS_TASK10S_FRESH_PUBLISH_FLOW_BODY,
     operationId,
+    postUploadReadinessStrategy: "TERMINAL_CLASSIFIER",
     budgets: {
       maxDurationMs: 60_000,
       maxNavigationRestarts: 0,

@@ -2189,6 +2189,61 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     ]));
   });
 
+  it("lets the fresh-flow branch consume terminal readiness before filling content", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager } as never);
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    fixture.manager.setRuntimeAuthState?.({ platformKey: "xiaohongshu", accountId: "account-a" }, "AUTHENTICATED", null);
+    const result = await adapter.runPublishFlowExploration(ctx, {
+      imagePath: "C:/fixtures/task10s-safe-test.png",
+      imageSource: "SAFE_TEST_FIXTURE",
+      title: "自动化发布测试1｜请忽略",
+      body: "GEO Media Publisher 自动发布链路测试。",
+      postUploadReadinessStrategy: "TERMINAL_CLASSIFIER"
+    });
+
+    expect(result).toMatchObject({
+      status: "PASS_READY_FOR_FINAL_SUBMIT",
+      readyForFinalSubmit: true,
+      uploadMutationCount: 1,
+      titleReadbackVerified: true,
+      bodyReadbackVerified: true,
+      finalSubmitCount: 0
+    });
+    expect(result.timeline).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase: "POST_UPLOAD_TERMINAL_READINESS", action: "R38_TERMINAL_READINESS_CLASSIFIER", result: "PASS" })
+    ]));
+    expect(fixture.calls.indexOf("image-set-input-files")).toBeLessThan(fixture.calls.indexOf("title-fill"));
+    expect(fixture.submitClick).not.toHaveBeenCalled();
+  });
+
+  it("fails closed in the fresh-flow branch when terminal readiness is not proven", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", titleCount: 0 });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager } as never);
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    fixture.manager.setRuntimeAuthState?.({ platformKey: "xiaohongshu", accountId: "account-a" }, "AUTHENTICATED", null);
+    const result = await adapter.runPublishFlowExploration(ctx, {
+      imagePath: "C:/fixtures/task10s-safe-test.png",
+      imageSource: "SAFE_TEST_FIXTURE",
+      title: "自动化发布测试1｜请忽略",
+      body: "GEO Media Publisher 自动发布链路测试。",
+      postUploadReadinessStrategy: "TERMINAL_CLASSIFIER"
+    });
+
+    expect(result).toMatchObject({ status: "BLOCKED", finalSubmitCount: 0 });
+    expect(result.blocker).toContain("TITLE_CONTROL_MISSING");
+    expect(fixture.inputSetFiles).toHaveBeenCalledTimes(1);
+    expect(fixture.calls).not.toContain("title-fill");
+    expect(fixture.calls).not.toContain("body-fill");
+    expect(fixture.submitClick).not.toHaveBeenCalled();
+  });
+
   it("autonomously clicks one proven intermediate next action before editing content", async () => {
     const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", intermediateAction: true });
     installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });

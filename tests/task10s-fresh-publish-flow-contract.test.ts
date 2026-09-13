@@ -75,4 +75,20 @@ describe("Task10S fresh publish flow contract", () => {
     expect(service).toContain("async runPublishFlowExploration");
     expect(service).toContain("task10r-safe-test.png");
   });
+
+  it("consumes the terminal readiness classifier before fresh-flow content fill", () => {
+    const browser = readFileSync("packages/adapters/xiaohongshu/src/browser.ts", "utf8");
+    const classifierUse = browser.indexOf("const terminalReadiness = classifyXiaohongshuPostUploadTerminalReadiness(");
+    const titleFill = browser.indexOf("const title = await this.exploreEditorField");
+
+    expect(classifierUse).toBeGreaterThan(-1);
+    expect(titleFill).toBeGreaterThan(classifierUse);
+    expect(browser.slice(classifierUse, titleFill)).toContain("terminalReadiness.ready");
+    expect(browser.slice(classifierUse, titleFill)).toContain("return buildResult(\"BLOCKED\")");
+  });
+
+  it("marks the fixed Task10S input to use the existing classifier", () => {
+    const service = readFileSync("apps/desktop/src/main/task10s-fresh-publish-flow.ts", "utf8");
+    expect(service).toContain('postUploadReadinessStrategy: "TERMINAL_CLASSIFIER"');
+  });
 });
