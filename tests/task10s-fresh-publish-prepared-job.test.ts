@@ -56,13 +56,17 @@ function setup() {
   const account = repo.createAccount({ platformKey: "xiaohongshu", name: "offline test" });
   repo.db.prepare("UPDATE accounts SET id=? WHERE id=?").run(accountId, account.id);
   repo.updateAccount(accountId, { enabled: true, loginStatus: "logged_in" });
+  repo.db.prepare("UPDATE accounts SET external_account_id=? WHERE id=?").run("960803317", accountId);
   const run = repo.createPlatformSelfTestRun({ platformAccountId: accountId, requestedLevel: "L5_PUBLISH" });
   repo.db.prepare("UPDATE platform_self_test_runs SET test_run_id=? WHERE test_run_id=?").run(runId, run.testRunId);
   repo.confirmPlatformSelfTestOneShotAtomically(runId, createOwnerAuthorizedOneShotPublication({ accountId, platformKey: "xiaohongshu", operationId: runId, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE }));
   const proof = exploration();
   const runtime = { sessionExists: true, browserConnected: true, contextExists: true, canonicalPageExists: true, canonicalPageClosed: false, runtimeAuthState: "AUTHENTICATED", browserSessionIdentity: "session", contextDebugId: "context", canonicalPageDebugId: "page" };
   const forbidden = vi.fn(() => { throw new Error("OFFLINE_PUBLICATION_BOUNDARY"); });
-  const adapter = { connectAccount: forbidden, checkSession: forbidden, preparePublish: forbidden, finalSubmit: forbidden, automationType: "BrowserAutomation", getBrowserRuntimeSnapshot: () => runtime, getBrowserSessionEvidence: async () => ({ pageUrl: "https://creator.xiaohongshu.com/new/home" }), inspectCurrentXiaohongshuClosedShadowFinalSubmit: async () => closedShadowPass(), runPublishFlowExploration: async (_context: unknown, input: { operationId: string }) => ({ ...proof, operationId: input.operationId }) };
+  let recoveredEditor = false;
+  const contextPages = () => ({ platformKey: "xiaohongshu" as const, accountId, inventoryStatus: "PASS" as const, failureCode: null, contextDebugId: "context", runtimeAuthState: "AUTHENTICATED" as const, browserConnected: true, pageCount: recoveredEditor ? 1 : 0, canonicalPageId: "page", pages: recoveredEditor ? [{ pageIndex: 0, pageId: "page", isCanonical: true, isClosed: false, urlOrigin: "https://creator.xiaohongshu.com", pathname: "/publish/publish", source: null, from: null, target: null, documentReadyState: "complete" as const, titleSafe: "发布", openerPresent: false, openerPageIdIfSameContext: null, frameCount: 0, visibilityState: "visible" as const, editorShellPresent: true, uploadImageTabPresent: true, currentSelectedTab: "上传图文" as const, imageUploadControlPresent: true, titleControlPresent: true, bodyControlPresent: true, finalSubmitControlPresent: true, contentType: "IMAGE_POST" as const, imageEditorPhase: "IMAGE_POST_POST_UPLOAD_EDITOR" as const }] : [], pageCreationEvents: [] });
+  const postUpload = { inspectionStatus: "PASS", failureCode: null, accountId, contextDebugId: "context", pageId: "page", sessionExists: true, browserConnected: true, contextExists: true, pageExists: true, pageClosed: false, pageContextMatchesSession: true, origin: "https://creator.xiaohongshu.com", pathname: "/publish/publish", readyState: "complete", editorRegionPresent: true, imageItems: [{}], visibleImageItemCount: 1, imageCounterTextSafe: "1/18", addImageControlPresent: true, deleteImageControlCount: 1, titleControlMatchCount: 1, titleControlVisible: true, bodyControlMatchCount: 1, bodyControlVisible: true, finalSubmitCandidateCount: 1, finalSubmitVisibleCount: 1, finalSubmitProof: "PASS", explicitUploadErrorSignals: [], processingSignalPresent: false, imageUploadReconciliation: "PASS", postUploadState: "EDITOR_READY", imageAssetRenderedCount: 1, postUploadImageEditorPresent: true, titleControlPresent: true, bodyControlPresent: true, noExplicitUploadError: true, source: null, from: null, target: null, sanitizedUrl: "https://creator.xiaohongshu.com/publish/publish" } as const;
+  const adapter = { connectAccount: forbidden, checkSession: forbidden, preparePublish: forbidden, finalSubmit: forbidden, automationType: "BrowserAutomation", getBrowserRuntimeSnapshot: () => runtime, getBrowserSessionEvidence: async () => ({ pageUrl: "https://creator.xiaohongshu.com/new/home" }), inspectCurrentXiaohongshuClosedShadowFinalSubmit: async () => closedShadowPass(), inspectXhsContextPages: async () => contextPages(), inspectCurrentXiaohongshuPostUploadReconciliation: async () => postUpload, recoverPreparedEditor: vi.fn(async (_context: unknown, input: { operationId: string }) => { recoveredEditor = true; return { ...proof, operationId: input.operationId }; }), runPublishFlowExploration: async (_context: unknown, input: { operationId: string }) => ({ ...proof, operationId: input.operationId }) };
   const registry = { getForContent: () => adapter } as unknown as AdapterRegistry;
   const publisher = { executeJob: forbidden, executeTask10sRetainedEditor: forbidden } as unknown as PublisherService;
   const options = { repository: repo, registry, publisher, resolveAccountSecrets: () => ({}) };
@@ -71,6 +75,7 @@ function setup() {
   vi.spyOn(XhsIdentityService.prototype, "establishContextIdentityAttestation").mockResolvedValue({ status: "PASS", attestation: { observedExternalCreatorId: "960803317", browserContextIdentity: "context" } } as Awaited<ReturnType<XhsIdentityService["establishContextIdentityAttestation"]>>);
   vi.spyOn(XhsIdentityService.prototype, "validateContextIdentityAttestation").mockResolvedValue({ valid: true } as Awaited<ReturnType<XhsIdentityService["validateContextIdentityAttestation"]>>);
   vi.spyOn(XhsIdentityService.prototype, "getContextIdentityAttestation").mockReturnValue({ observedExternalCreatorId: "960803317", browserContextIdentity: "context", sourcePageIdentity: "page" } as ReturnType<XhsIdentityService["getContextIdentityAttestation"]>);
+  vi.spyOn(XhsIdentityService.prototype, "verifyCreatorIdentity").mockResolvedValue({ expectedExternalCreatorId: "960803317", observed: { externalCreatorId: "960803317", displayName: null, profileUrl: null, source: "CREATOR_ACCOUNT_SURFACE", stable: true }, verified: true, mismatch: false, canonicalContextId: "context", canonicalPageId: "page", canonicalPageUrl: "https://creator.xiaohongshu.com/new/home", domLocationHref: "https://creator.xiaohongshu.com/new/home", pageUrlConsistency: "PASS", routeClass: "CREATOR_HOME" } as Awaited<ReturnType<XhsIdentityService["verifyCreatorIdentity"]>>);
   // Check the missing API with an assertion in RED, rather than a TypeError.
   const arm = async () => {
     await service.inspectCurrentXiaohongshuClosedShadowFinalSubmit();
@@ -78,7 +83,7 @@ function setup() {
     expect(method, "Main trusted ARM transition must exist").toBeTypeOf("function");
     return method!.call(service);
   };
-  return { repo, service, proof, runtime, forbidden, arm, options, adapter };
+  return { repo, service, proof, runtime, forbidden, arm, options, adapter, contextPages, postUpload };
 }
 
 describe("r41 fresh prepared job transition (offline)", () => {
@@ -176,6 +181,17 @@ describe("r41 fresh prepared job transition (offline)", () => {
     expect(f.forbidden).not.toHaveBeenCalled();
     f.runtime.browserConnected = false;
     expect(await f.service.runTask10sCompleteRetainedEditor()).toMatchObject({ failureCode: "TASK10S_RETAINED_EDITOR_RUNTIME_UNAVAILABLE" });
+  });
+  it("recovers the existing Prepared Job editor without creating rows or publishing", async () => {
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(); await f.arm();
+    const before = f.repo.getPublishDomainCounts();
+    const result = await f.service.recoverTask10sPreparedEditor();
+    expect(result).toMatchObject({ status: "PASS", readyForFreshIdentityAttestation: true, finalSubmitClickCount: 0, mousePressedCount: 0, mouseReleasedCount: 0, publicationTransactionCount: 0 });
+    expect(f.adapter.recoverPreparedEditor).toHaveBeenCalledTimes(1);
+    expect(f.repo.getPublishDomainCounts()).toEqual(before);
+    expect(f.repo.listJobs()).toHaveLength(1);
+    expect(f.repo.getPublishRecords()).toHaveLength(1);
+    expect(f.repo.getOneShotPublicationAuthorization(runId)?.state).toBe("AUTHORIZED_UNUSED");
   });
   it("resolves retained-editor content from the current Prepared Job Article", async () => {
     const f = setup(); await f.service.runTask10sFreshPublishFlow(); await f.arm();

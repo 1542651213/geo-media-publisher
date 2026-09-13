@@ -15,6 +15,7 @@ import { XhsIdentityService } from "./xhs-identity";
 import type { CreatorIdentityVerificationResult, FailedOneShotConfirmationIdentity, OneShotConfirmationReconciliationResult, XhsIdentityAcceptance } from "@publisher/domain";
 import { emptyTask10sControlledUploadAttemptResult, reserveTask10sAttempt, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, TASK10S_ATTEMPT_3, TASK10S_ATTEMPT_4, TASK10S_ATTEMPT_5, TASK10S_CANONICAL_AUTHORIZATION_ID, TASK10S_EXPECTED_CREATOR_ID, TASK10S_SAFE_FIXTURE_NAME, TASK10S_SAFE_FIXTURE_SIZE, TASK10S_SAFE_FIXTURE_SHA256, task10sSafeFixturePath, validateTask10sSafeFixture, type Task10sAttempt3DispatchDryRunResult, type Task10sAttempt3FileInputReadback, type Task10sControlledUploadAttemptResult, type Task10sControlledUploadAttemptSpec, type Task10sRetainedEditorCompletionResult } from "./task10s-attempt3";
 import { blockedTask10sFreshPublishFlowResult, buildTask10sFreshPublishFlowInput, isTask10sFreshPublishFlowReady, isTask10sFreshPublishStartPath, RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, XHS_TASK10S_FRESH_PUBLISH_FLOW_BODY, XHS_TASK10S_FRESH_PUBLISH_FLOW_TITLE, type Task10sFreshPublishFlowResult } from "./task10s-fresh-publish-flow";
+import { evaluatePreparedEditorRecoveryEvidence, validatePreparedEditorRecoveryTrustedState, RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY, type PreparedEditorRecoveryEvidence, type Task10sPreparedEditorRecoveryResult } from "./task10s-prepared-editor-recovery";
 
 const ARTICLE_TEST_TITLE = "Geo Media Publisher 发布链路测试";
 const ZHIHU_TEST_TITLE_PREFIX = "Geo Media Publisher 知乎发布测试";
@@ -829,6 +830,160 @@ export class PlatformSelfTestService {
     } catch (error) {
       this.options.logger?.warn("PLATFORM_SELF_TEST", "TASK10S_FRESH_COMPLETION_ARM_FAILED", "Fresh completion ARM 失败；持久化事务已回滚", { errorType: error instanceof Error ? error.name : "UnknownError" });
       return result("TASK10S_FRESH_ARM_FAILED");
+    } finally {
+      this.controlledOperations.delete(accountId);
+    }
+  }
+
+  /**
+   * Rebinds a lost editor to the existing Task10S Prepared Job. This action is
+   * intentionally browser-only after its read-only Main preflight: it never
+   * creates or changes Jobs, Records, Articles, authorizations, or submit
+   * state, and it stops after the editor and closed-shadow surfaces are ready.
+   */
+  async recoverTask10sPreparedEditor(): Promise<Task10sPreparedEditorRecoveryResult> {
+    const blocked = (failureCode: string, overrides: Partial<Task10sPreparedEditorRecoveryResult> = {}): Task10sPreparedEditorRecoveryResult => ({
+      action: RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY,
+      status: "BLOCKED",
+      failureCode,
+      testRunId: TASK10S_CANONICAL_AUTHORIZATION_ID,
+      readyForFreshIdentityAttestation: false,
+      finalSubmitClickCount: 0,
+      mousePressedCount: 0,
+      mouseReleasedCount: 0,
+      publicationTransactionCount: 0,
+      ...overrides
+    });
+    const accountId = XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID;
+    if (this.controlledOperations.has(accountId)) return blocked("TASK10S_PREPARED_EDITOR_RECOVERY_ALREADY_RUNNING");
+    this.controlledOperations.add(accountId);
+    try {
+      const repository = this.options.repository;
+      const account = repository.listAccounts().find((item) => item.id === accountId && item.platformKey === "xiaohongshu");
+      if (!account || !account.enabled || account.archivedAt) return blocked("RECOVERY_ACCOUNT_UNAVAILABLE", { accountId: account?.id ?? null });
+      const run = repository.getPlatformSelfTestRun(TASK10S_CANONICAL_AUTHORIZATION_ID);
+      if (!run || run.platformKey !== "xiaohongshu" || run.testRunId !== TASK10S_CANONICAL_AUTHORIZATION_ID) return blocked("RECOVERY_RUN_UNAVAILABLE", { accountId: account.id });
+      const platformAccountId = account.platformAccountId ?? account.id;
+      const job = run.publishJobId ? repository.getJob(run.publishJobId) : null;
+      const preparedRecord = job ? repository.getPublishRecordByJob(job.id) : null;
+      const article = job ? repository.getArticle(job.articleId) : null;
+      const authorization = repository.getOneShotPublicationAuthorization(run.testRunId);
+      const countRows = (sql: string, ...args: unknown[]): number => Number((repository.db.prepare(sql).get(...args) as { count?: number } | undefined)?.count ?? 0);
+      const publishJobCountForRun = run.publishJobId ? countRows("SELECT COUNT(*) AS count FROM publish_jobs WHERE id=?", run.publishJobId) : 0;
+      const preparedRecordCountForJob = job ? countRows("SELECT COUNT(*) AS count FROM publish_records WHERE job_id=? AND status='Prepared'", job.id) : 0;
+      if (!run.publishJobId) return blocked("RECOVERY_RUN_PUBLISH_JOB_MISSING", { accountId: account.id });
+      if (!job) return blocked("RECOVERY_JOB_MISSING", { accountId: account.id });
+      if (!preparedRecord) return blocked("RECOVERY_PREPARED_RECORD_MISSING", { accountId: account.id, jobId: job.id });
+      if (preparedRecord.status !== "Prepared") return blocked("RECOVERY_RECORD_NOT_PREPARED", { accountId: account.id, jobId: job.id, publishRecordId: preparedRecord.id });
+      if (!article) return blocked("RECOVERY_ARTICLE_MISSING", { accountId: account.id, jobId: job.id });
+      if (!authorization) return blocked("RECOVERY_AUTHORIZATION_NOT_UNUSED", { accountId: account.id, jobId: job.id });
+
+      const adapter = this.options.registry.getForContent("xiaohongshu", "article");
+      if (!isAutomationAdapter(adapter) || typeof adapter.recoverPreparedEditor !== "function" || typeof adapter.getBrowserRuntimeSnapshot !== "function") return blocked("RECOVERY_ADAPTER_UNAVAILABLE", { accountId: account.id, jobId: job.id, publishRecordId: preparedRecord.id, articleId: article.id });
+      const context = this.context(account, run, "VISIBLE");
+      const runtime = adapter.getBrowserRuntimeSnapshot(context);
+      if (!runtime.sessionExists || runtime.browserConnected !== true || !runtime.contextExists || !runtime.canonicalPageExists || runtime.canonicalPageClosed === true || runtime.runtimeAuthState !== "AUTHENTICATED") {
+        return blocked("RECOVERY_RUNTIME_UNAVAILABLE", { accountId: account.id, jobId: job.id, publishRecordId: preparedRecord.id, articleId: article.id });
+      }
+      const identity = await this.xhsIdentity.verifyCreatorIdentity(account.id);
+      const identityPass = identity.verified && identity.observed.externalCreatorId === TASK10S_EXPECTED_CREATOR_ID && identity.expectedExternalCreatorId === TASK10S_EXPECTED_CREATOR_ID;
+      if (!identityPass) return blocked("RECOVERY_IDENTITY_MISMATCH", { accountId: account.id, jobId: job.id, publishRecordId: preparedRecord.id, articleId: article.id });
+      const trustedState = validatePreparedEditorRecoveryTrustedState({
+        expectedPlatformKey: "xiaohongshu",
+        expectedAccountId: account.id,
+        expectedPlatformAccountId: platformAccountId,
+        expectedRunId: run.testRunId,
+        expectedCreatorId: TASK10S_EXPECTED_CREATOR_ID,
+        account: { id: account.id, platformKey: account.platformKey, platformAccountId, externalAccountId: account.externalAccountId, enabled: account.enabled, archivedAt: account.archivedAt },
+        run: { testRunId: run.testRunId, platformKey: run.platformKey, platformAccountId: run.platformAccountId, publishJobId: run.publishJobId },
+        job: { id: job.id, accountId: job.accountId, platformAccountId: job.platformAccountId, platformKey: job.platformKey, articleId: job.articleId },
+        preparedRecord: { id: preparedRecord.id, jobId: preparedRecord.jobId, accountId: preparedRecord.accountId, platformAccountId: preparedRecord.platformAccountId ?? platformAccountId, platformKey: preparedRecord.platformKey, articleId: preparedRecord.articleId, status: preparedRecord.status },
+        article: { id: article.id, title: article.title, body: article.body },
+        authorization: { state: authorization.state, platformKey: authorization.platformKey, accountId: authorization.accountId, operationId: authorization.operationId, mode: authorization.mode, publicationTransactionCount: authorization.publicationTransactionCount, finalSubmitAttemptCount: authorization.finalSubmitAttemptCount, finalSubmitRetryCount: authorization.finalSubmitRetryCount, finalSubmitActionStarted: authorization.finalSubmitActionStarted, finalSubmitActionCompleted: authorization.finalSubmitActionCompleted },
+        publishJobCountForRun,
+        preparedRecordCountForJob,
+        identityVerified: identityPass,
+        actualCreatorId: identity.observed.externalCreatorId
+      });
+      if (trustedState.status !== "PASS") return blocked(trustedState.failureCode ?? "RECOVERY_TRUSTED_STATE_INVALID", { accountId: account.id, jobId: job.id, publishRecordId: preparedRecord.id, articleId: article.id });
+      const pagesBefore = await this.xhsIdentity.inspectXhsContextPages(account.id);
+      const existingEditorCount = pagesBefore.inventoryStatus === "PASS" ? pagesBefore.pages.filter((page) => !page.isClosed && page.urlOrigin === "https://creator.xiaohongshu.com" && page.pathname === "/publish/publish").length : -1;
+      if (existingEditorCount < 0) return blocked("RECOVERY_CONTEXT_PAGE_INVENTORY_UNAVAILABLE", { accountId: account.id, jobId: job.id, publishRecordId: preparedRecord.id, articleId: article.id });
+      if (existingEditorCount > 0) return blocked("EDITOR_ALREADY_EXISTS", { accountId: account.id, jobId: job.id, publishRecordId: preparedRecord.id, articleId: article.id });
+      const fixture = validateTask10sSafeFixture();
+      if (!fixture.valid) return blocked("RECOVERY_FIXTURE_INVALID", { accountId: account.id, jobId: job.id, publishRecordId: preparedRecord.id, articleId: article.id });
+      const beforeCounts = repository.getPublishDomainCounts();
+      const beforeAuthCount = countRows("SELECT COUNT(*) AS count FROM one_shot_publication_authorizations WHERE operation_id=?", run.testRunId);
+      const beforeArticle = { id: article.id, title: article.title, body: article.body, contentHash: article.contentHash };
+      const operationId = randomUUID();
+      this.options.logger?.info("PLATFORM_SELF_TEST", "TASK10S_PREPARED_EDITOR_RECOVERY_STARTED", "开始恢复已有 Prepared Job 对应的小红书编辑器；不会创建发布域记录或执行发布", { action: RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY, accountId: account.id, testRunId: run.testRunId, jobId: job.id, articleId: article.id, operationId });
+      const exploration = await adapter.recoverPreparedEditor(context, { imagePath: fixture.path, imageSource: "SAFE_TEST_FIXTURE", title: article.title, body: article.body, operationId });
+      const postUpload = await this.xhsIdentity.inspectCurrentXiaohongshuPostUploadReconciliation(account.id);
+      const closedShadow = await this.xhsIdentity.inspectCurrentXiaohongshuClosedShadowFinalSubmit(account.id);
+      const pagesAfter = await this.xhsIdentity.inspectXhsContextPages(account.id);
+      const afterCounts = repository.getPublishDomainCounts();
+      const afterAuthCount = countRows("SELECT COUNT(*) AS count FROM one_shot_publication_authorizations WHERE operation_id=?", run.testRunId);
+      const afterArticle = repository.getArticle(article.id);
+      const genericResolverAllowed = exploration.status === "PASS_READY_FOR_FINAL_SUBMIT" || exploration.failureCode === "FINAL_SUBMIT_CONTROL_NOT_FOUND";
+      const editorRecreated = pagesAfter.inventoryStatus === "PASS" && pagesAfter.pages.some((page) => !page.isClosed && page.urlOrigin === "https://creator.xiaohongshu.com" && page.pathname === "/publish/publish");
+      const evidence: PreparedEditorRecoveryEvidence = {
+        editorRecreated,
+        fixtureVerified: fixture.valid,
+        uploadAttempts: exploration.uploadAttempts,
+        uploadMutationCount: exploration.uploadMutationCount,
+        uploadRetryCount: exploration.uploadRetryCount,
+        setInputFilesCount: exploration.uploadMutationCount,
+        postUploadState: postUpload.postUploadState,
+        imageAssetRenderedCount: postUpload.imageAssetRenderedCount,
+        imageCounterValid: postUpload.imageCounterTextSafe === "1/18",
+        imageCounterText: postUpload.imageCounterTextSafe,
+        titleControlPresent: postUpload.titleControlPresent,
+        bodyControlPresent: postUpload.bodyControlPresent,
+        uploadErrorSignalPresent: !postUpload.noExplicitUploadError,
+        busySignalPresent: postUpload.processingSignalPresent,
+        trustedArticleTitle: article.title,
+        trustedArticleBody: article.body,
+        titleReadback: exploration.titleReadbackVerified ? article.title : null,
+        bodyReadback: exploration.bodyReadbackVerified ? article.body : null,
+        closedShadowFinalSubmitSurface: closedShadow.closedShadowFinalSubmitSurface,
+        finalSubmitClickCount: exploration.finalSubmitCount,
+        mousePressedCount: 0,
+        mouseReleasedCount: 0,
+        publicationTransactionCount: 0,
+        runPublishJobIdUnchanged: repository.getPlatformSelfTestRun(run.testRunId)?.publishJobId === run.publishJobId,
+        publishJobCountForRun: countRows("SELECT COUNT(*) AS count FROM publish_jobs WHERE id=?", run.publishJobId),
+        preparedRecordCountForJob: countRows("SELECT COUNT(*) AS count FROM publish_records WHERE job_id=? AND status='Prepared'", job.id),
+        authorizationState: repository.getOneShotPublicationAuthorization(run.testRunId)?.state ?? "NOT_VERIFIED",
+        newJobCount: afterCounts.publishJobs - beforeCounts.publishJobs,
+        newRecordCount: afterCounts.publishRecords - beforeCounts.publishRecords,
+        newAuthorizationCount: afterAuthCount - beforeAuthCount,
+        articleMutationCount: afterArticle && afterArticle.id === beforeArticle.id && afterArticle.title === beforeArticle.title && afterArticle.body === beforeArticle.body && afterArticle.contentHash === beforeArticle.contentHash ? 0 : 1,
+        currentPageId: postUpload.pageId
+      };
+      const evaluated = genericResolverAllowed && !exploration.forbiddenMutationObserved ? evaluatePreparedEditorRecoveryEvidence(evidence) : { status: "BLOCKED" as const, failureCode: exploration.failureCode ?? "RECOVERY_EXPLORATION_BLOCKED" };
+      if (evaluated.status !== "PASS") return blocked(evaluated.failureCode ?? "RECOVERY_EVIDENCE_INCOMPLETE", { accountId: account.id, jobId: job.id, publishRecordId: preparedRecord.id, articleId: article.id, operationId, evidence, exploration: exploration as unknown as Record<string, unknown> });
+      const result: Task10sPreparedEditorRecoveryResult = {
+        action: RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY,
+        status: "PASS",
+        failureCode: null,
+        testRunId: run.testRunId,
+        accountId: account.id,
+        jobId: job.id,
+        publishRecordId: preparedRecord.id,
+        articleId: article.id,
+        operationId,
+        readyForFreshIdentityAttestation: true,
+        evidence,
+        exploration: exploration as unknown as Record<string, unknown>,
+        finalSubmitClickCount: 0,
+        mousePressedCount: 0,
+        mouseReleasedCount: 0,
+        publicationTransactionCount: 0
+      };
+      this.options.logger?.info("PLATFORM_SELF_TEST", "TASK10S_PREPARED_EDITOR_RECOVERY_STOPPED", "Prepared Job 编辑器恢复完成并停止；未执行 ARM、completion 或发布", { ...result, runtimeContextId: runtime.contextDebugId, runtimePageId: runtime.canonicalPageDebugId, genericResolverAllowed });
+      return result;
+    } catch (error) {
+      return blocked(error instanceof Error ? error.message : "RECOVERY_FAILED", { accountId });
     } finally {
       this.controlledOperations.delete(accountId);
     }

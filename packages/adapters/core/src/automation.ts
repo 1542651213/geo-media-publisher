@@ -304,6 +304,8 @@ export interface AutomationAdapter extends PlatformAdapter {
   runControlledPostUploadDiscovery?(ctx: AccountContext, input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE"; onUploadMutationStarted?: () => void }): Promise<ControlledPostUploadDiscoveryResult>;
   /** Optional bounded XHS exploration. It must never activate final publication. */
   runPublishFlowExploration?(ctx: AccountContext, input: PublishFlowExplorationInput): Promise<PublishFlowExplorationResult>;
+  /** Optional bounded recovery of an editor for an existing Prepared Job. It must never create persistence rows or submit. */
+  recoverPreparedEditor?(ctx: AccountContext, input: PublishFlowExplorationInput): Promise<PublishFlowExplorationResult>;
   /** Explicit Task10S path. It must be XHS/account/operation scoped and use the supplied guard for the only real submit. */
   runOneShotRealPublishAcceptance?(ctx: AccountContext, input: OneShotRealPublishAcceptanceInput & { oneShotPublicationGuard: OneShotPublicationGuard }): Promise<OneShotRealPublishAcceptanceResult>;
   preparePublish(ctx: AccountContext, article: PublishArticleInput): Promise<AutomationPrepareResult>;

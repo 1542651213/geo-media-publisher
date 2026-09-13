@@ -2933,6 +2933,44 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
   }
 
   /**
+   * Recreates the editor surface for an already-persisted Prepared Job. This
+   * is deliberately separate from the diagnostic fresh-flow entry point: it
+   * accepts trusted Article content from Main, performs one bounded upload,
+   * and stops before any publication boundary.
+   */
+  async recoverPreparedEditor(ctx: AccountContext, input: PublishFlowExplorationInput): Promise<PublishFlowExplorationResult> {
+    const operationId = input.operationId?.trim() || randomUUID();
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
+      const pages = this.activeContextPages(ctx) ?? [];
+      const editorExists = pages.some((entry) => {
+        if (entry.page.isClosed()) return false;
+        try {
+          const parsed = new URL(entry.page.url());
+          return parsed.origin === "https://creator.xiaohongshu.com" && parsed.pathname === "/publish/publish";
+        } catch {
+          return false;
+        }
+      });
+      if (editorExists) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "EDITOR_ALREADY_EXISTS");
+      return this.runPublishFlowExplorationOnCanonicalPage(ctx, {
+        ...input,
+        operationId,
+        postUploadReadinessStrategy: "TERMINAL_CLASSIFIER",
+        budgets: {
+          ...input.budgets,
+          maxDurationMs: 60_000,
+          maxNavigationRestarts: 0,
+          maxUploadAttempts: 1,
+          maxIntermediateActionClicks: 1,
+          maxRefreshCount: 0,
+          maxTitleMutations: 1,
+          maxBodyMutations: 1
+        }
+      }, operationId);
+    }, "preparedEditorRecovery");
+  }
+
+  /**
    * Explicit Task10S adapter boundary. Callers must still create the formal
    * Job/SubmissionIntent/PublishRecord lifecycle; this low-level method only
    * exists for adapter contract tests and owner-approved orchestration.
