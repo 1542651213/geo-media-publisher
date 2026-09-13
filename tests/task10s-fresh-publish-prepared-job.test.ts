@@ -70,6 +70,7 @@ function setup() {
   vi.spyOn(attempt, "validateTask10sSafeFixture").mockReturnValue({ path: "offline-fixture", valid: true, failureCode: null } as ReturnType<typeof attempt.validateTask10sSafeFixture>);
   vi.spyOn(XhsIdentityService.prototype, "establishContextIdentityAttestation").mockResolvedValue({ status: "PASS", attestation: { observedExternalCreatorId: "960803317", browserContextIdentity: "context" } } as Awaited<ReturnType<XhsIdentityService["establishContextIdentityAttestation"]>>);
   vi.spyOn(XhsIdentityService.prototype, "validateContextIdentityAttestation").mockResolvedValue({ valid: true } as Awaited<ReturnType<XhsIdentityService["validateContextIdentityAttestation"]>>);
+  vi.spyOn(XhsIdentityService.prototype, "getContextIdentityAttestation").mockReturnValue({ observedExternalCreatorId: "960803317", browserContextIdentity: "context", sourcePageIdentity: "page" } as ReturnType<XhsIdentityService["getContextIdentityAttestation"]>);
   // Check the missing API with an assertion in RED, rather than a TypeError.
   const arm = async () => {
     await service.inspectCurrentXiaohongshuClosedShadowFinalSubmit();
@@ -175,6 +176,33 @@ describe("r41 fresh prepared job transition (offline)", () => {
     expect(f.forbidden).not.toHaveBeenCalled();
     f.runtime.browserConnected = false;
     expect(await f.service.runTask10sCompleteRetainedEditor()).toMatchObject({ failureCode: "TASK10S_RETAINED_EDITOR_RUNTIME_UNAVAILABLE" });
+  });
+  it("resolves retained-editor content from the current Prepared Job Article", async () => {
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(); await f.arm();
+    const result = await f.service.runTask10sCompleteRetainedEditor();
+    expect(result.failureCode).not.toBe("TASK10S_RETAINED_EDITOR_FIXED_CONTENT_MISMATCH");
+    expect(f.forbidden).toHaveBeenCalledTimes(1);
+    expect(f.repo.getOneShotPublicationAuthorization(runId)?.state).toBe("AUTHORIZED_UNUSED");
+  });
+  it.each(["missing-id", "missing-article"]) ("fails closed when the Prepared Job Article is %s", async (kind) => {
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(); await f.arm();
+    const job = f.repo.listJobs()[0]!;
+    f.repo.db.pragma("foreign_keys = OFF");
+    f.repo.db.prepare("UPDATE publish_jobs SET article_id=? WHERE id=?").run(kind === "missing-id" ? "" : "article-does-not-exist", job.id);
+    f.repo.db.pragma("foreign_keys = ON");
+    const result = await f.service.runTask10sCompleteRetainedEditor();
+    expect(result).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_RETAINED_EDITOR_ARTICLE_BINDING_INVALID" });
+    expect(f.forbidden).not.toHaveBeenCalled();
+  });
+  it("fails closed when the Prepared PublishRecord is bound to a different Article", async () => {
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(); await f.arm();
+    const job = f.repo.listJobs()[0]!;
+    f.repo.db.pragma("foreign_keys = OFF");
+    f.repo.db.prepare("UPDATE publish_records SET article_id=? WHERE job_id=?").run("article-does-not-exist", job.id);
+    f.repo.db.pragma("foreign_keys = ON");
+    const result = await f.service.runTask10sCompleteRetainedEditor();
+    expect(result).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_RETAINED_EDITOR_ARTICLE_BINDING_INVALID" });
+    expect(f.forbidden).not.toHaveBeenCalled();
   });
   it.each(["missing", "used", "account", "platform", "operation", "counter", "run-account"])("fails closed for authorization/run binding: %s", async (kind) => {
     const f = setup(); await f.service.runTask10sFreshPublishFlow();

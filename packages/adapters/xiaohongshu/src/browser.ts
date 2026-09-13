@@ -83,7 +83,7 @@ import { emptyXiaohongshuPublishEditorDomRuntimeDiagnostic, inspectXiaohongshuPu
 import { emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, inspectXiaohongshuPublishEditorSemanticCandidates, type XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic } from "./publish-editor-semantic-diagnostic";
 import { emptyXiaohongshuGlobalExactPublishDomRuntimeDiagnostic, inspectXiaohongshuGlobalExactPublishDom, type XiaohongshuGlobalExactPublishDomRuntimeDiagnostic } from "./global-exact-publish-diagnostic";
 import { clickTask10sClosedShadowPublishSurface, inspectTask10sClosedShadowPublishSurface } from "./task10s-closed-shadow-final-submit";
-import { evaluateTask10sRetainedEditorGate, TASK10S_FIXED_BODY, TASK10S_FIXED_TITLE } from "./task10s-retained-editor-completion";
+import { evaluateTask10sRetainedEditorGate } from "./task10s-retained-editor-completion";
 import { emptyXiaohongshuPostUploadReconciliationDomSnapshot, inspectXiaohongshuPostUploadReconciliationDom, reconcileXiaohongshuPostUploadSnapshot, type XiaohongshuPostUploadReconciliationResult } from "./post-upload-reconciliation-diagnostic";
 import { classifyXiaohongshuPostUploadTerminalReadiness, type XiaohongshuPostUploadTerminalReadiness } from "./post-upload-terminal-readiness";
 import { containsExpectedXiaohongshuSafeFixture, inspectXiaohongshuFileInputState, type XiaohongshuFileInputFixtureMatch, type XiaohongshuFileInputSafeNode } from "./file-input-diagnostic";
@@ -4073,7 +4073,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
   }
 
   private async performTask10sRetainedEditorCompletion(ctx: AccountContext, article: PublishArticleInput, guard: OneShotPublicationGuard, attempt: BrowserPublishAttemptContext): Promise<PublishResult> {
-    if (article.title !== TASK10S_FIXED_TITLE || article.body !== TASK10S_FIXED_BODY) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "Task10S retained-editor action 只接受固定标题和正文 contract");
+    if (!article.title.trim() || !article.body.trim()) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "Task10S retained-editor action 要求 Prepared Job Article 提供标题和正文");
     const canonical = await this.activeCanonicalPage(ctx);
     if (!canonical || this.isCanonicalPageClosed(canonical.page) || !this.pageContextMatchesSession(canonical.session, canonical.page)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "Task10S retained-editor action 要求当前 canonical Context/Page");
     if (!isExactXhsPublishEditorRoute(canonical.page.url())) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "Task10S retained-editor action 要求 /publish/publish 路由");
@@ -4091,10 +4091,8 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     if (!initialPublishSurface.present) throw new XiaohongshuGateError("FINAL_SUBMIT_CONTROL_NOT_VERIFIED", "USER_ACTION_REQUIRED", `Task10S closed-shadow 发布 surface 未通过：${initialPublishSurface.failureCode ?? initialPublishSurface.status}；main-document exact count=${initialGlobalDiagnostic.globalExactPublishTextMatchCount}`);
 
     const titleEditor = await this.discoverUniqueEditor(canonical.page, "title");
-    await titleEditor.fill(TASK10S_FIXED_TITLE);
     const titleReadback = await readEditor(titleEditor, "title");
     const bodyEditor = await this.discoverUniqueEditor(canonical.page, "body");
-    await bodyEditor.fill(TASK10S_FIXED_BODY);
     const bodyReadback = await readEditor(bodyEditor, "body");
     const requiredFieldsPass = !(await this.inspectRequiredFields(canonical.page)).some((field) => field.empty);
     const finalGlobalDiagnostic = await inspectXiaohongshuGlobalExactPublishDom(canonical.page);
@@ -4122,6 +4120,8 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       bodyControlPresent: postUpload.bodyControlPresent,
       noExplicitUploadError: postUpload.noExplicitUploadError,
       initialPublishSurface,
+      trustedArticleTitle: article.title,
+      trustedArticleBody: article.body,
       titleReadback,
       bodyReadback,
       requiredFieldsPass,

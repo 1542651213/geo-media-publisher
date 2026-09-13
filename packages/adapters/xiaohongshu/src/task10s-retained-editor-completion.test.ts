@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveTask10sExactPublishSurface, type Task10sFinalSurfaceResolution } from "./task10s-final-surface";
-import { evaluateTask10sRetainedEditorGate, TASK10S_FIXED_BODY, TASK10S_FIXED_TITLE, type Task10sRetainedEditorGateInput } from "./task10s-retained-editor-completion";
+import { evaluateTask10sRetainedEditorGate, type Task10sRetainedEditorGateInput } from "./task10s-retained-editor-completion";
 
 const enabledSurface: Task10sFinalSurfaceResolution = {
   status: "FOUND_UNIQUE",
@@ -31,8 +31,10 @@ function input(overrides: Partial<Task10sRetainedEditorGateInput> = {}): Task10s
     bodyControlPresent: true,
     noExplicitUploadError: true,
     initialPublishSurface: disabledSurface,
-    titleReadback: TASK10S_FIXED_TITLE,
-    bodyReadback: TASK10S_FIXED_BODY,
+    trustedArticleTitle: "自动化发布测试｜请忽略",
+    trustedArticleBody: "这是一条 GEO Media Publisher 小红书自动发布链路测试内容，请忽略。",
+    titleReadback: "自动化发布测试｜请忽略",
+    bodyReadback: "这是一条 GEO Media Publisher 小红书自动发布链路测试内容，请忽略。",
     requiredFieldsPass: true,
     finalPublishSurface: enabledSurface,
     contextIdentityAttestationPass: true,
@@ -48,6 +50,20 @@ function inputWithDraftCounter(imageCounterTextSafe: string | null, overrides: P
   return { ...input(overrides), imageCounterTextSafe } as Task10sRetainedEditorGateInput;
 }
 
+const freshPreparedArticle = {
+  title: "自动化发布测试1｜请忽略",
+  body: "GEO Media Publisher 自动发布链路测试。"
+} as const;
+
+function freshPreparedArticleInput(overrides: Record<string, unknown> = {}): Task10sRetainedEditorGateInput {
+  return {
+    ...input({ titleReadback: freshPreparedArticle.title, bodyReadback: freshPreparedArticle.body }),
+    trustedArticleTitle: freshPreparedArticle.title,
+    trustedArticleBody: freshPreparedArticle.body,
+    ...overrides
+  } as Task10sRetainedEditorGateInput;
+}
+
 describe("Task10S retained-editor completion gate", () => {
   it("accepts a previously uploaded editor with a disabled pre-fill publish surface and enabled final surface", () => {
     expect(evaluateTask10sRetainedEditorGate(input())).toMatchObject({ status: "READY_TO_SUBMIT", titleReadbackExact: true, bodyReadbackExact: true, finalSubmitPresent: true, finalSubmitEnabled: true });
@@ -61,6 +77,43 @@ describe("Task10S retained-editor completion gate", () => {
   it("blocks when fixed title/body readback is not exact", () => {
     expect(evaluateTask10sRetainedEditorGate(input({ titleReadback: "其他标题" }))).toMatchObject({ status: "BLOCKED", failureCode: "TITLE_READBACK_NOT_EXACT" });
     expect(evaluateTask10sRetainedEditorGate(input({ bodyReadback: "其他正文" }))).toMatchObject({ status: "BLOCKED", failureCode: "BODY_READBACK_NOT_EXACT" });
+  });
+
+  it("uses the current Prepared Job Article instead of legacy fixed content", () => {
+    expect(evaluateTask10sRetainedEditorGate(freshPreparedArticleInput())).toMatchObject({ status: "READY_TO_SUBMIT", titleReadbackExact: true, bodyReadbackExact: true });
+  });
+
+  it("requires strict editor readback against the bound Article", () => {
+    expect(evaluateTask10sRetainedEditorGate(freshPreparedArticleInput({ titleReadback: "其他标题" }))).toMatchObject({ status: "BLOCKED", failureCode: "TITLE_READBACK_NOT_EXACT" });
+    expect(evaluateTask10sRetainedEditorGate(freshPreparedArticleInput({ bodyReadback: "其他正文" }))).toMatchObject({ status: "BLOCKED", failureCode: "BODY_READBACK_NOT_EXACT" });
+  });
+
+  it("fails closed when the Prepared Job Article content is unavailable", () => {
+    expect(evaluateTask10sRetainedEditorGate({
+      ...freshPreparedArticleInput(),
+      trustedArticleTitle: "",
+      trustedArticleBody: ""
+    } as Task10sRetainedEditorGateInput)).toMatchObject({ status: "BLOCKED", failureCode: "PREPARED_ARTICLE_CONTENT_NOT_AVAILABLE" });
+  });
+
+  it("allows legacy retained-editor content when that Article is the bound source", () => {
+    const legacyTitle = "自动化发布测试｜请忽略";
+    const legacyBody = "这是一条 GEO Media Publisher 小红书自动发布链路测试内容，请忽略。";
+    expect(evaluateTask10sRetainedEditorGate({
+      ...input({ titleReadback: legacyTitle, bodyReadback: legacyBody }),
+      trustedArticleTitle: legacyTitle,
+      trustedArticleBody: legacyBody
+    } as Task10sRetainedEditorGateInput)).toMatchObject({ status: "READY_TO_SUBMIT" });
+  });
+
+  it("accepts arbitrary bound Article content without a fresh-flow literal", () => {
+    const title = "任意已准备任务标题";
+    const body = "任意已准备任务正文";
+    expect(evaluateTask10sRetainedEditorGate({
+      ...input({ titleReadback: title, bodyReadback: body }),
+      trustedArticleTitle: title,
+      trustedArticleBody: body
+    } as Task10sRetainedEditorGateInput)).toMatchObject({ status: "READY_TO_SUBMIT" });
   });
 
   it("blocks final submit on identity, authorization, context, upload, or final-surface failures", () => {

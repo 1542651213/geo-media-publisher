@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluateTask10sRetainedEditorGate, TASK10S_FIXED_BODY, TASK10S_FIXED_TITLE, type Task10sRetainedEditorGateInput } from "../packages/adapters/xiaohongshu/src/task10s-retained-editor-completion";
+import { evaluateTask10sRetainedEditorGate, type Task10sRetainedEditorGateInput } from "../packages/adapters/xiaohongshu/src/task10s-retained-editor-completion";
 import type { Task10sFinalSurfaceResolution } from "../packages/adapters/xiaohongshu/src/task10s-final-surface";
 
 const enabled: Task10sFinalSurfaceResolution = { status: "FOUND_UNIQUE", present: true, enabled: true, currentState: "PRESENT_ENABLED", candidate: null, failureCode: null };
@@ -16,8 +16,10 @@ function base(overrides: Partial<Task10sRetainedEditorGateInput> = {}): Task10sR
     bodyControlPresent: true,
     noExplicitUploadError: true,
     initialPublishSurface: disabled,
-    titleReadback: TASK10S_FIXED_TITLE,
-    bodyReadback: TASK10S_FIXED_BODY,
+    trustedArticleTitle: "自动化发布测试｜请忽略",
+    trustedArticleBody: "这是一条 GEO Media Publisher 小红书自动发布链路测试内容，请忽略。",
+    titleReadback: "自动化发布测试｜请忽略",
+    bodyReadback: "这是一条 GEO Media Publisher 小红书自动发布链路测试内容，请忽略。",
     requiredFieldsPass: true,
     finalPublishSurface: enabled,
     contextIdentityAttestationPass: true,

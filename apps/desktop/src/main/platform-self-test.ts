@@ -433,7 +433,22 @@ export class PlatformSelfTestService {
       this.controlledOperations.add(account.id);
       try {
         const article = this.options.repository.getArticle(job.articleId);
-        if (!article || article.title !== XHS_ONE_SHOT_TITLE || article.body !== XHS_ONE_SHOT_BODY) return blocked("TASK10S_RETAINED_EDITOR_FIXED_CONTENT_MISMATCH", { accountId: account.id, testRunId: run.testRunId, jobId: job.id, contextDebugId: runtime.contextDebugId, pageDebugId: runtime.canonicalPageDebugId });
+        if (!article
+          || !job.articleId
+          || job.id !== run.publishJobId
+          || article.id !== job.articleId
+          || run.platformKey !== account.platformKey
+          || run.platformAccountId !== (account.platformAccountId ?? account.id)
+          || job.accountId !== account.id
+          || job.platformAccountId !== (account.platformAccountId ?? account.id)
+          || job.platformKey !== account.platformKey
+          || preparedRecord.jobId !== job.id
+          || preparedRecord.articleId !== article.id
+          || preparedRecord.accountId !== account.id
+          || preparedRecord.platformAccountId !== (account.platformAccountId ?? account.id)
+          || preparedRecord.platformKey !== account.platformKey) {
+          return blocked("TASK10S_RETAINED_EDITOR_ARTICLE_BINDING_INVALID", { accountId: account.id, testRunId: run.testRunId, jobId: job.id, contextDebugId: runtime.contextDebugId, pageDebugId: runtime.canonicalPageDebugId });
+        }
         this.options.logger?.info("PLATFORM_SELF_TEST", "TASK10S_COMPLETE_RETAINED_EDITOR_STARTED", "Task10S retained-editor fixed completion action 已通过 Main-side preflight；将复用已有图片编辑器，不执行上传", { action: RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, accountId: account.id, testRunId: run.testRunId, jobId: job.id, contextDebugId: runtime.contextDebugId, pageDebugId: runtime.canonicalPageDebugId, uploadCallCount: 0 });
         const execution = await this.options.publisher.executeTask10sRetainedEditor(job.id, { userActionId: run.testRunId, triggerSource: "RUN_SELF_TEST" }, "VISIBLE", authorization);
         const after = this.options.repository.getOneShotPublicationAuthorization(TASK10S_CANONICAL_AUTHORIZATION_ID);
@@ -456,7 +471,7 @@ export class PlatformSelfTestService {
           authorizationState: after?.state ?? "NOT_VERIFIED",
           message: execution.message,
           jobStatus: execution.job.status,
-          evidence: { contextIdentityAttestationPass: identityAttestationPass, sameContext: true, sourcePageIdentity: attestation.sourcePageIdentity, currentPageIdentity: runtime.canonicalPageDebugId, fixedTitle: XHS_ONE_SHOT_TITLE, fixedBody: XHS_ONE_SHOT_BODY }
+          evidence: { contextIdentityAttestationPass: identityAttestationPass, sameContext: true, sourcePageIdentity: attestation.sourcePageIdentity, currentPageIdentity: runtime.canonicalPageDebugId, trustedArticleId: article.id, trustedArticleTitle: article.title, trustedArticleBody: article.body }
         };
       } finally {
         this.controlledOperations.delete(account.id);

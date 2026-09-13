@@ -1,9 +1,6 @@
 import type { Task10sFinalSurfaceResolution } from "./task10s-final-surface";
 import { parseXiaohongshuImageCounterText } from "./post-upload-reconciliation-diagnostic";
 
-export const TASK10S_FIXED_TITLE = "自动化发布测试｜请忽略" as const;
-export const TASK10S_FIXED_BODY = "这是一条 GEO Media Publisher 小红书自动发布链路测试内容，请忽略。" as const;
-
 export type Task10sRetainedEditorPostUploadState = "EDITOR_READY" | "PROCESSING" | "REJECTED" | "AMBIGUOUS";
 
 export interface Task10sRetainedEditorGateInput {
@@ -16,6 +13,9 @@ export interface Task10sRetainedEditorGateInput {
   bodyControlPresent: boolean;
   noExplicitUploadError: boolean;
   initialPublishSurface: Task10sFinalSurfaceResolution;
+  /** Exact content persisted on the current Prepared Job's bound Article. */
+  trustedArticleTitle: string;
+  trustedArticleBody: string;
   titleReadback: string;
   bodyReadback: string;
   requiredFieldsPass: boolean;
@@ -61,8 +61,9 @@ export function evaluateTask10sRetainedEditorGate(input: Task10sRetainedEditorGa
   if (!input.bodyControlPresent) return blocked("BODY_CONTROL_NOT_FOUND");
   if (!input.noExplicitUploadError) return blocked("EXPLICIT_UPLOAD_ERROR");
   if (!input.initialPublishSurface.present) return blocked("INITIAL_FINAL_SURFACE_NOT_PRESENT");
-  if (input.titleReadback !== TASK10S_FIXED_TITLE) return blocked("TITLE_READBACK_NOT_EXACT");
-  if (input.bodyReadback !== TASK10S_FIXED_BODY) return blocked("BODY_READBACK_NOT_EXACT");
+  if (!input.trustedArticleTitle.trim() || !input.trustedArticleBody.trim()) return blocked("PREPARED_ARTICLE_CONTENT_NOT_AVAILABLE");
+  if (input.titleReadback !== input.trustedArticleTitle) return blocked("TITLE_READBACK_NOT_EXACT");
+  if (input.bodyReadback !== input.trustedArticleBody) return blocked("BODY_READBACK_NOT_EXACT");
   if (!input.requiredFieldsPass) return blocked("REQUIRED_FIELDS_NOT_VERIFIED");
   if (!input.contextIdentityAttestationPass) return blocked("CONTEXT_IDENTITY_ATTESTATION_INVALID");
   if (!input.sameContext) return blocked("SAME_CONTEXT_REQUIRED");
