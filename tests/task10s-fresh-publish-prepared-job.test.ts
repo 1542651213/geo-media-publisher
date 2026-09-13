@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDatabase } from "@publisher/db";
 import { createOwnerAuthorizedOneShotPublication, ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, type AdapterRegistry, type PublishFlowExplorationResult } from "@publisher/adapters-core";
+import type { XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
 import type { PublisherService } from "@publisher/publisher";
 import { PlatformSelfTestService } from "../apps/desktop/src/main/platform-self-test";
@@ -32,6 +33,19 @@ function exploration(): PublishFlowExplorationResult {
   };
 }
 
+function closedShadowPass(): XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic {
+  return {
+    inspectionStatus: "PASS", failureCode: null, accountId, contextDebugId: "context", pageId: "page",
+    sessionExists: true, browserConnected: true, contextExists: true, pageExists: true, pageClosed: false, pageContextMatchesSession: true,
+    origin: "https://creator.xiaohongshu.com", pathname: "/publish/publish", sanitizedUrl: "https://creator.xiaohongshu.com/publish/publish",
+    cdpSessionCreated: "YES", cdpGetDocumentSuccess: "YES", cdpGetDocumentDepth: -1, cdpGetDocumentPierce: true,
+    piercedXhsPublishBtnCount: 1, hostNodeName: "XHS-PUBLISH-BTN", hostAttributesSafe: { isPublish: "true", isSaveDraft: "false", submitText: "发布", saveText: "保存草稿", submitDisabled: "false", submitLoading: "false" },
+    hostIsPublish: "true", hostSubmitText: "发布", hostSubmitDisabled: "false", hostSubmitLoading: "false", hostDescendantButtonCount: 1, exactPublishNativeButtonCount: 1,
+    buttonNodeName: "BUTTON", buttonTextSafe: "发布", buttonType: "button", buttonClassSafe: "submit", buttonAriaDisabled: "false", buttonAriaBusy: "false", buttonBoxModelPresent: "YES", buttonCenterXSafe: 10, buttonCenterYSafe: 10,
+    finalSubmitControlPresent: "YES", finalSubmitControlEnabled: "YES", closedShadowFinalSubmitSurface: "PASS", saveDraftSurfacePresent: "NOT_INSPECTED", finalResolverSelectedSaveDraft: "NO"
+  };
+}
+
 function setup() {
   const dir = mkdtempSync(join(tmpdir(), "task10s-r41-"));
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
@@ -48,7 +62,7 @@ function setup() {
   const proof = exploration();
   const runtime = { sessionExists: true, browserConnected: true, contextExists: true, canonicalPageExists: true, canonicalPageClosed: false, runtimeAuthState: "AUTHENTICATED", browserSessionIdentity: "session", contextDebugId: "context", canonicalPageDebugId: "page" };
   const forbidden = vi.fn(() => { throw new Error("OFFLINE_PUBLICATION_BOUNDARY"); });
-  const adapter = { connectAccount: forbidden, checkSession: forbidden, preparePublish: forbidden, finalSubmit: forbidden, automationType: "BrowserAutomation", getBrowserRuntimeSnapshot: () => runtime, getBrowserSessionEvidence: async () => ({ pageUrl: "https://creator.xiaohongshu.com/new/home" }), runPublishFlowExploration: async (_context: unknown, input: { operationId: string }) => ({ ...proof, operationId: input.operationId }) };
+  const adapter = { connectAccount: forbidden, checkSession: forbidden, preparePublish: forbidden, finalSubmit: forbidden, automationType: "BrowserAutomation", getBrowserRuntimeSnapshot: () => runtime, getBrowserSessionEvidence: async () => ({ pageUrl: "https://creator.xiaohongshu.com/new/home" }), inspectCurrentXiaohongshuClosedShadowFinalSubmit: async () => closedShadowPass(), runPublishFlowExploration: async (_context: unknown, input: { operationId: string }) => ({ ...proof, operationId: input.operationId }) };
   const registry = { getForContent: () => adapter } as unknown as AdapterRegistry;
   const publisher = { executeJob: forbidden, executeTask10sRetainedEditor: forbidden } as unknown as PublisherService;
   const options = { repository: repo, registry, publisher, resolveAccountSecrets: () => ({}) };
@@ -58,14 +72,91 @@ function setup() {
   vi.spyOn(XhsIdentityService.prototype, "validateContextIdentityAttestation").mockResolvedValue({ valid: true } as Awaited<ReturnType<XhsIdentityService["validateContextIdentityAttestation"]>>);
   // Check the missing API with an assertion in RED, rather than a TypeError.
   const arm = async () => {
+    await service.inspectCurrentXiaohongshuClosedShadowFinalSubmit();
     const method = (service as unknown as { armTask10sFreshCompletion?: () => Promise<{ status: string; failureCode: string | null; jobId?: string }> }).armTask10sFreshCompletion;
     expect(method, "Main trusted ARM transition must exist").toBeTypeOf("function");
     return method!.call(service);
   };
-  return { repo, service, proof, runtime, forbidden, arm, options };
+  return { repo, service, proof, runtime, forbidden, arm, options, adapter };
 }
 
 describe("r41 fresh prepared job transition (offline)", () => {
+  it("r42 accepts the scoped generic resolver false negative when closed-shadow proof passes", async () => {
+    const f = setup();
+    f.proof.status = "BLOCKED";
+    f.proof.readyForFinalSubmit = false;
+    f.proof.failureCode = "FINAL_SUBMIT_CONTROL_NOT_FOUND";
+    f.proof.finalSubmit = { status: "NOT_FOUND", visible: false, enabled: false, hitTestValid: false };
+    await f.service.runTask10sFreshPublishFlow();
+    await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit();
+    expect(await f.arm()).toMatchObject({ status: "PASS", finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0 });
+    expect(f.repo.listJobs()).toHaveLength(1);
+    expect(f.repo.getPublishRecords()).toHaveLength(1);
+  });
+  it("requires a closed-shadow PASS before substituting the generic resolver failure", async () => {
+    const f = setup();
+    f.proof.status = "BLOCKED";
+    f.proof.readyForFinalSubmit = false;
+    f.proof.failureCode = "FINAL_SUBMIT_CONTROL_NOT_FOUND";
+    f.proof.finalSubmit = { status: "NOT_FOUND", visible: false, enabled: false, hitTestValid: false };
+    await f.service.runTask10sFreshPublishFlow();
+    expect(await f.service.armTask10sFreshCompletion()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
+    expect(f.repo.listJobs()).toHaveLength(0);
+  });
+  it("rejects a closed-shadow diagnostic that is not PASS", async () => {
+    const f = setup();
+    f.proof.status = "BLOCKED";
+    f.proof.readyForFinalSubmit = false;
+    f.proof.failureCode = "FINAL_SUBMIT_CONTROL_NOT_FOUND";
+    f.proof.finalSubmit = { status: "NOT_FOUND", visible: false, enabled: false, hitTestValid: false };
+    f.adapter.inspectCurrentXiaohongshuClosedShadowFinalSubmit = async () => ({ ...closedShadowPass(), inspectionStatus: "FAIL", failureCode: "CDP_DOM_DOCUMENT_UNAVAILABLE" });
+    await f.service.runTask10sFreshPublishFlow();
+    await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit();
+    expect(await f.service.armTask10sFreshCompletion()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
+  });
+  it("rejects any generic resolver failure outside the scoped NOT_FOUND false negative", async () => {
+    const f = setup();
+    f.proof.status = "BLOCKED";
+    f.proof.readyForFinalSubmit = false;
+    f.proof.failureCode = "FINAL_SUBMIT_CONTROL_AMBIGUOUS";
+    f.proof.finalSubmit = { status: "AMBIGUOUS", visible: true, enabled: true, hitTestValid: true, label: "发布" };
+    await f.service.runTask10sFreshPublishFlow();
+    await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit();
+    expect(await f.service.armTask10sFreshCompletion()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
+  });
+  it("requires closed-shadow evidence from the same context and page", async () => {
+    const f = setup();
+    f.proof.status = "BLOCKED";
+    f.proof.readyForFinalSubmit = false;
+    f.proof.failureCode = "FINAL_SUBMIT_CONTROL_NOT_FOUND";
+    f.proof.finalSubmit = { status: "NOT_FOUND", visible: false, enabled: false, hitTestValid: false };
+    f.adapter.inspectCurrentXiaohongshuClosedShadowFinalSubmit = async () => ({ ...closedShadowPass(), contextDebugId: "other-context" });
+    await f.service.runTask10sFreshPublishFlow();
+    await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit();
+    expect(await f.service.armTask10sFreshCompletion()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
+    expect(f.repo.listJobs()).toHaveLength(0);
+  });
+  it.each(["host-count", "native-count", "host-role", "submit-text", "submit-disabled", "submit-loading", "aria-disabled", "aria-busy"])("rejects a closed-shadow proof with an invalid %s signal", async (signal) => {
+    const f = setup();
+    f.proof.status = "BLOCKED";
+    f.proof.readyForFinalSubmit = false;
+    f.proof.failureCode = "FINAL_SUBMIT_CONTROL_NOT_FOUND";
+    f.proof.finalSubmit = { status: "NOT_FOUND", visible: false, enabled: false, hitTestValid: false };
+    const diagnostic = closedShadowPass();
+    if (signal === "host-count") diagnostic.piercedXhsPublishBtnCount = 0;
+    if (signal === "native-count") diagnostic.exactPublishNativeButtonCount = 0;
+    if (signal === "host-role") diagnostic.hostIsPublish = "false";
+    if (signal === "submit-text") diagnostic.hostSubmitText = "保存草稿";
+    if (signal === "submit-disabled") diagnostic.hostSubmitDisabled = "true";
+    if (signal === "submit-loading") diagnostic.hostSubmitLoading = "true";
+    if (signal === "aria-disabled") diagnostic.buttonAriaDisabled = "true";
+    if (signal === "aria-busy") diagnostic.buttonAriaBusy = "true";
+    f.adapter.inspectCurrentXiaohongshuClosedShadowFinalSubmit = async () => diagnostic;
+    await f.service.runTask10sFreshPublishFlow();
+    await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit();
+    expect(await f.service.armTask10sFreshCompletion()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
+    expect(f.repo.listJobs()).toHaveLength(0);
+  });
   it("keeps the missing prepared job guard after successful fresh content evidence", async () => {
     const f = setup(); await f.service.runTask10sFreshPublishFlow();
     expect(await f.service.runTask10sCompleteRetainedEditor()).toMatchObject({ failureCode: "TASK10S_RETAINED_EDITOR_PREPARED_JOB_MISSING" });
@@ -163,6 +254,7 @@ describe("r41 fresh prepared job transition (offline)", () => {
   });
   it("dispatches ARM to persistence and stops without calling completion", async () => {
     const f = setup(); await f.service.runTask10sFreshPublishFlow();
+    await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit();
     const completion = vi.spyOn(f.service, "runTask10sCompleteRetainedEditor");
     const write = vi.fn();
     const runner = createFixedDiagnosticRunner({ probe: vi.fn(), writeEvidence: vi.fn(), armTask10sFreshCompletion: () => f.service.armTask10sFreshCompletion(), writeTask10sFreshCompletionArmEvidence: write, runTask10sCompleteRetainedEditor: () => f.service.runTask10sCompleteRetainedEditor(), writeTask10sCompleteRetainedEditorEvidence: vi.fn() });

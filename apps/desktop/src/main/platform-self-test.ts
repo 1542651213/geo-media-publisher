@@ -75,6 +75,15 @@ interface BackgroundEvidence {
   reason: string;
 }
 
+interface Task10sClosedShadowEvidence {
+  result: XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic;
+  accountId: string;
+  operationId: string;
+  sessionId: string | null;
+  contextId: string | null;
+  pageId: string | null;
+}
+
 export interface PlatformSelfTestAccountView {
   account: Account;
   latestRun: PlatformSelfTestRun | null;
@@ -269,6 +278,9 @@ export class PlatformSelfTestService {
   // Browser evidence is valid only in this Main lifetime. Never restore it from
   // a diagnostic JSON file after restart, or accept it from a caller/renderer.
   private task10sFreshEvidence: { result: Task10sFreshPublishFlowResult; sessionId: string | null; pageId: string | null } | null = null;
+  // The closed-shadow proof is also process-memory-only and is bound to the
+  // fresh-flow operation that was active when the read-only diagnostic ran.
+  private task10sClosedShadowEvidence: Task10sClosedShadowEvidence | null = null;
   private readonly controlledOperations = new Set<string>();
   private readonly oneShotConfirmations = new OneShotConfirmationCoordinator();
   private readonly oneShotReconciliation: OneShotConfirmationReconciliationService;
@@ -611,6 +623,7 @@ export class PlatformSelfTestService {
    */
   async runTask10sFreshPublishFlow(): Promise<Task10sFreshPublishFlowResult> {
     this.task10sFreshEvidence = null;
+    this.task10sClosedShadowEvidence = null;
     const operationId = randomUUID();
     const account = this.options.repository.listAccounts().find((item) => item.id === XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID && item.platformKey === "xiaohongshu");
     if (!account || !account.enabled || account.archivedAt) return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account?.id ?? null, failureCode: "XHS_ACCOUNT_UNAVAILABLE" });
@@ -739,18 +752,45 @@ export class PlatformSelfTestService {
         const cached = this.task10sFreshEvidence;
         const fresh = cached?.result;
         const exploration = fresh?.exploration;
-        // ARM requires upload/editor/content evidence. Final-submit resolution
-        // remains a separate completion gate; r40's closed-shadow proof does not
-        // turn a diagnostic result into permission to click.
+        const closedShadow = this.task10sClosedShadowEvidence;
+        const closedShadowResult = closedShadow?.result;
+        const closedShadowBindingPass = Boolean(closedShadow && closedShadowResult
+          && closedShadow.accountId === account.id
+          && closedShadow.operationId === fresh?.operationId
+          && closedShadow.sessionId === cached?.sessionId
+          && closedShadow.contextId === fresh?.identityAttestation.contextId
+          && closedShadow.pageId === cached?.pageId
+          && closedShadowResult.accountId === account.id
+          && closedShadowResult.contextDebugId === fresh?.identityAttestation.contextId
+          && closedShadowResult.pageId === cached?.pageId);
+        const closedShadowPass = closedShadowBindingPass && closedShadowResult?.inspectionStatus === "PASS" && closedShadowResult.failureCode === null
+          && closedShadowResult.sessionExists && closedShadowResult.browserConnected && closedShadowResult.contextExists && closedShadowResult.pageExists
+          && !closedShadowResult.pageClosed && closedShadowResult.pageContextMatchesSession
+          && closedShadowResult.origin === "https://creator.xiaohongshu.com" && closedShadowResult.pathname === "/publish/publish"
+          && closedShadowResult.cdpSessionCreated === "YES" && closedShadowResult.cdpGetDocumentSuccess === "YES" && closedShadowResult.cdpGetDocumentPierce === true
+          && closedShadowResult.piercedXhsPublishBtnCount === 1 && closedShadowResult.exactPublishNativeButtonCount === 1
+          && closedShadowResult.hostNodeName === "XHS-PUBLISH-BTN" && closedShadowResult.hostIsPublish === "true"
+          && closedShadowResult.hostSubmitText === "发布" && closedShadowResult.hostSubmitDisabled === "false" && closedShadowResult.hostSubmitLoading === "false" && closedShadowResult.hostDescendantButtonCount === 1
+          && closedShadowResult.buttonNodeName === "BUTTON" && closedShadowResult.buttonTextSafe === "发布"
+          && closedShadowResult.buttonAriaDisabled === "false" && closedShadowResult.buttonAriaBusy === "false"
+          && closedShadowResult.buttonBoxModelPresent === "YES" && closedShadowResult.finalSubmitControlPresent === "YES" && closedShadowResult.finalSubmitControlEnabled === "YES"
+          && closedShadowResult.closedShadowFinalSubmitSurface === "PASS";
+        const genericResolverPass = (exploration?.failureCode === null || exploration?.failureCode === undefined) && exploration?.finalSubmit.status === "FOUND_UNIQUE" && exploration.finalSubmit.visible && exploration.finalSubmit.enabled && exploration.finalSubmit.hitTestValid;
+        const genericResolverFalseNegative = exploration?.failureCode === "FINAL_SUBMIT_CONTROL_NOT_FOUND" && exploration.finalSubmit.status === "NOT_FOUND";
+        const finalSubmitEvidencePass = genericResolverPass || (genericResolverFalseNegative && closedShadowPass);
+        // ARM requires each fresh-flow identity, upload, editor, and content
+        // proof explicitly. A generic resolver NOT_FOUND is substitutable only
+        // for this one known false-negative and only with the trusted
+        // closed-shadow proof from the same run/context/page.
         if (!fresh || !exploration || fresh.accountId !== account.id || exploration.accountId !== account.id || exploration.platformKey !== account.platformKey || exploration.operationId !== fresh.operationId
-          || fresh.status !== "PASS_READY_FOR_FINAL_SUBMIT" || !fresh.readyForFinalSubmit || fresh.newPublishEntry !== "PASS" || !fresh.fixture.valid || fresh.identityAttestation.status !== "PASS" || fresh.identityAttestation.creatorId !== TASK10S_EXPECTED_CREATOR_ID
+          || (!genericResolverFalseNegative && fresh.status !== "PASS_READY_FOR_FINAL_SUBMIT") || (genericResolverFalseNegative && exploration.status !== "BLOCKED") || fresh.newPublishEntry !== "PASS" || !fresh.fixture.valid || fresh.identityAttestation.status !== "PASS" || fresh.identityAttestation.creatorId !== TASK10S_EXPECTED_CREATOR_ID
           || fresh.fixedContent.title !== XHS_TASK10S_FRESH_PUBLISH_FLOW_TITLE || fresh.fixedContent.body !== XHS_TASK10S_FRESH_PUBLISH_FLOW_BODY
           || exploration.status === "SAFETY_BOUNDARY_VIOLATION" || exploration.forbiddenMutationObserved || !exploration.sameCanonicalPage || !exploration.sameContext
           || exploration.uploadAttempts !== 1 || exploration.uploadMutationCount !== 1 || exploration.uploadRetryCount !== 0
           || exploration.counters.uploadAttempts !== 1 || exploration.counters.uploadMutationCount !== 1 || exploration.counters.uploadRetryCount !== 0
           || exploration.titleMutationCount !== 1 || exploration.bodyMutationCount !== 1 || !exploration.titleReadbackVerified || !exploration.bodyReadbackVerified
           || !exploration.title.readbackVerified || !exploration.body.readbackVerified || exploration.title.mutationCount !== 1 || exploration.body.mutationCount !== 1
-          || exploration.finalSubmit.status !== "FOUND_UNIQUE" || !exploration.finalSubmit.visible || !exploration.finalSubmit.enabled || !exploration.finalSubmit.hitTestValid
+          || !finalSubmitEvidencePass
           || exploration.finalSubmitCount !== 0 || exploration.counters.finalSubmitCount !== 0
           || !exploration.states.some((state) => state.phase === "POST_UPLOAD_TERMINAL_READINESS" && state.postUploadState === "EDITOR_READY" && state.ready === true && state.imageCounterValid === true && typeof state.editorScopedImageAssetCount === "number" && state.editorScopedImageAssetCount > 0 && state.uploadErrorSignalPresent === false && state.busySignalPresent === false)) return result("TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE");
         const adapter = this.options.registry.getForContent(account.platformKey, "article");
@@ -978,7 +1018,15 @@ export class PlatformSelfTestService {
   }
 
   inspectCurrentXiaohongshuClosedShadowFinalSubmit(): Promise<XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic> {
-    return this.xhsIdentity.inspectCurrentXiaohongshuClosedShadowFinalSubmit(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
+    return this.xhsIdentity.inspectCurrentXiaohongshuClosedShadowFinalSubmit(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID).then((diagnostic) => {
+      const fresh = this.task10sFreshEvidence;
+      const accountId = XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID;
+      this.task10sClosedShadowEvidence = fresh ? {
+        result: structuredClone(diagnostic), accountId, operationId: fresh.result.operationId, sessionId: fresh.sessionId,
+        contextId: diagnostic.contextDebugId, pageId: diagnostic.pageId
+      } : null;
+      return diagnostic;
+    });
   }
 
   inspectCurrentXiaohongshuPostUploadReconciliation(): Promise<XiaohongshuCurrentPostUploadReconciliation> {
