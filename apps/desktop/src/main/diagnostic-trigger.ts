@@ -1,3 +1,4 @@
+import { TASK10S_FRESH_COMPLETION_ARM, type Task10sFreshCompletionArmResult } from "./platform-self-test";
 import { createHash } from "node:crypto";
 import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuCurrentPostUploadTerminalReadiness, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, XHS_TASK10S_COMPLETE_RETAINED_EDITOR_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5_FLAG, type Task10sAttempt3DispatchDryRunResult, type Task10sControlledUploadAttemptResult, type Task10sRetainedEditorCompletionResult } from "./task10s-attempt3";
@@ -28,9 +29,11 @@ export const INSPECT_XHS_CLOSED_SHADOW_FINAL_SUBMIT = "INSPECT_XHS_CLOSED_SHADOW
 export const XHS_CONTEXT_IDENTITY_ATTESTATION_FLAG = "--xhs-task10s-establish-context-identity-attestation" as const;
 export const ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION = "ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION" as const;
 
-export type DiagnosticAction = typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS | typeof INSPECT_XHS_FILE_INPUT_STATE | typeof INSPECT_XHS_FINAL_SUBMIT_DOM | typeof INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM | typeof INSPECT_XHS_CLOSED_SHADOW_FINAL_SUBMIT | typeof ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 | typeof RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN | typeof RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR | typeof RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW;
+export const XHS_TASK10S_ARM_FRESH_COMPLETION_FLAG = "--xhs-task10s-arm-fresh-completion" as const;
+export type DiagnosticAction = typeof TASK10S_FRESH_COMPLETION_ARM | typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS | typeof INSPECT_XHS_FILE_INPUT_STATE | typeof INSPECT_XHS_FINAL_SUBMIT_DOM | typeof INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM | typeof INSPECT_XHS_CLOSED_SHADOW_FINAL_SUBMIT | typeof ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 | typeof RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN | typeof RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR | typeof RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW;
 
 function actionForValue(value: unknown): DiagnosticAction | null {
+  if (value === TASK10S_FRESH_COMPLETION_ARM) return TASK10S_FRESH_COMPLETION_ARM;
   if (value === PROBE_XHS_CANONICAL_PAGE) return PROBE_XHS_CANONICAL_PAGE;
   if (value === INSPECT_XHS_CONTEXT_PAGES) return INSPECT_XHS_CONTEXT_PAGES;
   if (value === INSPECT_XHS_PUBLISH_ENTRY_DOM) return INSPECT_XHS_PUBLISH_ENTRY_DOM;
@@ -51,6 +54,7 @@ function actionForValue(value: unknown): DiagnosticAction | null {
 }
 
 function actionForFlag(value: string | undefined): DiagnosticAction | null {
+  if (value === XHS_TASK10S_ARM_FRESH_COMPLETION_FLAG) return TASK10S_FRESH_COMPLETION_ARM;
   if (value === XHS_CANONICAL_PAGE_PROBE_FLAG) return PROBE_XHS_CANONICAL_PAGE;
   if (value === XHS_CONTEXT_PAGE_INVENTORY_FLAG) return INSPECT_XHS_CONTEXT_PAGES;
   if (value === XHS_PUBLISH_ENTRY_DOM_DIAGNOSTIC_FLAG) return INSPECT_XHS_PUBLISH_ENTRY_DOM;
@@ -323,6 +327,8 @@ export function createFixedDiagnosticRunner(options: {
   writeTask10sAttempt3DispatchDryRunEvidence?: (trace: Task10sAttempt3DispatchTrace) => void;
   runTask10sCompleteRetainedEditor?: () => Promise<Task10sRetainedEditorCompletionResult>;
   writeTask10sCompleteRetainedEditorEvidence?: (result: Task10sRetainedEditorCompletionResult) => void;
+  armTask10sFreshCompletion?: () => Promise<Task10sFreshCompletionArmResult>;
+  writeTask10sFreshCompletionArmEvidence?: (result: Task10sFreshCompletionArmResult) => void;
   runTask10sFreshPublishFlow?: () => Promise<Task10sFreshPublishFlowResult>;
   writeTask10sFreshPublishFlowEvidence?: (result: Task10sFreshPublishFlowResult) => void;
 }): (action: DiagnosticAction, context?: FixedDiagnosticInvocationContext) => Promise<boolean> {
@@ -408,6 +414,11 @@ export function createFixedDiagnosticRunner(options: {
     if (action === RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR && options.runTask10sCompleteRetainedEditor && options.writeTask10sCompleteRetainedEditorEvidence) {
       const result = await options.runTask10sCompleteRetainedEditor();
       options.writeTask10sCompleteRetainedEditorEvidence(result);
+      return result.status === "PASS";
+    }
+    if (action === TASK10S_FRESH_COMPLETION_ARM && options.armTask10sFreshCompletion && options.writeTask10sFreshCompletionArmEvidence) {
+      const result = await options.armTask10sFreshCompletion();
+      options.writeTask10sFreshCompletionArmEvidence(result);
       return result.status === "PASS";
     }
     if (action === RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW && options.runTask10sFreshPublishFlow && options.writeTask10sFreshPublishFlowEvidence) {

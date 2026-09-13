@@ -40,6 +40,18 @@ const XHS_EXPLORATION_BODY = "自动化发布流程验证，仅用于本地测�
 const XHS_ONE_SHOT_TITLE = "自动化发布测试｜请忽略";
 const XHS_ONE_SHOT_BODY = "这是一条 GEO Media Publisher 小红书自动发布链路测试内容，请忽略。";
 const XHS_ONE_SHOT_CONFIRMATION = "本次会真实发布 1 条测试笔记，最多提交一次。";
+export const TASK10S_FRESH_COMPLETION_ARM = "TASK10S_FRESH_COMPLETION_ARM" as const;
+export interface Task10sFreshCompletionArmResult {
+  action: typeof TASK10S_FRESH_COMPLETION_ARM;
+  status: "PASS" | "BLOCKED";
+  failureCode: string | null;
+  jobId?: string;
+  freshOperationId?: string;
+  testRunId: string;
+  finalSubmitClickCount: 0;
+  mousePressedCount: 0;
+  publicationTransactionCount: 0;
+}
 const XHS_EXPLORATION_EVIDENCE_FILE = "xiaohongshu-task10r-publish-flow-exploration.json";
 function publishDomainCountsEqual(left: { publishJobs: number; submissionIntents: number; publishRecords: number }, right: { publishJobs: number; submissionIntents: number; publishRecords: number }): boolean {
   return left.publishJobs === right.publishJobs && left.submissionIntents === right.submissionIntents && left.publishRecords === right.publishRecords;
@@ -254,6 +266,9 @@ function safePostUploadEvidence(result: ControlledPostUploadDiscoveryResult): Re
 }
 
 export class PlatformSelfTestService {
+  // Browser evidence is valid only in this Main lifetime. Never restore it from
+  // a diagnostic JSON file after restart, or accept it from a caller/renderer.
+  private task10sFreshEvidence: { result: Task10sFreshPublishFlowResult; sessionId: string | null; pageId: string | null } | null = null;
   private readonly controlledOperations = new Set<string>();
   private readonly oneShotConfirmations = new OneShotConfirmationCoordinator();
   private readonly oneShotReconciliation: OneShotConfirmationReconciliationService;
@@ -595,6 +610,7 @@ export class PlatformSelfTestService {
    * invokes the final submit action.
    */
   async runTask10sFreshPublishFlow(): Promise<Task10sFreshPublishFlowResult> {
+    this.task10sFreshEvidence = null;
     const operationId = randomUUID();
     const account = this.options.repository.listAccounts().find((item) => item.id === XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID && item.platformKey === "xiaohongshu");
     if (!account || !account.enabled || account.archivedAt) return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account?.id ?? null, failureCode: "XHS_ACCOUNT_UNAVAILABLE" });
@@ -687,11 +703,79 @@ export class PlatformSelfTestService {
         failureCode: safetyViolation ? "TASK10S_FRESH_PUBLISH_FLOW_SAFETY_BOUNDARY" : (persistedExploration.failureCode ?? null)
       };
       this.options.logger?.info("PLATFORM_SELF_TEST", "XHS_TASK10S_FRESH_PUBLISH_FLOW_COMPLETED", "小红书 fresh publish flow diagnostic 已完成；未执行最终发布", { action: RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, accountId: account.id, operationId, status: result.status, readyForFinalSubmit, newPublishEntry, uploadAttempts: result.safety.uploadAttempts, titleMutationCount: result.safety.titleMutationCount, bodyMutationCount: result.safety.bodyMutationCount, finalSubmitCount: 0, publicationTransactionCount: 0, publishDomainUnchanged });
+      if (!safetyViolation) this.task10sFreshEvidence = { result: structuredClone(result), sessionId: runtime.browserSessionIdentity ?? null, pageId: runtime.canonicalPageDebugId };
       return result;
     } catch (error) {
       return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account.id, failureCode: error instanceof Error ? error.message : "XHS_FRESH_PUBLISH_FLOW_FAILED", fixture: fixtureEvidence, identityAttestation: identityEvidence });
     } finally {
       this.controlledOperations.delete(account.id);
+    }
+  }
+
+  /** Separate Owner-authorized persistence transition. Never executes a job. */
+  async armTask10sFreshCompletion(): Promise<Task10sFreshCompletionArmResult> {
+    const result = (failureCode: string | null, jobId?: string): Task10sFreshCompletionArmResult => ({
+      action: TASK10S_FRESH_COMPLETION_ARM, status: failureCode ? "BLOCKED" : "PASS", failureCode,
+      testRunId: TASK10S_CANONICAL_AUTHORIZATION_ID, jobId,
+      freshOperationId: this.task10sFreshEvidence?.result.operationId,
+      finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0
+    });
+    const accountId = XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID;
+    if (this.controlledOperations.has(accountId)) return result("TASK10S_FRESH_ARM_ALREADY_RUNNING");
+    this.controlledOperations.add(accountId);
+    try {
+      const identity = await this.xhsIdentity.validateContextIdentityAttestation(accountId);
+      const outcome = this.options.repository.db.transaction((): Task10sFreshCompletionArmResult => {
+        const repository = this.options.repository;
+        const account = repository.listAccounts().find((item) => item.id === accountId && item.platformKey === "xiaohongshu");
+        const run = repository.getPlatformSelfTestRun(TASK10S_CANONICAL_AUTHORIZATION_ID);
+        if (!account || !account.enabled || account.archivedAt) return result("XHS_ACCOUNT_UNAVAILABLE");
+        if (!run || run.testRunId !== TASK10S_CANONICAL_AUTHORIZATION_ID || run.platformKey !== account.platformKey || run.platformAccountId !== (account.platformAccountId ?? account.id) || run.requestedLevel !== "L5_PUBLISH" || !run.publishConfirmedAt) return result("TASK10S_FRESH_ARM_RUN_BINDING_MISMATCH");
+        if (run.publishJobId) return result("TASK10S_FRESH_ARM_JOB_ALREADY_EXISTS");
+        const authorization = repository.getOneShotPublicationAuthorization(run.testRunId);
+        if (!authorization || authorization.authorization !== OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH || authorization.state !== "AUTHORIZED_UNUSED"
+          || authorization.platformKey !== account.platformKey || authorization.accountId !== account.id || authorization.operationId !== run.testRunId || authorization.mode !== ONE_SHOT_REAL_PUBLISH_ACCEPTANCE
+          || authorization.publicationTransactionCount !== 0 || authorization.publicationCommitActionCount !== 0 || authorization.finalSubmitAttemptCount !== 0 || authorization.finalSubmitRetryCount !== 0 || authorization.finalSubmitActionStarted || authorization.finalSubmitActionCompleted) return result("TASK10S_FRESH_ARM_AUTHORIZATION_NOT_UNUSED");
+        const cached = this.task10sFreshEvidence;
+        const fresh = cached?.result;
+        const exploration = fresh?.exploration;
+        // ARM requires upload/editor/content evidence. Final-submit resolution
+        // remains a separate completion gate; r40's closed-shadow proof does not
+        // turn a diagnostic result into permission to click.
+        if (!fresh || !exploration || fresh.accountId !== account.id || exploration.accountId !== account.id || exploration.platformKey !== account.platformKey || exploration.operationId !== fresh.operationId
+          || fresh.status !== "PASS_READY_FOR_FINAL_SUBMIT" || !fresh.readyForFinalSubmit || fresh.newPublishEntry !== "PASS" || !fresh.fixture.valid || fresh.identityAttestation.status !== "PASS" || fresh.identityAttestation.creatorId !== TASK10S_EXPECTED_CREATOR_ID
+          || fresh.fixedContent.title !== XHS_TASK10S_FRESH_PUBLISH_FLOW_TITLE || fresh.fixedContent.body !== XHS_TASK10S_FRESH_PUBLISH_FLOW_BODY
+          || exploration.status === "SAFETY_BOUNDARY_VIOLATION" || exploration.forbiddenMutationObserved || !exploration.sameCanonicalPage || !exploration.sameContext
+          || exploration.uploadAttempts !== 1 || exploration.uploadMutationCount !== 1 || exploration.uploadRetryCount !== 0
+          || exploration.counters.uploadAttempts !== 1 || exploration.counters.uploadMutationCount !== 1 || exploration.counters.uploadRetryCount !== 0
+          || exploration.titleMutationCount !== 1 || exploration.bodyMutationCount !== 1 || !exploration.titleReadbackVerified || !exploration.bodyReadbackVerified
+          || !exploration.title.readbackVerified || !exploration.body.readbackVerified || exploration.title.mutationCount !== 1 || exploration.body.mutationCount !== 1
+          || exploration.finalSubmit.status !== "FOUND_UNIQUE" || !exploration.finalSubmit.visible || !exploration.finalSubmit.enabled || !exploration.finalSubmit.hitTestValid
+          || exploration.finalSubmitCount !== 0 || exploration.counters.finalSubmitCount !== 0
+          || !exploration.states.some((state) => state.phase === "POST_UPLOAD_TERMINAL_READINESS" && state.postUploadState === "EDITOR_READY" && state.ready === true && state.imageCounterValid === true && typeof state.editorScopedImageAssetCount === "number" && state.editorScopedImageAssetCount > 0 && state.uploadErrorSignalPresent === false && state.busySignalPresent === false)) return result("TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE");
+        const adapter = this.options.registry.getForContent(account.platformKey, "article");
+        if (!isAutomationAdapter(adapter) || typeof adapter.getBrowserRuntimeSnapshot !== "function") return result("TASK10S_FRESH_ARM_RUNTIME_UNAVAILABLE");
+        const runtime = adapter.getBrowserRuntimeSnapshot(this.context(account, run, "VISIBLE"));
+        if (!identity.valid || !cached?.sessionId || !cached.pageId || !fresh.identityAttestation.contextId || !runtime.sessionExists || runtime.browserConnected !== true || !runtime.contextExists || !runtime.canonicalPageExists || runtime.canonicalPageClosed === true || runtime.runtimeAuthState !== "AUTHENTICATED"
+          || runtime.browserSessionIdentity !== cached.sessionId || runtime.contextDebugId !== fresh.identityAttestation.contextId || runtime.canonicalPageDebugId !== cached.pageId) return result("TASK10S_FRESH_ARM_RUNTIME_BINDING_MISMATCH");
+        const job = repository.createPlatformSelfTestPublishJob({ testRunId: run.testRunId, title: fresh.fixedContent.title, body: fresh.fixedContent.body, dryRun: false });
+        repository.insertPublishRecord({ jobId: job.id, accountId: account.id, platformAccountId: account.platformAccountId, platformKey: account.platformKey, articleId: job.articleId,
+          publishedUrl: null, publishedExternalId: null, success: false, dryRun: false, status: "Prepared", publishMode: "ASSISTED", automationType: adapter.automationType,
+          browserSessionIdHash: account.browserSessionId, operator: process.env.USERNAME?.trim() || process.env.USER?.trim() || "desktop-user", verificationStatus: "WaitingUser", editorOpenedAt: null,
+          titleFilled: true, bodyFilled: true, selectedImageAssetId: null, imageSelectionMode: "none",
+          response: { action: TASK10S_FRESH_COMPLETION_ARM, freshOperationId: fresh.operationId, authorizationOperationId: authorization.operationId, authorizationState: authorization.state,
+            freshFlowEvidence: fresh, imageSource: "SAFE_TEST_FIXTURE", finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0 }
+        });
+        repository.confirmJob(job.id, false);
+        return result(null, job.id);
+      })();
+      this.options.logger?.info("PLATFORM_SELF_TEST", "TASK10S_FRESH_COMPLETION_ARM_STOPPED", "Fresh completion ARM 已停止；未执行发布", { ...outcome });
+      return outcome;
+    } catch (error) {
+      this.options.logger?.warn("PLATFORM_SELF_TEST", "TASK10S_FRESH_COMPLETION_ARM_FAILED", "Fresh completion ARM 失败；持久化事务已回滚", { errorType: error instanceof Error ? error.name : "UnknownError" });
+      return result("TASK10S_FRESH_ARM_FAILED");
+    } finally {
+      this.controlledOperations.delete(accountId);
     }
   }
 

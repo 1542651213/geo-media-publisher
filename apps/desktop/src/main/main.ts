@@ -712,6 +712,14 @@ async function createWindow(): Promise<void> {
       return platformSelfTests.runTask10sCompleteRetainedEditor();
     },
     writeTask10sCompleteRetainedEditorEvidence,
+    armTask10sFreshCompletion: () => platformSelfTests.armTask10sFreshCompletion(),
+    writeTask10sFreshCompletionArmEvidence: (result) => {
+      mkdirSync(evidenceDirectory, { recursive: true });
+      const timestamp = new Date().toISOString();
+      const evidencePath = join(evidenceDirectory, `xiaohongshu-task10s-fresh-completion-arm-${timestamp.replace(/[:.]/gu, "-")}.json`);
+      writeFileSync(evidencePath, JSON.stringify({ timestamp, ...result }, null, 2), "utf8");
+      logger.info("PLATFORM_SELF_TEST", "TASK10S_FRESH_COMPLETION_ARM_EVIDENCE_WRITTEN", "ARM 结果已写入；不自动执行 completion", { evidencePath, ...result });
+    },
     runTask10sFreshPublishFlow: async () => {
       logger.info("PLATFORM_SELF_TEST", "TASK10S_FRESH_PUBLISH_FLOW_TRIGGER_RECEIVED", "收到固定 Main-side Task10S fresh publish flow trigger", { action: RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
       return platformSelfTests.runTask10sFreshPublishFlow();
