@@ -9,6 +9,8 @@ export interface Task10sFreshPublishFlowResult {
   action: typeof RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW;
   status: PublishFlowExplorationResult["status"];
   operationId: string;
+  /** Explicit L5 run this evidence was collected for. Null means it cannot arm a run. */
+  testRunId: string | null;
   accountId: string | null;
   newPublishEntry: "PASS" | "FAIL" | "NOT_RUN";
   identityAttestation: {
@@ -90,6 +92,7 @@ export function isTask10sFreshPublishStartPath(pathname: string): boolean {
 
 export function blockedTask10sFreshPublishFlowResult(input: {
   operationId: string;
+  testRunId?: string | null;
   accountId?: string | null;
   failureCode: string;
   fixture?: Task10sFreshPublishFlowResult["fixture"];
@@ -99,6 +102,7 @@ export function blockedTask10sFreshPublishFlowResult(input: {
     action: RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW,
     status: "BLOCKED",
     operationId: input.operationId,
+    testRunId: input.testRunId ?? null,
     accountId: input.accountId ?? null,
     newPublishEntry: "NOT_RUN",
     identityAttestation: input.identityAttestation ?? { status: "BLOCKED", creatorId: null, contextId: null, failureCode: input.failureCode },

@@ -14,7 +14,7 @@ import { runDeepSeekBenchmarkMode } from "./deepseek-benchmark-mode";
 import { createProcessDiagnostics } from "./process-diagnostics";
 import { recordAppStartup } from "./runtime-observability";
 import type { PlatformSelfTestService } from "./platform-self-test";
-import { buildSecondInstanceDispatchTrace, createFixedDiagnosticRunner, ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, INSPECT_XHS_CLOSED_SHADOW_FINAL_SUBMIT, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_FINAL_SUBMIT_DOM, INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticActionWithTrace, RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, parseDiagnosticAction, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE, RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY, type DiagnosticAction, type FixedDiagnosticInvocationContext, type Task10sAttempt3DispatchTrace, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
+import { buildSecondInstanceDispatchTrace, createFixedDiagnosticRunner, ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, INSPECT_XHS_CLOSED_SHADOW_FINAL_SUBMIT, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_FINAL_SUBMIT_DOM, INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticActionWithTrace, RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_ARM_RUN, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE, RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY, type DiagnosticAction, type FixedDiagnosticInvocationContext, type Task10sAttempt3DispatchTrace, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
 import type { XhsIdentityPageEnsureServiceResult } from "./xhs-identity";
 
 app.setName("codex-media-publisher");
@@ -25,10 +25,13 @@ let scheduler: PersistentScheduler | null = null;
 const ownedBrowserSessionClosers = new Set<() => Promise<void>>();
 let shutdownStarted = false;
 let shutdownReady = false;
-const initialDiagnosticAction = parseDiagnosticAction(process.argv);
+const initialDiagnosticInvocation = parseDiagnosticActionWithTrace(process.argv);
+const initialDiagnosticAction = initialDiagnosticInvocation.action;
 const primaryInstanceLockAcquired = app.requestSingleInstanceLock(initialDiagnosticAction ? { action: initialDiagnosticAction } : undefined);
 let queuedDiagnosticAction: DiagnosticAction | null = initialDiagnosticAction;
-let queuedDiagnosticInvocationContext: FixedDiagnosticInvocationContext | undefined;
+let queuedDiagnosticInvocationContext: FixedDiagnosticInvocationContext | undefined = initialDiagnosticAction === RUN_XHS_TASK10S_ARM_RUN && initialDiagnosticInvocation.testRunId
+  ? { testRunId: initialDiagnosticInvocation.testRunId }
+  : undefined;
 let fixedDiagnosticActionRunner: ((action: DiagnosticAction, context?: FixedDiagnosticInvocationContext) => Promise<boolean>) | null = null;
 let diagnosticRunInFlight: Promise<boolean> | null = null;
 let writeTask10sAttempt3DispatchDryRunEvidence: ((trace: Task10sAttempt3DispatchTrace) => void) | null = null;
@@ -666,6 +669,13 @@ async function createWindow(): Promise<void> {
     writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), "utf8");
     logger.info("PLATFORM_SELF_TEST", "XHS_TASK10S_FRESH_PUBLISH_FLOW_EVIDENCE_WRITTEN", "小红书 fresh publish flow diagnostic evidence 已写入；未执行最终发布", { action: RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, evidencePath, status: result.status, failureCode: result.failureCode, newPublishEntry: result.newPublishEntry, readyForFinalSubmit: result.readyForFinalSubmit, uploadAttempts: result.safety.uploadAttempts, titleMutationCount: result.safety.titleMutationCount, bodyMutationCount: result.safety.bodyMutationCount, finalSubmitCount: 0 });
   };
+  const writeTask10sArmRunEvidence = (result: Awaited<ReturnType<typeof platformSelfTests.armTask10sRun>>): void => {
+    mkdirSync(evidenceDirectory, { recursive: true });
+    const timestamp = new Date().toISOString();
+    const evidencePath = join(evidenceDirectory, `xiaohongshu-task10s-arm-run-${timestamp.replace(/[:.]/gu, "-")}.json`);
+    writeFileSync(evidencePath, JSON.stringify({ timestamp, evidencePath, ...result }, null, 2), "utf8");
+    logger.info("PLATFORM_SELF_TEST", "TASK10S_ARM_RUN_EVIDENCE_WRITTEN", "Parameterized Task10S ARM 结果已写入；不自动执行 completion", { evidencePath, ...result });
+  };
   const writeTask10sPreparedEditorRecoveryEvidence = (result: Awaited<ReturnType<typeof platformSelfTests.recoverTask10sPreparedEditor>>): void => {
     mkdirSync(evidenceDirectory, { recursive: true });
     const timestamp = new Date().toISOString();
@@ -769,6 +779,8 @@ async function createWindow(): Promise<void> {
       return platformSelfTests.runTask10sCompleteRetainedEditor();
     },
     writeTask10sCompleteRetainedEditorEvidence,
+    armTask10sRun: (testRunId) => platformSelfTests.armTask10sRun(testRunId),
+    writeTask10sArmRunEvidence,
     armTask10sFreshCompletion: () => platformSelfTests.armTask10sFreshCompletion(),
     writeTask10sFreshCompletionArmEvidence: (result) => {
       mkdirSync(evidenceDirectory, { recursive: true });
@@ -777,9 +789,9 @@ async function createWindow(): Promise<void> {
       writeFileSync(evidencePath, JSON.stringify({ timestamp, ...result }, null, 2), "utf8");
       logger.info("PLATFORM_SELF_TEST", "TASK10S_FRESH_COMPLETION_ARM_EVIDENCE_WRITTEN", "ARM 结果已写入；不自动执行 completion", { evidencePath, ...result });
     },
-    runTask10sFreshPublishFlow: async () => {
+    runTask10sFreshPublishFlow: async (testRunId) => {
       logger.info("PLATFORM_SELF_TEST", "TASK10S_FRESH_PUBLISH_FLOW_TRIGGER_RECEIVED", "收到固定 Main-side Task10S fresh publish flow trigger", { action: RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, accountId: resolveXhsAccountId() });
-      return platformSelfTests.runTask10sFreshPublishFlow();
+      return platformSelfTests.runTask10sFreshPublishFlow(undefined, testRunId);
     },
     writeTask10sFreshPublishFlowEvidence,
     recoverTask10sPreparedEditor: async () => {
@@ -842,11 +854,15 @@ if (primaryInstanceLockAcquired) {
     if (!fixedDiagnosticActionRunner) {
       if (queuedDiagnosticAction === null) {
         queuedDiagnosticAction = action;
-        queuedDiagnosticInvocationContext = action === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN ? { dispatchTrace: parsed.trace } : undefined;
+        queuedDiagnosticInvocationContext = action === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN
+          ? { dispatchTrace: parsed.trace }
+          : action === RUN_XHS_TASK10S_ARM_RUN && parsed.testRunId ? { testRunId: parsed.testRunId } : undefined;
       }
       return;
     }
-    void runFixedDiagnosticAction(action, action === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN ? { dispatchTrace: parsed.trace } : undefined);
+    void runFixedDiagnosticAction(action, action === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN
+      ? { dispatchTrace: parsed.trace }
+      : action === RUN_XHS_TASK10S_ARM_RUN && parsed.testRunId ? { testRunId: parsed.testRunId } : undefined);
   });
 }
 

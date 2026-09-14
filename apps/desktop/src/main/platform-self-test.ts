@@ -57,6 +57,27 @@ export interface Task10sFreshCompletionArmResult {
   preparedJobMediaGate?: "PASS" | "BLOCKED";
   selectedImageAssetId?: string | null;
 }
+export const RUN_XHS_TASK10S_ARM_RUN = "RUN_XHS_TASK10S_ARM_RUN" as const;
+export const TASK10S_ARM_RUN = RUN_XHS_TASK10S_ARM_RUN;
+export interface Task10sArmRunResult {
+  action: typeof TASK10S_ARM_RUN;
+  status: "PASS" | "BLOCKED";
+  failureCode: string | null;
+  requestedTestRunId: string | null;
+  resolvedTestRunId: string | null;
+  accountId: string | null;
+  jobId?: string;
+  articleId?: string;
+  publishRecordId?: string;
+  freshOperationId?: string;
+  authorizationState: "AUTHORIZED_UNUSED" | "BLOCKED";
+  preparedJobMediaGate: "PASS" | "BLOCKED";
+  armOnly: "YES";
+  completionExecuted: "NO";
+  finalSubmitClickCount: 0;
+  mousePressedCount: 0;
+  publicationTransactionCount: 0;
+}
 const XHS_EXPLORATION_EVIDENCE_FILE = "xiaohongshu-task10r-publish-flow-exploration.json";
 function publishDomainCountsEqual(left: { publishJobs: number; submissionIntents: number; publishRecords: number }, right: { publishJobs: number; submissionIntents: number; publishRecords: number }): boolean {
   return left.publishJobs === right.publishJobs && left.submissionIntents === right.submissionIntents && left.publishRecords === right.publishRecords;
@@ -643,16 +664,19 @@ export class PlatformSelfTestService {
    * uses the repository-owned safe fixture and fixed content, and never
    * invokes the final submit action.
    */
-  async runTask10sFreshPublishFlow(requestedAccountId?: string): Promise<Task10sFreshPublishFlowResult> {
+  async runTask10sFreshPublishFlow(requestedAccountId?: string, requestedTestRunId?: string): Promise<Task10sFreshPublishFlowResult> {
     this.task10sFreshEvidence = null;
     this.task10sClosedShadowEvidence = null;
     const operationId = randomUUID();
+    const requestedRun = requestedTestRunId ? this.options.repository.getPlatformSelfTestRun(requestedTestRunId) : null;
+    if (requestedTestRunId && (!requestedRun || requestedRun.testRunId !== requestedTestRunId || requestedRun.requestedLevel !== "L5_PUBLISH")) return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: requestedAccountId ?? null, failureCode: "TASK10S_FRESH_RUN_UNAVAILABLE" });
     const account = this.selectedXhsAccount(requestedAccountId);
-    if (!account || !account.enabled || account.archivedAt) return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account?.id ?? null, failureCode: "XHS_ACCOUNT_UNAVAILABLE" });
+    if (!account || !account.enabled || account.archivedAt) return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account?.id ?? null, failureCode: "XHS_ACCOUNT_UNAVAILABLE" });
+    if (requestedRun && (requestedRun.accountId !== account.id || requestedRun.platformKey !== account.platformKey || requestedRun.platformAccountId !== (account.platformAccountId ?? account.id))) return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account.id, failureCode: "TASK10S_FRESH_RUN_ACCOUNT_MISMATCH" });
 
     const adapter = this.options.registry.getForContent("xiaohongshu", "article");
     if (!isAutomationAdapter(adapter) || typeof adapter.runPublishFlowExploration !== "function" || typeof adapter.getBrowserRuntimeSnapshot !== "function" || typeof adapter.getBrowserSessionEvidence !== "function") {
-      return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_ADAPTER_UNAVAILABLE" });
+      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_ADAPTER_UNAVAILABLE" });
     }
 
     const context: AccountContext = {
@@ -667,19 +691,19 @@ export class PlatformSelfTestService {
     const pathname = safeUrlPath(sessionEvidence?.pageUrl ?? null);
     const origin = safeUrlOrigin(sessionEvidence?.pageUrl ?? null);
     if (runtime.platformKey !== account.platformKey || runtime.accountId !== account.id) {
-      return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_ACCOUNT_MISMATCH" });
+      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_ACCOUNT_MISMATCH" });
     }
     if (!runtime.sessionExists || runtime.browserConnected !== true || !runtime.contextExists || !runtime.canonicalPageExists || runtime.canonicalPageClosed === true || runtime.runtimeAuthState !== "AUTHENTICATED") {
-      return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_RUNTIME_UNAVAILABLE" });
+      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_RUNTIME_UNAVAILABLE" });
     }
     if (origin !== "https://creator.xiaohongshu.com" || !isTask10sFreshPublishStartPath(pathname ?? "")) {
-      return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account.id, failureCode: "FRESH_PUBLISH_REQUIRES_CREATOR_HOME" });
+      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account.id, failureCode: "FRESH_PUBLISH_REQUIRES_CREATOR_HOME" });
     }
 
     const identity = await this.xhsIdentity.establishContextIdentityAttestation(account.id);
     if (identity.status !== "PASS") {
       const identityEvidence = { status: "BLOCKED" as const, creatorId: null, contextId: runtime.contextDebugId, failureCode: identity.failureCode };
-      return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account.id, failureCode: identity.failureCode, identityAttestation: identityEvidence });
+      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account.id, failureCode: identity.failureCode, identityAttestation: identityEvidence });
     }
     const attestation = identity.attestation;
     const identityEvidence = { status: "PASS" as const, creatorId: attestation.observedExternalCreatorId, contextId: attestation.browserContextIdentity, failureCode: null };
@@ -694,9 +718,9 @@ export class PlatformSelfTestService {
       failureCode: fixture.failureCode
     };
     if (!fixture.valid) {
-      return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account.id, failureCode: fixture.failureCode ?? "FIXTURE_INVALID", fixture: fixtureEvidence, identityAttestation: identityEvidence });
+      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account.id, failureCode: fixture.failureCode ?? "FIXTURE_INVALID", fixture: fixtureEvidence, identityAttestation: identityEvidence });
     }
-    if (this.controlledOperations.has(account.id)) return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_ALREADY_RUNNING", fixture: fixtureEvidence, identityAttestation: identityEvidence });
+    if (this.controlledOperations.has(account.id)) return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_ALREADY_RUNNING", fixture: fixtureEvidence, identityAttestation: identityEvidence });
 
     const before = this.options.repository.getPublishDomainCounts();
     this.controlledOperations.add(account.id);
@@ -730,6 +754,7 @@ export class PlatformSelfTestService {
         action: RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW,
         status: persistedExploration.status,
         operationId,
+        testRunId: requestedTestRunId ?? null,
         accountId: account.id,
         newPublishEntry,
         identityAttestation: identityEvidence,
@@ -744,109 +769,126 @@ export class PlatformSelfTestService {
       if (!safetyViolation) this.task10sFreshEvidence = { result: structuredClone(result), sessionId: runtime.browserSessionIdentity ?? null, pageId: runtime.canonicalPageDebugId };
       return result;
     } catch (error) {
-      return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account.id, failureCode: error instanceof Error ? error.message : "XHS_FRESH_PUBLISH_FLOW_FAILED", fixture: fixtureEvidence, identityAttestation: identityEvidence });
+      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account.id, failureCode: error instanceof Error ? error.message : "XHS_FRESH_PUBLISH_FLOW_FAILED", fixture: fixtureEvidence, identityAttestation: identityEvidence });
     } finally {
       this.controlledOperations.delete(account.id);
     }
   }
 
-  /** Separate Owner-authorized persistence transition. Never executes a job. */
-  async armTask10sFreshCompletion(requestedAccountId?: string): Promise<Task10sFreshCompletionArmResult> {
-    const result = (failureCode: string | null, jobId?: string): Task10sFreshCompletionArmResult => ({
-      action: TASK10S_FRESH_COMPLETION_ARM, status: failureCode ? "BLOCKED" : "PASS", failureCode,
-      testRunId: TASK10S_CANONICAL_AUTHORIZATION_ID, jobId,
-      freshOperationId: this.task10sFreshEvidence?.result.operationId,
-      finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0,
-      preparedJobMediaGate: failureCode ? "BLOCKED" : "PASS"
+  /** Compatibility-shaped result for the old action. It is fail-closed unless an explicit run is supplied. */
+  async armTask10sFreshCompletion(testRunId?: string): Promise<Task10sFreshCompletionArmResult> {
+    const requested = testRunId?.trim() || null;
+    if (!requested) return {
+      action: TASK10S_FRESH_COMPLETION_ARM, status: "BLOCKED", failureCode: "TASK10S_ARM_TEST_RUN_ID_REQUIRED",
+      testRunId: "", freshOperationId: this.task10sFreshEvidence?.result.operationId,
+      finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0, preparedJobMediaGate: "BLOCKED"
+    };
+    const existingAuthorization = this.options.repository.getOneShotPublicationAuthorization(requested);
+    if (!existingAuthorization) return {
+      action: TASK10S_FRESH_COMPLETION_ARM, status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_AUTHORIZATION_NOT_UNUSED",
+      testRunId: requested, freshOperationId: this.task10sFreshEvidence?.result.operationId,
+      finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0, preparedJobMediaGate: "BLOCKED"
+    };
+    const armed = await this.armTask10sRun(requested);
+    const legacyFailureCode: Record<string, string> = {
+      TASK10S_ARM_EVIDENCE_INCOMPLETE: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE",
+      TASK10S_ARM_SAME_RUN_EVIDENCE_MISMATCH: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE",
+      TASK10S_ARM_JOB_ALREADY_EXISTS: "TASK10S_FRESH_ARM_JOB_ALREADY_EXISTS",
+      TASK10S_ARM_MEDIA_FIXTURE_INVALID: "TASK10S_FRESH_ARM_MEDIA_FIXTURE_INVALID",
+      TASK10S_ARM_RUNTIME_BINDING_MISMATCH: "TASK10S_FRESH_ARM_RUNTIME_BINDING_MISMATCH"
+    };
+    return {
+      action: TASK10S_FRESH_COMPLETION_ARM,
+      status: armed.status,
+      failureCode: armed.failureCode ? legacyFailureCode[armed.failureCode] ?? armed.failureCode : null,
+      testRunId: armed.resolvedTestRunId ?? requested,
+      jobId: armed.jobId,
+      freshOperationId: armed.freshOperationId,
+      finalSubmitClickCount: 0,
+      mousePressedCount: 0,
+      publicationTransactionCount: 0,
+      preparedJobMediaGate: armed.preparedJobMediaGate,
+      selectedImageAssetId: armed.jobId ? this.options.repository.getJob(armed.jobId)?.selectedImageAssetId : null
+    };
+  }
+
+  /** r51 explicit ARM-only transition. It creates durable prepared state and never executes completion. */
+  async armTask10sRun(requestedTestRunId?: string): Promise<Task10sArmRunResult> {
+    const requested = requestedTestRunId?.trim() || null;
+    const blocked = (failureCode: string, input: Partial<Task10sArmRunResult> = {}): Task10sArmRunResult => ({
+      action: TASK10S_ARM_RUN, status: "BLOCKED", failureCode, requestedTestRunId: requested, resolvedTestRunId: input.resolvedTestRunId ?? null,
+      accountId: input.accountId ?? null, authorizationState: "BLOCKED", preparedJobMediaGate: "BLOCKED", armOnly: "YES", completionExecuted: "NO",
+      finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0, ...input
     });
-    const accountId = requestedAccountId ?? this.options.repository.getPlatformSelfTestRun(TASK10S_CANONICAL_AUTHORIZATION_ID)?.accountId;
-    if (!accountId) return result("TASK10S_FRESH_ARM_ACCOUNT_UNRESOLVED");
-    if (this.controlledOperations.has(accountId)) return result("TASK10S_FRESH_ARM_ALREADY_RUNNING");
-    this.controlledOperations.add(accountId);
+    if (!requested) return blocked("TASK10S_ARM_TEST_RUN_ID_REQUIRED");
+    const repository = this.options.repository;
+    const initialRun = repository.getPlatformSelfTestRun(requested);
+    if (!initialRun || initialRun.testRunId !== requested || initialRun.requestedLevel !== "L5_PUBLISH") return blocked("TASK10S_ARM_RUN_NOT_FOUND");
+    const account = repository.getAccountById(initialRun.accountId ?? initialRun.platformAccountId, "xiaohongshu");
+    if (!account || account.platformKey !== "xiaohongshu" || !account.enabled || Boolean(account.archivedAt)) return blocked("TASK10S_ARM_ACCOUNT_UNAVAILABLE", { resolvedTestRunId: requested });
+    if (this.controlledOperations.has(account.id)) return blocked("TASK10S_ARM_ALREADY_RUNNING", { resolvedTestRunId: requested, accountId: account.id });
+    this.controlledOperations.add(account.id);
     try {
-      const identity = await this.xhsIdentity.validateContextIdentityAttestation(accountId);
-      const outcome = this.options.repository.db.transaction((): Task10sFreshCompletionArmResult => {
-        const repository = this.options.repository;
-        const account = repository.listAccounts().find((item) => item.id === accountId && item.platformKey === "xiaohongshu");
-        const run = repository.getPlatformSelfTestRun(TASK10S_CANONICAL_AUTHORIZATION_ID);
-        if (!account || !account.enabled || account.archivedAt) return result("XHS_ACCOUNT_UNAVAILABLE");
-        if (!run || run.testRunId !== TASK10S_CANONICAL_AUTHORIZATION_ID || run.platformKey !== account.platformKey || run.platformAccountId !== (account.platformAccountId ?? account.id) || run.requestedLevel !== "L5_PUBLISH" || !run.publishConfirmedAt) return result("TASK10S_FRESH_ARM_RUN_BINDING_MISMATCH");
-        if (run.publishJobId) return result("TASK10S_FRESH_ARM_JOB_ALREADY_EXISTS");
-        const authorization = repository.getOneShotPublicationAuthorization(run.testRunId);
-        if (!authorization || authorization.authorization !== OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH || authorization.state !== "AUTHORIZED_UNUSED"
-          || authorization.platformKey !== account.platformKey || authorization.accountId !== account.id || authorization.operationId !== run.testRunId || authorization.mode !== ONE_SHOT_REAL_PUBLISH_ACCEPTANCE
-          || authorization.publicationTransactionCount !== 0 || authorization.publicationCommitActionCount !== 0 || authorization.finalSubmitAttemptCount !== 0 || authorization.finalSubmitRetryCount !== 0 || authorization.finalSubmitActionStarted || authorization.finalSubmitActionCompleted) return result("TASK10S_FRESH_ARM_AUTHORIZATION_NOT_UNUSED");
-        const cached = this.task10sFreshEvidence;
-        const fresh = cached?.result;
-        const exploration = fresh?.exploration;
-        const closedShadow = this.task10sClosedShadowEvidence;
-        const closedShadowResult = closedShadow?.result;
-        const closedShadowBindingPass = Boolean(closedShadow && closedShadowResult
-          && closedShadow.accountId === account.id
-          && closedShadow.operationId === fresh?.operationId
-          && closedShadow.sessionId === cached?.sessionId
-          && closedShadow.contextId === fresh?.identityAttestation.contextId
-          && closedShadow.pageId === cached?.pageId
-          && closedShadowResult.accountId === account.id
-          && closedShadowResult.contextDebugId === fresh?.identityAttestation.contextId
-          && closedShadowResult.pageId === cached?.pageId);
-        const closedShadowPass = closedShadowBindingPass && closedShadowResult?.inspectionStatus === "PASS" && closedShadowResult.failureCode === null
-          && closedShadowResult.sessionExists && closedShadowResult.browserConnected && closedShadowResult.contextExists && closedShadowResult.pageExists
-          && !closedShadowResult.pageClosed && closedShadowResult.pageContextMatchesSession
-          && closedShadowResult.origin === "https://creator.xiaohongshu.com" && closedShadowResult.pathname === "/publish/publish"
-          && closedShadowResult.cdpSessionCreated === "YES" && closedShadowResult.cdpGetDocumentSuccess === "YES" && closedShadowResult.cdpGetDocumentPierce === true
-          && closedShadowResult.piercedXhsPublishBtnCount === 1 && closedShadowResult.exactPublishNativeButtonCount === 1
-          && closedShadowResult.hostNodeName === "XHS-PUBLISH-BTN" && closedShadowResult.hostIsPublish === "true"
-          && closedShadowResult.hostSubmitText === "发布" && closedShadowResult.hostSubmitDisabled === "false" && closedShadowResult.hostSubmitLoading === "false" && closedShadowResult.hostDescendantButtonCount === 1
-          && closedShadowResult.buttonNodeName === "BUTTON" && closedShadowResult.buttonTextSafe === "发布"
-          && closedShadowResult.buttonAriaDisabled === "false" && closedShadowResult.buttonAriaBusy === "false"
-          && closedShadowResult.buttonBoxModelPresent === "YES" && closedShadowResult.finalSubmitControlPresent === "YES" && closedShadowResult.finalSubmitControlEnabled === "YES"
-          && closedShadowResult.closedShadowFinalSubmitSurface === "PASS";
-        const genericResolverPass = (exploration?.failureCode === null || exploration?.failureCode === undefined) && exploration?.finalSubmit.status === "FOUND_UNIQUE" && exploration.finalSubmit.visible && exploration.finalSubmit.enabled && exploration.finalSubmit.hitTestValid;
-        const genericResolverFalseNegative = exploration?.failureCode === "FINAL_SUBMIT_CONTROL_NOT_FOUND" && exploration.finalSubmit.status === "NOT_FOUND";
-        const finalSubmitEvidencePass = genericResolverPass || (genericResolverFalseNegative && closedShadowPass);
-        // ARM requires each fresh-flow identity, upload, editor, and content
-        // proof explicitly. A generic resolver NOT_FOUND is substitutable only
-        // for this one known false-negative and only with the trusted
-        // closed-shadow proof from the same run/context/page.
-        if (!fresh || !exploration || fresh.accountId !== account.id || exploration.accountId !== account.id || exploration.platformKey !== account.platformKey || exploration.operationId !== fresh.operationId
-          || (!genericResolverFalseNegative && fresh.status !== "PASS_READY_FOR_FINAL_SUBMIT") || (genericResolverFalseNegative && exploration.status !== "BLOCKED") || fresh.newPublishEntry !== "PASS" || !fresh.fixture.valid || fresh.identityAttestation.status !== "PASS" || fresh.identityAttestation.creatorId !== this.expectedCreatorId(account)
-          || fresh.fixedContent.title !== XHS_TASK10S_FRESH_PUBLISH_FLOW_TITLE || fresh.fixedContent.body !== XHS_TASK10S_FRESH_PUBLISH_FLOW_BODY
-          || exploration.status === "SAFETY_BOUNDARY_VIOLATION" || exploration.forbiddenMutationObserved || !exploration.sameCanonicalPage || !exploration.sameContext
-          || exploration.uploadAttempts !== 1 || exploration.uploadMutationCount !== 1 || exploration.uploadRetryCount !== 0
-          || exploration.counters.uploadAttempts !== 1 || exploration.counters.uploadMutationCount !== 1 || exploration.counters.uploadRetryCount !== 0
-          || exploration.titleMutationCount !== 1 || exploration.bodyMutationCount !== 1 || !exploration.titleReadbackVerified || !exploration.bodyReadbackVerified
-          || !exploration.title.readbackVerified || !exploration.body.readbackVerified || exploration.title.mutationCount !== 1 || exploration.body.mutationCount !== 1
-          || !finalSubmitEvidencePass
-          || exploration.finalSubmitCount !== 0 || exploration.counters.finalSubmitCount !== 0
-          || !exploration.states.some((state) => state.phase === "POST_UPLOAD_TERMINAL_READINESS" && state.postUploadState === "EDITOR_READY" && state.ready === true && state.imageCounterValid === true && typeof state.editorScopedImageAssetCount === "number" && state.editorScopedImageAssetCount > 0 && state.uploadErrorSignalPresent === false && state.busySignalPresent === false)) return result("TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE");
-        const adapter = this.options.registry.getForContent(account.platformKey, "article");
-        if (!isAutomationAdapter(adapter) || typeof adapter.getBrowserRuntimeSnapshot !== "function") return result("TASK10S_FRESH_ARM_RUNTIME_UNAVAILABLE");
-        const runtime = adapter.getBrowserRuntimeSnapshot(this.context(account, run, "VISIBLE"));
-        if (!identity.valid || !cached?.sessionId || !cached.pageId || !fresh.identityAttestation.contextId || runtime.platformKey !== account.platformKey || runtime.accountId !== account.id || !runtime.sessionExists || runtime.browserConnected !== true || !runtime.contextExists || !runtime.canonicalPageExists || runtime.canonicalPageClosed === true || runtime.runtimeAuthState !== "AUTHENTICATED"
-          || runtime.browserSessionIdentity !== cached.sessionId || runtime.contextDebugId !== fresh.identityAttestation.contextId || runtime.canonicalPageDebugId !== cached.pageId) return result("TASK10S_FRESH_ARM_RUNTIME_BINDING_MISMATCH");
-        const fixture = validateTask10sSafeFixture();
-        if (!fixture.valid) return result("TASK10S_FRESH_ARM_MEDIA_FIXTURE_INVALID");
+      const accountExternalId = account.externalAccountId?.trim() || null;
+      const binding = repository.getPlatformAccountIdentityBinding("xiaohongshu", account.id);
+      const bindingExternalId = binding?.externalCreatorId?.trim() || null;
+      const expectedCreatorId = this.expectedCreatorId(account);
+      if (!expectedCreatorId || !accountExternalId || !bindingExternalId || bindingExternalId !== accountExternalId) return blocked("TASK10S_ARM_ACCOUNT_IDENTITY_BINDING_MISMATCH", { resolvedTestRunId: requested, accountId: account.id });
+      if (initialRun.platformKey !== "xiaohongshu" || initialRun.accountId !== account.id || initialRun.platformAccountId !== (account.platformAccountId ?? account.id)) return blocked("TASK10S_ARM_RUN_ACCOUNT_MISMATCH", { resolvedTestRunId: requested, accountId: account.id });
+      if (initialRun.publishJobId) return blocked("TASK10S_ARM_JOB_ALREADY_EXISTS", { resolvedTestRunId: requested, accountId: account.id });
+      const existingAuthorization = repository.getOneShotPublicationAuthorization(requested);
+      if (existingAuthorization && (existingAuthorization.authorization !== OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH || existingAuthorization.platformKey !== account.platformKey || existingAuthorization.accountId !== account.id || existingAuthorization.operationId !== requested || existingAuthorization.mode !== ONE_SHOT_REAL_PUBLISH_ACCEPTANCE || existingAuthorization.state !== "AUTHORIZED_UNUSED" || existingAuthorization.publicationTransactionCount !== 0 || existingAuthorization.publicationCommitActionCount !== 0 || existingAuthorization.finalSubmitAttemptCount !== 0 || existingAuthorization.finalSubmitRetryCount !== 0 || existingAuthorization.finalSubmitActionStarted || existingAuthorization.finalSubmitActionCompleted)) return blocked("TASK10S_ARM_AUTHORIZATION_NOT_UNUSED", { resolvedTestRunId: requested, accountId: account.id });
+      const displacedAuthorization = repository.db.prepare("SELECT operation_id FROM one_shot_publication_authorizations WHERE account_id=? AND operation_id<>? LIMIT 1").get(account.id, requested) as { operation_id?: string } | undefined;
+      if (displacedAuthorization) return blocked("TASK10S_ARM_AUTHORIZATION_NOT_UNUSED", { resolvedTestRunId: requested, accountId: account.id });
+
+      const identity = await this.xhsIdentity.validateContextIdentityAttestation(account.id);
+      if (!identity.valid) return blocked("TASK10S_ARM_IDENTITY_ATTESTATION_INVALID", { resolvedTestRunId: requested, accountId: account.id });
+      const cached = this.task10sFreshEvidence;
+      const fresh = cached?.result;
+      const exploration = fresh?.exploration;
+      if (!fresh || fresh.testRunId !== requested || fresh.accountId !== account.id || fresh.identityAttestation.creatorId !== expectedCreatorId) return blocked("TASK10S_ARM_SAME_RUN_EVIDENCE_MISMATCH", { resolvedTestRunId: requested, accountId: account.id, freshOperationId: fresh?.operationId });
+      const closedShadow = this.task10sClosedShadowEvidence;
+      const closedShadowResult = closedShadow?.result;
+      const closedShadowBindingPass = Boolean(closedShadow && closedShadowResult && closedShadow.accountId === account.id && closedShadow.operationId === fresh.operationId && closedShadow.sessionId === cached.sessionId && closedShadow.contextId === fresh.identityAttestation.contextId && closedShadow.pageId === cached.pageId && closedShadowResult.accountId === account.id && closedShadowResult.contextDebugId === fresh.identityAttestation.contextId && closedShadowResult.pageId === cached.pageId);
+      const closedShadowPass = closedShadowBindingPass && closedShadowResult?.inspectionStatus === "PASS" && closedShadowResult.failureCode === null && closedShadowResult.sessionExists && closedShadowResult.browserConnected && closedShadowResult.contextExists && closedShadowResult.pageExists && !closedShadowResult.pageClosed && closedShadowResult.pageContextMatchesSession && closedShadowResult.origin === "https://creator.xiaohongshu.com" && closedShadowResult.pathname === "/publish/publish" && closedShadowResult.cdpSessionCreated === "YES" && closedShadowResult.cdpGetDocumentSuccess === "YES" && closedShadowResult.cdpGetDocumentPierce === true && closedShadowResult.piercedXhsPublishBtnCount === 1 && closedShadowResult.exactPublishNativeButtonCount === 1 && closedShadowResult.hostNodeName === "XHS-PUBLISH-BTN" && closedShadowResult.hostIsPublish === "true" && closedShadowResult.hostSubmitText === "发布" && closedShadowResult.hostSubmitDisabled === "false" && closedShadowResult.hostSubmitLoading === "false" && closedShadowResult.hostDescendantButtonCount === 1 && closedShadowResult.buttonNodeName === "BUTTON" && closedShadowResult.buttonTextSafe === "发布" && closedShadowResult.buttonAriaDisabled === "false" && closedShadowResult.buttonAriaBusy === "false" && closedShadowResult.buttonBoxModelPresent === "YES" && closedShadowResult.finalSubmitControlPresent === "YES" && closedShadowResult.finalSubmitControlEnabled === "YES" && closedShadowResult.closedShadowFinalSubmitSurface === "PASS";
+      const genericResolverPass = (exploration?.failureCode === null || exploration?.failureCode === undefined) && exploration?.finalSubmit.status === "FOUND_UNIQUE" && exploration.finalSubmit.visible && exploration.finalSubmit.enabled && exploration.finalSubmit.hitTestValid;
+      const genericResolverFalseNegative = exploration?.failureCode === "FINAL_SUBMIT_CONTROL_NOT_FOUND" && exploration.finalSubmit.status === "NOT_FOUND";
+      const finalSubmitEvidencePass = genericResolverPass || (genericResolverFalseNegative && closedShadowPass);
+      const editorReady = Boolean(exploration?.states.some((state) => state.phase === "POST_UPLOAD_TERMINAL_READINESS" && state.postUploadState === "EDITOR_READY" && state.ready === true && state.imageCounterValid === true && typeof state.editorScopedImageAssetCount === "number" && state.editorScopedImageAssetCount > 0 && state.uploadErrorSignalPresent === false && state.busySignalPresent === false));
+      if (!exploration || !closedShadowPass || (!genericResolverFalseNegative && fresh.status !== "PASS_READY_FOR_FINAL_SUBMIT") || (genericResolverFalseNegative && exploration.status !== "BLOCKED") || fresh.newPublishEntry !== "PASS" || !fresh.fixture.valid || fresh.identityAttestation.status !== "PASS" || fresh.fixedContent.title !== XHS_TASK10S_FRESH_PUBLISH_FLOW_TITLE || fresh.fixedContent.body !== XHS_TASK10S_FRESH_PUBLISH_FLOW_BODY || exploration.accountId !== account.id || exploration.platformKey !== account.platformKey || exploration.operationId !== fresh.operationId || exploration.status === "SAFETY_BOUNDARY_VIOLATION" || exploration.forbiddenMutationObserved || !exploration.sameCanonicalPage || !exploration.sameContext || exploration.uploadAttempts !== 1 || exploration.uploadMutationCount !== 1 || exploration.uploadRetryCount !== 0 || exploration.counters.uploadAttempts !== 1 || exploration.counters.uploadMutationCount !== 1 || exploration.counters.uploadRetryCount !== 0 || exploration.titleMutationCount !== 1 || exploration.bodyMutationCount !== 1 || !exploration.titleReadbackVerified || !exploration.bodyReadbackVerified || !exploration.title.readbackVerified || !exploration.body.readbackVerified || exploration.title.mutationCount !== 1 || exploration.body.mutationCount !== 1 || !finalSubmitEvidencePass || exploration.finalSubmitCount !== 0 || exploration.counters.finalSubmitCount !== 0 || !editorReady) return blocked("TASK10S_ARM_EVIDENCE_INCOMPLETE", { resolvedTestRunId: requested, accountId: account.id, freshOperationId: fresh.operationId });
+
+      const adapter = this.options.registry.getForContent(account.platformKey, "article");
+      if (!isAutomationAdapter(adapter) || typeof adapter.getBrowserRuntimeSnapshot !== "function") return blocked("TASK10S_ARM_RUNTIME_UNAVAILABLE", { resolvedTestRunId: requested, accountId: account.id, freshOperationId: fresh.operationId });
+      const runtime = adapter.getBrowserRuntimeSnapshot(this.context(account, initialRun, "VISIBLE"));
+      if (!cached.sessionId || !cached.pageId || !fresh.identityAttestation.contextId || runtime.platformKey !== account.platformKey || runtime.accountId !== account.id || !runtime.sessionExists || runtime.browserConnected !== true || !runtime.contextExists || !runtime.canonicalPageExists || runtime.canonicalPageClosed === true || runtime.runtimeAuthState !== "AUTHENTICATED" || runtime.browserSessionIdentity !== cached.sessionId || runtime.contextDebugId !== fresh.identityAttestation.contextId || runtime.canonicalPageDebugId !== cached.pageId) return blocked("TASK10S_ARM_RUNTIME_BINDING_MISMATCH", { resolvedTestRunId: requested, accountId: account.id, freshOperationId: fresh.operationId });
+      const fixture = validateTask10sSafeFixture();
+      if (!fixture.valid) return blocked("TASK10S_ARM_MEDIA_FIXTURE_INVALID", { resolvedTestRunId: requested, accountId: account.id, freshOperationId: fresh.operationId });
+
+      const authorization = createOwnerAuthorizedOneShotPublication({ operationId: requested, platformKey: account.platformKey, accountId: account.id, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE });
+      const outcome = repository.db.transaction((): Task10sArmRunResult => {
+        const run = repository.getPlatformSelfTestRun(requested);
+        if (!run || run.publishJobId) return blocked("TASK10S_ARM_JOB_ALREADY_EXISTS", { resolvedTestRunId: requested, accountId: account.id, freshOperationId: fresh.operationId });
+        const currentAuthorization = repository.getOneShotPublicationAuthorization(requested);
+        const persistedAuthorization = currentAuthorization
+          ? { authorization: currentAuthorization, created: false }
+          : repository.confirmPlatformSelfTestOneShotAtomically(requested, authorization);
+        if (persistedAuthorization.authorization.state !== "AUTHORIZED_UNUSED") return blocked("TASK10S_ARM_AUTHORIZATION_NOT_UNUSED", { resolvedTestRunId: requested, accountId: account.id, freshOperationId: fresh.operationId });
         const media = this.ensureTask10sImageAsset(fixture);
-        if (media.gate.status !== "PASS" || !media.asset) return result(media.gate.failureCode ?? "TASK10S_FRESH_ARM_PREPARED_JOB_MEDIA_GATE_FAILED");
-        const job = repository.createPlatformSelfTestPublishJob({ testRunId: run.testRunId, title: fresh.fixedContent.title, body: fresh.fixedContent.body, dryRun: false, selectedImageAssetId: media.asset.id });
-        repository.insertPublishRecord({ jobId: job.id, accountId: account.id, platformAccountId: account.platformAccountId, platformKey: account.platformKey, articleId: job.articleId,
-          publishedUrl: null, publishedExternalId: null, success: false, dryRun: false, status: "Prepared", publishMode: "ASSISTED", automationType: adapter.automationType,
-          browserSessionIdHash: account.browserSessionId, operator: process.env.USERNAME?.trim() || process.env.USER?.trim() || "desktop-user", verificationStatus: "WaitingUser", editorOpenedAt: null,
-          titleFilled: true, bodyFilled: true, selectedImageAssetId: media.asset.id, imageSelectionMode: "manual",
-          response: { action: TASK10S_FRESH_COMPLETION_ARM, freshOperationId: fresh.operationId, authorizationOperationId: authorization.operationId, authorizationState: authorization.state,
-            freshFlowEvidence: fresh, imageSource: "SAFE_TEST_FIXTURE", preparedJobMediaGate: "PASS", selectedImageAssetId: media.asset.id, finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0 }
-        });
+        if (media.gate.status !== "PASS" || !media.asset) return blocked(media.gate.failureCode ?? "TASK10S_ARM_PREPARED_JOB_MEDIA_GATE_FAILED", { resolvedTestRunId: requested, accountId: account.id, freshOperationId: fresh.operationId });
+        const job = repository.createPlatformSelfTestPublishJob({ testRunId: requested, title: fresh.fixedContent.title, body: fresh.fixedContent.body, dryRun: false, selectedImageAssetId: media.asset.id });
+        const record = repository.insertPublishRecord({ jobId: job.id, accountId: account.id, platformAccountId: account.platformAccountId, platformKey: account.platformKey, articleId: job.articleId, publishedUrl: null, publishedExternalId: null, success: false, dryRun: false, status: "Prepared", publishMode: "ASSISTED", automationType: adapter.automationType, browserSessionIdHash: account.browserSessionId, operator: process.env.USERNAME?.trim() || process.env.USER?.trim() || "desktop-user", verificationStatus: "WaitingUser", editorOpenedAt: null, titleFilled: true, bodyFilled: true, selectedImageAssetId: media.asset.id, imageSelectionMode: "manual", response: { action: TASK10S_ARM_RUN, requestedTestRunId: requested, freshOperationId: fresh.operationId, authorizationOperationId: persistedAuthorization.authorization.operationId, authorizationState: persistedAuthorization.authorization.state, freshFlowEvidence: fresh, imageSource: "SAFE_TEST_FIXTURE", preparedJobMediaGate: "PASS", selectedImageAssetId: media.asset.id, armOnly: "YES", completionExecuted: "NO", finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0 } });
         repository.confirmJob(job.id, false);
-        return { ...result(null, job.id), preparedJobMediaGate: "PASS", selectedImageAssetId: media.asset.id };
+        const finalRun = repository.getPlatformSelfTestRun(requested);
+        if (!finalRun?.publishJobId || finalRun.publishJobId !== job.id) return blocked("TASK10S_ARM_RUN_JOB_LINK_MISSING", { resolvedTestRunId: requested, accountId: account.id, freshOperationId: fresh.operationId });
+        return { action: TASK10S_ARM_RUN, status: "PASS", failureCode: null, requestedTestRunId: requested, resolvedTestRunId: requested, accountId: account.id, jobId: job.id, articleId: job.articleId, publishRecordId: record.id, freshOperationId: fresh.operationId, authorizationState: "AUTHORIZED_UNUSED", preparedJobMediaGate: "PASS", armOnly: "YES", completionExecuted: "NO", finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0 };
       })();
-      this.options.logger?.info("PLATFORM_SELF_TEST", "TASK10S_FRESH_COMPLETION_ARM_STOPPED", "Fresh completion ARM 已停止；未执行发布", { ...outcome });
+      this.options.logger?.info("PLATFORM_SELF_TEST", "TASK10S_ARM_RUN_STOPPED", "Parameterized Task10S ARM 已停止；未执行 completion 或发布", { ...outcome });
       return outcome;
     } catch (error) {
-      this.options.logger?.warn("PLATFORM_SELF_TEST", "TASK10S_FRESH_COMPLETION_ARM_FAILED", "Fresh completion ARM 失败；持久化事务已回滚", { errorType: error instanceof Error ? error.name : "UnknownError" });
-      return result("TASK10S_FRESH_ARM_FAILED");
+      this.options.logger?.warn("PLATFORM_SELF_TEST", "TASK10S_ARM_RUN_FAILED", "Parameterized Task10S ARM 失败；持久化事务已回滚", { errorType: error instanceof Error ? error.name : "UnknownError" });
+      return blocked("TASK10S_ARM_FAILED", { resolvedTestRunId: requested, accountId: account.id, freshOperationId: this.task10sFreshEvidence?.result.operationId });
     } finally {
-      this.controlledOperations.delete(accountId);
+      this.controlledOperations.delete(account.id);
     }
   }
 

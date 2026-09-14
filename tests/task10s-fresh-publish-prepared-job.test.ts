@@ -47,7 +47,8 @@ function closedShadowPass(): XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic
   };
 }
 
-function setup() {
+function setup(config: { withAuthorization?: boolean; requestedRunId?: string } = {}) {
+  const requestedRunId = config.requestedRunId ?? runId;
   const dir = mkdtempSync(join(tmpdir(), "task10s-r41-"));
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
   const fixtureBytes = Buffer.from("offline fixture");
@@ -62,9 +63,10 @@ function setup() {
   repo.db.prepare("UPDATE accounts SET id=? WHERE id=?").run(accountId, account.id);
   repo.updateAccount(accountId, { enabled: true, loginStatus: "logged_in" });
   repo.db.prepare("UPDATE accounts SET external_account_id=? WHERE id=?").run("960803317", accountId);
+  repo.bindPlatformAccountIdentity({ platformKey: "xiaohongshu", accountId, externalCreatorId: "960803317", bindingSource: "OWNER_APPROVED_CREATOR_IDENTITY_BINDING" });
   const run = repo.createPlatformSelfTestRun({ platformAccountId: accountId, requestedLevel: "L5_PUBLISH" });
-  repo.db.prepare("UPDATE platform_self_test_runs SET test_run_id=? WHERE test_run_id=?").run(runId, run.testRunId);
-  repo.confirmPlatformSelfTestOneShotAtomically(runId, createOwnerAuthorizedOneShotPublication({ accountId, platformKey: "xiaohongshu", operationId: runId, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE }));
+  repo.db.prepare("UPDATE platform_self_test_runs SET test_run_id=? WHERE test_run_id=?").run(requestedRunId, run.testRunId);
+  if (config.withAuthorization !== false) repo.confirmPlatformSelfTestOneShotAtomically(requestedRunId, createOwnerAuthorizedOneShotPublication({ accountId, platformKey: "xiaohongshu", operationId: requestedRunId, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE }));
   const proof = exploration();
   const runtime = { platformKey: "xiaohongshu", accountId, sessionExists: true, browserConnected: true, contextExists: true, canonicalPageExists: true, canonicalPageClosed: false, runtimeAuthState: "AUTHENTICATED", browserSessionIdentity: "session", contextDebugId: "context", canonicalPageDebugId: "page" };
   const forbidden = vi.fn(() => { throw new Error("OFFLINE_PUBLICATION_BOUNDARY"); });
@@ -74,8 +76,8 @@ function setup() {
   const adapter = { connectAccount: forbidden, checkSession: forbidden, preparePublish: forbidden, finalSubmit: forbidden, automationType: "BrowserAutomation", getBrowserRuntimeSnapshot: () => runtime, getBrowserSessionEvidence: async () => ({ pageUrl: "https://creator.xiaohongshu.com/new/home" }), inspectCurrentXiaohongshuClosedShadowFinalSubmit: async () => closedShadowPass(), inspectXhsContextPages: async () => contextPages(), inspectCurrentXiaohongshuPostUploadReconciliation: async () => postUpload, recoverPreparedEditor: vi.fn(async (_context: unknown, input: { operationId: string }) => { recoveredEditor = true; return { ...proof, operationId: input.operationId }; }), runPublishFlowExploration: async (_context: unknown, input: { operationId: string }) => ({ ...proof, operationId: input.operationId }) };
   const registry = { getForContent: () => adapter } as unknown as AdapterRegistry;
   const publisher = { executeJob: forbidden, executeTask10sRetainedEditor: forbidden } as unknown as PublisherService;
-  const options = { repository: repo, registry, publisher, resolveAccountSecrets: () => ({}) };
-  const service = new PlatformSelfTestService(options);
+  const serviceOptions = { repository: repo, registry, publisher, resolveAccountSecrets: () => ({}) };
+  const service = new PlatformSelfTestService(serviceOptions);
   vi.spyOn(attempt, "validateTask10sSafeFixture").mockReturnValue({
     path: fixturePath,
     exists: true,
@@ -95,11 +97,11 @@ function setup() {
   // Check the missing API with an assertion in RED, rather than a TypeError.
   const arm = async () => {
     await service.inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId);
-    const method = (service as unknown as { armTask10sFreshCompletion?: () => Promise<{ status: string; failureCode: string | null; jobId?: string }> }).armTask10sFreshCompletion;
+    const method = (service as unknown as { armTask10sFreshCompletion?: (testRunId?: string) => Promise<{ status: string; failureCode: string | null; jobId?: string }> }).armTask10sFreshCompletion;
     expect(method, "Main trusted ARM transition must exist").toBeTypeOf("function");
-    return method!.call(service);
+    return method!.call(service, requestedRunId);
   };
-  return { repo, service, proof, runtime, forbidden, arm, options, adapter, contextPages, postUpload, fixturePath, fixtureSha };
+  return { repo, service, proof, runtime, forbidden, arm, options: serviceOptions, adapter, contextPages, postUpload, fixturePath, fixtureSha, requestedRunId };
 }
 
 describe("r41 fresh prepared job transition (offline)", () => {
@@ -109,7 +111,7 @@ describe("r41 fresh prepared job transition (offline)", () => {
     f.proof.readyForFinalSubmit = false;
     f.proof.failureCode = "FINAL_SUBMIT_CONTROL_NOT_FOUND";
     f.proof.finalSubmit = { status: "NOT_FOUND", visible: false, enabled: false, hitTestValid: false };
-    await f.service.runTask10sFreshPublishFlow();
+    await f.service.runTask10sFreshPublishFlow(accountId, runId);
     await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId);
     expect(await f.arm()).toMatchObject({ status: "PASS", finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0 });
     expect(f.repo.listJobs()).toHaveLength(1);
@@ -121,8 +123,8 @@ describe("r41 fresh prepared job transition (offline)", () => {
     f.proof.readyForFinalSubmit = false;
     f.proof.failureCode = "FINAL_SUBMIT_CONTROL_NOT_FOUND";
     f.proof.finalSubmit = { status: "NOT_FOUND", visible: false, enabled: false, hitTestValid: false };
-    await f.service.runTask10sFreshPublishFlow();
-    expect(await f.service.armTask10sFreshCompletion()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
+    await f.service.runTask10sFreshPublishFlow(accountId, runId);
+    expect(await f.service.armTask10sFreshCompletion(runId)).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
     expect(f.repo.listJobs()).toHaveLength(0);
   });
   it("rejects a closed-shadow diagnostic that is not PASS", async () => {
@@ -132,9 +134,9 @@ describe("r41 fresh prepared job transition (offline)", () => {
     f.proof.failureCode = "FINAL_SUBMIT_CONTROL_NOT_FOUND";
     f.proof.finalSubmit = { status: "NOT_FOUND", visible: false, enabled: false, hitTestValid: false };
     f.adapter.inspectCurrentXiaohongshuClosedShadowFinalSubmit = async () => ({ ...closedShadowPass(), inspectionStatus: "FAIL", failureCode: "CDP_DOM_DOCUMENT_UNAVAILABLE" });
-    await f.service.runTask10sFreshPublishFlow();
+    await f.service.runTask10sFreshPublishFlow(accountId, runId);
     await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId);
-    expect(await f.service.armTask10sFreshCompletion()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
+    expect(await f.service.armTask10sFreshCompletion(runId)).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
   });
   it("rejects any generic resolver failure outside the scoped NOT_FOUND false negative", async () => {
     const f = setup();
@@ -142,9 +144,9 @@ describe("r41 fresh prepared job transition (offline)", () => {
     f.proof.readyForFinalSubmit = false;
     f.proof.failureCode = "FINAL_SUBMIT_CONTROL_AMBIGUOUS";
     f.proof.finalSubmit = { status: "AMBIGUOUS", visible: true, enabled: true, hitTestValid: true, label: "发布" };
-    await f.service.runTask10sFreshPublishFlow();
+    await f.service.runTask10sFreshPublishFlow(accountId, runId);
     await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId);
-    expect(await f.service.armTask10sFreshCompletion()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
+    expect(await f.service.armTask10sFreshCompletion(runId)).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
   });
   it("requires closed-shadow evidence from the same context and page", async () => {
     const f = setup();
@@ -153,9 +155,9 @@ describe("r41 fresh prepared job transition (offline)", () => {
     f.proof.failureCode = "FINAL_SUBMIT_CONTROL_NOT_FOUND";
     f.proof.finalSubmit = { status: "NOT_FOUND", visible: false, enabled: false, hitTestValid: false };
     f.adapter.inspectCurrentXiaohongshuClosedShadowFinalSubmit = async () => ({ ...closedShadowPass(), contextDebugId: "other-context" });
-    await f.service.runTask10sFreshPublishFlow();
+    await f.service.runTask10sFreshPublishFlow(accountId, runId);
     await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId);
-    expect(await f.service.armTask10sFreshCompletion()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
+    expect(await f.service.armTask10sFreshCompletion(runId)).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
     expect(f.repo.listJobs()).toHaveLength(0);
   });
   it.each(["host-count", "native-count", "host-role", "submit-text", "submit-disabled", "submit-loading", "aria-disabled", "aria-busy"])("rejects a closed-shadow proof with an invalid %s signal", async (signal) => {
@@ -174,18 +176,18 @@ describe("r41 fresh prepared job transition (offline)", () => {
     if (signal === "aria-disabled") diagnostic.buttonAriaDisabled = "true";
     if (signal === "aria-busy") diagnostic.buttonAriaBusy = "true";
     f.adapter.inspectCurrentXiaohongshuClosedShadowFinalSubmit = async () => diagnostic;
-    await f.service.runTask10sFreshPublishFlow();
+    await f.service.runTask10sFreshPublishFlow(accountId, runId);
     await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId);
-    expect(await f.service.armTask10sFreshCompletion()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
+    expect(await f.service.armTask10sFreshCompletion(runId)).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
     expect(f.repo.listJobs()).toHaveLength(0);
   });
   it("keeps the missing prepared job guard after successful fresh content evidence", async () => {
-    const f = setup(); await f.service.runTask10sFreshPublishFlow();
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(accountId, runId);
     expect(await f.service.runTask10sCompleteRetainedEditor()).toMatchObject({ failureCode: "TASK10S_RETAINED_EDITOR_PREPARED_JOB_MISSING" });
     expect(f.repo.listJobs()).toHaveLength(0);
   });
   it("arms exactly one durable Prepared job with fresh content and leaves authorization unused", async () => {
-    const f = setup(); await f.service.runTask10sFreshPublishFlow();
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(accountId, runId);
     const authorization = f.repo.getOneShotPublicationAuthorization(runId);
     expect(await f.arm()).toMatchObject({ status: "PASS", finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0 });
     const jobs = f.repo.listJobs(); expect(jobs).toHaveLength(1);
@@ -201,7 +203,7 @@ describe("r41 fresh prepared job transition (offline)", () => {
     expect(await f.service.runTask10sCompleteRetainedEditor()).toMatchObject({ failureCode: "TASK10S_RETAINED_EDITOR_RUNTIME_UNAVAILABLE" });
   });
   it("recovers the existing Prepared Job editor without creating rows or publishing", async () => {
-    const f = setup(); await f.service.runTask10sFreshPublishFlow(); await f.arm();
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(accountId, runId); await f.arm();
     const before = f.repo.getPublishDomainCounts();
     const result = await f.service.recoverTask10sPreparedEditor();
     expect(result).toMatchObject({ status: "PASS", readyForFreshIdentityAttestation: true, finalSubmitClickCount: 0, mousePressedCount: 0, mouseReleasedCount: 0, publicationTransactionCount: 0 });
@@ -212,7 +214,7 @@ describe("r41 fresh prepared job transition (offline)", () => {
     expect(f.repo.getOneShotPublicationAuthorization(runId)?.state).toBe("AUTHORIZED_UNUSED");
   });
   it("blocks ARM when the verified fixture hash does not match the file", async () => {
-    const f = setup(); await f.service.runTask10sFreshPublishFlow();
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(accountId, runId);
     vi.spyOn(attempt, "validateTask10sSafeFixture").mockReturnValue({
       path: f.fixturePath,
       exists: true,
@@ -230,7 +232,7 @@ describe("r41 fresh prepared job transition (offline)", () => {
     expect(f.repo.getPublishRecords()).toHaveLength(0);
   });
   it.each(["null-binding", "missing-file", "hash-mismatch"])("fails closed during recovery for a Job media binding: %s", async (kind) => {
-    const f = setup(); await f.service.runTask10sFreshPublishFlow(); await f.arm();
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(accountId, runId); await f.arm();
     const job = f.repo.listJobs()[0]!;
     if (kind === "null-binding") f.repo.db.prepare("UPDATE publish_jobs SET selected_image_asset_id=NULL WHERE id=?").run(job.id);
     if (kind === "missing-file") rmSync(f.fixturePath, { force: true });
@@ -243,7 +245,7 @@ describe("r41 fresh prepared job transition (offline)", () => {
     expect(f.adapter.recoverPreparedEditor).toHaveBeenCalledTimes(0);
   });
   it("does not revive or retry a terminal Failed Job", async () => {
-    const f = setup(); await f.service.runTask10sFreshPublishFlow(); await f.arm();
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(accountId, runId); await f.arm();
     const job = f.repo.listJobs()[0]!;
     f.repo.db.prepare("UPDATE publish_jobs SET status='Failed',last_error_code='CONTENT_REJECTED' WHERE id=?").run(job.id);
     const before = f.repo.getJob(job.id);
@@ -253,14 +255,14 @@ describe("r41 fresh prepared job transition (offline)", () => {
     expect(f.adapter.recoverPreparedEditor).toHaveBeenCalledTimes(0);
   });
   it("resolves retained-editor content from the current Prepared Job Article", async () => {
-    const f = setup(); await f.service.runTask10sFreshPublishFlow(); await f.arm();
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(accountId, runId); await f.arm();
     const result = await f.service.runTask10sCompleteRetainedEditor();
     expect(result.failureCode).not.toBe("TASK10S_RETAINED_EDITOR_FIXED_CONTENT_MISMATCH");
     expect(f.forbidden).toHaveBeenCalledTimes(1);
     expect(f.repo.getOneShotPublicationAuthorization(runId)?.state).toBe("AUTHORIZED_UNUSED");
   });
   it.each(["missing-id", "missing-article"]) ("fails closed when the Prepared Job Article is %s", async (kind) => {
-    const f = setup(); await f.service.runTask10sFreshPublishFlow(); await f.arm();
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(accountId, runId); await f.arm();
     const job = f.repo.listJobs()[0]!;
     f.repo.db.pragma("foreign_keys = OFF");
     f.repo.db.prepare("UPDATE publish_jobs SET article_id=? WHERE id=?").run(kind === "missing-id" ? "" : "article-does-not-exist", job.id);
@@ -270,7 +272,7 @@ describe("r41 fresh prepared job transition (offline)", () => {
     expect(f.forbidden).not.toHaveBeenCalled();
   });
   it("fails closed when the Prepared PublishRecord is bound to a different Article", async () => {
-    const f = setup(); await f.service.runTask10sFreshPublishFlow(); await f.arm();
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(accountId, runId); await f.arm();
     const job = f.repo.listJobs()[0]!;
     f.repo.db.pragma("foreign_keys = OFF");
     f.repo.db.prepare("UPDATE publish_records SET article_id=? WHERE job_id=?").run("article-does-not-exist", job.id);
@@ -280,7 +282,7 @@ describe("r41 fresh prepared job transition (offline)", () => {
     expect(f.forbidden).not.toHaveBeenCalled();
   });
   it.each(["missing", "used", "account", "platform", "operation", "counter", "run-account"])("fails closed for authorization/run binding: %s", async (kind) => {
-    const f = setup(); await f.service.runTask10sFreshPublishFlow();
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(accountId, runId);
     if (kind === "missing") f.repo.db.prepare("DELETE FROM one_shot_publication_authorizations").run();
     else if (kind === "run-account") {
       const other = f.repo.createAccount({ platformKey: "xiaohongshu", name: "other" });
@@ -305,24 +307,24 @@ describe("r41 fresh prepared job transition (offline)", () => {
     if (kind === "body") f.proof.bodyReadbackVerified = false;
     if (kind === "context") f.proof.sameContext = false;
     if (kind === "safety") f.proof.forbiddenMutationObserved = true;
-    await f.service.runTask10sFreshPublishFlow();
+    await f.service.runTask10sFreshPublishFlow(accountId, runId);
     expect(await f.arm()).toMatchObject({ status: "BLOCKED" }); expect(f.repo.listJobs()).toHaveLength(0);
   });
   it("rejects an existing unrelated job and repeated ARM without duplicate rows", async () => {
-    const f = setup(); await f.service.runTask10sFreshPublishFlow();
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(accountId, runId);
     await f.arm(); const counts = f.repo.getPublishDomainCounts();
     expect(await f.arm()).toMatchObject({ status: "BLOCKED" });
     expect(f.repo.getPublishDomainCounts()).toEqual(counts);
   });
   it("never reuses a historical article/job already linked to the run", async () => {
-    const f = setup(); await f.service.runTask10sFreshPublishFlow();
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(accountId, runId);
     const job = f.repo.createPlatformSelfTestPublishJob({ testRunId: runId, title: "old", body: "old", dryRun: false });
     expect(await f.arm()).toMatchObject({ status: "BLOCKED" });
     expect(f.repo.listJobs()).toHaveLength(1); expect(f.repo.getArticle(job.articleId)?.title).toBe("old");
     expect(f.repo.getPublishRecords()).toHaveLength(0);
   });
   it("rolls back article, job and run linkage when Prepared persistence fails", async () => {
-    const f = setup(); await f.service.runTask10sFreshPublishFlow();
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(accountId, runId);
     const before = f.repo.listArticles().length;
     vi.spyOn(f.repo, "insertPublishRecord").mockImplementation(() => { throw new Error("offline disk failure"); });
     expect(await f.arm()).toMatchObject({ status: "BLOCKED" });
@@ -330,40 +332,40 @@ describe("r41 fresh prepared job transition (offline)", () => {
     expect(f.repo.getPlatformSelfTestRun(runId)?.publishJobId).toBeNull();
   });
   it("rejects runtime replacement after evidence collection", async () => {
-    const f = setup(); await f.service.runTask10sFreshPublishFlow(); f.runtime.canonicalPageDebugId = "replacement";
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(accountId, runId); f.runtime.canonicalPageDebugId = "replacement";
     expect(await f.arm()).toMatchObject({ status: "BLOCKED" }); expect(f.repo.listJobs()).toHaveLength(0);
   });
   it("rejects missing evidence after a Main restart without creating another authorization", async () => {
-    const f = setup(); await f.service.runTask10sFreshPublishFlow();
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(accountId, runId);
     const restarted = new PlatformSelfTestService(f.options);
     const authorization = f.repo.getOneShotPublicationAuthorization(runId);
-    expect(await restarted.armTask10sFreshCompletion()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
+    expect(await restarted.armTask10sFreshCompletion(runId)).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
     expect(f.repo.listJobs()).toHaveLength(0);
     expect(f.repo.getOneShotPublicationAuthorization(runId)).toEqual(authorization);
   });
   it("persists prepared linkage across a new service instance and still blocks repeat ARM", async () => {
-    const f = setup(); await f.service.runTask10sFreshPublishFlow(); await f.arm();
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(accountId, runId); await f.arm();
     const restarted = new PlatformSelfTestService(f.options);
-    expect(await restarted.armTask10sFreshCompletion()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_JOB_ALREADY_EXISTS" });
+    expect(await restarted.armTask10sFreshCompletion(runId)).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_JOB_ALREADY_EXISTS" });
     expect(f.repo.listJobs()).toHaveLength(1); expect(f.repo.getPublishRecords()).toHaveLength(1);
   });
   it("invalidates previous ready evidence when a subsequent fresh flow fails", async () => {
-    const f = setup(); await f.service.runTask10sFreshPublishFlow();
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(accountId, runId);
     f.runtime.browserConnected = false;
-    await f.service.runTask10sFreshPublishFlow();
+    await f.service.runTask10sFreshPublishFlow(accountId, runId);
     f.runtime.browserConnected = true;
     expect(await f.arm()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
     expect(f.repo.listJobs()).toHaveLength(0);
   });
   it("dispatches ARM to persistence and stops without calling completion", async () => {
-    const f = setup(); await f.service.runTask10sFreshPublishFlow();
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(accountId, runId);
     await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId);
     const completion = vi.spyOn(f.service, "runTask10sCompleteRetainedEditor");
     const write = vi.fn();
-    const runner = createFixedDiagnosticRunner({ probe: vi.fn(), writeEvidence: vi.fn(), armTask10sFreshCompletion: () => f.service.armTask10sFreshCompletion(), writeTask10sFreshCompletionArmEvidence: write, runTask10sCompleteRetainedEditor: () => f.service.runTask10sCompleteRetainedEditor(), writeTask10sCompleteRetainedEditorEvidence: vi.fn() });
-    const action = parseDiagnosticAction(["app.exe", "--xhs-task10s-arm-fresh-completion"]);
+    const runner = createFixedDiagnosticRunner({ probe: vi.fn(), writeEvidence: vi.fn(), armTask10sRun: (testRunId) => f.service.armTask10sRun(testRunId), writeTask10sArmRunEvidence: write, runTask10sCompleteRetainedEditor: () => f.service.runTask10sCompleteRetainedEditor(), writeTask10sCompleteRetainedEditorEvidence: vi.fn() });
+    const action = parseDiagnosticAction(["app.exe", "--xhs-task10s-arm-run", runId]);
     expect(action).not.toBeNull();
-    expect(await runner(action!)).toBe(true);
+    expect(await runner(action!, { testRunId: runId })).toBe(true);
     expect(f.repo.getPublishRecords()[0]?.status).toBe("Prepared");
     expect(write).toHaveBeenCalledWith(expect.objectContaining({ status: "PASS", finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0 }));
     expect(completion).not.toHaveBeenCalled(); expect(f.forbidden).not.toHaveBeenCalled();
@@ -372,4 +374,40 @@ describe("r41 fresh prepared job transition (offline)", () => {
     expect(parseDiagnosticAction(["app.exe", "--xhs-task10s-arm-fresh-completion"])).toBe("TASK10S_FRESH_COMPLETION_ARM");
     expect(parseDiagnosticAction(["app.exe", "--xhs-task10s-arm-fresh-completion", "job-id"])).toBeNull();
   });
+});
+
+describe("r51 explicit ARM-only boundaries (offline)", () => {
+  async function ready(f: ReturnType<typeof setup>): Promise<void> {
+    await f.service.runTask10sFreshPublishFlow(accountId, f.requestedRunId);
+    await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId);
+  }
+
+  it("resolves exactly the requested run and creates the first trusted authorization", async () => {
+    const f = setup({ withAuthorization: false, requestedRunId: "r51-run-1" }); await ready(f);
+    const result = await f.service.armTask10sRun(f.requestedRunId);
+    expect(result).toMatchObject({ status: "PASS", requestedTestRunId: f.requestedRunId, resolvedTestRunId: f.requestedRunId, authorizationState: "AUTHORIZED_UNUSED", armOnly: "YES", completionExecuted: "NO" });
+  });
+  it("requires an explicit testRunId", async () => { const f = setup({ withAuthorization: false }); expect(await f.service.armTask10sRun()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_ARM_TEST_RUN_ID_REQUIRED" }); });
+  it("rejects an unknown testRunId without touching publish rows", async () => { const f = setup({ withAuthorization: false }); const before = f.repo.getPublishDomainCounts(); expect(await f.service.armTask10sRun("missing-run")).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_ARM_RUN_NOT_FOUND" }); expect(f.repo.getPublishDomainCounts()).toEqual(before); });
+  it("rejects a run that already has a publish job", async () => { const f = setup({ withAuthorization: false }); f.repo.db.pragma("foreign_keys = OFF"); f.repo.db.prepare("UPDATE platform_self_test_runs SET publish_job_id=? WHERE test_run_id=?").run("existing-job", runId); f.repo.db.pragma("foreign_keys = ON"); expect(await f.service.armTask10sRun(runId)).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_ARM_JOB_ALREADY_EXISTS" }); });
+  it("rejects a run bound to another account", async () => { const f = setup({ withAuthorization: false }); const other = f.repo.createAccount({ platformKey: "xiaohongshu", name: "other" }); f.repo.db.prepare("UPDATE platform_self_test_runs SET platform_account_id=? WHERE test_run_id=?").run(other.platformAccountId ?? other.id, runId); expect(await f.service.armTask10sRun(runId)).toMatchObject({ status: "BLOCKED" }); });
+  it("rejects a current runtime account mismatch", async () => { const f = setup({ withAuthorization: false }); await ready(f); f.runtime.accountId = "other-account"; expect(await f.service.armTask10sRun(runId)).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_ARM_RUNTIME_BINDING_MISMATCH" }); });
+  it("rejects a creator identity that no longer matches the account binding", async () => { const f = setup({ withAuthorization: false }); await ready(f); f.repo.db.prepare("UPDATE accounts SET external_account_id=? WHERE id=?").run("different-creator", accountId); expect(await f.service.armTask10sRun(runId)).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_ARM_ACCOUNT_IDENTITY_BINDING_MISMATCH" }); });
+  it("rejects evidence collected for another run", async () => { const f = setup({ withAuthorization: false, requestedRunId: "r51-run-a" }); await ready(f); const other = f.repo.createPlatformSelfTestRun({ platformAccountId: accountId, requestedLevel: "L5_PUBLISH" }); f.repo.db.prepare("UPDATE platform_self_test_runs SET test_run_id=? WHERE test_run_id=?").run("r51-run-b", other.testRunId); expect(await f.service.armTask10sRun("r51-run-b")).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_ARM_SAME_RUN_EVIDENCE_MISMATCH" }); });
+  it("rejects missing editor readiness evidence", async () => { const f = setup({ withAuthorization: false }); f.proof.states = []; await ready(f); expect(await f.service.armTask10sRun(runId)).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_ARM_EVIDENCE_INCOMPLETE" }); });
+  it("rejects upload retry evidence", async () => { const f = setup({ withAuthorization: false }); f.proof.uploadRetryCount = 1; await ready(f); expect(await f.service.armTask10sRun(runId)).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_ARM_EVIDENCE_INCOMPLETE" }); });
+  it("rejects title readback evidence", async () => { const f = setup({ withAuthorization: false }); f.proof.titleReadbackVerified = false; await ready(f); expect(await f.service.armTask10sRun(runId)).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_ARM_EVIDENCE_INCOMPLETE" }); });
+  it("rejects body readback evidence", async () => { const f = setup({ withAuthorization: false }); f.proof.bodyReadbackVerified = false; await ready(f); expect(await f.service.armTask10sRun(runId)).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_ARM_EVIDENCE_INCOMPLETE" }); });
+  it("rejects a failed closed-shadow surface", async () => { const f = setup({ withAuthorization: false }); await f.service.runTask10sFreshPublishFlow(accountId, runId); f.adapter.inspectCurrentXiaohongshuClosedShadowFinalSubmit = async () => ({ ...closedShadowPass(), inspectionStatus: "FAIL", failureCode: "CDP_DOM_DOCUMENT_UNAVAILABLE" }); await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId); expect(await f.service.armTask10sRun(runId)).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_ARM_EVIDENCE_INCOMPLETE" }); });
+  it("creates exactly one Article", async () => { const f = setup({ withAuthorization: false }); const before = f.repo.listArticles({ source: "test" }).length; await ready(f); expect((await f.service.armTask10sRun(runId)).status).toBe("PASS"); expect(f.repo.listArticles({ source: "test" })).toHaveLength(before + 1); });
+  it("creates exactly one Job and links it to the run", async () => { const f = setup({ withAuthorization: false }); await ready(f); const result = await f.service.armTask10sRun(runId); expect(f.repo.listJobs()).toHaveLength(1); expect(f.repo.getPlatformSelfTestRun(runId)?.publishJobId).toBe(result.jobId); });
+  it("creates exactly one Prepared PublishRecord", async () => { const f = setup({ withAuthorization: false }); await ready(f); const result = await f.service.armTask10sRun(runId); expect(f.repo.getPublishRecords()).toHaveLength(1); expect(f.repo.getPublishRecordByJob(result.jobId!)).toMatchObject({ status: "Prepared", selectedImageAssetId: expect.any(String) }); });
+  it("persists the real r46 ImageAsset binding", async () => { const f = setup({ withAuthorization: false }); await ready(f); const result = await f.service.armTask10sRun(runId); const job = f.repo.getJob(result.jobId!); expect(job?.selectedImageAssetId).toBeTruthy(); expect(f.repo.getImageAsset(job!.selectedImageAssetId!)).toBeTruthy(); });
+  it("keeps authorization unused after ARM", async () => { const f = setup({ withAuthorization: false }); await ready(f); await f.service.armTask10sRun(runId); expect(f.repo.getOneShotPublicationAuthorization(runId)?.state).toBe("AUTHORIZED_UNUSED"); });
+  it("does not execute completion or publisher code", async () => { const f = setup({ withAuthorization: false }); await ready(f); const completion = vi.spyOn(f.service, "runTask10sCompleteRetainedEditor"); await f.service.armTask10sRun(runId); expect(completion).not.toHaveBeenCalled(); expect(f.forbidden).not.toHaveBeenCalled(); });
+  it("leaves all submit and publication counters at zero", async () => { const f = setup({ withAuthorization: false }); await ready(f); expect(await f.service.armTask10sRun(runId)).toMatchObject({ finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0 }); });
+  it("rejects a second ARM for the same run without duplicate rows", async () => { const f = setup({ withAuthorization: false }); await ready(f); await f.service.armTask10sRun(runId); const counts = f.repo.getPublishDomainCounts(); expect(await f.service.armTask10sRun(runId)).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_ARM_JOB_ALREADY_EXISTS" }); expect(f.repo.getPublishDomainCounts()).toEqual(counts); });
+  it("does not arm an alternate run when run A evidence is selected", async () => { const f = setup({ withAuthorization: false, requestedRunId: "r51-run-a" }); await ready(f); const other = f.repo.createPlatformSelfTestRun({ platformAccountId: accountId, requestedLevel: "L5_PUBLISH" }); f.repo.db.prepare("UPDATE platform_self_test_runs SET test_run_id=? WHERE test_run_id=?").run("r51-run-b", other.testRunId); expect(await f.service.armTask10sRun("r51-run-b")).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_ARM_SAME_RUN_EVIDENCE_MISMATCH" }); expect(f.repo.listJobs()).toHaveLength(0); });
+  it("keeps the old no-argument action fail-closed", async () => { const f = setup({ withAuthorization: false }); expect(await f.service.armTask10sFreshCompletion()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_ARM_TEST_RUN_ID_REQUIRED" }); expect(f.repo.listJobs()).toHaveLength(0); });
+  it("does not create an authorization when evidence validation fails", async () => { const f = setup({ withAuthorization: false }); f.proof.forbiddenMutationObserved = true; await ready(f); expect(await f.service.armTask10sRun(runId)).toMatchObject({ status: "BLOCKED" }); expect(f.repo.getOneShotPublicationAuthorization(runId)).toBeNull(); });
 });

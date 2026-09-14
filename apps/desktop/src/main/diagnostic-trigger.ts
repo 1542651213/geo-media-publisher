@@ -1,4 +1,4 @@
-import { TASK10S_FRESH_COMPLETION_ARM, type Task10sFreshCompletionArmResult } from "./platform-self-test";
+import { TASK10S_ARM_RUN, TASK10S_FRESH_COMPLETION_ARM, type Task10sArmRunResult, type Task10sFreshCompletionArmResult } from "./platform-self-test";
 import { createHash } from "node:crypto";
 import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuCurrentPostUploadTerminalReadiness, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, XHS_TASK10S_COMPLETE_RETAINED_EDITOR_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5_FLAG, type Task10sAttempt3DispatchDryRunResult, type Task10sControlledUploadAttemptResult, type Task10sRetainedEditorCompletionResult } from "./task10s-attempt3";
@@ -10,6 +10,7 @@ import type { XhsIdentityPageEnsureServiceResult } from "./xhs-identity";
 export { RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, XHS_TASK10S_COMPLETE_RETAINED_EDITOR_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5_FLAG } from "./task10s-attempt3";
 export { RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, XHS_TASK10S_FRESH_PUBLISH_FLOW_FLAG } from "./task10s-fresh-publish-flow";
 export { RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY, XHS_TASK10S_PREPARED_EDITOR_RECOVERY_FLAG } from "./task10s-prepared-editor-recovery";
+export { RUN_XHS_TASK10S_ARM_RUN, TASK10S_ARM_RUN } from "./platform-self-test";
 
 export const XHS_TASK10S_ENSURE_IDENTITY_PAGE_FLAG = "--xhs-task10s-ensure-identity-page" as const;
 export const RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE = "RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE" as const;
@@ -36,9 +37,11 @@ export const XHS_CONTEXT_IDENTITY_ATTESTATION_FLAG = "--xhs-task10s-establish-co
 export const ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION = "ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION" as const;
 
 export const XHS_TASK10S_ARM_FRESH_COMPLETION_FLAG = "--xhs-task10s-arm-fresh-completion" as const;
-export type DiagnosticAction = typeof TASK10S_FRESH_COMPLETION_ARM | typeof RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY | typeof RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE | typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS | typeof INSPECT_XHS_FILE_INPUT_STATE | typeof INSPECT_XHS_FINAL_SUBMIT_DOM | typeof INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM | typeof INSPECT_XHS_CLOSED_SHADOW_FINAL_SUBMIT | typeof ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 | typeof RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN | typeof RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR | typeof RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW;
+export const XHS_TASK10S_ARM_RUN_FLAG = "--xhs-task10s-arm-run" as const;
+export type DiagnosticAction = typeof TASK10S_ARM_RUN | typeof TASK10S_FRESH_COMPLETION_ARM | typeof RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY | typeof RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE | typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS | typeof INSPECT_XHS_FILE_INPUT_STATE | typeof INSPECT_XHS_FINAL_SUBMIT_DOM | typeof INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM | typeof INSPECT_XHS_CLOSED_SHADOW_FINAL_SUBMIT | typeof ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 | typeof RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN | typeof RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR | typeof RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW;
 
 function actionForValue(value: unknown): DiagnosticAction | null {
+  if (value === TASK10S_ARM_RUN) return TASK10S_ARM_RUN;
   if (value === TASK10S_FRESH_COMPLETION_ARM) return TASK10S_FRESH_COMPLETION_ARM;
   if (value === RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY) return RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY;
   if (value === RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE) return RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE;
@@ -62,6 +65,7 @@ function actionForValue(value: unknown): DiagnosticAction | null {
 }
 
 function actionForFlag(value: string | undefined): DiagnosticAction | null {
+  if (value === XHS_TASK10S_ARM_RUN_FLAG) return TASK10S_ARM_RUN;
   if (value === XHS_TASK10S_ARM_FRESH_COMPLETION_FLAG) return TASK10S_FRESH_COMPLETION_ARM;
   if (value === XHS_TASK10S_PREPARED_EDITOR_RECOVERY_FLAG) return RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY;
   if (value === XHS_TASK10S_ENSURE_IDENTITY_PAGE_FLAG) return RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE;
@@ -144,6 +148,7 @@ export interface Task10sAttempt3DispatchTrace {
 
 export interface FixedDiagnosticInvocationContext {
   dispatchTrace?: Task10sAttempt3DispatchTrace;
+  testRunId?: string;
 }
 
 function safeBasename(value: string): string | undefined {
@@ -260,23 +265,30 @@ function parseFixedAdditionalData(additionalData: unknown): DiagnosticAction | n
 interface DiagnosticActionParseResult {
   action: DiagnosticAction | null;
   rejectionCode: string | null;
+  testRunId: string | null;
 }
 
 function parseDiagnosticActionInternal(commandLine: readonly string[], additionalData?: unknown): DiagnosticActionParseResult {
   const args = normalizeSecondInstanceArgv(commandLine);
+  const parameterizedArm = args[0] === XHS_TASK10S_ARM_RUN_FLAG;
+  if (parameterizedArm) {
+    if (additionalData !== undefined) return { action: null, rejectionCode: "INVALID_PARAMETERIZED_ARM_ADDITIONAL_DATA", testRunId: null };
+    if (args.length !== 2 || !args[1]?.trim()) return { action: null, rejectionCode: "TASK10S_ARM_TEST_RUN_ID_REQUIRED", testRunId: null };
+    return { action: TASK10S_ARM_RUN, rejectionCode: null, testRunId: args[1].trim() };
+  }
   const cliAction = args.length === 1 ? actionForFlag(args[0]) : null;
   if (additionalData !== undefined) {
     const additionalAction = parseFixedAdditionalData(additionalData);
-    if (!additionalAction) return { action: null, rejectionCode: "INVALID_ADDITIONAL_DATA" };
+    if (!additionalAction) return { action: null, rejectionCode: "INVALID_ADDITIONAL_DATA", testRunId: null };
     if (additionalAction === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 || additionalAction === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 || additionalAction === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 || additionalAction === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN) {
       return args.length === 0 || cliAction === additionalAction
-        ? { action: additionalAction, rejectionCode: null }
-        : { action: null, rejectionCode: "UNKNOWN_OR_EXTRA_ARGUMENT" };
+        ? { action: additionalAction, rejectionCode: null, testRunId: null }
+        : { action: null, rejectionCode: "UNKNOWN_OR_EXTRA_ARGUMENT", testRunId: null };
     }
-    return { action: additionalAction, rejectionCode: null };
+    return { action: additionalAction, rejectionCode: null, testRunId: null };
   }
-  if (cliAction) return { action: cliAction, rejectionCode: null };
-  return { action: null, rejectionCode: args.length === 0 ? "NO_FIXED_ACTION" : "UNKNOWN_OR_EXTRA_ARGUMENT" };
+  if (cliAction) return { action: cliAction, rejectionCode: null, testRunId: null };
+  return { action: null, rejectionCode: args.length === 0 ? "NO_FIXED_ACTION" : "UNKNOWN_OR_EXTRA_ARGUMENT", testRunId: null };
 }
 
 function actionParseResult(action: DiagnosticAction | null, args: readonly string[]): Task10sAttempt3DispatchTrace["actionParseResult"] {
@@ -286,12 +298,13 @@ function actionParseResult(action: DiagnosticAction | null, args: readonly strin
   return "FIXED_ACTION";
 }
 
-export function parseDiagnosticActionWithTrace(commandLine: readonly string[], additionalData?: unknown): { action: DiagnosticAction | null; trace: Task10sAttempt3DispatchTrace } {
+export function parseDiagnosticActionWithTrace(commandLine: readonly string[], additionalData?: unknown): { action: DiagnosticAction | null; testRunId: string | null; trace: Task10sAttempt3DispatchTrace } {
   const baseTrace = buildSecondInstanceDispatchTrace(commandLine, process.pid);
   const parsed = parseDiagnosticActionInternal(commandLine, additionalData);
   const normalizedArgs = normalizeSecondInstanceArgv(commandLine);
   return {
     action: parsed.action,
+    testRunId: parsed.testRunId,
     trace: {
       ...baseTrace,
       actionParseEntered: "YES",
@@ -336,10 +349,12 @@ export function createFixedDiagnosticRunner(options: {
   runTask10sAttempt3DispatchDryRun?: () => Promise<Task10sAttempt3DispatchDryRunResult>;
   writeTask10sAttempt3DispatchDryRunEvidence?: (trace: Task10sAttempt3DispatchTrace) => void;
   runTask10sCompleteRetainedEditor?: () => Promise<Task10sRetainedEditorCompletionResult>;
+  armTask10sRun?: (testRunId: string) => Promise<Task10sArmRunResult>;
+  writeTask10sArmRunEvidence?: (result: Task10sArmRunResult) => void;
   writeTask10sCompleteRetainedEditorEvidence?: (result: Task10sRetainedEditorCompletionResult) => void;
   armTask10sFreshCompletion?: () => Promise<Task10sFreshCompletionArmResult>;
   writeTask10sFreshCompletionArmEvidence?: (result: Task10sFreshCompletionArmResult) => void;
-  runTask10sFreshPublishFlow?: () => Promise<Task10sFreshPublishFlowResult>;
+  runTask10sFreshPublishFlow?: (testRunId?: string) => Promise<Task10sFreshPublishFlowResult>;
   writeTask10sFreshPublishFlowEvidence?: (result: Task10sFreshPublishFlowResult) => void;
   recoverTask10sPreparedEditor?: () => Promise<Task10sPreparedEditorRecoveryResult>;
   writeTask10sPreparedEditorRecoveryEvidence?: (result: Task10sPreparedEditorRecoveryResult) => void;
@@ -430,13 +445,18 @@ export function createFixedDiagnosticRunner(options: {
       options.writeTask10sCompleteRetainedEditorEvidence(result);
       return result.status === "PASS";
     }
+    if (action === TASK10S_ARM_RUN && options.armTask10sRun && options.writeTask10sArmRunEvidence && context?.testRunId) {
+      const result = await options.armTask10sRun(context.testRunId);
+      options.writeTask10sArmRunEvidence(result);
+      return result.status === "PASS";
+    }
     if (action === TASK10S_FRESH_COMPLETION_ARM && options.armTask10sFreshCompletion && options.writeTask10sFreshCompletionArmEvidence) {
       const result = await options.armTask10sFreshCompletion();
       options.writeTask10sFreshCompletionArmEvidence(result);
       return result.status === "PASS";
     }
     if (action === RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW && options.runTask10sFreshPublishFlow && options.writeTask10sFreshPublishFlowEvidence) {
-      const result = await options.runTask10sFreshPublishFlow();
+      const result = await options.runTask10sFreshPublishFlow(context?.testRunId);
       options.writeTask10sFreshPublishFlowEvidence(result);
       return result.status === "PASS_READY_FOR_FINAL_SUBMIT" && result.readyForFinalSubmit;
     }
