@@ -35,7 +35,7 @@ const result: ControlledPostUploadDiscoveryResult = {
 
 function service(adapter: Record<string, unknown>) {
   return new PlatformSelfTestService({
-    repository: { listAccounts: () => [account] } as never,
+    repository: { listAccounts: () => [account], getAccountById: (id: string) => id === account.id ? account : null } as never,
     registry: { getForContent: vi.fn(() => adapter) } as never,
     publisher: {} as never,
     resolveAccountSecrets: vi.fn(() => ({}))
@@ -76,10 +76,10 @@ describe("Task10O controlled self-test dispatch", () => {
 
   it("coalesces duplicate Task10S confirmations before any browser call", async () => {
     const testRunId = "task10t-confirmation-run";
-    const run = { testRunId, platformKey: "xiaohongshu", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", requestedLevel: "L5_PUBLISH", publishJobId: null, publishConfirmedAt: null, steps: [{ stepKey: "PUBLISH_CONFIRMATION", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] };
+    const run = { testRunId, platformKey: "xiaohongshu", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", requestedLevel: "L5_PUBLISH", publishJobId: null, publishConfirmedAt: null, steps: [{ stepKey: "PUBLISH_CONFIRMATION", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] };
     const account = { id: "54b390ac-d81e-440a-baeb-d00f9f346cc3", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", platformKey: "xiaohongshu", accountAlias: "XHS", name: "XHS", enabled: true, archivedAt: null };
     const confirmAtomic = vi.fn(() => { throw Object.assign(new Error("forced database failure"), { code: "DB_ERROR" }); });
-    const repository = { listAccounts: () => [account], getPlatformSelfTestRun: () => run, getOneShotPublicationAuthorization: () => null, confirmPlatformSelfTestOneShotAtomically: confirmAtomic };
+    const repository = { listAccounts: () => [account], getAccountById: (id: string) => id === account.id ? account : null, getPlatformSelfTestRun: () => run, getOneShotPublicationAuthorization: () => null, confirmPlatformSelfTestOneShotAtomically: confirmAtomic };
     const adapter = { connectAccount: vi.fn(), checkSession: vi.fn(), preparePublish: vi.fn(), finalSubmit: vi.fn() };
     const instance = new PlatformSelfTestService({ repository: repository as never, registry: { getForContent: vi.fn(() => adapter) } as never, publisher: {} as never, resolveAccountSecrets: vi.fn(() => ({})) });
 
@@ -93,10 +93,10 @@ describe("Task10O controlled self-test dispatch", () => {
 
   it("blocks a previously partial confirmation until formal reconciliation", async () => {
     const testRunId = "task10t-partial-run";
-    const run = { testRunId, platformKey: "xiaohongshu", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", requestedLevel: "L5_PUBLISH", publishJobId: null, publishConfirmedAt: "2026-09-01T04:00:10.700Z", steps: [{ stepKey: "PUBLISH_CONFIRMATION", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] };
+    const run = { testRunId, platformKey: "xiaohongshu", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", requestedLevel: "L5_PUBLISH", publishJobId: null, publishConfirmedAt: "2026-09-01T04:00:10.700Z", steps: [{ stepKey: "PUBLISH_CONFIRMATION", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] };
     const account = { id: "54b390ac-d81e-440a-baeb-d00f9f346cc3", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", platformKey: "xiaohongshu", accountAlias: "XHS", name: "XHS", enabled: true, archivedAt: null };
     const confirmAtomic = vi.fn();
-    const repository = { listAccounts: () => [account], getPlatformSelfTestRun: () => run, getOneShotPublicationAuthorization: () => null, confirmPlatformSelfTestOneShotAtomically: confirmAtomic };
+    const repository = { listAccounts: () => [account], getAccountById: (id: string) => id === account.id ? account : null, getPlatformSelfTestRun: () => run, getOneShotPublicationAuthorization: () => null, confirmPlatformSelfTestOneShotAtomically: confirmAtomic };
     const adapter = { connectAccount: vi.fn(), checkSession: vi.fn(), preparePublish: vi.fn(), finalSubmit: vi.fn() };
     const instance = new PlatformSelfTestService({ repository: repository as never, registry: { getForContent: vi.fn(() => adapter) } as never, publisher: {} as never, resolveAccountSecrets: vi.fn(() => ({})) });
 
@@ -110,7 +110,7 @@ describe("Task10O controlled self-test dispatch", () => {
     const reconcile = vi.fn(() => ({ status: "RECONCILED_RETRYABLE", testRunId, mutationCount: 1, retryEligible: true }));
     const snapshot = {
       identity: { testRunId, platformKey: "xiaohongshu", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3" },
-      run: { testRunId, platformKey: "xiaohongshu", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", requestedLevel: "L5_PUBLISH", overallResult: "WAITING_FOR_USER", publishConfirmedAt: "2026-09-01T04:00:10.700Z", publishJobId: null, publishRecordId: null, testArticleId: null, externalId: null, externalUrl: null, steps: [{ stepKey: "PUBLISH_CONFIRMATION", result: "WAITING_FOR_USER", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] },
+      run: { testRunId, platformKey: "xiaohongshu", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", requestedLevel: "L5_PUBLISH", overallResult: "WAITING_FOR_USER", publishConfirmedAt: "2026-09-01T04:00:10.700Z", publishJobId: null, publishRecordId: null, testArticleId: null, externalId: null, externalUrl: null, steps: [{ stepKey: "PUBLISH_CONFIRMATION", result: "WAITING_FOR_USER", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] },
       authorizationCount: 0,
       operationCount: 0,
       publicationTransactionCount: 0,
@@ -130,13 +130,20 @@ describe("Task10O controlled self-test dispatch", () => {
     expect(adapter.finalSubmit).not.toHaveBeenCalled();
   });
 
-  it("rejects a wrong one-shot identity before repository access", () => {
+  it("rejects a wrong one-shot identity through the persisted binding gate", () => {
     const snapshot = { testRunId: "task10u-wrong", platformKey: "xiaohongshu", accountId: "wrong-account" };
-    const repository = { getOneShotConfirmationReconciliationSnapshot: vi.fn(), reconcileFailedOneShotConfirmation: vi.fn() };
+    const repository = {
+      getOneShotConfirmationReconciliationSnapshot: vi.fn(() => ({
+        identity: snapshot,
+        run: { testRunId: snapshot.testRunId, platformKey: "xiaohongshu", accountId: "persisted-account", platformAccountId: "persisted-account", requestedLevel: "L5_PUBLISH", overallResult: "WAITING_FOR_USER", publishConfirmedAt: null, steps: [] },
+        authorizationCount: 0, operationCount: 0, publicationTransactionCount: 0, finalSubmitAttemptCount: 0, externalPublicationEvidence: false, needsReconciliation: false, publishedOrVerified: false
+      })),
+      reconcileFailedOneShotConfirmation: vi.fn()
+    };
     const instance = new PlatformSelfTestService({ repository: repository as never, registry: {} as never, publisher: {} as never, resolveAccountSecrets: vi.fn(() => ({})) });
 
-    expect(() => instance.reconcileFailedOneShotConfirmation(snapshot as never)).toThrow("ONE_SHOT_RECONCILIATION_IDENTITY_MISMATCH");
-    expect(repository.getOneShotConfirmationReconciliationSnapshot).not.toHaveBeenCalled();
+    expect(() => instance.reconcileFailedOneShotConfirmation(snapshot as never)).toThrow("ONE_SHOT_RECONCILIATION_ACCOUNT_MISMATCH");
+    expect(repository.getOneShotConfirmationReconciliationSnapshot).toHaveBeenCalledWith(snapshot);
   });
 
   it.each([
@@ -152,7 +159,7 @@ describe("Task10O controlled self-test dispatch", () => {
   ])("fail-closes %s", (_label, override, reason) => {
     const base = {
       identity: { testRunId: "x", platformKey: "xiaohongshu", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3" },
-      run: { platformKey: "xiaohongshu", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", requestedLevel: "L5_PUBLISH", overallResult: "WAITING_FOR_USER", publishConfirmedAt: "2026-09-01T04:00:10.700Z", steps: [{ stepKey: "PUBLISH_CONFIRMATION", result: "WAITING_FOR_USER", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] },
+      run: { platformKey: "xiaohongshu", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", requestedLevel: "L5_PUBLISH", overallResult: "WAITING_FOR_USER", publishConfirmedAt: "2026-09-01T04:00:10.700Z", steps: [{ stepKey: "PUBLISH_CONFIRMATION", result: "WAITING_FOR_USER", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] },
       authorizationCount: 0,
       operationCount: 0,
       publicationTransactionCount: 0,
@@ -169,7 +176,7 @@ describe("Task10O controlled self-test dispatch", () => {
   it("accepts only a confirmed orphan and treats the canonical pre-confirm state as already reconciled", () => {
     const base = {
       identity: { testRunId: "x", platformKey: "xiaohongshu", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3" },
-      run: { platformKey: "xiaohongshu", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", requestedLevel: "L5_PUBLISH", overallResult: "WAITING_FOR_USER", publishConfirmedAt: "2026-09-01T04:00:10.700Z", steps: [{ stepKey: "PUBLISH_CONFIRMATION", result: "WAITING_FOR_USER", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] },
+      run: { platformKey: "xiaohongshu", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", requestedLevel: "L5_PUBLISH", overallResult: "WAITING_FOR_USER", publishConfirmedAt: "2026-09-01T04:00:10.700Z", steps: [{ stepKey: "PUBLISH_CONFIRMATION", result: "WAITING_FOR_USER", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] },
       authorizationCount: 0, operationCount: 0, publicationTransactionCount: 0, finalSubmitAttemptCount: 0, externalPublicationEvidence: false, needsReconciliation: false, publishedOrVerified: false
     };
     expect(evaluateStrictFailedOneShotConfirmation(base as never)).toEqual({ allowed: true, alreadyReconciled: false, reason: null });

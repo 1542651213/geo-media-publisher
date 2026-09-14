@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
+const XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID = "historical-test-account";
 import type { Account, Platform } from "@publisher/domain";
 import {
   ONE_SHOT_REAL_PUBLISH_ACCEPTANCE_CONFIRMATION,
@@ -29,11 +29,12 @@ describe("Task10S one-shot entry", () => {
     expect(ONE_SHOT_REAL_PUBLISH_ACCEPTANCE_CONFIRMATION).toBe("本次会真实发布 1 条测试笔记，最多提交一次。");
   });
 
-  it("allows only the bound XHS account", () => {
+  it("allows any enabled, non-archived XHS account and rejects other platforms", () => {
     expect(supportsOneShotRealPublishAcceptance(platform(), account())).toBe(true);
     expect(supportsOneShotRealPublishAcceptance(platform({ platformKey: "weibo" }), account())).toBe(false);
-    expect(supportsOneShotRealPublishAcceptance(platform(), account({ id: "another-account" }))).toBe(false);
+    expect(supportsOneShotRealPublishAcceptance(platform(), account({ id: "another-account" }))).toBe(true);
     expect(supportsOneShotRealPublishAcceptance(platform(), account({ enabled: false }))).toBe(false);
+    expect(supportsOneShotRealPublishAcceptance(platform(), account({ archivedAt: "2026-09-14T00:00:00.000Z" }))).toBe(false);
   });
 
   it("requires connection, owner confirmation and a free entry", () => {

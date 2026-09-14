@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AdapterRegistry } from "@publisher/adapters-core";
 import type { Account, PlatformAccountIdentityBinding } from "@publisher/domain";
-import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
+const XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID = "historical-test-account";
 import type { XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentImageEditorReadiness, XiaohongshuPageScopedIdentityVerification } from "@publisher/adapters-xiaohongshu/browser";
 import { XhsIdentityService } from "./xhs-identity";
 
@@ -365,8 +365,8 @@ describe("Task10V XHS identity proof", () => {
         proof: pageScopedIdentityProof({ browserSessionId: "session-a" })
       } satisfies XiaohongshuPageScopedIdentityVerification)),
       getBrowserRuntimeSnapshot: vi.fn()
-        .mockReturnValueOnce({ sessionExists: true, browserSessionIdentity: "session-a", contextDebugId: "context-1", canonicalPageDebugId: "page-1", browserConnected: true, contextExists: true, contextPageCount: 1, canonicalPageExists: true, canonicalPageClosed: false, canonicalPageContextMatchesSession: true, runtimeAuthState: "AUTHENTICATED" as const })
-        .mockReturnValueOnce({ sessionExists: true, browserSessionIdentity: "session-b", contextDebugId: "context-1", canonicalPageDebugId: "page-draft", browserConnected: true, contextExists: true, contextPageCount: 1, canonicalPageExists: true, canonicalPageClosed: false, canonicalPageContextMatchesSession: true, runtimeAuthState: "AUTHENTICATED" as const })
+        .mockReturnValueOnce({ platformKey: "xiaohongshu", accountId: account.id, sessionExists: true, browserSessionIdentity: "session-a", contextDebugId: "context-1", canonicalPageDebugId: "page-1", browserConnected: true, contextExists: true, contextPageCount: 1, canonicalPageExists: true, canonicalPageClosed: false, canonicalPageContextMatchesSession: true, runtimeAuthState: "AUTHENTICATED" as const })
+        .mockReturnValueOnce({ platformKey: "xiaohongshu", accountId: account.id, sessionExists: true, browserSessionIdentity: "session-b", contextDebugId: "context-1", canonicalPageDebugId: "page-draft", browserConnected: true, contextExists: true, contextPageCount: 1, canonicalPageExists: true, canonicalPageClosed: false, canonicalPageContextMatchesSession: true, runtimeAuthState: "AUTHENTICATED" as const })
     };
     const repository = {
       getAccountById: vi.fn(() => account),

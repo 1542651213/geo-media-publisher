@@ -10,7 +10,7 @@ import {
 const read = (path: string): string => readFileSync(path, "utf8");
 
 describe("Task10S publish-editor semantic candidate diagnostic contract", () => {
-  it("exposes one fixed no-argument Main/IPC/preload path", () => {
+  it("exposes one account-bound Main/IPC/preload path", () => {
     const browser = read("packages/adapters/xiaohongshu/src/browser.ts");
     const identity = read("apps/desktop/src/main/xhs-identity.ts");
     const service = read("apps/desktop/src/main/platform-self-test.ts");
@@ -20,12 +20,12 @@ describe("Task10S publish-editor semantic candidate diagnostic contract", () => 
 
     expect(browser).toContain("inspectCurrentXiaohongshuPublishEditorSemanticCandidates(ctx: AccountContext)");
     expect(identity).toContain("inspectCurrentXiaohongshuPublishEditorSemanticCandidates(accountId: string)");
-    expect(service).toContain("inspectCurrentXiaohongshuPublishEditorSemanticCandidates(): Promise<XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic>");
-    expect(ipc).toContain('register("platform-self-test:inspect-current-xhs-publish-editor-semantic-candidates", async () =>');
-    expect(preload).toContain("inspectCurrentXiaohongshuPublishEditorSemanticCandidates: () => invoke(\"platform-self-test:inspect-current-xhs-publish-editor-semantic-candidates\")");
-    expect(api).toContain("inspectCurrentXiaohongshuPublishEditorSemanticCandidates(): Promise<XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic>");
+    expect(service).toContain("inspectCurrentXiaohongshuPublishEditorSemanticCandidates(accountId?: string): Promise<XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic>");
+    expect(ipc).toContain('register("platform-self-test:inspect-current-xhs-publish-editor-semantic-candidates", async (_event, payload) =>');
+    expect(preload).toContain("inspectCurrentXiaohongshuPublishEditorSemanticCandidates: (accountId) => invoke(\"platform-self-test:inspect-current-xhs-publish-editor-semantic-candidates\", { accountId })");
+    expect(api).toContain("inspectCurrentXiaohongshuPublishEditorSemanticCandidates(accountId: string): Promise<XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic>");
     expect(preload).not.toContain("inspectCurrentXiaohongshuPublishEditorSemanticCandidates: (input");
-    expect(ipc).not.toContain("inspect-current-xhs-publish-editor-semantic-candidates\", async (_event, payload)");
+    expect(ipc).not.toContain("inspect-current-xhs-publish-editor-semantic-candidates\", async ()");
   });
 
   it("keeps the live diagnostic fixed-label, bounded, and read-only", () => {
@@ -107,12 +107,12 @@ describe("Task10S publish-editor semantic candidate diagnostic contract", () => 
     }
   });
 
-  it("wires the fixed action to the existing no-argument semantic inspector", () => {
+  it("wires the fixed action to the existing account-bound semantic inspector", () => {
     const main = read("apps/desktop/src/main/main.ts");
     const runner = read("apps/desktop/src/main/diagnostic-trigger.ts");
     expect(runner).toContain("XHS_FINAL_SUBMIT_DOM_DIAGNOSTIC_FLAG");
     expect(runner).toContain("inspectFinalSubmitDom");
     expect(main).toContain("INSPECT_XHS_FINAL_SUBMIT_DOM");
-    expect(main).toContain("platformSelfTests.inspectCurrentXiaohongshuPublishEditorSemanticCandidates()");
+    expect(main).toContain("platformSelfTests.inspectCurrentXiaohongshuPublishEditorSemanticCandidates(resolveXhsAccountId())");
   });
 });

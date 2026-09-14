@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { AdapterRegistry } from "@publisher/adapters-core";
 import type { Account } from "@publisher/domain";
-import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
+const XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID = "historical-test-account";
 import type { XiaohongshuCurrentImageEditorReadiness } from "@publisher/adapters-xiaohongshu/browser";
 import { XhsIdentityService } from "../apps/desktop/src/main/xhs-identity";
 
@@ -34,7 +34,7 @@ const account: Account = {
 };
 
 describe("Task10S retained canonical Page editor readiness diagnostic", () => {
-  it("routes the fixed account-owned diagnostic through Main without accepting Page inputs", async () => {
+  it("routes the selected account-owned diagnostic through Main without accepting Page inputs", async () => {
     const readiness = { inspectionStatus: "PASS", accountId: account.id } as XiaohongshuCurrentImageEditorReadiness;
     const adapter = { inspectCurrentXiaohongshuImageEditorReadiness: vi.fn(async () => readiness) };
     const repository = {
@@ -50,15 +50,15 @@ describe("Task10S retained canonical Page editor readiness diagnostic", () => {
     expect(adapter.inspectCurrentXiaohongshuImageEditorReadiness).toHaveBeenCalledWith(expect.objectContaining({ accountId: account.id, platformKey: "xiaohongshu" }));
   });
 
-  it("keeps the Renderer boundary no-arg and blocks selector, URL, script, and Page identity input", () => {
+  it("keeps the Renderer boundary account-id based and blocks selector, URL, script, and Page identity input", () => {
     const api = readFileSync("apps/desktop/src/shared/api.ts", "utf8");
     const preload = readFileSync("apps/desktop/src/main/preload.ts", "utf8");
     const ipc = readFileSync("apps/desktop/src/main/ipc.ts", "utf8");
     const adapter = readFileSync("packages/adapters/xiaohongshu/src/browser.ts", "utf8");
 
-    expect(api).toContain("inspectCurrentXiaohongshuImageEditorReadiness(): Promise<XiaohongshuCurrentImageEditorReadiness>");
-    expect(preload).toContain("inspectCurrentXiaohongshuImageEditorReadiness: () => invoke(\"platform-self-test:inspect-current-xhs-image-editor-readiness\")");
-    expect(ipc).toContain('register("platform-self-test:inspect-current-xhs-image-editor-readiness", async () =>');
+    expect(api).toContain("inspectCurrentXiaohongshuImageEditorReadiness(accountId: string): Promise<XiaohongshuCurrentImageEditorReadiness>");
+    expect(preload).toContain("inspectCurrentXiaohongshuImageEditorReadiness: (accountId) => invoke(\"platform-self-test:inspect-current-xhs-image-editor-readiness\", { accountId })");
+    expect(ipc).toContain('register("platform-self-test:inspect-current-xhs-image-editor-readiness", async (_event, payload) =>');
     expect(adapter).toContain("activeCanonicalPage(ctx)");
     expect(adapter).not.toContain("inspectCurrentXiaohongshuImageEditorReadiness(pageId");
     expect(adapter).not.toContain("inspectCurrentXiaohongshuImageEditorReadiness(url");

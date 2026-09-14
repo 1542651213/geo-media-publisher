@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { AdapterRegistry } from "@publisher/adapters-core";
 import type { Account } from "@publisher/domain";
-import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
+const XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID = "historical-test-account";
 import type { XiaohongshuCanonicalPageRuntimeProbe } from "@publisher/adapters-xiaohongshu/browser";
 import { XhsIdentityService } from "../apps/desktop/src/main/xhs-identity";
 
@@ -133,7 +133,7 @@ describe("Task10W canonical Page runtime probe wiring", () => {
     const adapter = readFileSync("packages/adapters/xiaohongshu/src/browser.ts", "utf8");
 
     expect(ipc).toContain('"platform-self-test:probe-xhs-canonical-page"');
-    expect(preload).toContain("probeXhsCanonicalPage: () => invoke(\"platform-self-test:probe-xhs-canonical-page\", { accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID })");
+    expect(preload).toContain("probeXhsCanonicalPage: (accountId) => invoke(\"platform-self-test:probe-xhs-canonical-page\", { accountId })");
     expect(adapter).toContain("evaluate(() => location.href)");
     expect(ipc).not.toContain("payload.script");
     expect(ipc).not.toContain("payload.url");

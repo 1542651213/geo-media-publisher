@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDatabase } from "@publisher/db";
 import { createOwnerAuthorizedOneShotPublication, ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, type AdapterRegistry, type PublishFlowExplorationResult } from "@publisher/adapters-core";
 import type { XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
-import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
+const XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID = "historical-test-account";
 import type { PublisherService } from "@publisher/publisher";
 import { PlatformSelfTestService } from "../apps/desktop/src/main/platform-self-test";
 import { XhsIdentityService } from "../apps/desktop/src/main/xhs-identity";
@@ -66,7 +66,7 @@ function setup() {
   repo.db.prepare("UPDATE platform_self_test_runs SET test_run_id=? WHERE test_run_id=?").run(runId, run.testRunId);
   repo.confirmPlatformSelfTestOneShotAtomically(runId, createOwnerAuthorizedOneShotPublication({ accountId, platformKey: "xiaohongshu", operationId: runId, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE }));
   const proof = exploration();
-  const runtime = { sessionExists: true, browserConnected: true, contextExists: true, canonicalPageExists: true, canonicalPageClosed: false, runtimeAuthState: "AUTHENTICATED", browserSessionIdentity: "session", contextDebugId: "context", canonicalPageDebugId: "page" };
+  const runtime = { platformKey: "xiaohongshu", accountId, sessionExists: true, browserConnected: true, contextExists: true, canonicalPageExists: true, canonicalPageClosed: false, runtimeAuthState: "AUTHENTICATED", browserSessionIdentity: "session", contextDebugId: "context", canonicalPageDebugId: "page" };
   const forbidden = vi.fn(() => { throw new Error("OFFLINE_PUBLICATION_BOUNDARY"); });
   let recoveredEditor = false;
   const contextPages = () => ({ platformKey: "xiaohongshu" as const, accountId, inventoryStatus: "PASS" as const, failureCode: null, contextDebugId: "context", runtimeAuthState: "AUTHENTICATED" as const, browserConnected: true, pageCount: recoveredEditor ? 1 : 0, canonicalPageId: "page", pages: recoveredEditor ? [{ pageIndex: 0, pageId: "page", isCanonical: true, isClosed: false, urlOrigin: "https://creator.xiaohongshu.com", pathname: "/publish/publish", source: null, from: null, target: null, documentReadyState: "complete" as const, titleSafe: "发布", openerPresent: false, openerPageIdIfSameContext: null, frameCount: 0, visibilityState: "visible" as const, editorShellPresent: true, uploadImageTabPresent: true, currentSelectedTab: "上传图文" as const, imageUploadControlPresent: true, titleControlPresent: true, bodyControlPresent: true, finalSubmitControlPresent: true, contentType: "IMAGE_POST" as const, imageEditorPhase: "IMAGE_POST_POST_UPLOAD_EDITOR" as const }] : [], pageCreationEvents: [] });
@@ -94,7 +94,7 @@ function setup() {
   vi.spyOn(XhsIdentityService.prototype, "verifyCreatorIdentity").mockResolvedValue({ expectedExternalCreatorId: "960803317", observed: { externalCreatorId: "960803317", displayName: null, profileUrl: null, source: "CREATOR_ACCOUNT_SURFACE", stable: true }, verified: true, mismatch: false, canonicalContextId: "context", canonicalPageId: "page", canonicalPageUrl: "https://creator.xiaohongshu.com/new/home", domLocationHref: "https://creator.xiaohongshu.com/new/home", pageUrlConsistency: "PASS", routeClass: "CREATOR_HOME" } as Awaited<ReturnType<XhsIdentityService["verifyCreatorIdentity"]>>);
   // Check the missing API with an assertion in RED, rather than a TypeError.
   const arm = async () => {
-    await service.inspectCurrentXiaohongshuClosedShadowFinalSubmit();
+    await service.inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId);
     const method = (service as unknown as { armTask10sFreshCompletion?: () => Promise<{ status: string; failureCode: string | null; jobId?: string }> }).armTask10sFreshCompletion;
     expect(method, "Main trusted ARM transition must exist").toBeTypeOf("function");
     return method!.call(service);
@@ -110,7 +110,7 @@ describe("r41 fresh prepared job transition (offline)", () => {
     f.proof.failureCode = "FINAL_SUBMIT_CONTROL_NOT_FOUND";
     f.proof.finalSubmit = { status: "NOT_FOUND", visible: false, enabled: false, hitTestValid: false };
     await f.service.runTask10sFreshPublishFlow();
-    await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit();
+    await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId);
     expect(await f.arm()).toMatchObject({ status: "PASS", finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0 });
     expect(f.repo.listJobs()).toHaveLength(1);
     expect(f.repo.getPublishRecords()).toHaveLength(1);
@@ -133,7 +133,7 @@ describe("r41 fresh prepared job transition (offline)", () => {
     f.proof.finalSubmit = { status: "NOT_FOUND", visible: false, enabled: false, hitTestValid: false };
     f.adapter.inspectCurrentXiaohongshuClosedShadowFinalSubmit = async () => ({ ...closedShadowPass(), inspectionStatus: "FAIL", failureCode: "CDP_DOM_DOCUMENT_UNAVAILABLE" });
     await f.service.runTask10sFreshPublishFlow();
-    await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit();
+    await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId);
     expect(await f.service.armTask10sFreshCompletion()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
   });
   it("rejects any generic resolver failure outside the scoped NOT_FOUND false negative", async () => {
@@ -143,7 +143,7 @@ describe("r41 fresh prepared job transition (offline)", () => {
     f.proof.failureCode = "FINAL_SUBMIT_CONTROL_AMBIGUOUS";
     f.proof.finalSubmit = { status: "AMBIGUOUS", visible: true, enabled: true, hitTestValid: true, label: "发布" };
     await f.service.runTask10sFreshPublishFlow();
-    await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit();
+    await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId);
     expect(await f.service.armTask10sFreshCompletion()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
   });
   it("requires closed-shadow evidence from the same context and page", async () => {
@@ -154,7 +154,7 @@ describe("r41 fresh prepared job transition (offline)", () => {
     f.proof.finalSubmit = { status: "NOT_FOUND", visible: false, enabled: false, hitTestValid: false };
     f.adapter.inspectCurrentXiaohongshuClosedShadowFinalSubmit = async () => ({ ...closedShadowPass(), contextDebugId: "other-context" });
     await f.service.runTask10sFreshPublishFlow();
-    await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit();
+    await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId);
     expect(await f.service.armTask10sFreshCompletion()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
     expect(f.repo.listJobs()).toHaveLength(0);
   });
@@ -175,7 +175,7 @@ describe("r41 fresh prepared job transition (offline)", () => {
     if (signal === "aria-busy") diagnostic.buttonAriaBusy = "true";
     f.adapter.inspectCurrentXiaohongshuClosedShadowFinalSubmit = async () => diagnostic;
     await f.service.runTask10sFreshPublishFlow();
-    await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit();
+    await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId);
     expect(await f.service.armTask10sFreshCompletion()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_EVIDENCE_INCOMPLETE" });
     expect(f.repo.listJobs()).toHaveLength(0);
   });
@@ -357,7 +357,7 @@ describe("r41 fresh prepared job transition (offline)", () => {
   });
   it("dispatches ARM to persistence and stops without calling completion", async () => {
     const f = setup(); await f.service.runTask10sFreshPublishFlow();
-    await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit();
+    await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId);
     const completion = vi.spyOn(f.service, "runTask10sCompleteRetainedEditor");
     const write = vi.fn();
     const runner = createFixedDiagnosticRunner({ probe: vi.fn(), writeEvidence: vi.fn(), armTask10sFreshCompletion: () => f.service.armTask10sFreshCompletion(), writeTask10sFreshCompletionArmEvidence: write, runTask10sCompleteRetainedEditor: () => f.service.runTask10sCompleteRetainedEditor(), writeTask10sCompleteRetainedEditorEvidence: vi.fn() });

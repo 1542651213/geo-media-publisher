@@ -252,7 +252,7 @@ describe("Task10S Attempt 3 fixed runner guard", () => {
       connectAccount: vi.fn(),
       checkSession: vi.fn(),
       preparePublish: vi.fn(),
-      getBrowserRuntimeSnapshot: vi.fn(() => ({ sessionExists: false, browserSessionIdentity: null, browserConnected: false, contextExists: false, canonicalPageExists: false, canonicalPageClosed: true, runtimeAuthState: "UNVERIFIED", contextDebugId: null, canonicalPageDebugId: null })),
+      getBrowserRuntimeSnapshot: vi.fn(() => ({ platformKey: "xiaohongshu", accountId, sessionExists: false, browserSessionIdentity: null, browserConnected: false, contextExists: false, canonicalPageExists: false, canonicalPageClosed: true, runtimeAuthState: "UNVERIFIED", contextDebugId: null, canonicalPageDebugId: null })),
       runControlledPostUploadDiscovery: vi.fn()
     };
     const instance = new PlatformSelfTestService({

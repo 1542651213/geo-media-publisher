@@ -4,17 +4,17 @@ import { describe, expect, it } from "vitest";
 const read = (path: string) => readFileSync(path, "utf8");
 
 describe("Task10S canonical publish-editor DOM diagnostic contract", () => {
-  it("exposes one fixed no-argument typed Main boundary", () => {
+  it("exposes one account-bound typed Main boundary", () => {
     const api = read("apps/desktop/src/shared/api.ts");
     const preload = read("apps/desktop/src/main/preload.ts");
     const ipc = read("apps/desktop/src/main/ipc.ts");
     const selfTest = read("apps/desktop/src/main/platform-self-test.ts");
     const identity = read("apps/desktop/src/main/xhs-identity.ts");
 
-    expect(api).toContain("inspectCurrentXiaohongshuPublishEditorDom(): Promise<XiaohongshuPublishEditorDomRuntimeDiagnostic>");
-    expect(preload).toContain("inspectCurrentXiaohongshuPublishEditorDom: () => invoke(\"platform-self-test:inspect-current-xhs-publish-editor-dom\")");
-    expect(ipc).toContain('register("platform-self-test:inspect-current-xhs-publish-editor-dom", async () =>');
-    expect(selfTest).toContain("inspectCurrentXiaohongshuPublishEditorDom(): Promise<XiaohongshuPublishEditorDomRuntimeDiagnostic>");
+    expect(api).toContain("inspectCurrentXiaohongshuPublishEditorDom(accountId: string): Promise<XiaohongshuPublishEditorDomRuntimeDiagnostic>");
+    expect(preload).toContain("inspectCurrentXiaohongshuPublishEditorDom: (accountId) => invoke(\"platform-self-test:inspect-current-xhs-publish-editor-dom\", { accountId })");
+    expect(ipc).toContain('register("platform-self-test:inspect-current-xhs-publish-editor-dom", async (_event, payload) =>');
+    expect(selfTest).toContain("inspectCurrentXiaohongshuPublishEditorDom(accountId?: string): Promise<XiaohongshuPublishEditorDomRuntimeDiagnostic>");
     expect(identity).toContain("inspectCurrentXiaohongshuPublishEditorDom");
   });
 

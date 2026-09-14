@@ -10,14 +10,14 @@ describe("Task10S closed-shadow final-submit diagnostic", () => {
     expect(parseDiagnosticAction(["publisher.exe", "--xhs-task10s-closed-shadow-final-submit-diagnostic", "selector"])).toBeNull();
   });
 
-  it("routes the fixed Main action to the existing closed-shadow resolver", () => {
+  it("routes the selected Main action to the existing closed-shadow resolver", () => {
     const main = read("apps/desktop/src/main/main.ts");
     const service = read("apps/desktop/src/main/platform-self-test.ts");
     const identity = read("apps/desktop/src/main/xhs-identity.ts");
     const browser = read("packages/adapters/xiaohongshu/src/browser.ts");
 
-    expect(main).toContain("platformSelfTests.inspectCurrentXiaohongshuClosedShadowFinalSubmit()");
-    expect(service).toContain("inspectCurrentXiaohongshuClosedShadowFinalSubmit(): Promise<");
+    expect(main).toContain("platformSelfTests.inspectCurrentXiaohongshuClosedShadowFinalSubmit(resolveXhsAccountId())");
+    expect(service).toContain("inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId?: string): Promise<");
     expect(identity).toContain("inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId: string)");
     expect(browser).toContain("inspectTask10sClosedShadowPublishSurface(canonical.page)");
   });

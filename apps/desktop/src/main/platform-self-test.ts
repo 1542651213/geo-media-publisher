@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { AppRepository } from "@publisher/db";
-import { createOwnerAuthorizedOneShotPublication, isAutomationAdapter, ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type AdapterRegistry, type AutomationAdapter, type BrowserSessionRuntimeSnapshot, type ControlledSelfTestMode, type PlatformAdapter, type UserInitiatedAction } from "@publisher/adapters-core";
+import { createOwnerAuthorizedOneShotPublication, isAutomationAdapter, ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH, type AdapterRegistry, type AutomationAdapter, type BrowserSessionRuntimeSnapshot, type ControlledSelfTestMode, type PlatformAdapter, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { AutomationPrepareResult, ControlledPostUploadDiscoveryResult, PublishFlowExplorationResult } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
 import type { PublisherService } from "@publisher/publisher";
@@ -14,7 +14,7 @@ import { OneShotConfirmationCoordinator } from "./one-shot-confirmation";
 import { OneShotConfirmationReconciliationService } from "./one-shot-reconciliation";
 import { XhsIdentityService } from "./xhs-identity";
 import type { CreatorIdentityVerificationResult, FailedOneShotConfirmationIdentity, OneShotConfirmationReconciliationResult, XhsIdentityAcceptance } from "@publisher/domain";
-import { emptyTask10sControlledUploadAttemptResult, reserveTask10sAttempt, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, TASK10S_ATTEMPT_3, TASK10S_ATTEMPT_4, TASK10S_ATTEMPT_5, TASK10S_CANONICAL_AUTHORIZATION_ID, TASK10S_EXPECTED_CREATOR_ID, TASK10S_SAFE_FIXTURE_NAME, TASK10S_SAFE_FIXTURE_SIZE, TASK10S_SAFE_FIXTURE_SHA256, task10sSafeFixturePath, validateTask10sSafeFixture, type Task10sAttempt3DispatchDryRunResult, type Task10sAttempt3FileInputReadback, type Task10sControlledUploadAttemptResult, type Task10sControlledUploadAttemptSpec, type Task10sRetainedEditorCompletionResult } from "./task10s-attempt3";
+import { emptyTask10sControlledUploadAttemptResult, reserveTask10sAttempt, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, TASK10S_ATTEMPT_3, TASK10S_ATTEMPT_4, TASK10S_ATTEMPT_5, TASK10S_CANONICAL_AUTHORIZATION_ID, TASK10S_SAFE_FIXTURE_NAME, TASK10S_SAFE_FIXTURE_SIZE, TASK10S_SAFE_FIXTURE_SHA256, task10sSafeFixturePath, validateTask10sSafeFixture, type Task10sAttempt3DispatchDryRunResult, type Task10sAttempt3FileInputReadback, type Task10sControlledUploadAttemptResult, type Task10sControlledUploadAttemptSpec, type Task10sRetainedEditorCompletionResult } from "./task10s-attempt3";
 import { blockedTask10sFreshPublishFlowResult, buildTask10sFreshPublishFlowInput, isTask10sFreshPublishFlowReady, isTask10sFreshPublishStartPath, RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, XHS_TASK10S_FRESH_PUBLISH_FLOW_BODY, XHS_TASK10S_FRESH_PUBLISH_FLOW_TITLE, type Task10sFreshPublishFlowResult } from "./task10s-fresh-publish-flow";
 import { evaluatePreparedEditorRecoveryEvidence, validatePreparedEditorRecoveryTrustedState, RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY, type PreparedEditorRecoveryEvidence, type Task10sPreparedEditorRecoveryResult } from "./task10s-prepared-editor-recovery";
 import { validateTask10sImageAssetBinding, type Task10sImageAssetBindingResult } from "./task10s-media-binding";
@@ -366,18 +366,18 @@ export class PlatformSelfTestService {
    * as a renderer or IPC method: the only caller is the exact second-instance
    * diagnostic action. It stops after upload delivery/post-upload evidence.
    */
-  async runTask10sControlledUploadAttempt3(): Promise<Task10sControlledUploadAttemptResult> {
-    return this.runTask10sControlledUploadAttempt(TASK10S_ATTEMPT_3);
+  async runTask10sControlledUploadAttempt3(accountId?: string): Promise<Task10sControlledUploadAttemptResult> {
+    return this.runTask10sControlledUploadAttempt(TASK10S_ATTEMPT_3, accountId);
   }
 
   /** Main-side fixed Attempt 4 action with its own replay guard. */
-  async runTask10sControlledUploadAttempt4(): Promise<Task10sControlledUploadAttemptResult> {
-    return this.runTask10sControlledUploadAttempt(TASK10S_ATTEMPT_4);
+  async runTask10sControlledUploadAttempt4(accountId?: string): Promise<Task10sControlledUploadAttemptResult> {
+    return this.runTask10sControlledUploadAttempt(TASK10S_ATTEMPT_4, accountId);
   }
 
   /** Main-side fixed Attempt 5 action with its own replay guard. */
-  async runTask10sControlledUploadAttempt5(): Promise<Task10sControlledUploadAttemptResult> {
-    return this.runTask10sControlledUploadAttempt(TASK10S_ATTEMPT_5);
+  async runTask10sControlledUploadAttempt5(accountId?: string): Promise<Task10sControlledUploadAttemptResult> {
+    return this.runTask10sControlledUploadAttempt(TASK10S_ATTEMPT_5, accountId);
   }
 
   /**
@@ -396,10 +396,10 @@ export class PlatformSelfTestService {
       ...overrides
     });
     try {
-      const account = this.options.repository.listAccounts().find((item) => item.id === XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID && item.platformKey === "xiaohongshu");
-      if (!account || !account.enabled || account.archivedAt) return blocked("XHS_ACCOUNT_UNAVAILABLE", { accountId: account?.id ?? null });
       const run = this.options.repository.getPlatformSelfTestRun(TASK10S_CANONICAL_AUTHORIZATION_ID);
-      if (!run || run.platformKey !== "xiaohongshu" || run.requestedLevel !== "L5_PUBLISH") return blocked("TASK10S_RETAINED_EDITOR_RUN_UNAVAILABLE", { accountId: account.id });
+      const account = run ? this.account(run) : undefined;
+      if (!account || !account.enabled || account.archivedAt) return blocked("XHS_ACCOUNT_UNAVAILABLE", { accountId: account?.id ?? null });
+      if (!run || run.platformKey !== "xiaohongshu" || run.requestedLevel !== "L5_PUBLISH") return blocked("TASK10S_RETAINED_EDITOR_RUN_UNAVAILABLE", { accountId: account?.id ?? null });
       if (!run.publishJobId) return blocked("TASK10S_RETAINED_EDITOR_PREPARED_JOB_MISSING", { accountId: account.id, testRunId: run.testRunId });
       const job = this.options.repository.getJob(run.publishJobId);
       const preparedRecord = job ? this.options.repository.getPublishRecordByJob(job.id) : null;
@@ -427,13 +427,14 @@ export class PlatformSelfTestService {
       if (!isAutomationAdapter(adapter) || typeof adapter.finalSubmit !== "function" || typeof adapter.getBrowserRuntimeSnapshot !== "function") return blocked("TASK10S_RETAINED_EDITOR_ADAPTER_UNAVAILABLE", { accountId: account.id, testRunId: run.testRunId, jobId: job.id });
       const context = this.context(account, run, "VISIBLE");
       const runtime = adapter.getBrowserRuntimeSnapshot(context);
+      if (runtime.platformKey !== account.platformKey || runtime.accountId !== account.id) return blocked("TASK10S_RETAINED_EDITOR_RUNTIME_ACCOUNT_MISMATCH", { accountId: account.id, testRunId: run.testRunId, jobId: job.id, contextDebugId: runtime.contextDebugId, pageDebugId: runtime.canonicalPageDebugId });
       if (!runtime.sessionExists || runtime.browserConnected !== true || !runtime.contextExists || !runtime.canonicalPageExists || runtime.canonicalPageClosed === true || runtime.runtimeAuthState !== "AUTHENTICATED") {
         return blocked("TASK10S_RETAINED_EDITOR_RUNTIME_UNAVAILABLE", { accountId: account.id, testRunId: run.testRunId, jobId: job.id, contextDebugId: runtime.contextDebugId, pageDebugId: runtime.canonicalPageDebugId });
       }
       const identityAttestation = await this.xhsIdentity.validateContextIdentityAttestation(account.id);
       const identityAttestationPass = identityAttestation.valid;
       const attestation = this.xhsIdentity.getContextIdentityAttestation(account.id);
-      if (!identityAttestationPass || !attestation) return blocked("TASK10S_RETAINED_EDITOR_CONTEXT_IDENTITY_ATTESTATION_FAILED", { accountId: account.id, testRunId: run.testRunId, jobId: job.id, contextDebugId: runtime.contextDebugId, pageDebugId: runtime.canonicalPageDebugId, expectedCreatorId: TASK10S_EXPECTED_CREATOR_ID, failureCode: identityAttestation.failureCode });
+      if (!identityAttestationPass || !attestation) return blocked("TASK10S_RETAINED_EDITOR_CONTEXT_IDENTITY_ATTESTATION_FAILED", { accountId: account.id, testRunId: run.testRunId, jobId: job.id, contextDebugId: runtime.contextDebugId, pageDebugId: runtime.canonicalPageDebugId, expectedCreatorId: this.expectedCreatorId(account), failureCode: identityAttestation.failureCode });
 
       this.controlledOperations.add(account.id);
       try {
@@ -492,7 +493,7 @@ export class PlatformSelfTestService {
     }
   }
 
-  private async runTask10sControlledUploadAttempt(attempt: Task10sControlledUploadAttemptSpec): Promise<Task10sControlledUploadAttemptResult> {
+  private async runTask10sControlledUploadAttempt(attempt: Task10sControlledUploadAttemptSpec, requestedAccountId?: string): Promise<Task10sControlledUploadAttemptResult> {
     let attemptConsumed = false;
     const counts = (): Pick<Task10sControlledUploadAttemptResult, "controlledUploadAttempt3Count" | "controlledUploadAttempt4Count" | "controlledUploadAttempt5Count" | "imageUploadAttemptCount"> => ({
       controlledUploadAttempt3Count: attemptConsumed && attempt.attemptId === "ATTEMPT_3" ? 1 : 0,
@@ -501,15 +502,15 @@ export class PlatformSelfTestService {
       imageUploadAttemptCount: attemptConsumed ? attempt.imageUploadAttemptCount : attempt.baseImageUploadAttemptCount
     });
     const blocked = (failureCode: string, overrides: Partial<Task10sControlledUploadAttemptResult> = {}): Task10sControlledUploadAttemptResult => ({
-      ...emptyTask10sControlledUploadAttemptResult(attempt, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID),
+      ...emptyTask10sControlledUploadAttemptResult(attempt, requestedAccountId ?? "UNRESOLVED"),
       ...counts(),
       status: "BLOCKED",
       failureCode,
       ...overrides
     });
     try {
-      const account = this.options.repository.listAccounts().find((item) => item.id === XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID && item.platformKey === "xiaohongshu");
-      if (!account || !account.enabled || account.archivedAt) return blocked("XHS_ACCOUNT_UNAVAILABLE");
+      const account = this.selectedXhsAccount(requestedAccountId);
+      if (!account.enabled || account.archivedAt) return blocked("XHS_ACCOUNT_UNAVAILABLE", { accountId: account.id });
       const adapter = this.options.registry.getForContent("xiaohongshu", "article");
       if (!isAutomationAdapter(adapter) || typeof adapter.runControlledPostUploadDiscovery !== "function" || typeof adapter.getBrowserRuntimeSnapshot !== "function") return blocked(`${attempt.attemptId}_ADAPTER_CAPABILITY_UNAVAILABLE`);
       const context: AccountContext = {
@@ -520,6 +521,7 @@ export class PlatformSelfTestService {
         secrets: this.options.resolveAccountSecrets(account.id, account.platformKey)
       };
       const runtimeBefore = adapter.getBrowserRuntimeSnapshot(context);
+      if (runtimeBefore.platformKey !== account.platformKey || runtimeBefore.accountId !== account.id) return blocked("XHS_CANONICAL_RUNTIME_ACCOUNT_MISMATCH", { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId, authorizedRunStateAfter: "NOT_VERIFIED" });
       if (!runtimeBefore.sessionExists || runtimeBefore.browserConnected !== true || !runtimeBefore.contextExists || !runtimeBefore.canonicalPageExists || runtimeBefore.canonicalPageClosed === true || runtimeBefore.runtimeAuthState !== "AUTHENTICATED") {
         return blocked("XHS_CANONICAL_RUNTIME_UNAVAILABLE", { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId, authorizedRunStateAfter: "NOT_VERIFIED" });
       }
@@ -528,7 +530,7 @@ export class PlatformSelfTestService {
         || authorization.authorization !== OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH
         || authorization.state !== "AUTHORIZED_UNUSED"
         || authorization.platformKey !== "xiaohongshu"
-        || authorization.accountId !== XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID
+        || authorization.accountId !== account.id
         || authorization.operationId !== TASK10S_CANONICAL_AUTHORIZATION_ID
         || authorization.mode !== ONE_SHOT_REAL_PUBLISH_ACCEPTANCE
         || authorization.publicationTransactionCount !== 0
@@ -545,12 +547,12 @@ export class PlatformSelfTestService {
       const identityUrl = identity.canonicalPageUrl;
       const identityRouteValid = safeUrlOrigin(identityUrl) === "https://creator.xiaohongshu.com" && safeUrlPath(identityUrl) === "/new/home";
       const identityPassed = identity.verified
-        && identity.expectedExternalCreatorId === TASK10S_EXPECTED_CREATOR_ID
-        && identity.observed.externalCreatorId === TASK10S_EXPECTED_CREATOR_ID
+        && identity.expectedExternalCreatorId === this.expectedCreatorId(account)
+        && identity.observed.externalCreatorId === this.expectedCreatorId(account)
         && identity.canonicalContextId === runtimeBefore.contextDebugId
         && identity.canonicalPageId === runtimeBefore.canonicalPageDebugId
         && identityRouteValid;
-      if (!identityPassed) return blocked("CURRENT_RUNTIME_IDENTITY_REVALIDATION_FAILED", { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId, evidence: { expectedCreatorId: TASK10S_EXPECTED_CREATOR_ID, observedCreatorId: identity.observed.externalCreatorId, identityVerified: identity.verified, canonicalRoute: identityRouteValid ? "/new/home" : safeUrlPath(identityUrl) } });
+      if (!identityPassed) return blocked("CURRENT_RUNTIME_IDENTITY_REVALIDATION_FAILED", { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId, evidence: { expectedCreatorId: this.expectedCreatorId(account), observedCreatorId: identity.observed.externalCreatorId, identityVerified: identity.verified, canonicalRoute: identityRouteValid ? "/new/home" : safeUrlPath(identityUrl) } });
 
       const fixture = validateTask10sSafeFixture();
       if (!fixture.valid) return blocked(fixture.failureCode ?? "SAFE_FIXTURE_INVALID", { contextDebugId: runtimeBefore.contextDebugId, pageDebugId: runtimeBefore.canonicalPageDebugId, evidence: { fixture: { path: fixture.path, exists: fixture.exists, fileName: fixture.fileName, sizeBytes: fixture.sizeBytes, sha256: fixture.sha256, expectedName: TASK10S_SAFE_FIXTURE_NAME, expectedSizeBytes: TASK10S_SAFE_FIXTURE_SIZE, expectedSha256: TASK10S_SAFE_FIXTURE_SHA256 } } });
@@ -641,11 +643,11 @@ export class PlatformSelfTestService {
    * uses the repository-owned safe fixture and fixed content, and never
    * invokes the final submit action.
    */
-  async runTask10sFreshPublishFlow(): Promise<Task10sFreshPublishFlowResult> {
+  async runTask10sFreshPublishFlow(requestedAccountId?: string): Promise<Task10sFreshPublishFlowResult> {
     this.task10sFreshEvidence = null;
     this.task10sClosedShadowEvidence = null;
     const operationId = randomUUID();
-    const account = this.options.repository.listAccounts().find((item) => item.id === XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID && item.platformKey === "xiaohongshu");
+    const account = this.selectedXhsAccount(requestedAccountId);
     if (!account || !account.enabled || account.archivedAt) return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account?.id ?? null, failureCode: "XHS_ACCOUNT_UNAVAILABLE" });
 
     const adapter = this.options.registry.getForContent("xiaohongshu", "article");
@@ -664,6 +666,9 @@ export class PlatformSelfTestService {
     const sessionEvidence = await adapter.getBrowserSessionEvidence(context).catch(() => null);
     const pathname = safeUrlPath(sessionEvidence?.pageUrl ?? null);
     const origin = safeUrlOrigin(sessionEvidence?.pageUrl ?? null);
+    if (runtime.platformKey !== account.platformKey || runtime.accountId !== account.id) {
+      return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_ACCOUNT_MISMATCH" });
+    }
     if (!runtime.sessionExists || runtime.browserConnected !== true || !runtime.contextExists || !runtime.canonicalPageExists || runtime.canonicalPageClosed === true || runtime.runtimeAuthState !== "AUTHENTICATED") {
       return blockedTask10sFreshPublishFlowResult({ operationId, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_RUNTIME_UNAVAILABLE" });
     }
@@ -746,7 +751,7 @@ export class PlatformSelfTestService {
   }
 
   /** Separate Owner-authorized persistence transition. Never executes a job. */
-  async armTask10sFreshCompletion(): Promise<Task10sFreshCompletionArmResult> {
+  async armTask10sFreshCompletion(requestedAccountId?: string): Promise<Task10sFreshCompletionArmResult> {
     const result = (failureCode: string | null, jobId?: string): Task10sFreshCompletionArmResult => ({
       action: TASK10S_FRESH_COMPLETION_ARM, status: failureCode ? "BLOCKED" : "PASS", failureCode,
       testRunId: TASK10S_CANONICAL_AUTHORIZATION_ID, jobId,
@@ -754,7 +759,8 @@ export class PlatformSelfTestService {
       finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0,
       preparedJobMediaGate: failureCode ? "BLOCKED" : "PASS"
     });
-    const accountId = XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID;
+    const accountId = requestedAccountId ?? this.options.repository.getPlatformSelfTestRun(TASK10S_CANONICAL_AUTHORIZATION_ID)?.accountId;
+    if (!accountId) return result("TASK10S_FRESH_ARM_ACCOUNT_UNRESOLVED");
     if (this.controlledOperations.has(accountId)) return result("TASK10S_FRESH_ARM_ALREADY_RUNNING");
     this.controlledOperations.add(accountId);
     try {
@@ -804,7 +810,7 @@ export class PlatformSelfTestService {
         // for this one known false-negative and only with the trusted
         // closed-shadow proof from the same run/context/page.
         if (!fresh || !exploration || fresh.accountId !== account.id || exploration.accountId !== account.id || exploration.platformKey !== account.platformKey || exploration.operationId !== fresh.operationId
-          || (!genericResolverFalseNegative && fresh.status !== "PASS_READY_FOR_FINAL_SUBMIT") || (genericResolverFalseNegative && exploration.status !== "BLOCKED") || fresh.newPublishEntry !== "PASS" || !fresh.fixture.valid || fresh.identityAttestation.status !== "PASS" || fresh.identityAttestation.creatorId !== TASK10S_EXPECTED_CREATOR_ID
+          || (!genericResolverFalseNegative && fresh.status !== "PASS_READY_FOR_FINAL_SUBMIT") || (genericResolverFalseNegative && exploration.status !== "BLOCKED") || fresh.newPublishEntry !== "PASS" || !fresh.fixture.valid || fresh.identityAttestation.status !== "PASS" || fresh.identityAttestation.creatorId !== this.expectedCreatorId(account)
           || fresh.fixedContent.title !== XHS_TASK10S_FRESH_PUBLISH_FLOW_TITLE || fresh.fixedContent.body !== XHS_TASK10S_FRESH_PUBLISH_FLOW_BODY
           || exploration.status === "SAFETY_BOUNDARY_VIOLATION" || exploration.forbiddenMutationObserved || !exploration.sameCanonicalPage || !exploration.sameContext
           || exploration.uploadAttempts !== 1 || exploration.uploadMutationCount !== 1 || exploration.uploadRetryCount !== 0
@@ -817,7 +823,7 @@ export class PlatformSelfTestService {
         const adapter = this.options.registry.getForContent(account.platformKey, "article");
         if (!isAutomationAdapter(adapter) || typeof adapter.getBrowserRuntimeSnapshot !== "function") return result("TASK10S_FRESH_ARM_RUNTIME_UNAVAILABLE");
         const runtime = adapter.getBrowserRuntimeSnapshot(this.context(account, run, "VISIBLE"));
-        if (!identity.valid || !cached?.sessionId || !cached.pageId || !fresh.identityAttestation.contextId || !runtime.sessionExists || runtime.browserConnected !== true || !runtime.contextExists || !runtime.canonicalPageExists || runtime.canonicalPageClosed === true || runtime.runtimeAuthState !== "AUTHENTICATED"
+        if (!identity.valid || !cached?.sessionId || !cached.pageId || !fresh.identityAttestation.contextId || runtime.platformKey !== account.platformKey || runtime.accountId !== account.id || !runtime.sessionExists || runtime.browserConnected !== true || !runtime.contextExists || !runtime.canonicalPageExists || runtime.canonicalPageClosed === true || runtime.runtimeAuthState !== "AUTHENTICATED"
           || runtime.browserSessionIdentity !== cached.sessionId || runtime.contextDebugId !== fresh.identityAttestation.contextId || runtime.canonicalPageDebugId !== cached.pageId) return result("TASK10S_FRESH_ARM_RUNTIME_BINDING_MISMATCH");
         const fixture = validateTask10sSafeFixture();
         if (!fixture.valid) return result("TASK10S_FRESH_ARM_MEDIA_FIXTURE_INVALID");
@@ -850,7 +856,7 @@ export class PlatformSelfTestService {
    * creates or changes Jobs, Records, Articles, authorizations, or submit
    * state, and it stops after the editor and closed-shadow surfaces are ready.
    */
-  async recoverTask10sPreparedEditor(): Promise<Task10sPreparedEditorRecoveryResult> {
+  async recoverTask10sPreparedEditor(requestedAccountId?: string): Promise<Task10sPreparedEditorRecoveryResult> {
     const blocked = (failureCode: string, overrides: Partial<Task10sPreparedEditorRecoveryResult> = {}): Task10sPreparedEditorRecoveryResult => ({
       action: RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY,
       status: "BLOCKED",
@@ -863,12 +869,13 @@ export class PlatformSelfTestService {
       publicationTransactionCount: 0,
       ...overrides
     });
-    const accountId = XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID;
+    const accountId = requestedAccountId ?? this.options.repository.getPlatformSelfTestRun(TASK10S_CANONICAL_AUTHORIZATION_ID)?.accountId;
+    if (!accountId) return blocked("RECOVERY_ACCOUNT_UNRESOLVED");
     if (this.controlledOperations.has(accountId)) return blocked("TASK10S_PREPARED_EDITOR_RECOVERY_ALREADY_RUNNING");
     this.controlledOperations.add(accountId);
     try {
       const repository = this.options.repository;
-      const account = repository.listAccounts().find((item) => item.id === accountId && item.platformKey === "xiaohongshu");
+      const account = repository.getAccountById(accountId, "xiaohongshu");
       if (!account || !account.enabled || account.archivedAt) return blocked("RECOVERY_ACCOUNT_UNAVAILABLE", { accountId: account?.id ?? null });
       const run = repository.getPlatformSelfTestRun(TASK10S_CANONICAL_AUTHORIZATION_ID);
       if (!run || run.platformKey !== "xiaohongshu" || run.testRunId !== TASK10S_CANONICAL_AUTHORIZATION_ID) return blocked("RECOVERY_RUN_UNAVAILABLE", { accountId: account.id });
@@ -896,18 +903,20 @@ export class PlatformSelfTestService {
       if (!isAutomationAdapter(adapter) || typeof adapter.recoverPreparedEditor !== "function" || typeof adapter.getBrowserRuntimeSnapshot !== "function") return blocked("RECOVERY_ADAPTER_UNAVAILABLE", { accountId: account.id, jobId: job.id, publishRecordId: preparedRecord.id, articleId: article.id });
       const context = this.context(account, run, "VISIBLE");
       const runtime = adapter.getBrowserRuntimeSnapshot(context);
+      if (runtime.platformKey !== account.platformKey || runtime.accountId !== account.id) return blocked("RECOVERY_RUNTIME_ACCOUNT_MISMATCH", { accountId: account.id, jobId: job.id, publishRecordId: preparedRecord.id, articleId: article.id });
       if (!runtime.sessionExists || runtime.browserConnected !== true || !runtime.contextExists || !runtime.canonicalPageExists || runtime.canonicalPageClosed === true || runtime.runtimeAuthState !== "AUTHENTICATED") {
         return blocked("RECOVERY_RUNTIME_UNAVAILABLE", { accountId: account.id, jobId: job.id, publishRecordId: preparedRecord.id, articleId: article.id });
       }
       const identity = await this.xhsIdentity.verifyCreatorIdentity(account.id);
-      const identityPass = identity.verified && identity.observed.externalCreatorId === TASK10S_EXPECTED_CREATOR_ID && identity.expectedExternalCreatorId === TASK10S_EXPECTED_CREATOR_ID;
+      const expectedCreatorId = this.expectedCreatorId(account);
+      const identityPass = Boolean(expectedCreatorId) && identity.verified && identity.observed.externalCreatorId === expectedCreatorId && identity.expectedExternalCreatorId === expectedCreatorId;
       if (!identityPass) return blocked("RECOVERY_IDENTITY_MISMATCH", { accountId: account.id, jobId: job.id, publishRecordId: preparedRecord.id, articleId: article.id });
       const trustedState = validatePreparedEditorRecoveryTrustedState({
         expectedPlatformKey: "xiaohongshu",
         expectedAccountId: account.id,
         expectedPlatformAccountId: platformAccountId,
         expectedRunId: run.testRunId,
-        expectedCreatorId: TASK10S_EXPECTED_CREATOR_ID,
+        expectedCreatorId: expectedCreatorId as string,
         account: { id: account.id, platformKey: account.platformKey, platformAccountId, externalAccountId: account.externalAccountId, enabled: account.enabled, archivedAt: account.archivedAt },
         run: { testRunId: run.testRunId, platformKey: run.platformKey, platformAccountId: run.platformAccountId, publishJobId: run.publishJobId },
         job: { id: job.id, accountId: job.accountId, platformAccountId: job.platformAccountId, platformKey: job.platformKey, articleId: job.articleId },
@@ -1004,11 +1013,11 @@ export class PlatformSelfTestService {
 
   async prepareOneShotPrepublish(testRunId: string): Promise<Task10SPrepublishResult> {
     const run = this.mustOneShotRun(testRunId);
+    const account = this.account(run);
     const authorization = this.options.repository.getOneShotPublicationAuthorization(testRunId);
-    if (!authorization || authorization.state !== "AUTHORIZED_UNUSED" || authorization.platformKey !== "xiaohongshu" || authorization.accountId !== XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID || authorization.mode !== ONE_SHOT_REAL_PUBLISH_ACCEPTANCE || authorization.publicationTransactionCount !== 0 || authorization.finalSubmitAttemptCount !== 0 || authorization.finalSubmitRetryCount !== 0 || authorization.finalSubmitActionStarted || authorization.finalSubmitActionCompleted) {
+    if (!authorization || authorization.state !== "AUTHORIZED_UNUSED" || authorization.platformKey !== "xiaohongshu" || authorization.accountId !== account.id || authorization.mode !== ONE_SHOT_REAL_PUBLISH_ACCEPTANCE || authorization.publicationTransactionCount !== 0 || authorization.finalSubmitAttemptCount !== 0 || authorization.finalSubmitRetryCount !== 0 || authorization.finalSubmitActionStarted || authorization.finalSubmitActionCompleted) {
       throw new Error("ONE_SHOT_PREPUBLISH_AUTHORIZATION_NOT_AVAILABLE");
     }
-    const account = this.account(run);
     const adapter = this.options.registry.getForContent("xiaohongshu", "article");
     if (!isAutomationAdapter(adapter)) throw new Error("当前小红书 Adapter 未提供安全预发布准备能力");
     if (this.controlledOperations.has(account.id)) throw new Error("XHS_ONE_SHOT_OPERATION_ALREADY_RUNNING");
@@ -1133,7 +1142,7 @@ export class PlatformSelfTestService {
 
   requestOneShotPublish(platformAccountId: string): PlatformSelfTestRun {
     const account = this.options.repository.listAccounts().find((item) => (item.id === platformAccountId || (item.platformAccountId ?? item.id) === platformAccountId) && item.platformKey === "xiaohongshu");
-    if (!account || account.id !== XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID || !account.enabled || account.archivedAt) throw new Error("小红书一次性真实发布测试账号不可用或未绑定到授权账号");
+    if (!account || !account.enabled || account.archivedAt) throw new Error("小红书一次性真实发布测试账号不可用或未绑定到授权账号");
     const convergence = this.options.repository.convergeUnusedOneShotAuthorization({ platformKey: "xiaohongshu", accountId: account.id, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE });
     if (convergence.reusableOperationId) {
       const existing = this.options.repository.getPlatformSelfTestRun(convergence.reusableOperationId);
@@ -1164,19 +1173,19 @@ export class PlatformSelfTestService {
     return this.xhsIdentity.verifyCreatorIdentity(accountId);
   }
 
-  establishXhsContextIdentityAttestation(accountId: string = XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID) {
-    return this.xhsIdentity.establishContextIdentityAttestation(accountId);
+  establishXhsContextIdentityAttestation(accountId?: string) {
+    return this.xhsIdentity.establishContextIdentityAttestation(this.selectedXhsAccount(accountId).id);
   }
 
-  ensureXhsIdentityPage(accountId: string = XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID): Promise<XhsIdentityPageEnsureServiceResult> {
-    return this.xhsIdentity.ensureIdentityPage(accountId);
+  ensureXhsIdentityPage(accountId?: string): Promise<XhsIdentityPageEnsureServiceResult> {
+    return this.xhsIdentity.ensureIdentityPage(this.selectedXhsAccount(accountId).id);
   }
 
   invalidateXhsContextIdentityAttestation(accountId: string): void {
     this.xhsIdentity.invalidateContextIdentityAttestation(accountId);
   }
 
-  getXhsContextIdentityAttestation(accountId: string = XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID) {
+  getXhsContextIdentityAttestation(accountId: string) {
     return this.xhsIdentity.getContextIdentityAttestation(accountId);
   }
 
@@ -1188,44 +1197,44 @@ export class PlatformSelfTestService {
     return this.xhsIdentity.inspectXhsContextPages(accountId);
   }
 
-  inspectCurrentXiaohongshuImageEditorReadiness(): Promise<XiaohongshuCurrentImageEditorReadiness> {
-    return this.xhsIdentity.inspectCurrentXiaohongshuImageEditorReadiness(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
+  inspectCurrentXiaohongshuImageEditorReadiness(accountId?: string): Promise<XiaohongshuCurrentImageEditorReadiness> {
+    return this.xhsIdentity.inspectCurrentXiaohongshuImageEditorReadiness(this.selectedXhsAccount(accountId).id);
   }
 
-  inspectCurrentXiaohongshuPublishEditorDom(): Promise<XiaohongshuPublishEditorDomRuntimeDiagnostic> {
-    return this.xhsIdentity.inspectCurrentXiaohongshuPublishEditorDom(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
+  inspectCurrentXiaohongshuPublishEditorDom(accountId?: string): Promise<XiaohongshuPublishEditorDomRuntimeDiagnostic> {
+    return this.xhsIdentity.inspectCurrentXiaohongshuPublishEditorDom(this.selectedXhsAccount(accountId).id);
   }
 
-  inspectCurrentXiaohongshuPublishEditorSemanticCandidates(): Promise<XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic> {
-    return this.xhsIdentity.inspectCurrentXiaohongshuPublishEditorSemanticCandidates(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
+  inspectCurrentXiaohongshuPublishEditorSemanticCandidates(accountId?: string): Promise<XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic> {
+    return this.xhsIdentity.inspectCurrentXiaohongshuPublishEditorSemanticCandidates(this.selectedXhsAccount(accountId).id);
   }
 
-  inspectCurrentXiaohongshuGlobalExactPublishDom(): Promise<XiaohongshuGlobalExactPublishDomRuntimeDiagnostic> {
-    return this.xhsIdentity.inspectCurrentXiaohongshuGlobalExactPublishDom(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
+  inspectCurrentXiaohongshuGlobalExactPublishDom(accountId?: string): Promise<XiaohongshuGlobalExactPublishDomRuntimeDiagnostic> {
+    return this.xhsIdentity.inspectCurrentXiaohongshuGlobalExactPublishDom(this.selectedXhsAccount(accountId).id);
   }
 
-  inspectCurrentXiaohongshuClosedShadowFinalSubmit(): Promise<XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic> {
-    return this.xhsIdentity.inspectCurrentXiaohongshuClosedShadowFinalSubmit(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID).then((diagnostic) => {
+  inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId?: string): Promise<XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic> {
+    const selectedAccountId = this.selectedXhsAccount(accountId).id;
+    return this.xhsIdentity.inspectCurrentXiaohongshuClosedShadowFinalSubmit(selectedAccountId).then((diagnostic) => {
       const fresh = this.task10sFreshEvidence;
-      const accountId = XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID;
       this.task10sClosedShadowEvidence = fresh ? {
-        result: structuredClone(diagnostic), accountId, operationId: fresh.result.operationId, sessionId: fresh.sessionId,
+        result: structuredClone(diagnostic), accountId: selectedAccountId, operationId: fresh.result.operationId, sessionId: fresh.sessionId,
         contextId: diagnostic.contextDebugId, pageId: diagnostic.pageId
       } : null;
       return diagnostic;
     });
   }
 
-  inspectCurrentXiaohongshuPostUploadReconciliation(): Promise<XiaohongshuCurrentPostUploadReconciliation> {
-    return this.xhsIdentity.inspectCurrentXiaohongshuPostUploadReconciliation(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
+  inspectCurrentXiaohongshuPostUploadReconciliation(accountId?: string): Promise<XiaohongshuCurrentPostUploadReconciliation> {
+    return this.xhsIdentity.inspectCurrentXiaohongshuPostUploadReconciliation(this.selectedXhsAccount(accountId).id);
   }
 
-  inspectCurrentXiaohongshuPostUploadTerminalReadiness(): Promise<XiaohongshuCurrentPostUploadTerminalReadiness> {
-    return this.xhsIdentity.inspectCurrentXiaohongshuPostUploadTerminalReadiness(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
+  inspectCurrentXiaohongshuPostUploadTerminalReadiness(accountId?: string): Promise<XiaohongshuCurrentPostUploadTerminalReadiness> {
+    return this.xhsIdentity.inspectCurrentXiaohongshuPostUploadTerminalReadiness(this.selectedXhsAccount(accountId).id);
   }
 
-  inspectCurrentXiaohongshuFileInputState(): Promise<XiaohongshuCurrentFileInputState> {
-    return this.xhsIdentity.inspectCurrentXiaohongshuFileInputState(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
+  inspectCurrentXiaohongshuFileInputState(accountId?: string): Promise<XiaohongshuCurrentFileInputState> {
+    return this.xhsIdentity.inspectCurrentXiaohongshuFileInputState(this.selectedXhsAccount(accountId).id);
   }
 
   inspectXhsPublishEntryDom(accountId: string): Promise<XiaohongshuPublishEntryDomRuntimeDiagnostic> {
@@ -1241,7 +1250,7 @@ export class PlatformSelfTestService {
     let run = this.mustOneShotRun(testRunId);
     if (run.publishJobId) throw new Error("ONE_SHOT_PUBLICATION_ALREADY_STARTED");
     const account = this.account(run);
-    if (account.id !== XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID || account.platformKey !== "xiaohongshu") throw new Error("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH");
+    if (account.platformKey !== "xiaohongshu" || account.id !== run.accountId) throw new Error("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH");
     const adapter = this.options.registry.getForContent("xiaohongshu", "article");
     if (!isAutomationAdapter(adapter) || typeof adapter.finalSubmit !== "function") throw new Error("当前小红书 Adapter 未提供一次性真实发布能力");
     let existing: ReturnType<AppRepository["getOneShotPublicationAuthorization"]>;
@@ -1928,9 +1937,23 @@ export class PlatformSelfTestService {
   }
 
   private account(run: PlatformSelfTestRun): Account {
-    const account = this.options.repository.listAccounts().find((item) => (item.platformAccountId ?? item.id) === run.platformAccountId && item.platformKey === run.platformKey);
-    if (!account) throw new Error("平台自测账号不存在");
+    const account = this.options.repository.getAccountById(run.accountId ?? run.platformAccountId, run.platformKey);
+    if (!account || account.platformKey !== run.platformKey || (account.platformAccountId ?? account.id) !== run.platformAccountId || !account.enabled || Boolean(account.archivedAt)) throw new Error("平台自测账号绑定不可用");
     return account;
+  }
+
+  private selectedXhsAccount(accountId?: string): Account {
+    const account = accountId
+      ? this.options.repository.getAccountById(accountId, "xiaohongshu")
+      : this.options.repository.listAccounts().filter((item) => item.platformKey === "xiaohongshu" && item.enabled && !item.archivedAt).length === 1
+        ? this.options.repository.listAccounts().find((item) => item.platformKey === "xiaohongshu" && item.enabled && !item.archivedAt)
+        : undefined;
+    if (!account || account.platformKey !== "xiaohongshu" || !account.enabled || Boolean(account.archivedAt)) throw new Error("小红书账号不可用或选择不明确");
+    return account;
+  }
+
+  private expectedCreatorId(account: Account): string | null {
+    return this.options.repository.getPlatformAccountIdentityBinding("xiaohongshu", account.id)?.externalCreatorId ?? account.externalAccountId ?? null;
   }
 
   private mustRun(testRunId: string, level: PlatformSelfTestLevel): PlatformSelfTestRun {
@@ -1946,7 +1969,7 @@ export class PlatformSelfTestService {
     const resumable = Boolean(authorization
       && authorization.state === "AUTHORIZED_UNUSED"
       && authorization.platformKey === "xiaohongshu"
-      && authorization.accountId === XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID
+      && authorization.accountId === run.accountId
       && authorization.mode === ONE_SHOT_REAL_PUBLISH_ACCEPTANCE
       && authorization.publicationTransactionCount === 0
       && authorization.finalSubmitAttemptCount === 0

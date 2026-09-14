@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AdapterRegistry } from "@publisher/adapters-core";
 import type { Account, PlatformAccountIdentityBinding } from "@publisher/domain";
-import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
+const XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID = "historical-test-account";
 import type { XiaohongshuCreatorIdentityObservation } from "../packages/adapters/xiaohongshu/src/browser";
 import { XhsIdentityService } from "../apps/desktop/src/main/xhs-identity";
 

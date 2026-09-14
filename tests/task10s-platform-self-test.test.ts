@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { AdapterRegistry, createOwnerAuthorizedOneShotPublication, defaultCapabilities, ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, type PlatformAdapter } from "@publisher/adapters-core";
 import { openDatabase } from "@publisher/db";
 import { PublisherService } from "@publisher/publisher";
-import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
+const XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID = "historical-test-account";
 import type { Logger } from "@publisher/logger";
 import { PlatformSelfTestService } from "../apps/desktop/src/main/platform-self-test";
 

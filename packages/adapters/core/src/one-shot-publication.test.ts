@@ -56,10 +56,10 @@ function preflight(overrides: Partial<OneShotFinalSubmitPreflight> = {}): OneSho
 }
 
 describe("Task10S one-shot publication contract", () => {
-  it("binds authorization to the exact XHS account, operation and mode", () => {
+  it("binds authorization to the selected XHS account, operation and mode", () => {
     expect(createOwnerAuthorizedOneShotPublication({ platformKey: "xiaohongshu", accountId: ACCOUNT_ID, operationId: OPERATION_ID, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE })).toMatchObject(authorization());
     expect(() => createOwnerAuthorizedOneShotPublication({ platformKey: "weibo", accountId: ACCOUNT_ID, operationId: OPERATION_ID, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE })).toThrow("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH");
-    expect(() => createOwnerAuthorizedOneShotPublication({ platformKey: "xiaohongshu", accountId: "wrong-account", operationId: OPERATION_ID, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE })).toThrow("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH");
+    expect(createOwnerAuthorizedOneShotPublication({ platformKey: "xiaohongshu", accountId: "wrong-account", operationId: "operation-task10s-2", mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE })).toMatchObject({ accountId: "wrong-account", operationId: "operation-task10s-2" });
   });
 
   it("consumes before the side effect and rejects a second submit even after failure", async () => {

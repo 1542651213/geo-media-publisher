@@ -505,6 +505,8 @@ export interface PlatformSelfTestRun {
   id: string;
   testRunId: string;
   platformKey: string;
+  /** Immutable local Account primary key selected for this run. */
+  accountId: string;
   platformAccountId: string;
   requestedLevel: PlatformSelfTestLevel;
   overallResult: PlatformSelfTestResult;
@@ -735,7 +737,6 @@ export interface PublishResult {
 
 export const OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH = "OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH" as const;
 export const ONE_SHOT_REAL_PUBLISH_ACCEPTANCE = "ONE_SHOT_REAL_PUBLISH_ACCEPTANCE" as const;
-export const XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID = "54b390ac-d81e-440a-baeb-d00f9f346cc3" as const;
 
 export type OneShotPublicationAuthorizationState =
   | "NOT_AUTHORIZED"
@@ -751,7 +752,8 @@ export interface OneShotPublicationAuthorization {
   authorization: typeof OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH;
   state: OneShotPublicationAuthorizationState;
   platformKey: "xiaohongshu";
-  accountId: typeof XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID;
+  /** Immutable account selected when the run/operation was created. */
+  accountId: string;
   operationId: string;
   mode: typeof ONE_SHOT_REAL_PUBLISH_ACCEPTANCE;
   publicationTransactionCount: number;
@@ -781,7 +783,7 @@ export interface XhsIdentityAcceptance {
 export interface FailedOneShotConfirmationIdentity {
   testRunId: string;
   platformKey: "xiaohongshu";
-  accountId: typeof XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID;
+  accountId: string;
 }
 
 export interface OneShotConfirmationReconciliationSnapshot {

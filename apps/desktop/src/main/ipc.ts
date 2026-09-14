@@ -10,7 +10,7 @@ import { AIProviderError, DeepSeekErrorMapper, DeepSeekProvider, FallbackAIProvi
 import { MockImageProvider, OpenAICompatibleImageProvider, persistGeneratedImage, type ImageProvider } from "@publisher/image";
 import { exportLogBundle } from "@publisher/logger";
 import { CredentialDecryptError, type CredentialStatus, type CredentialStore } from "@publisher/security";
-import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STUDIO_PLATFORM_KEYS, EXCEL_ADVANCED_ARTICLE_HEADERS, EXCEL_SIMPLE_ARTICLE_HEADERS, ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, PROMOTION_STRENGTHS, SEARCH_INTENTS, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, checkGeneratedArticleQuality, selectRelevantBrandFacts, type AccountContext, type AccountProfile, type AccountStatus, type AIUsage, type CredentialField, type ContentStudioPlatformKey, type ExcelImportPreview, type ImageAsset } from "@publisher/domain";
+import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STUDIO_PLATFORM_KEYS, EXCEL_ADVANCED_ARTICLE_HEADERS, EXCEL_SIMPLE_ARTICLE_HEADERS, ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, PROMOTION_STRENGTHS, SEARCH_INTENTS, checkGeneratedArticleQuality, selectRelevantBrandFacts, type AccountContext, type AccountProfile, type AccountStatus, type AIUsage, type CredentialField, type ContentStudioPlatformKey, type ExcelImportPreview, type ImageAsset } from "@publisher/domain";
 import { BrowserRuntimeError, assertExternalLaunchAllowed, browserSessionCredentialKey, browserSessionIdHash, isAutomationAdapter, type AdapterRegistry, type AutomationAdapter, type ExternalLaunchTriggerSource, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
 import type { PublisherService, PersistentScheduler } from "@publisher/publisher";
@@ -813,42 +813,47 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
   });
   register("platform-self-test:cancel-one-shot-publish", (_event, payload) => platformSelfTests.cancelOneShotPublish(z.object({ testRunId: idSchema }).parse(payload).testRunId));
   register("platform-self-test:reconcile-failed-one-shot-confirmation", (_event, payload) => {
-    const input = z.object({ testRunId: idSchema, platformKey: z.literal("xiaohongshu"), accountId: z.literal(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID) }).parse(payload);
+    const input = z.object({ testRunId: idSchema, platformKey: z.literal("xiaohongshu"), accountId: idSchema }).parse(payload);
     logger.info("PLATFORM_SELF_TEST", "PARTIAL_CONFIRM_RECONCILIATION_IPC_ATTEMPT", "收到指定一次性确认 partial state reconciliation 请求", { testRunId: input.testRunId, platformKey: input.platformKey, accountId: input.accountId, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE });
     return platformSelfTests.reconcileFailedOneShotConfirmation(input);
   });
   register("platform-self-test:verify-xhs-creator-identity", async (_event, payload) => {
-    const input = z.object({ accountId: z.literal(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID) }).parse(payload);
+    const input = z.object({ accountId: idSchema }).parse(payload);
     logger.info("PLATFORM_SELF_TEST", "XHS_CREATOR_IDENTITY_PROOF_STARTED", "开始只读读取现有 canonical Page 的小红书 Creator 身份", { platformKey: "xiaohongshu", accountId: input.accountId });
     return platformSelfTests.verifyXhsCreatorIdentity(input.accountId);
   });
   register("platform-self-test:probe-xhs-canonical-page", async (_event, payload) => {
-    const input = z.object({ accountId: z.literal(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID) }).parse(payload);
+    const input = z.object({ accountId: idSchema }).parse(payload);
     logger.info("PLATFORM_SELF_TEST", "XHS_CANONICAL_PAGE_RUNTIME_PROBE_STARTED", "开始只读读取现有小红书 canonical Page runtime", { platformKey: "xiaohongshu", accountId: input.accountId });
     return platformSelfTests.inspectCanonicalXhsPageRuntime(input.accountId);
   });
-  register("platform-self-test:inspect-current-xhs-image-editor-readiness", async () => {
-    logger.info("PLATFORM_SELF_TEST", "XHS_CURRENT_IMAGE_EDITOR_READINESS_STARTED", "开始只读读取现有 retained canonical Page 的小红书图文编辑器 readiness", { platformKey: "xiaohongshu", accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
-    return platformSelfTests.inspectCurrentXiaohongshuImageEditorReadiness();
+  register("platform-self-test:inspect-current-xhs-image-editor-readiness", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    logger.info("PLATFORM_SELF_TEST", "XHS_CURRENT_IMAGE_EDITOR_READINESS_STARTED", "开始只读读取现有 retained canonical Page 的小红书图文编辑器 readiness", { platformKey: "xiaohongshu", accountId: input.accountId });
+    return platformSelfTests.inspectCurrentXiaohongshuImageEditorReadiness(input.accountId);
   });
-  register("platform-self-test:inspect-current-xhs-publish-editor-dom", async () => {
-    logger.info("PLATFORM_SELF_TEST", "XHS_PUBLISH_EDITOR_DOM_DIAGNOSTIC_STARTED", "开始只读读取现有 canonical XHS publish editor bounded DOM", { platformKey: "xiaohongshu", accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
-    return platformSelfTests.inspectCurrentXiaohongshuPublishEditorDom();
+  register("platform-self-test:inspect-current-xhs-publish-editor-dom", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    logger.info("PLATFORM_SELF_TEST", "XHS_PUBLISH_EDITOR_DOM_DIAGNOSTIC_STARTED", "开始只读读取现有 canonical XHS publish editor bounded DOM", { platformKey: "xiaohongshu", accountId: input.accountId });
+    return platformSelfTests.inspectCurrentXiaohongshuPublishEditorDom(input.accountId);
   });
-  register("platform-self-test:inspect-current-xhs-publish-editor-semantic-candidates", async () => {
-    logger.info("PLATFORM_SELF_TEST", "XHS_PUBLISH_EDITOR_SEMANTIC_DIAGNOSTIC_STARTED", "开始只读读取现有 canonical XHS publish editor semantic candidates", { platformKey: "xiaohongshu", accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
-    return platformSelfTests.inspectCurrentXiaohongshuPublishEditorSemanticCandidates();
+  register("platform-self-test:inspect-current-xhs-publish-editor-semantic-candidates", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    logger.info("PLATFORM_SELF_TEST", "XHS_PUBLISH_EDITOR_SEMANTIC_DIAGNOSTIC_STARTED", "开始只读读取现有 canonical XHS publish editor semantic candidates", { platformKey: "xiaohongshu", accountId: input.accountId });
+    return platformSelfTests.inspectCurrentXiaohongshuPublishEditorSemanticCandidates(input.accountId);
   });
-  register("platform-self-test:inspect-current-xhs-post-upload-reconciliation", async () => {
-    logger.info("PLATFORM_SELF_TEST", "XHS_POST_UPLOAD_RECONCILIATION_STARTED", "开始只读读取现有 retained canonical XHS post-upload editor reconciliation", { platformKey: "xiaohongshu", accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
-    return platformSelfTests.inspectCurrentXiaohongshuPostUploadReconciliation();
+  register("platform-self-test:inspect-current-xhs-post-upload-reconciliation", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    logger.info("PLATFORM_SELF_TEST", "XHS_POST_UPLOAD_RECONCILIATION_STARTED", "开始只读读取现有 retained canonical XHS post-upload editor reconciliation", { platformKey: "xiaohongshu", accountId: input.accountId });
+    return platformSelfTests.inspectCurrentXiaohongshuPostUploadReconciliation(input.accountId);
   });
-  register("platform-self-test:inspect-current-xhs-file-input-state", async () => {
-    logger.info("PLATFORM_SELF_TEST", "XHS_FILE_INPUT_STATE_STARTED", "开始只读读取现有 retained canonical XHS file-input state", { platformKey: "xiaohongshu", accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
-    return platformSelfTests.inspectCurrentXiaohongshuFileInputState();
+  register("platform-self-test:inspect-current-xhs-file-input-state", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    logger.info("PLATFORM_SELF_TEST", "XHS_FILE_INPUT_STATE_STARTED", "开始只读读取现有 retained canonical XHS file-input state", { platformKey: "xiaohongshu", accountId: input.accountId });
+    return platformSelfTests.inspectCurrentXiaohongshuFileInputState(input.accountId);
   });
   register("platform-self-test:verify-and-converge-xhs-identity", async (_event, payload) => {
-    const input = z.object({ accountId: z.literal(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID), ownerApproved: z.boolean().optional() }).parse(payload);
+    const input = z.object({ accountId: idSchema, ownerApproved: z.boolean().optional() }).parse(payload);
     logger.info("PLATFORM_SELF_TEST", "XHS_IDENTITY_CONVERGENCE_STARTED", "开始小红书 Creator 身份证明与未消费一次性授权收敛", { platformKey: "xiaohongshu", accountId: input.accountId, ownerApproved: input.ownerApproved === true });
     return platformSelfTests.verifyAndConvergeXhsIdentity(input.accountId, input.ownerApproved === true);
   });

@@ -1,6 +1,5 @@
 import type { ControlledPostUploadDiscoveryResult, ControlledSelfTestMode, PublishFlowExplorationResult } from "@publisher/adapters-core";
 import type { Account, Platform } from "@publisher/domain";
-import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
 
 export const CONTROLLED_POST_UPLOAD_DISCOVERY_MODE = "POST_UPLOAD_DISCOVERY_ONLY" as const;
 export const PUBLISH_FLOW_EXPLORATION_MODE = "XHS_PUBLISH_FLOW_EXPLORATION" as const;
@@ -80,7 +79,6 @@ export function publishFlowExplorationResultMessage(result: Pick<PublishFlowExpl
 export function supportsOneShotRealPublishAcceptance(platform: ControlledEntryPlatform, account: ControlledEntryAccount): boolean {
   return platform.platformKey === "xiaohongshu"
     && account.platformKey === "xiaohongshu"
-    && account.id === XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID
     && account.enabled
     && !account.archivedAt;
 }

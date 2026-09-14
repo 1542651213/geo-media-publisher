@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { readFileSync as readPhysicalFileSync } from "node:original-fs";
 import { join } from "node:path";
-import { XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID } from "@publisher/domain";
 import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuCurrentPostUploadTerminalReadiness, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { openDatabase, restoreDatabaseSafely } from "@publisher/db";
 import { SafeStorageCredentialStore } from "@publisher/security";
@@ -319,7 +318,12 @@ async function createWindow(): Promise<void> {
   scheduler = new PersistentScheduler(database.repository, publisher, logger);
   const platformSelfTests = registerIpc({ repository: database.repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir: join(dataDirectory, "covers"), logger, credentials, aiCredentials: credentials, appLogPath, databasePath, processDiagnostics, restoreDatabase: (backupPath) => { scheduler?.stop(); restoreDatabaseSafely(database.db, databasePath, backupPath); app.relaunch(); app.exit(0); } });
   platformSelfTestsRef.current = platformSelfTests;
-  const targetAccount = database.repository.getAccountById(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, "xiaohongshu");
+  const resolveXhsAccountId = (): string => {
+    const accounts = database.repository.listAccounts().filter((item) => item.platformKey === "xiaohongshu" && item.enabled && !item.archivedAt);
+    if (accounts.length !== 1 || !accounts[0]) throw new Error("小红书账号选择不明确或不可用");
+    return accounts[0].id;
+  };
+  const targetAccount = database.repository.listAccounts().find((item) => item.platformKey === "xiaohongshu" && item.enabled && !item.archivedAt) ?? null;
   const targetBinding = targetAccount ? database.repository.getPlatformAccountIdentityBinding("xiaohongshu", targetAccount.id) : null;
   const expectedCreatorId = targetBinding?.externalCreatorId ?? targetAccount?.externalAccountId ?? null;
   const expectedCreatorIdProvenance = targetBinding?.externalCreatorId
@@ -691,77 +695,77 @@ async function createWindow(): Promise<void> {
   };
   fixedDiagnosticActionRunner = createFixedDiagnosticRunner({
     probe: async () => {
-      logger.info("PLATFORM_SELF_TEST", "XHS_CANONICAL_PAGE_RUNTIME_PROBE_TRIGGER_RECEIVED", "收到固定非 UI 小红书 canonical Page probe trigger", { action: PROBE_XHS_CANONICAL_PAGE, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
-      return platformSelfTests.inspectCanonicalXhsPageRuntime(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
+      logger.info("PLATFORM_SELF_TEST", "XHS_CANONICAL_PAGE_RUNTIME_PROBE_TRIGGER_RECEIVED", "收到固定非 UI 小红书 canonical Page probe trigger", { action: PROBE_XHS_CANONICAL_PAGE, accountId: resolveXhsAccountId() });
+      return platformSelfTests.inspectCanonicalXhsPageRuntime(resolveXhsAccountId());
     },
     writeEvidence: writeProbeEvidence,
     inspectContextPages: async () => {
-      logger.info("PLATFORM_SELF_TEST", "XHS_CONTEXT_PAGE_INVENTORY_TRIGGER_RECEIVED", "收到固定非 UI 小红书 Context Page inventory trigger", { action: INSPECT_XHS_CONTEXT_PAGES, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
-      return platformSelfTests.inspectXhsContextPages(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
+      logger.info("PLATFORM_SELF_TEST", "XHS_CONTEXT_PAGE_INVENTORY_TRIGGER_RECEIVED", "收到固定非 UI 小红书 Context Page inventory trigger", { action: INSPECT_XHS_CONTEXT_PAGES, accountId: resolveXhsAccountId() });
+      return platformSelfTests.inspectXhsContextPages(resolveXhsAccountId());
     },
     writeContextPageEvidence,
     inspectPublishEntryDom: async () => {
-      logger.info("PLATFORM_SELF_TEST", "XHS_PUBLISH_ENTRY_DOM_TRIGGER_RECEIVED", "收到固定非 UI 小红书 publish-entry bounded DOM diagnostic trigger", { action: INSPECT_XHS_PUBLISH_ENTRY_DOM, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
-      return platformSelfTests.inspectXhsPublishEntryDom(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
+      logger.info("PLATFORM_SELF_TEST", "XHS_PUBLISH_ENTRY_DOM_TRIGGER_RECEIVED", "收到固定非 UI 小红书 publish-entry bounded DOM diagnostic trigger", { action: INSPECT_XHS_PUBLISH_ENTRY_DOM, accountId: resolveXhsAccountId() });
+      return platformSelfTests.inspectXhsPublishEntryDom(resolveXhsAccountId());
     },
     writePublishEntryDomEvidence,
     inspectPostUploadReconciliation: async () => {
-      logger.info("PLATFORM_SELF_TEST", "XHS_POST_UPLOAD_RECONCILIATION_TRIGGER_RECEIVED", "收到固定非 UI 小红书 post-upload reconciliation trigger", { action: INSPECT_XHS_POST_UPLOAD_RECONCILIATION, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
-      return platformSelfTests.inspectCurrentXiaohongshuPostUploadReconciliation();
+      logger.info("PLATFORM_SELF_TEST", "XHS_POST_UPLOAD_RECONCILIATION_TRIGGER_RECEIVED", "收到固定非 UI 小红书 post-upload reconciliation trigger", { action: INSPECT_XHS_POST_UPLOAD_RECONCILIATION, accountId: resolveXhsAccountId() });
+      return platformSelfTests.inspectCurrentXiaohongshuPostUploadReconciliation(resolveXhsAccountId());
     },
     writePostUploadReconciliationEvidence,
     inspectPostUploadTerminalReadiness: async () => {
-      logger.info("PLATFORM_SELF_TEST", "XHS_POST_UPLOAD_TERMINAL_READINESS_TRIGGER_RECEIVED", "收到固定非 UI 小红书 post-upload terminal readiness trigger", { action: INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
-      return platformSelfTests.inspectCurrentXiaohongshuPostUploadTerminalReadiness();
+      logger.info("PLATFORM_SELF_TEST", "XHS_POST_UPLOAD_TERMINAL_READINESS_TRIGGER_RECEIVED", "收到固定非 UI 小红书 post-upload terminal readiness trigger", { action: INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS, accountId: resolveXhsAccountId() });
+      return platformSelfTests.inspectCurrentXiaohongshuPostUploadTerminalReadiness(resolveXhsAccountId());
     },
     writePostUploadTerminalReadinessEvidence,
     inspectFileInputState: async () => {
-      logger.info("PLATFORM_SELF_TEST", "XHS_FILE_INPUT_STATE_TRIGGER_RECEIVED", "收到固定非 UI 小红书 file-input state trigger", { action: INSPECT_XHS_FILE_INPUT_STATE, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
-      return platformSelfTests.inspectCurrentXiaohongshuFileInputState();
+      logger.info("PLATFORM_SELF_TEST", "XHS_FILE_INPUT_STATE_TRIGGER_RECEIVED", "收到固定非 UI 小红书 file-input state trigger", { action: INSPECT_XHS_FILE_INPUT_STATE, accountId: resolveXhsAccountId() });
+      return platformSelfTests.inspectCurrentXiaohongshuFileInputState(resolveXhsAccountId());
     },
     writeFileInputEvidence,
     inspectFinalSubmitDom: async () => {
-      logger.info("PLATFORM_SELF_TEST", "XHS_FINAL_SUBMIT_DOM_TRIGGER_RECEIVED", "收到固定非 UI 小红书 final-submit bounded DOM diagnostic trigger", { action: INSPECT_XHS_FINAL_SUBMIT_DOM, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
-      return platformSelfTests.inspectCurrentXiaohongshuPublishEditorSemanticCandidates();
+      logger.info("PLATFORM_SELF_TEST", "XHS_FINAL_SUBMIT_DOM_TRIGGER_RECEIVED", "收到固定非 UI 小红书 final-submit bounded DOM diagnostic trigger", { action: INSPECT_XHS_FINAL_SUBMIT_DOM, accountId: resolveXhsAccountId() });
+      return platformSelfTests.inspectCurrentXiaohongshuPublishEditorSemanticCandidates(resolveXhsAccountId());
     },
     writeFinalSubmitDomEvidence,
     inspectGlobalExactPublishDom: async () => {
-      logger.info("PLATFORM_SELF_TEST", "XHS_GLOBAL_EXACT_PUBLISH_DOM_TRIGGER_RECEIVED", "收到固定非 UI 小红书 document-global exact 发布只读 diagnostic trigger", { action: INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
-      return platformSelfTests.inspectCurrentXiaohongshuGlobalExactPublishDom();
+      logger.info("PLATFORM_SELF_TEST", "XHS_GLOBAL_EXACT_PUBLISH_DOM_TRIGGER_RECEIVED", "收到固定非 UI 小红书 document-global exact 发布只读 diagnostic trigger", { action: INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM, accountId: resolveXhsAccountId() });
+      return platformSelfTests.inspectCurrentXiaohongshuGlobalExactPublishDom(resolveXhsAccountId());
     },
     writeGlobalExactPublishDomEvidence,
     inspectClosedShadowFinalSubmit: async () => {
-      logger.info("PLATFORM_SELF_TEST", "XHS_CLOSED_SHADOW_FINAL_SUBMIT_TRIGGER_RECEIVED", "收到固定非 UI 小红书 closed-shadow final-submit 只读 diagnostic trigger", { action: INSPECT_XHS_CLOSED_SHADOW_FINAL_SUBMIT, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
-      return platformSelfTests.inspectCurrentXiaohongshuClosedShadowFinalSubmit();
+      logger.info("PLATFORM_SELF_TEST", "XHS_CLOSED_SHADOW_FINAL_SUBMIT_TRIGGER_RECEIVED", "收到固定非 UI 小红书 closed-shadow final-submit 只读 diagnostic trigger", { action: INSPECT_XHS_CLOSED_SHADOW_FINAL_SUBMIT, accountId: resolveXhsAccountId() });
+      return platformSelfTests.inspectCurrentXiaohongshuClosedShadowFinalSubmit(resolveXhsAccountId());
     },
     writeClosedShadowFinalSubmitEvidence,
     establishXhsContextIdentityAttestation: async () => {
-      logger.info("PLATFORM_SELF_TEST", "XHS_CONTEXT_IDENTITY_ATTESTATION_TRIGGER_RECEIVED", "收到固定 Main-side 小红书 Context-bound identity attestation trigger", { action: ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
+      logger.info("PLATFORM_SELF_TEST", "XHS_CONTEXT_IDENTITY_ATTESTATION_TRIGGER_RECEIVED", "收到固定 Main-side 小红书 Context-bound identity attestation trigger", { action: ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, accountId: resolveXhsAccountId() });
       return platformSelfTests.establishXhsContextIdentityAttestation();
     },
     writeXhsContextIdentityAttestationEvidence,
     ensureXhsIdentityPage: async () => {
-      logger.info("PLATFORM_SELF_TEST", "XHS_IDENTITY_PAGE_ENSURE_TRIGGER_RECEIVED", "收到固定 Main-side 小红书 identity Page ensure trigger", { action: RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
-      return platformSelfTests.ensureXhsIdentityPage(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
+      logger.info("PLATFORM_SELF_TEST", "XHS_IDENTITY_PAGE_ENSURE_TRIGGER_RECEIVED", "收到固定 Main-side 小红书 identity Page ensure trigger", { action: RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE, accountId: resolveXhsAccountId() });
+      return platformSelfTests.ensureXhsIdentityPage(resolveXhsAccountId());
     },
     writeXhsIdentityPageEnsureEvidence,
     runTask10sControlledUploadAttempt3: async () => {
-      logger.info("PLATFORM_SELF_TEST", "TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_TRIGGER_RECEIVED", "收到固定 Main-side Task10S Attempt 3 trigger", { action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
+      logger.info("PLATFORM_SELF_TEST", "TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_TRIGGER_RECEIVED", "收到固定 Main-side Task10S Attempt 3 trigger", { action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, accountId: resolveXhsAccountId() });
       return platformSelfTests.runTask10sControlledUploadAttempt3();
     },
     writeTask10sControlledUploadAttempt3Evidence,
     runTask10sControlledUploadAttempt4: async () => {
-      logger.info("PLATFORM_SELF_TEST", "TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_TRIGGER_RECEIVED", "收到固定 Main-side Task10S Attempt 4 trigger", { action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
+      logger.info("PLATFORM_SELF_TEST", "TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_TRIGGER_RECEIVED", "收到固定 Main-side Task10S Attempt 4 trigger", { action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, accountId: resolveXhsAccountId() });
       return platformSelfTests.runTask10sControlledUploadAttempt4();
     },
     writeTask10sControlledUploadAttempt4Evidence,
     runTask10sControlledUploadAttempt5: async () => {
-      logger.info("PLATFORM_SELF_TEST", "TASK10S_CONTROLLED_UPLOAD_ATTEMPT5_TRIGGER_RECEIVED", "收到固定 Main-side Task10S Attempt 5 trigger", { action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
+      logger.info("PLATFORM_SELF_TEST", "TASK10S_CONTROLLED_UPLOAD_ATTEMPT5_TRIGGER_RECEIVED", "收到固定 Main-side Task10S Attempt 5 trigger", { action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, accountId: resolveXhsAccountId() });
       return platformSelfTests.runTask10sControlledUploadAttempt5();
     },
     writeTask10sControlledUploadAttempt5Evidence,
     runTask10sCompleteRetainedEditor: async () => {
-      logger.info("PLATFORM_SELF_TEST", "TASK10S_COMPLETE_RETAINED_EDITOR_TRIGGER_RECEIVED", "收到固定 Main-side Task10S retained-editor completion trigger", { action: RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
+      logger.info("PLATFORM_SELF_TEST", "TASK10S_COMPLETE_RETAINED_EDITOR_TRIGGER_RECEIVED", "收到固定 Main-side Task10S retained-editor completion trigger", { action: RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, accountId: resolveXhsAccountId() });
       return platformSelfTests.runTask10sCompleteRetainedEditor();
     },
     writeTask10sCompleteRetainedEditorEvidence,
@@ -774,12 +778,12 @@ async function createWindow(): Promise<void> {
       logger.info("PLATFORM_SELF_TEST", "TASK10S_FRESH_COMPLETION_ARM_EVIDENCE_WRITTEN", "ARM 结果已写入；不自动执行 completion", { evidencePath, ...result });
     },
     runTask10sFreshPublishFlow: async () => {
-      logger.info("PLATFORM_SELF_TEST", "TASK10S_FRESH_PUBLISH_FLOW_TRIGGER_RECEIVED", "收到固定 Main-side Task10S fresh publish flow trigger", { action: RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
+      logger.info("PLATFORM_SELF_TEST", "TASK10S_FRESH_PUBLISH_FLOW_TRIGGER_RECEIVED", "收到固定 Main-side Task10S fresh publish flow trigger", { action: RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, accountId: resolveXhsAccountId() });
       return platformSelfTests.runTask10sFreshPublishFlow();
     },
     writeTask10sFreshPublishFlowEvidence,
     recoverTask10sPreparedEditor: async () => {
-      logger.info("PLATFORM_SELF_TEST", "TASK10S_PREPARED_EDITOR_RECOVERY_TRIGGER_RECEIVED", "收到固定 Main-side Prepared Job 编辑器恢复 trigger", { action: RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
+      logger.info("PLATFORM_SELF_TEST", "TASK10S_PREPARED_EDITOR_RECOVERY_TRIGGER_RECEIVED", "收到固定 Main-side Prepared Job 编辑器恢复 trigger", { action: RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY, accountId: resolveXhsAccountId() });
       return platformSelfTests.recoverTask10sPreparedEditor();
     },
     writeTask10sPreparedEditorRecoveryEvidence,

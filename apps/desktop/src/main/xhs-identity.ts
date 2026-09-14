@@ -1,6 +1,6 @@
 import type { AdapterRegistry, BrowserSessionRuntimeSnapshot } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
-import { ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type Account, type AccountContext, type CreatorIdentityVerificationResult, type PlatformAccountIdentityBinding, type XhsIdentityAcceptance } from "@publisher/domain";
+import { ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, type Account, type AccountContext, type CreatorIdentityVerificationResult, type PlatformAccountIdentityBinding, type XhsIdentityAcceptance } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
 import { classifyXiaohongshuPostUploadTerminalReadiness } from "@publisher/adapters-xiaohongshu/browser";
 import type { IdentityPageEnsureResult, XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentFileInputState, XiaohongshuCurrentImageEditorReadiness, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuCurrentPostUploadTerminalReadiness, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPageScopedIdentityVerification, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
@@ -86,6 +86,10 @@ export class XhsIdentityService {
     if (typeof adapter.getBrowserRuntimeSnapshot !== "function") throw Object.assign(new Error("当前小红书运行时未提供 BrowserSession runtime snapshot"), { code: "XHS_RUNTIME_SNAPSHOT_UNAVAILABLE" });
     const context = this.context(account);
     const runtime = adapter.getBrowserRuntimeSnapshot(context);
+    if (runtime.platformKey !== "xiaohongshu" || runtime.accountId !== account.id) {
+      this.contextIdentityAttestations.delete(account.id);
+      return { status: "BLOCKED", failureCode: "ACCOUNT_SESSION_BINDING_MISMATCH" };
+    }
     const identity = typeof adapter.verifyIdentityOnContextPage === "function"
       ? await adapter.verifyIdentityOnContextPage(context)
       : { status: "FAIL", failureCode: "XHS_CONTEXT_IDENTITY_PAGE_VERIFIER_UNAVAILABLE", proof: null } satisfies XiaohongshuPageScopedIdentityVerification;
@@ -126,6 +130,10 @@ export class XhsIdentityService {
     const adapter = this.options.registry.getForContent("xiaohongshu", "article") as IdentityReader;
     if (typeof adapter.getBrowserRuntimeSnapshot !== "function") return { valid: false, failureCode: "XHS_RUNTIME_SNAPSHOT_UNAVAILABLE" };
     const runtime = adapter.getBrowserRuntimeSnapshot(this.context(account));
+    if (runtime.platformKey !== "xiaohongshu" || runtime.accountId !== account.id) {
+      this.contextIdentityAttestations.delete(account.id);
+      return { valid: false, failureCode: "ACCOUNT_SESSION_BINDING_MISMATCH" };
+    }
     const binding = this.options.repository.getPlatformAccountIdentityBinding("xiaohongshu", account.id);
     const expectedCreatorId = binding?.externalCreatorId ?? account.externalAccountId ?? null;
     const current: XhsContextIdentityRuntime = {
@@ -206,15 +214,18 @@ export class XhsIdentityService {
     if (typeof adapter.ensureXhsIdentityPage !== "function") return blocked("XHS_IDENTITY_PAGE_ENSURE_UNAVAILABLE");
     if (typeof adapter.getBrowserRuntimeSnapshot === "function") {
       const runtime = adapter.getBrowserRuntimeSnapshot(this.context(account));
+      if (runtime.platformKey !== "xiaohongshu" || runtime.accountId !== account.id) return blocked("ACCOUNT_SESSION_BINDING_MISMATCH");
       if (!runtime.sessionExists || runtime.browserConnected !== true || !runtime.contextExists || runtime.runtimeAuthState !== "AUTHENTICATED") return blocked("XHS_IDENTITY_PAGE_RUNTIME_UNAVAILABLE");
     }
     const ensured = await adapter.ensureXhsIdentityPage(this.context(account));
     if (ensured.status !== "PASS" || !ensured.identityPageUrl || !ensured.editorPageUrl || !ensured.sameBrowserContext) return blocked(ensured.failureCode ?? "IDENTITY_PAGE_ENSURE_FAILED", ensured);
     if (typeof adapter.verifyIdentityOnContextPage !== "function") return blocked("XHS_CONTEXT_IDENTITY_PAGE_VERIFIER_UNAVAILABLE", ensured);
     const identity = await adapter.verifyIdentityOnContextPage(this.context(account));
-    const expectedCreatorId = this.options.repository.getPlatformAccountIdentityBinding("xiaohongshu", account.id)?.externalCreatorId ?? account.externalAccountId ?? null;
+    const binding = this.options.repository.getPlatformAccountIdentityBinding("xiaohongshu", account.id);
+    if (binding?.externalCreatorId && account.externalAccountId && binding.externalCreatorId !== account.externalAccountId) return blocked("ACCOUNT_IDENTITY_BINDING_CONFLICT", ensured);
+    const expectedCreatorId = binding?.externalCreatorId ?? account.externalAccountId ?? null;
     const observedCreatorId = identity.status === "PASS" ? identity.proof.creatorId : null;
-    const identityMatch = identity.status === "PASS" && observedCreatorId === expectedCreatorId && observedCreatorId === account.externalAccountId;
+    const identityMatch = identity.status === "PASS" && expectedCreatorId !== null && observedCreatorId === expectedCreatorId;
     if (!identityMatch) return blocked(identity.status === "PASS" ? "CREATOR_ID_MISMATCH" : identity.failureCode, ensured, observedCreatorId);
     return { status: "PASS", failureCode: null, identityPageEnsured: true, identityPageUrl: ensured.identityPageUrl, editorPageUrl: ensured.editorPageUrl, sameBrowserContext: true, identityMatch: true, observedCreatorId, action: ensured.action };
   }
@@ -598,9 +609,8 @@ export class XhsIdentityService {
   }
 
   private requireAccount(accountId: string): Account {
-    if (accountId !== XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID) throw Object.assign(new Error("小红书身份证明只允许指定测试账号"), { code: "XHS_IDENTITY_ACCOUNT_MISMATCH" });
     const account = this.options.repository.getAccountById(accountId, "xiaohongshu");
-    if (!account || account.platformKey !== "xiaohongshu" || !account.enabled || Boolean(account.archivedAt)) throw Object.assign(new Error("小红书指定账号不可用"), { code: "XHS_IDENTITY_ACCOUNT_UNAVAILABLE" });
+    if (!account || account.platformKey !== "xiaohongshu" || !account.enabled || Boolean(account.archivedAt)) throw Object.assign(new Error("小红书账号不可用"), { code: "XHS_IDENTITY_ACCOUNT_UNAVAILABLE" });
     return account;
   }
 

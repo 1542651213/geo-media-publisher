@@ -1,15 +1,13 @@
 import {
   ONE_SHOT_REAL_PUBLISH_ACCEPTANCE,
   OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH,
-  XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID,
   type OneShotPublicationAuthorization,
   type OneShotPublicationAuthorizationState
 } from "@publisher/domain";
 
 export {
   ONE_SHOT_REAL_PUBLISH_ACCEPTANCE,
-  OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH,
-  XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID
+  OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH
 } from "@publisher/domain";
 export type { OneShotPublicationAuthorization, OneShotPublicationAuthorizationState } from "@publisher/domain";
 
@@ -30,7 +28,7 @@ export interface OneShotFinalSubmitPreflight {
   authorization: typeof OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH;
   authorizationState: OneShotPublicationAuthorizationState;
   platformKey: "xiaohongshu";
-  accountId: typeof XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID;
+  accountId: string;
   operationId: string;
   mode: typeof ONE_SHOT_REAL_PUBLISH_ACCEPTANCE;
   authenticated: boolean;
@@ -78,14 +76,14 @@ export function createOwnerAuthorizedOneShotPublication(input: {
   operationId: string;
   mode: string;
 }): OneShotPublicationAuthorization {
-  if (input.platformKey !== "xiaohongshu" || input.accountId !== XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID || input.mode !== ONE_SHOT_REAL_PUBLISH_ACCEPTANCE || !input.operationId.trim()) {
+  if (input.platformKey !== "xiaohongshu" || !input.accountId.trim() || input.mode !== ONE_SHOT_REAL_PUBLISH_ACCEPTANCE || !input.operationId.trim()) {
     throw new OneShotPublicationGuardError("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH");
   }
   return {
     authorization: OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH,
     state: "AUTHORIZED_UNUSED",
     platformKey: "xiaohongshu",
-    accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID,
+    accountId: input.accountId,
     operationId: input.operationId,
     mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE,
     publicationTransactionCount: 0,
@@ -101,7 +99,7 @@ export function createOwnerAuthorizedOneShotPublication(input: {
 function ensureAuthorizationBinding(authorization: OneShotPublicationAuthorization, preflight: OneShotFinalSubmitPreflight): void {
   const matches = authorization.authorization === OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH
     && authorization.platformKey === "xiaohongshu"
-    && authorization.accountId === XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID
+    && authorization.accountId.trim().length > 0
     && authorization.mode === ONE_SHOT_REAL_PUBLISH_ACCEPTANCE
     && authorization.operationId === preflight.operationId
     && preflight.authorization === authorization.authorization

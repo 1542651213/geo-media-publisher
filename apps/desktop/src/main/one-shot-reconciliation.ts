@@ -1,5 +1,5 @@
 import type { AppRepository } from "@publisher/db";
-import { ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type FailedOneShotConfirmationIdentity, type OneShotConfirmationReconciliationResult, type OneShotConfirmationReconciliationSnapshot } from "@publisher/domain";
+import { ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH, type FailedOneShotConfirmationIdentity, type OneShotConfirmationReconciliationResult, type OneShotConfirmationReconciliationSnapshot } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
 
 const CONFIRMATION_STEP = "PUBLISH_CONFIRMATION";
@@ -14,8 +14,8 @@ export interface OneShotConfirmationReconciliationDecision {
 export function evaluateStrictFailedOneShotConfirmation(snapshot: OneShotConfirmationReconciliationSnapshot): OneShotConfirmationReconciliationDecision {
   const step = snapshot.run.steps.find((item) => item.stepKey === CONFIRMATION_STEP);
   if (snapshot.identity.platformKey !== "xiaohongshu") return { allowed: false, alreadyReconciled: false, reason: "ONE_SHOT_RECONCILIATION_PLATFORM_MISMATCH" };
-  if (snapshot.identity.accountId !== XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID) return { allowed: false, alreadyReconciled: false, reason: "ONE_SHOT_RECONCILIATION_ACCOUNT_MISMATCH" };
-  if (snapshot.run.platformKey !== "xiaohongshu" || snapshot.run.platformAccountId !== snapshot.identity.accountId) return { allowed: false, alreadyReconciled: false, reason: "ONE_SHOT_RECONCILIATION_ACCOUNT_MISMATCH" };
+  if (!snapshot.identity.accountId.trim()) return { allowed: false, alreadyReconciled: false, reason: "ONE_SHOT_RECONCILIATION_ACCOUNT_MISMATCH" };
+  if (snapshot.run.platformKey !== "xiaohongshu" || snapshot.run.accountId !== snapshot.identity.accountId || snapshot.run.platformAccountId !== snapshot.identity.accountId) return { allowed: false, alreadyReconciled: false, reason: "ONE_SHOT_RECONCILIATION_ACCOUNT_MISMATCH" };
   if (snapshot.run.requestedLevel !== "L5_PUBLISH" || snapshot.run.overallResult !== "WAITING_FOR_USER") return { allowed: false, alreadyReconciled: false, reason: "ONE_SHOT_RECONCILIATION_STATE_MISMATCH" };
   if (snapshot.authorizationCount !== 0) return { allowed: false, alreadyReconciled: false, reason: "ONE_SHOT_RECONCILIATION_AUTHORIZATION_EXISTS" };
   if (snapshot.operationCount !== 0) return { allowed: false, alreadyReconciled: false, reason: "ONE_SHOT_RECONCILIATION_OPERATION_EXISTS" };
@@ -38,7 +38,7 @@ export class OneShotConfirmationReconciliationService {
   constructor(private readonly options: OneShotConfirmationReconciliationServiceOptions) {}
 
   reconcileFailedOneShotConfirmation(identity: FailedOneShotConfirmationIdentity): OneShotConfirmationReconciliationResult {
-    if (identity.platformKey !== "xiaohongshu" || identity.accountId !== XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID) throw Object.assign(new Error("ONE_SHOT_RECONCILIATION_IDENTITY_MISMATCH"), { code: "ONE_SHOT_RECONCILIATION_IDENTITY_MISMATCH" });
+    if (identity.platformKey !== "xiaohongshu" || !identity.accountId.trim()) throw Object.assign(new Error("ONE_SHOT_RECONCILIATION_IDENTITY_MISMATCH"), { code: "ONE_SHOT_RECONCILIATION_IDENTITY_MISMATCH" });
     const snapshot = this.options.repository.getOneShotConfirmationReconciliationSnapshot(identity);
     this.options.logger?.info("PLATFORM_SELF_TEST", "PARTIAL_CONFIRMATION_STATE_DETECTED", "检测到指定的一次性确认 partial state；开始严格资格判断", {
       testRunId: identity.testRunId,
