@@ -1173,6 +1173,10 @@ export class PlatformSelfTestService {
     return this.xhsIdentity.verifyCreatorIdentity(accountId);
   }
 
+  bootstrapXhsCreatorIdentity(accountId: string): Promise<CreatorIdentityVerificationResult> {
+    return this.xhsIdentity.bootstrapCreatorIdentity(accountId);
+  }
+
   establishXhsContextIdentityAttestation(accountId?: string) {
     return this.xhsIdentity.establishContextIdentityAttestation(this.selectedXhsAccount(accountId).id);
   }

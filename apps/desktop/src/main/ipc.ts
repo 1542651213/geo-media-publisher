@@ -10,7 +10,7 @@ import { AIProviderError, DeepSeekErrorMapper, DeepSeekProvider, FallbackAIProvi
 import { MockImageProvider, OpenAICompatibleImageProvider, persistGeneratedImage, type ImageProvider } from "@publisher/image";
 import { exportLogBundle } from "@publisher/logger";
 import { CredentialDecryptError, type CredentialStatus, type CredentialStore } from "@publisher/security";
-import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STUDIO_PLATFORM_KEYS, EXCEL_ADVANCED_ARTICLE_HEADERS, EXCEL_SIMPLE_ARTICLE_HEADERS, ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, PROMOTION_STRENGTHS, SEARCH_INTENTS, checkGeneratedArticleQuality, selectRelevantBrandFacts, type AccountContext, type AccountProfile, type AccountStatus, type AIUsage, type CredentialField, type ContentStudioPlatformKey, type ExcelImportPreview, type ImageAsset } from "@publisher/domain";
+import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STUDIO_PLATFORM_KEYS, EXCEL_ADVANCED_ARTICLE_HEADERS, EXCEL_SIMPLE_ARTICLE_HEADERS, ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, PROMOTION_STRENGTHS, SEARCH_INTENTS, checkGeneratedArticleQuality, selectRelevantBrandFacts, type AccountContext, type AccountProfile, type AccountStatus, type AIUsage, type CredentialField, type ContentStudioPlatformKey, type CreatorIdentityVerificationResult, type ExcelImportPreview, type ImageAsset } from "@publisher/domain";
 import { BrowserRuntimeError, assertExternalLaunchAllowed, browserSessionCredentialKey, browserSessionIdHash, isAutomationAdapter, type AdapterRegistry, type AutomationAdapter, type ExternalLaunchTriggerSource, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
 import type { PublisherService, PersistentScheduler } from "@publisher/publisher";
@@ -653,8 +653,9 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
         logger.info("ACCOUNT", "COMPLETE_LOGIN_RESPONSE", "主进程完成登录结果", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, status, reason: "CHECK_LOGIN_NOT_PASSED", errorCode: null, resultContract: { configured: result.configured, accountStatus: result.accountStatus, authorizationStatus: result.authorizationStatus } });
         return result;
       }
+      let identityProof: CreatorIdentityVerificationResult | null = null;
       if (input.platformKey === "xiaohongshu") {
-        const identityProof = await platformSelfTests.verifyXhsCreatorIdentity(input.accountId);
+        identityProof = await platformSelfTests.bootstrapXhsCreatorIdentity(input.accountId);
         logger.info("ACCOUNT", "COMPLETE_LOGIN_IDENTITY_PROOF", "complete-login 已复用 Task10W canonical Creator 身份证明", {
           accountId: input.accountId,
           platformKey: input.platformKey,
@@ -671,6 +672,9 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
         if (!identityProof.verified) throw Object.assign(new Error("ACCOUNT_IDENTITY_UNVERIFIED: complete-login 的 Creator 身份证明未通过"), { code: "ACCOUNT_IDENTITY_UNVERIFIED" });
       }
       const profile = adapter.getAccountProfile ? await adapter.getAccountProfile(completedContext) : undefined;
+      if (input.platformKey === "xiaohongshu" && identityProof && profile?.accountId && profile.accountId !== identityProof.observed.externalCreatorId) {
+        throw Object.assign(new Error("小红书 Adapter profile Creator ID 与已证明身份不一致，拒绝回写"), { code: "XHS_CREATOR_IDENTITY_MISMATCH" });
+      }
       const archivedAccount = profile?.accountId ? repository.findArchivedAccountByExternalIdForConnection(input.accountId, input.platformKey, profile.accountId) : null;
       const effectiveAccountId = archivedAccount?.id ?? input.accountId;
       const effectiveContext = effectiveAccountId === input.accountId ? completedContext : accountContext(effectiveAccountId, input.platformKey, action, true);

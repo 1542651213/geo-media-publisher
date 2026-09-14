@@ -106,6 +106,91 @@ function setup(input: { observedId: string | null; expectedId?: string | null; e
 }
 
 describe("Task10V XHS identity proof", () => {
+  it("bootstraps a fresh account from the authenticated page-scoped Creator proof", async () => {
+    const freshAccount = { ...account, externalAccountId: null };
+    let persistedAccount: Account = freshAccount;
+    let persistedBinding: PlatformAccountIdentityBinding | null = null;
+    const reader = {
+      verifyIdentityOnContextPage: vi.fn(async () => ({ status: "PASS", failureCode: null, proof: pageScopedIdentityProof() } satisfies XiaohongshuPageScopedIdentityVerification)),
+      getBrowserRuntimeSnapshot: vi.fn(() => runtimeSnapshot({ accountId: freshAccount.id, runtimeAuthState: "AUTHENTICATED" }))
+    };
+    const repository = {
+      getAccountById: vi.fn(() => persistedAccount),
+      getPlatformAccountIdentityBinding: vi.fn(() => persistedBinding),
+      bootstrapXhsCreatorIdentity: vi.fn((input: { accountId: string; observedCreatorId: string }) => ({
+        account: (persistedAccount = { ...freshAccount, externalAccountId: input.observedCreatorId }),
+        binding: (persistedBinding = binding(input.observedCreatorId))
+      })),
+      bindPlatformAccountIdentity: vi.fn(),
+      convergeUnusedOneShotAuthorization: vi.fn()
+    };
+    const registry = { getForContent: vi.fn(() => reader) } as unknown as AdapterRegistry;
+    const service = new XhsIdentityService({ repository, registry });
+
+    await expect(service.bootstrapCreatorIdentity(freshAccount.id)).resolves.toMatchObject({
+      expectedExternalCreatorId: "960803317",
+      observed: { externalCreatorId: "960803317" },
+      verified: true,
+      mismatch: false
+    });
+    expect(repository.bootstrapXhsCreatorIdentity).toHaveBeenCalledWith(expect.objectContaining({ accountId: freshAccount.id, observedCreatorId: "960803317" }));
+  });
+
+  it("requires the authenticated same-account /new/home page before bootstrap", async () => {
+    const freshAccount = { ...account, externalAccountId: null };
+    const reader = {
+      verifyIdentityOnContextPage: vi.fn(async () => ({ status: "PASS", failureCode: null, proof: pageScopedIdentityProof() } satisfies XiaohongshuPageScopedIdentityVerification)),
+      getBrowserRuntimeSnapshot: vi.fn(() => runtimeSnapshot({ accountId: "other-account", runtimeAuthState: "UNVERIFIED" }))
+    };
+    const repository = { getAccountById: vi.fn(() => freshAccount), getPlatformAccountIdentityBinding: vi.fn(() => null), bootstrapXhsCreatorIdentity: vi.fn(), bindPlatformAccountIdentity: vi.fn(), convergeUnusedOneShotAuthorization: vi.fn() };
+    const registry = { getForContent: vi.fn(() => reader) } as unknown as AdapterRegistry;
+    const service = new XhsIdentityService({ repository, registry });
+
+    await expect(service.bootstrapCreatorIdentity(freshAccount.id)).rejects.toMatchObject({ code: "ACCOUNT_SESSION_BINDING_MISMATCH" });
+    expect(repository.bootstrapXhsCreatorIdentity).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unauthenticated, wrong-route, or unstable identity proof", async () => {
+    const freshAccount = { ...account, externalAccountId: null };
+    const repository = { getAccountById: vi.fn(() => freshAccount), getPlatformAccountIdentityBinding: vi.fn(() => null), bootstrapXhsCreatorIdentity: vi.fn(), bindPlatformAccountIdentity: vi.fn(), convergeUnusedOneShotAuthorization: vi.fn() };
+    const scenarios = [
+      { runtime: { runtimeAuthState: "LOGIN" as const }, proof: pageScopedIdentityProof() },
+      { runtime: { runtimeAuthState: "AUTHENTICATED" as const }, proof: pageScopedIdentityProof({ pagePathname: "/publish/publish" }) },
+      { runtime: { runtimeAuthState: "AUTHENTICATED" as const }, proof: pageScopedIdentityProof({ creatorId: "" }) }
+    ];
+    for (const scenario of scenarios) {
+      const reader = {
+        verifyIdentityOnContextPage: vi.fn(async () => ({ status: "PASS", failureCode: null, proof: scenario.proof } satisfies XiaohongshuPageScopedIdentityVerification)),
+        getBrowserRuntimeSnapshot: vi.fn(() => runtimeSnapshot({ ...scenario.runtime }))
+      };
+      const registry = { getForContent: vi.fn(() => reader) } as unknown as AdapterRegistry;
+      const service = new XhsIdentityService({ repository, registry });
+      await expect(service.bootstrapCreatorIdentity(freshAccount.id)).rejects.toBeTruthy();
+    }
+    expect(repository.bootstrapXhsCreatorIdentity).not.toHaveBeenCalled();
+  });
+
+  it("propagates active and archived Creator ownership conflicts without overwriting", async () => {
+    const freshAccount = { ...account, externalAccountId: null };
+    for (const code of ["XHS_CREATOR_ID_ALREADY_BOUND_TO_ANOTHER_ACTIVE_ACCOUNT", "XHS_CREATOR_ID_BOUND_TO_ARCHIVED_ACCOUNT"]) {
+      const reader = {
+        verifyIdentityOnContextPage: vi.fn(async () => ({ status: "PASS", failureCode: null, proof: pageScopedIdentityProof() } satisfies XiaohongshuPageScopedIdentityVerification)),
+        getBrowserRuntimeSnapshot: vi.fn(() => runtimeSnapshot())
+      };
+      const repository = {
+        getAccountById: vi.fn(() => freshAccount),
+        getPlatformAccountIdentityBinding: vi.fn(() => null),
+        bootstrapXhsCreatorIdentity: vi.fn(() => { throw Object.assign(new Error(code), { code }); }),
+        bindPlatformAccountIdentity: vi.fn(),
+        convergeUnusedOneShotAuthorization: vi.fn()
+      };
+      const registry = { getForContent: vi.fn(() => reader) } as unknown as AdapterRegistry;
+      const service = new XhsIdentityService({ repository, registry });
+      await expect(service.bootstrapCreatorIdentity(freshAccount.id)).rejects.toMatchObject({ code });
+      expect(repository.bindPlatformAccountIdentity).not.toHaveBeenCalled();
+    }
+  });
+
   it("routes the current publish-editor DOM diagnostic through the fixed account-owned adapter", async () => {
     const diagnostic = { inspectionStatus: "PASS", accountId: account.id };
     const reader = { inspectCurrentXiaohongshuPublishEditorDom: vi.fn(async () => diagnostic) };

@@ -1935,6 +1935,92 @@ export class AppRepository {
     return transaction();
   }
 
+  /**
+   * Atomically establishes the first trusted XHS Creator identity for an
+   * active internal account, while also repairing the two supported partial
+   * legacy states. Ownership conflicts are deliberately fail-closed.
+   */
+  bootstrapXhsCreatorIdentity(input: {
+    accountId: string;
+    observedCreatorId: string;
+    displayName?: string | null;
+    profileUrl?: string | null;
+  }): { account: Account; binding: PlatformAccountIdentityBinding } {
+    const externalCreatorId = input.observedCreatorId.trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/.test(externalCreatorId)) {
+      throw Object.assign(new Error("小红书 Creator 外部 ID 格式无效，拒绝绑定"), { code: "XHS_CREATOR_ID_INVALID" });
+    }
+    const transaction = this.db.transaction(() => {
+      const current = this.db.prepare("SELECT * FROM accounts WHERE id=? AND platform_key=?").get(input.accountId, "xiaohongshu") as Row | undefined;
+      if (!current) throw Object.assign(new Error("小红书身份绑定账号不存在"), { code: "XHS_IDENTITY_ACCOUNT_NOT_FOUND" });
+      if (current.archived_at != null || !boolValue(current.enabled)) throw Object.assign(new Error("小红书身份绑定账号不可用或已归档"), { code: "XHS_IDENTITY_ACCOUNT_UNAVAILABLE" });
+
+      const accountExternalCreatorId = typeof current.external_account_id === "string" && current.external_account_id.trim() ? current.external_account_id.trim() : null;
+      const currentBinding = this.db.prepare("SELECT * FROM platform_account_identity_bindings WHERE platform_key=? AND account_id=?").get("xiaohongshu", input.accountId) as Row | undefined;
+      const bindingExternalCreatorId = currentBinding && typeof currentBinding.external_creator_id === "string" && currentBinding.external_creator_id.trim() ? currentBinding.external_creator_id.trim() : null;
+      if (accountExternalCreatorId && bindingExternalCreatorId && accountExternalCreatorId !== bindingExternalCreatorId) {
+        throw Object.assign(new Error("账号 external account ID 与 Creator identity binding 冲突，拒绝选择其一"), { code: "XHS_IDENTITY_PARTIAL_STATE_CONFLICT" });
+      }
+      if (accountExternalCreatorId && accountExternalCreatorId !== externalCreatorId) {
+        throw Object.assign(new Error("小红书 Creator 身份与账号已有绑定不一致，拒绝覆盖"), { code: "XHS_CREATOR_IDENTITY_MISMATCH" });
+      }
+      if (bindingExternalCreatorId && bindingExternalCreatorId !== externalCreatorId) {
+        throw Object.assign(new Error("小红书 Creator identity binding 与当前证明不一致，拒绝覆盖"), { code: "XHS_CREATOR_IDENTITY_MISMATCH" });
+      }
+
+      const accountOwners = this.db.prepare("SELECT id, archived_at FROM accounts WHERE platform_key=? AND external_account_id=? AND id<>?").all("xiaohongshu", externalCreatorId, input.accountId) as Row[];
+      if (accountOwners.some((row) => row.archived_at == null)) {
+        throw Object.assign(new Error("小红书 Creator 身份已绑定到其他活动内部账号"), { code: "XHS_CREATOR_ID_ALREADY_BOUND_TO_ANOTHER_ACTIVE_ACCOUNT" });
+      }
+      if (accountOwners.some((row) => row.archived_at != null)) {
+        throw Object.assign(new Error("小红书 Creator 身份已属于归档内部账号，拒绝静默迁移"), { code: "XHS_CREATOR_ID_BOUND_TO_ARCHIVED_ACCOUNT" });
+      }
+      const bindingOwners = this.db.prepare("SELECT b.account_id, a.archived_at FROM platform_account_identity_bindings b LEFT JOIN accounts a ON a.id=b.account_id AND a.platform_key=b.platform_key WHERE b.platform_key=? AND b.external_creator_id=? AND b.account_id<>?").all("xiaohongshu", externalCreatorId, input.accountId) as Row[];
+      if (bindingOwners.some((row) => row.archived_at == null)) {
+        throw Object.assign(new Error("小红书 Creator identity binding 已属于其他活动内部账号"), { code: "XHS_CREATOR_ID_ALREADY_BOUND_TO_ANOTHER_ACTIVE_ACCOUNT" });
+      }
+      if (bindingOwners.some((row) => row.archived_at != null)) {
+        throw Object.assign(new Error("小红书 Creator identity binding 已属于归档内部账号，拒绝静默迁移"), { code: "XHS_CREATOR_ID_BOUND_TO_ARCHIVED_ACCOUNT" });
+      }
+
+      const timestamp = now();
+      if (!accountExternalCreatorId) {
+        this.db.prepare("UPDATE accounts SET external_account_id=?, updated_at=? WHERE id=? AND platform_key=? AND archived_at IS NULL").run(externalCreatorId, timestamp, input.accountId, "xiaohongshu");
+      }
+      if (!currentBinding) {
+        const id = randomUUID();
+        this.db.prepare(`INSERT INTO platform_account_identity_bindings (
+          id, platform_key, account_id, external_creator_id, display_name, profile_url,
+          binding_source, bound_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+          id, "xiaohongshu", input.accountId, externalCreatorId, input.displayName ?? null, input.profileUrl ?? null,
+          accountExternalCreatorId ? "LEGACY_ACCOUNT_EXTERNAL_ID_MATCH" : "OWNER_APPROVED_CREATOR_IDENTITY_BINDING", timestamp, timestamp, timestamp
+        );
+      }
+      const account = this.db.prepare("SELECT * FROM accounts WHERE id=? AND platform_key=?").get(input.accountId, "xiaohongshu") as Row | undefined;
+      const binding = this.db.prepare("SELECT * FROM platform_account_identity_bindings WHERE platform_key=? AND account_id=?").get("xiaohongshu", input.accountId) as Row | undefined;
+      if (!account || !binding) throw Object.assign(new Error("小红书 Creator identity bootstrap 写入后复读失败"), { code: "XHS_IDENTITY_BOOTSTRAP_REVALIDATION_FAILED" });
+      return { account: toAccount(account), binding: toPlatformAccountIdentityBinding(binding) };
+    });
+    try {
+      transaction();
+      const account = this.getAccountById(input.accountId, "xiaohongshu");
+      const binding = this.getPlatformAccountIdentityBinding("xiaohongshu", input.accountId);
+      if (!account || !binding || account.externalAccountId !== externalCreatorId || binding.accountId !== input.accountId || binding.externalCreatorId !== externalCreatorId) {
+        throw Object.assign(new Error("小红书 Creator identity bootstrap 提交后一致性复核失败"), { code: "XHS_IDENTITY_BOOTSTRAP_REVALIDATION_FAILED" });
+      }
+      return { account, binding };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/UNIQUE constraint failed: platform_account_identity_bindings\.external_creator_id/i.test(message)) {
+        const owner = this.db.prepare("SELECT a.archived_at FROM platform_account_identity_bindings b LEFT JOIN accounts a ON a.id=b.account_id AND a.platform_key=b.platform_key WHERE b.platform_key=? AND b.external_creator_id=? AND b.account_id<>?").get("xiaohongshu", externalCreatorId, input.accountId) as Row | undefined;
+        if (owner?.archived_at != null) throw Object.assign(new Error("小红书 Creator identity binding 并发命中归档账号，拒绝静默迁移"), { code: "XHS_CREATOR_ID_BOUND_TO_ARCHIVED_ACCOUNT" });
+        throw Object.assign(new Error("小红书 Creator identity binding 并发冲突，已拒绝覆盖"), { code: "XHS_CREATOR_ID_ALREADY_BOUND_TO_ANOTHER_ACTIVE_ACCOUNT" });
+      }
+      throw error;
+    }
+  }
+
   findArchivedAccountByExternalIdForConnection(accountId: string, platformKey: string, externalAccountId: string): Account | null {
     const current = this.getAccountById(accountId, platformKey);
     if (!current) throw new Error("账号不存在");

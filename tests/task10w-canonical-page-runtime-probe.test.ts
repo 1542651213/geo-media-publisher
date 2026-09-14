@@ -142,8 +142,8 @@ describe("Task10W canonical Page runtime probe wiring", () => {
   it("gates XHS complete-login with the same Task10W identity service before profile persistence", () => {
     const ipc = readFileSync("apps/desktop/src/main/ipc.ts", "utf8");
     const completeLogin = ipc.slice(ipc.indexOf('register("accounts:complete-login"'), ipc.indexOf('register("accounts:refresh-login"'));
-    expect(completeLogin).toContain("platformSelfTests.verifyXhsCreatorIdentity(input.accountId)");
-    expect(completeLogin.indexOf("platformSelfTests.verifyXhsCreatorIdentity(input.accountId)")).toBeLessThan(completeLogin.indexOf("adapter.getAccountProfile"));
+    expect(completeLogin).toContain("platformSelfTests.bootstrapXhsCreatorIdentity(input.accountId)");
+    expect(completeLogin.indexOf("platformSelfTests.bootstrapXhsCreatorIdentity(input.accountId)")).toBeLessThan(completeLogin.indexOf("adapter.getAccountProfile"));
     expect(completeLogin).not.toContain("verifyAndConvergeXhsIdentity");
   });
 });

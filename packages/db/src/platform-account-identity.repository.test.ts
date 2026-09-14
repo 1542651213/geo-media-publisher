@@ -38,6 +38,53 @@ function insertAuthorization(database: ReturnType<typeof fixture>, input: { acco
 }
 
 describe("Task10V platform account identity binding schema", () => {
+  it("atomically persists the first XHS Creator binding and account external ID", () => {
+    const database = fixture();
+    const account = database.repository.createAccount({ platformKey: "xiaohongshu", name: "Task10V bootstrap account" });
+
+    const result = database.repository.bootstrapXhsCreatorIdentity({
+      accountId: account.id,
+      observedCreatorId: "960803317",
+      displayName: "测试账号",
+      profileUrl: "https://creator.xiaohongshu.com/user/profile/960803317"
+    });
+
+    expect(result.account.externalAccountId).toBe("960803317");
+    expect(result.binding.accountId).toBe(account.id);
+    expect(result.binding.externalCreatorId).toBe("960803317");
+    expect(database.repository.getAccountById(account.id, "xiaohongshu")?.externalAccountId).toBe("960803317");
+    expect(database.repository.getPlatformAccountIdentityBinding("xiaohongshu", account.id)?.externalCreatorId).toBe("960803317");
+  });
+
+  it("allows only safe partial legacy backfills and rejects conflicting state", () => {
+    const database = fixture();
+    const accountFieldOnly = database.repository.createAccount({ platformKey: "xiaohongshu", name: "Task10V account field" });
+    database.db.prepare("UPDATE accounts SET external_account_id=? WHERE id=?").run("960803317", accountFieldOnly.id);
+    expect(database.repository.bootstrapXhsCreatorIdentity({ accountId: accountFieldOnly.id, observedCreatorId: "960803317" }).binding.externalCreatorId).toBe("960803317");
+
+    const bindingOnly = database.repository.createAccount({ platformKey: "xiaohongshu", name: "Task10V binding field" });
+    database.repository.bindPlatformAccountIdentity({ platformKey: "xiaohongshu", accountId: bindingOnly.id, externalCreatorId: "123456789", bindingSource: "OWNER_APPROVED_CREATOR_IDENTITY_BINDING" });
+    expect(database.repository.bootstrapXhsCreatorIdentity({ accountId: bindingOnly.id, observedCreatorId: "123456789" }).account.externalAccountId).toBe("123456789");
+
+    const conflicting = database.repository.createAccount({ platformKey: "xiaohongshu", name: "Task10V conflict" });
+    database.db.prepare("UPDATE accounts SET external_account_id=? WHERE id=?").run("111111111", conflicting.id);
+    database.repository.bindPlatformAccountIdentity({ platformKey: "xiaohongshu", accountId: conflicting.id, externalCreatorId: "222222222", bindingSource: "OWNER_APPROVED_CREATOR_IDENTITY_BINDING" });
+    expect(() => database.repository.bootstrapXhsCreatorIdentity({ accountId: conflicting.id, observedCreatorId: "111111111" })).toThrow(/IDENTITY|冲突|conflict/iu);
+  });
+
+  it("blocks active and archived ownership races instead of transferring Creator identity", () => {
+    const database = fixture();
+    const first = database.repository.createAccount({ platformKey: "xiaohongshu", name: "Task10V first owner" });
+    const second = database.repository.createAccount({ platformKey: "xiaohongshu", name: "Task10V second owner" });
+    expect(database.repository.bootstrapXhsCreatorIdentity({ accountId: first.id, observedCreatorId: "960803317" }).account.externalAccountId).toBe("960803317");
+    expect(() => database.repository.bootstrapXhsCreatorIdentity({ accountId: second.id, observedCreatorId: "960803317" })).toThrow(/ACTIVE|活动内部账号|already bound/iu);
+
+    const archived = database.repository.createAccount({ platformKey: "xiaohongshu", name: "Task10V archived owner" });
+    database.db.prepare("UPDATE accounts SET external_account_id=?, archived_at=? WHERE id=?").run("archived-creator", "2026-09-14T00:00:00.000Z", archived.id);
+    const fresh = database.repository.createAccount({ platformKey: "xiaohongshu", name: "Task10V fresh owner" });
+    expect(() => database.repository.bootstrapXhsCreatorIdentity({ accountId: fresh.id, observedCreatorId: "archived-creator" })).toThrow(/ARCHIVED|归档|archived/iu);
+  });
+
   it("creates the identity binding table and unique indexes", () => {
     const database = fixture();
     const table = database.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='platform_account_identity_bindings'").get();
