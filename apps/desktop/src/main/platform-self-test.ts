@@ -9,6 +9,7 @@ import type { Logger } from "@publisher/logger";
 import type { PublisherService } from "@publisher/publisher";
 import type { Account, AccountContext, BackgroundAutomationStatus, CurrentRuntimeIdentityProof, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PublishArticleInput, Task10SPrepublishResult } from "@publisher/domain";
 import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic, XiaohongshuContextPageInventory, XiaohongshuCurrentFileInputState, XiaohongshuCurrentImageEditorReadiness, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuCurrentPostUploadTerminalReadiness, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { XhsIdentityPageEnsureServiceResult } from "./xhs-identity";
 import { OneShotConfirmationCoordinator } from "./one-shot-confirmation";
 import { OneShotConfirmationReconciliationService } from "./one-shot-reconciliation";
 import { XhsIdentityService } from "./xhs-identity";
@@ -1153,6 +1154,10 @@ export class PlatformSelfTestService {
 
   establishXhsContextIdentityAttestation(accountId: string = XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID) {
     return this.xhsIdentity.establishContextIdentityAttestation(accountId);
+  }
+
+  ensureXhsIdentityPage(accountId: string = XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID): Promise<XhsIdentityPageEnsureServiceResult> {
+    return this.xhsIdentity.ensureIdentityPage(accountId);
   }
 
   invalidateXhsContextIdentityAttestation(accountId: string): void {

@@ -235,6 +235,52 @@ describe("Task10V XHS identity proof", () => {
     await expect(service.validateContextIdentityAttestation(account.id)).resolves.toEqual({ valid: true, failureCode: null });
   });
 
+  it("ensures an identity Page through the adapter and verifies the expected Creator ID without persistence", async () => {
+    const ensured = {
+      status: "PASS", failureCode: null, action: "NAVIGATED_EXISTING_BLANK", identityPage: {},
+      identityPageUrl: "https://creator.xiaohongshu.com/new/home", editorPage: {},
+      editorPageUrl: "https://creator.xiaohongshu.com/publish/publish", sameBrowserContext: true
+    } as const;
+    const reader = {
+      ensureXhsIdentityPage: vi.fn(async () => ensured),
+      verifyIdentityOnContextPage: vi.fn(async () => ({ status: "PASS", failureCode: null, proof: pageScopedIdentityProof() } satisfies XiaohongshuPageScopedIdentityVerification)),
+      getBrowserRuntimeSnapshot: vi.fn(() => runtimeSnapshot())
+    };
+    const repository = {
+      getAccountById: vi.fn(() => account),
+      getPlatformAccountIdentityBinding: vi.fn(() => binding("960803317")),
+      bindPlatformAccountIdentity: vi.fn(),
+      convergeUnusedOneShotAuthorization: vi.fn()
+    };
+    const registry = { getForContent: vi.fn(() => reader) } as unknown as AdapterRegistry;
+    const service = new XhsIdentityService({ repository, registry });
+
+    await expect(service.ensureIdentityPage(account.id)).resolves.toMatchObject({ status: "PASS", identityPageEnsured: true, identityMatch: true, observedCreatorId: "960803317", sameBrowserContext: true });
+    expect(reader.ensureXhsIdentityPage).toHaveBeenCalledTimes(1);
+    expect(repository.bindPlatformAccountIdentity).not.toHaveBeenCalled();
+    expect(repository.convergeUnusedOneShotAuthorization).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when ensured identity Creator ID mismatches", async () => {
+    const reader = {
+      ensureXhsIdentityPage: vi.fn(async () => ({ status: "PASS", failureCode: null, action: "REUSED", identityPage: {}, identityPageUrl: "https://creator.xiaohongshu.com/new/home", editorPage: {}, editorPageUrl: "https://creator.xiaohongshu.com/publish/publish", sameBrowserContext: true })),
+      verifyIdentityOnContextPage: vi.fn(async () => ({ status: "PASS", failureCode: null, proof: pageScopedIdentityProof({ creatorId: "different-creator" }) } satisfies XiaohongshuPageScopedIdentityVerification)),
+      getBrowserRuntimeSnapshot: vi.fn(() => runtimeSnapshot())
+    };
+    const repository = {
+      getAccountById: vi.fn(() => account),
+      getPlatformAccountIdentityBinding: vi.fn(() => binding("960803317")),
+      bindPlatformAccountIdentity: vi.fn(),
+      convergeUnusedOneShotAuthorization: vi.fn()
+    };
+    const registry = { getForContent: vi.fn(() => reader) } as unknown as AdapterRegistry;
+    const service = new XhsIdentityService({ repository, registry });
+
+    await expect(service.ensureIdentityPage(account.id)).resolves.toMatchObject({ status: "BLOCKED", failureCode: "CREATOR_ID_MISMATCH", identityMatch: false });
+    expect(repository.bindPlatformAccountIdentity).not.toHaveBeenCalled();
+    expect(repository.convergeUnusedOneShotAuthorization).not.toHaveBeenCalled();
+  });
+
   it("fails closed when the identity Page is closed", async () => {
     const reader = {
       verifyIdentityOnContextPage: vi.fn(async () => ({ status: "FAIL", failureCode: "IDENTITY_PAGE_CLOSED", proof: null } satisfies XiaohongshuPageScopedIdentityVerification)),

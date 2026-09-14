@@ -15,7 +15,8 @@ import { runDeepSeekBenchmarkMode } from "./deepseek-benchmark-mode";
 import { createProcessDiagnostics } from "./process-diagnostics";
 import { recordAppStartup } from "./runtime-observability";
 import type { PlatformSelfTestService } from "./platform-self-test";
-import { buildSecondInstanceDispatchTrace, createFixedDiagnosticRunner, ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, INSPECT_XHS_CLOSED_SHADOW_FINAL_SUBMIT, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_FINAL_SUBMIT_DOM, INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticActionWithTrace, RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, parseDiagnosticAction, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY, type DiagnosticAction, type FixedDiagnosticInvocationContext, type Task10sAttempt3DispatchTrace, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
+import { buildSecondInstanceDispatchTrace, createFixedDiagnosticRunner, ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, INSPECT_XHS_CLOSED_SHADOW_FINAL_SUBMIT, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_FINAL_SUBMIT_DOM, INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticActionWithTrace, RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, parseDiagnosticAction, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE, RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY, type DiagnosticAction, type FixedDiagnosticInvocationContext, type Task10sAttempt3DispatchTrace, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
+import type { XhsIdentityPageEnsureServiceResult } from "./xhs-identity";
 
 app.setName("codex-media-publisher");
 const processDiagnostics = createProcessDiagnostics(join(app.getPath("userData"), "production-data", "logs", "main-process-diagnostics.log"));
@@ -556,6 +557,45 @@ async function createWindow(): Promise<void> {
     writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), "utf8");
     logger.info("PLATFORM_SELF_TEST", "XHS_CONTEXT_IDENTITY_ATTESTATION_EVIDENCE_WRITTEN", "小红书 Context-bound identity attestation evidence 已写入", { action: ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, evidencePath, status: result.status, failureCode: result.status === "BLOCKED" ? result.failureCode : null });
   };
+  const writeXhsIdentityPageEnsureEvidence = (result: XhsIdentityPageEnsureServiceResult): void => {
+    mkdirSync(evidenceDirectory, { recursive: true });
+    const timestamp = new Date().toISOString();
+    const evidencePath = join(evidenceDirectory, `xiaohongshu-task10s-ensure-identity-page-${timestamp.replace(/[:.]/gu, "-")}.json`);
+    const evidence = {
+      timestamp,
+      evidencePath,
+      ...result,
+      action: RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE,
+      sideEffectCounts: {
+        pageCreated: result.action === "CREATED_NEW_PAGE" ? 1 : 0,
+        contextCreated: 0,
+        navigation: result.action === "REUSED" ? 0 : 1,
+        reload: 0,
+        uploadImages: 0,
+        setInputFiles: 0,
+        titleFill: 0,
+        bodyFill: 0,
+        finalSubmitClick: 0,
+        publicationTransaction: 0,
+        newJob: 0,
+        newRecord: 0,
+        newAuthorization: 0
+      }
+    };
+    writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), "utf8");
+    logger.info("PLATFORM_SELF_TEST", "XHS_IDENTITY_PAGE_ENSURE_EVIDENCE_WRITTEN", "小红书 identity Page ensure evidence 已写入；未修改编辑器且未执行发布", {
+      action: RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE,
+      evidencePath,
+      status: result.status,
+      failureCode: result.failureCode,
+      identityPageUrl: result.identityPageUrl,
+      editorPageUrl: result.editorPageUrl,
+      sameBrowserContext: result.sameBrowserContext,
+      identityMatch: result.identityMatch,
+      finalSubmitClickCount: 0,
+      publicationTransactionCount: 0
+    });
+  };
   const writeTask10sControlledUploadAttempt3Evidence = (result: Awaited<ReturnType<typeof platformSelfTests.runTask10sControlledUploadAttempt3>>): void => {
     mkdirSync(evidenceDirectory, { recursive: true });
     const timestamp = new Date().toISOString();
@@ -700,6 +740,11 @@ async function createWindow(): Promise<void> {
       return platformSelfTests.establishXhsContextIdentityAttestation();
     },
     writeXhsContextIdentityAttestationEvidence,
+    ensureXhsIdentityPage: async () => {
+      logger.info("PLATFORM_SELF_TEST", "XHS_IDENTITY_PAGE_ENSURE_TRIGGER_RECEIVED", "收到固定 Main-side 小红书 identity Page ensure trigger", { action: RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
+      return platformSelfTests.ensureXhsIdentityPage(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
+    },
+    writeXhsIdentityPageEnsureEvidence,
     runTask10sControlledUploadAttempt3: async () => {
       logger.info("PLATFORM_SELF_TEST", "TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_TRIGGER_RECEIVED", "收到固定 Main-side Task10S Attempt 3 trigger", { action: RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID });
       return platformSelfTests.runTask10sControlledUploadAttempt3();

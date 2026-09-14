@@ -6,9 +6,13 @@ import { RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, XHS_TASK10S_FRESH_PUBLISH_FLOW_FLAG
 import type { XhsContextIdentityAttestationResult } from "./xhs-context-identity-attestation";
 import type { Task10sFreshPublishFlowResult } from "./task10s-fresh-publish-flow";
 import { RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY, XHS_TASK10S_PREPARED_EDITOR_RECOVERY_FLAG, type Task10sPreparedEditorRecoveryResult } from "./task10s-prepared-editor-recovery";
+import type { XhsIdentityPageEnsureServiceResult } from "./xhs-identity";
 export { RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG, XHS_TASK10S_COMPLETE_RETAINED_EDITOR_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4_FLAG, XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5_FLAG } from "./task10s-attempt3";
 export { RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, XHS_TASK10S_FRESH_PUBLISH_FLOW_FLAG } from "./task10s-fresh-publish-flow";
 export { RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY, XHS_TASK10S_PREPARED_EDITOR_RECOVERY_FLAG } from "./task10s-prepared-editor-recovery";
+
+export const XHS_TASK10S_ENSURE_IDENTITY_PAGE_FLAG = "--xhs-task10s-ensure-identity-page" as const;
+export const RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE = "RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE" as const;
 
 export const XHS_CANONICAL_PAGE_PROBE_FLAG = "--probe-xhs-canonical-page" as const;
 export const PROBE_XHS_CANONICAL_PAGE = "PROBE_XHS_CANONICAL_PAGE" as const;
@@ -32,11 +36,12 @@ export const XHS_CONTEXT_IDENTITY_ATTESTATION_FLAG = "--xhs-task10s-establish-co
 export const ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION = "ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION" as const;
 
 export const XHS_TASK10S_ARM_FRESH_COMPLETION_FLAG = "--xhs-task10s-arm-fresh-completion" as const;
-export type DiagnosticAction = typeof TASK10S_FRESH_COMPLETION_ARM | typeof RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY | typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS | typeof INSPECT_XHS_FILE_INPUT_STATE | typeof INSPECT_XHS_FINAL_SUBMIT_DOM | typeof INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM | typeof INSPECT_XHS_CLOSED_SHADOW_FINAL_SUBMIT | typeof ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 | typeof RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN | typeof RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR | typeof RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW;
+export type DiagnosticAction = typeof TASK10S_FRESH_COMPLETION_ARM | typeof RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY | typeof RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE | typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS | typeof INSPECT_XHS_FILE_INPUT_STATE | typeof INSPECT_XHS_FINAL_SUBMIT_DOM | typeof INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM | typeof INSPECT_XHS_CLOSED_SHADOW_FINAL_SUBMIT | typeof ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 | typeof RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN | typeof RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR | typeof RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW;
 
 function actionForValue(value: unknown): DiagnosticAction | null {
   if (value === TASK10S_FRESH_COMPLETION_ARM) return TASK10S_FRESH_COMPLETION_ARM;
   if (value === RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY) return RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY;
+  if (value === RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE) return RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE;
   if (value === PROBE_XHS_CANONICAL_PAGE) return PROBE_XHS_CANONICAL_PAGE;
   if (value === INSPECT_XHS_CONTEXT_PAGES) return INSPECT_XHS_CONTEXT_PAGES;
   if (value === INSPECT_XHS_PUBLISH_ENTRY_DOM) return INSPECT_XHS_PUBLISH_ENTRY_DOM;
@@ -59,6 +64,7 @@ function actionForValue(value: unknown): DiagnosticAction | null {
 function actionForFlag(value: string | undefined): DiagnosticAction | null {
   if (value === XHS_TASK10S_ARM_FRESH_COMPLETION_FLAG) return TASK10S_FRESH_COMPLETION_ARM;
   if (value === XHS_TASK10S_PREPARED_EDITOR_RECOVERY_FLAG) return RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY;
+  if (value === XHS_TASK10S_ENSURE_IDENTITY_PAGE_FLAG) return RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE;
   if (value === XHS_CANONICAL_PAGE_PROBE_FLAG) return PROBE_XHS_CANONICAL_PAGE;
   if (value === XHS_CONTEXT_PAGE_INVENTORY_FLAG) return INSPECT_XHS_CONTEXT_PAGES;
   if (value === XHS_PUBLISH_ENTRY_DOM_DIAGNOSTIC_FLAG) return INSPECT_XHS_PUBLISH_ENTRY_DOM;
@@ -337,6 +343,8 @@ export function createFixedDiagnosticRunner(options: {
   writeTask10sFreshPublishFlowEvidence?: (result: Task10sFreshPublishFlowResult) => void;
   recoverTask10sPreparedEditor?: () => Promise<Task10sPreparedEditorRecoveryResult>;
   writeTask10sPreparedEditorRecoveryEvidence?: (result: Task10sPreparedEditorRecoveryResult) => void;
+  ensureXhsIdentityPage?: () => Promise<XhsIdentityPageEnsureServiceResult>;
+  writeXhsIdentityPageEnsureEvidence?: (result: XhsIdentityPageEnsureServiceResult) => void;
 }): (action: DiagnosticAction, context?: FixedDiagnosticInvocationContext) => Promise<boolean> {
   return async (action: DiagnosticAction, context?: FixedDiagnosticInvocationContext): Promise<boolean> => {
     if (action === PROBE_XHS_CANONICAL_PAGE) {
@@ -436,6 +444,11 @@ export function createFixedDiagnosticRunner(options: {
       const result = await options.recoverTask10sPreparedEditor();
       options.writeTask10sPreparedEditorRecoveryEvidence(result);
       return result.status === "PASS" && result.readyForFreshIdentityAttestation;
+    }
+    if (action === RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE && options.ensureXhsIdentityPage && options.writeXhsIdentityPageEnsureEvidence) {
+      const result = await options.ensureXhsIdentityPage();
+      options.writeXhsIdentityPageEnsureEvidence(result);
+      return result.status === "PASS" && result.identityPageEnsured && result.identityMatch && result.sameBrowserContext;
     }
     return false;
   };

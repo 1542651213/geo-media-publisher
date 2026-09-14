@@ -88,6 +88,7 @@ import { emptyXiaohongshuPostUploadReconciliationDomSnapshot, inspectXiaohongshu
 import { classifyXiaohongshuPostUploadTerminalReadiness, type XiaohongshuPostUploadTerminalReadiness } from "./post-upload-terminal-readiness";
 import { containsExpectedXiaohongshuSafeFixture, inspectXiaohongshuFileInputState, type XiaohongshuFileInputFixtureMatch, type XiaohongshuFileInputSafeNode } from "./file-input-diagnostic";
 import { readXiaohongshuUploadInputImmediately, type XiaohongshuUploadFileExpectation, type XiaohongshuUploadInputImmediateReadback } from "./upload-delivery-diagnostic";
+import { ensureXhsIdentityPage, type IdentityPageEnsureResult } from "./ensure-identity-page";
 export type { XiaohongshuPostUploadBoundingRect, XiaohongshuPostUploadFinalSubmitProof, XiaohongshuPostUploadImageItemSafe, XiaohongshuPostUploadReconciliationDomSnapshot, XiaohongshuPostUploadReconciliationResult, XiaohongshuPostUploadReconciliationState } from "./post-upload-reconciliation-diagnostic";
 export { classifyXiaohongshuPostUploadTerminalReadiness } from "./post-upload-terminal-readiness";
 export type { XiaohongshuPostUploadTerminalReadiness, XiaohongshuPostUploadTerminalReadinessBlocker, XiaohongshuPostUploadTerminalReadinessInput } from "./post-upload-terminal-readiness";
@@ -96,6 +97,7 @@ export type { XiaohongshuUploadFileExpectation, XiaohongshuUploadFileMetadata, X
 export type { XhsEditorLoadDiagnosticResult } from "./editor-load-diagnostic";
 export type { XhsEditorNetworkDiagnosticResult } from "./editor-network-diagnostic";
 export type { XiaohongshuContextPageInventory, XiaohongshuContextPageInventoryEntry, XiaohongshuContextPageDomSnapshot, XiaohongshuDocumentReadyState, XiaohongshuVisibilityState } from "./context-page-inventory";
+export type { IdentityPageEnsureAction, IdentityPageEnsureContext, IdentityPageEnsurePage, IdentityPageEnsureResult } from "./ensure-identity-page";
 export type { XiaohongshuPublishEditorDomRuntimeDiagnostic } from "./publish-editor-dom-diagnostic";
 export type { XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic } from "./publish-editor-semantic-diagnostic";
 export type { XiaohongshuGlobalExactPublishAncestorSafe, XiaohongshuGlobalExactPublishBoundingRect, XiaohongshuGlobalExactPublishClickableSignal, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuGlobalExactPublishDomSnapshot, XiaohongshuGlobalExactPublishNodeSafe, XiaohongshuGlobalExactPublishUnique } from "./global-exact-publish-diagnostic";
@@ -2040,6 +2042,26 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         pageCreationEvents: [...(this.activeContextPageLifecycleEvents(ctx) ?? [])]
       };
     }, "inspectXhsContextPages");
+  }
+
+  /** Ensure an identity-capable Page exists in the current account-owned Context without touching the editor. */
+  async ensureXhsIdentityPage(ctx: AccountContext): Promise<IdentityPageEnsureResult> {
+    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
+      const session = this.activeBrowserSession(ctx);
+      if (!session || !this.isBrowserConnected(session)) {
+        return { status: "BLOCKED", failureCode: "BROWSER_SESSION_UNAVAILABLE", action: null, identityPage: null, identityPageUrl: null, editorPage: null, editorPageUrl: null, sameBrowserContext: false };
+      }
+      let pages: Awaited<ReturnType<typeof this.activeContextPages>>;
+      try {
+        pages = this.activeContextPages(ctx);
+      } catch {
+        return { status: "BLOCKED", failureCode: "CONTEXT_PAGES_UNAVAILABLE", action: null, identityPage: null, identityPageUrl: null, editorPage: null, editorPageUrl: null, sameBrowserContext: false };
+      }
+      if (!pages) {
+        return { status: "BLOCKED", failureCode: "CONTEXT_PAGES_UNAVAILABLE", action: null, identityPage: null, identityPageUrl: null, editorPage: null, editorPageUrl: null, sameBrowserContext: false };
+      }
+      return ensureXhsIdentityPage({ context: session.context, editorPage: session.page });
+    }, "ensureXhsIdentityPage");
   }
 
   /**

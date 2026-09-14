@@ -3,12 +3,13 @@ import type { AppRepository } from "@publisher/db";
 import { ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, type Account, type AccountContext, type CreatorIdentityVerificationResult, type PlatformAccountIdentityBinding, type XhsIdentityAcceptance } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
 import { classifyXiaohongshuPostUploadTerminalReadiness } from "@publisher/adapters-xiaohongshu/browser";
-import type { XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentFileInputState, XiaohongshuCurrentImageEditorReadiness, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuCurrentPostUploadTerminalReadiness, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPageScopedIdentityVerification, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
+import type { IdentityPageEnsureResult, XiaohongshuCanonicalPageRuntimeProbe, XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic, XiaohongshuContextPageInventory, XiaohongshuCreatorIdentityObservation, XiaohongshuCurrentFileInputState, XiaohongshuCurrentImageEditorReadiness, XiaohongshuCurrentPostUploadReconciliation, XiaohongshuCurrentPostUploadTerminalReadiness, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuPageScopedIdentityVerification, XiaohongshuPublishEditorDomRuntimeDiagnostic, XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, XiaohongshuPublishEntryDomRuntimeDiagnostic } from "@publisher/adapters-xiaohongshu/browser";
 import { createXhsContextIdentityAttestation, validateXhsContextIdentityAttestation, type XhsContextIdentityAttestation, type XhsContextIdentityAttestationResult, type XhsContextIdentityRuntime } from "./xhs-context-identity-attestation";
 
 type IdentityReader = {
   inspectCanonicalPageRuntime?: (ctx: AccountContext) => Promise<XiaohongshuCanonicalPageRuntimeProbe>;
   inspectXhsContextPages?: (ctx: AccountContext) => Promise<XiaohongshuContextPageInventory>;
+  ensureXhsIdentityPage?: (ctx: AccountContext) => Promise<IdentityPageEnsureResult>;
   verifyIdentityOnContextPage?: (ctx: AccountContext) => Promise<XiaohongshuPageScopedIdentityVerification>;
   inspectXhsPublishEntryDom?: (ctx: AccountContext) => Promise<XiaohongshuPublishEntryDomRuntimeDiagnostic>;
   inspectCurrentXiaohongshuImageEditorReadiness?: (ctx: AccountContext) => Promise<XiaohongshuCurrentImageEditorReadiness>;
@@ -26,6 +27,18 @@ export interface XhsIdentityServiceOptions {
   repository: Pick<AppRepository, "getAccountById" | "getPlatformAccountIdentityBinding" | "bindPlatformAccountIdentity" | "convergeUnusedOneShotAuthorization">;
   registry: Pick<AdapterRegistry, "getForContent">;
   logger?: Logger;
+}
+
+export interface XhsIdentityPageEnsureServiceResult {
+  status: "PASS" | "BLOCKED";
+  failureCode: string | null;
+  identityPageEnsured: boolean;
+  identityPageUrl: string | null;
+  editorPageUrl: string | null;
+  sameBrowserContext: boolean;
+  identityMatch: boolean;
+  observedCreatorId: string | null;
+  action: IdentityPageEnsureResult["action"];
 }
 
 const BLOCKED_ROUTE_CLASSES = new Set<XiaohongshuCreatorIdentityObservation["routeClass"]>(["LOGIN", "SECURITY_VERIFICATION", "UNKNOWN"]);
@@ -179,6 +192,31 @@ export class XhsIdentityService {
       readyImageEditorPageCount: inventory.pages.filter((page) => page.urlOrigin === "https://creator.xiaohongshu.com" && page.pathname === "/publish/publish" && !page.isClosed && page.editorShellPresent && page.uploadImageTabPresent && page.imageUploadControlPresent && page.contentType === "IMAGE_POST").length
     });
     return inventory;
+  }
+
+  async ensureIdentityPage(accountId: string): Promise<XhsIdentityPageEnsureServiceResult> {
+    const account = this.requireAccount(accountId);
+    const adapter = this.options.registry.getForContent("xiaohongshu", "article") as IdentityReader;
+    const blocked = (failureCode: string, ensured?: Partial<IdentityPageEnsureResult>, observedCreatorId: string | null = null): XhsIdentityPageEnsureServiceResult => ({
+      status: "BLOCKED", failureCode, identityPageEnsured: false,
+      identityPageUrl: ensured?.identityPageUrl ?? null, editorPageUrl: ensured?.editorPageUrl ?? null,
+      sameBrowserContext: ensured?.sameBrowserContext ?? false, identityMatch: false, observedCreatorId,
+      action: ensured?.action ?? null
+    });
+    if (typeof adapter.ensureXhsIdentityPage !== "function") return blocked("XHS_IDENTITY_PAGE_ENSURE_UNAVAILABLE");
+    if (typeof adapter.getBrowserRuntimeSnapshot === "function") {
+      const runtime = adapter.getBrowserRuntimeSnapshot(this.context(account));
+      if (!runtime.sessionExists || runtime.browserConnected !== true || !runtime.contextExists || runtime.runtimeAuthState !== "AUTHENTICATED") return blocked("XHS_IDENTITY_PAGE_RUNTIME_UNAVAILABLE");
+    }
+    const ensured = await adapter.ensureXhsIdentityPage(this.context(account));
+    if (ensured.status !== "PASS" || !ensured.identityPageUrl || !ensured.editorPageUrl || !ensured.sameBrowserContext) return blocked(ensured.failureCode ?? "IDENTITY_PAGE_ENSURE_FAILED", ensured);
+    if (typeof adapter.verifyIdentityOnContextPage !== "function") return blocked("XHS_CONTEXT_IDENTITY_PAGE_VERIFIER_UNAVAILABLE", ensured);
+    const identity = await adapter.verifyIdentityOnContextPage(this.context(account));
+    const expectedCreatorId = this.options.repository.getPlatformAccountIdentityBinding("xiaohongshu", account.id)?.externalCreatorId ?? account.externalAccountId ?? null;
+    const observedCreatorId = identity.status === "PASS" ? identity.proof.creatorId : null;
+    const identityMatch = identity.status === "PASS" && observedCreatorId === expectedCreatorId && observedCreatorId === account.externalAccountId;
+    if (!identityMatch) return blocked(identity.status === "PASS" ? "CREATOR_ID_MISMATCH" : identity.failureCode, ensured, observedCreatorId);
+    return { status: "PASS", failureCode: null, identityPageEnsured: true, identityPageUrl: ensured.identityPageUrl, editorPageUrl: ensured.editorPageUrl, sameBrowserContext: true, identityMatch: true, observedCreatorId, action: ensured.action };
   }
 
   async inspectCurrentXiaohongshuImageEditorReadiness(accountId: string): Promise<XiaohongshuCurrentImageEditorReadiness> {
