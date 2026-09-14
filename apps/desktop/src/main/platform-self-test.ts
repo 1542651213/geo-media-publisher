@@ -18,6 +18,7 @@ import { emptyTask10sControlledUploadAttemptResult, reserveTask10sAttempt, RUN_X
 import { blockedTask10sFreshPublishFlowResult, buildTask10sFreshPublishFlowInput, isTask10sFreshPublishFlowReady, isTask10sFreshPublishStartPath, RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, XHS_TASK10S_FRESH_PUBLISH_FLOW_BODY, XHS_TASK10S_FRESH_PUBLISH_FLOW_TITLE, type Task10sFreshPublishFlowResult } from "./task10s-fresh-publish-flow";
 import { evaluatePreparedEditorRecoveryEvidence, validatePreparedEditorRecoveryTrustedState, RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY, type PreparedEditorRecoveryEvidence, type Task10sPreparedEditorRecoveryResult } from "./task10s-prepared-editor-recovery";
 import { validateTask10sImageAssetBinding, type Task10sImageAssetBindingResult } from "./task10s-media-binding";
+import { resolveTask10sExecutionTarget } from "./task10s-execution-target";
 
 const ARTICLE_TEST_TITLE = "Geo Media Publisher 发布链路测试";
 const ZHIHU_TEST_TITLE_PREFIX = "Geo Media Publisher 知乎发布测试";
@@ -407,7 +408,9 @@ export class PlatformSelfTestService {
    * prepared record from trusted Main state; no caller may supply a Page,
    * Context, selector, content, or file path.
    */
-  async runTask10sCompleteRetainedEditor(): Promise<Task10sRetainedEditorCompletionResult> {
+  async runTask10sCompleteRetainedEditor(): Promise<Task10sRetainedEditorCompletionResult>;
+  async runTask10sCompleteRetainedEditor(requestedTestRunId: string): Promise<Task10sRetainedEditorCompletionResult>;
+  async runTask10sCompleteRetainedEditor(requestedTestRunId?: string): Promise<Task10sRetainedEditorCompletionResult> {
     const blocked = (failureCode: string, overrides: Record<string, unknown> = {}): Task10sRetainedEditorCompletionResult => ({
       action: RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR,
       status: "BLOCKED",
@@ -416,24 +419,37 @@ export class PlatformSelfTestService {
       finalSubmitClickCount: 0,
       ...overrides
     });
+    // Legacy diagnostics may still invoke the no-argument action; live routes
+    // always provide an explicit target through the parameterized CLI flag.
+    const effectiveTestRunId = requestedTestRunId ?? TASK10S_CANONICAL_AUTHORIZATION_ID;
     try {
-      const run = this.options.repository.getPlatformSelfTestRun(TASK10S_CANONICAL_AUTHORIZATION_ID);
-      const account = run ? this.account(run) : undefined;
-      if (!account || !account.enabled || account.archivedAt) return blocked("XHS_ACCOUNT_UNAVAILABLE", { accountId: account?.id ?? null });
-      if (!run || run.platformKey !== "xiaohongshu" || run.requestedLevel !== "L5_PUBLISH") return blocked("TASK10S_RETAINED_EDITOR_RUN_UNAVAILABLE", { accountId: account?.id ?? null });
-      if (!run.publishJobId) return blocked("TASK10S_RETAINED_EDITOR_PREPARED_JOB_MISSING", { accountId: account.id, testRunId: run.testRunId });
-      const job = this.options.repository.getJob(run.publishJobId);
-      const preparedRecord = job ? this.options.repository.getPublishRecordByJob(job.id) : null;
-      if (!job || !["Pending", "Scheduled", "Retry", "NeedsUserAction"].includes(job.status) || !preparedRecord || preparedRecord.status !== "Prepared") {
-        return blocked("TASK10S_RETAINED_EDITOR_PREPARED_JOB_REQUIRED", { accountId: account.id, testRunId: run.testRunId, jobId: job?.id ?? null, jobStatus: job?.status ?? null, preparedRecordStatus: preparedRecord?.status ?? null });
+      const resolved = resolveTask10sExecutionTarget(this.options.repository, effectiveTestRunId);
+      // Legacy compatibility previously used getPlatformSelfTestRun(TASK10S_CANONICAL_AUTHORIZATION_ID); parameterized live routes never use that path.
+      if (resolved.status !== "PASS") {
+        const legacyFailure = !requestedTestRunId && resolved.failureCode === "RUN_HAS_NO_BOUND_JOB"
+          ? "TASK10S_RETAINED_EDITOR_PREPARED_JOB_MISSING"
+          : !requestedTestRunId && resolved.failureCode === "RECORD_JOB_BINDING_MISMATCH"
+            ? "TASK10S_RETAINED_EDITOR_ARTICLE_BINDING_INVALID"
+            : resolved.failureCode;
+        return blocked(legacyFailure, { testRunId: effectiveTestRunId });
       }
-      const authorization = this.options.repository.getOneShotPublicationAuthorization(TASK10S_CANONICAL_AUTHORIZATION_ID);
+      const target = resolved.target;
+      const run = this.options.repository.getPlatformSelfTestRun(target.testRunId);
+      const account = run ? this.account(run) : undefined;
+      if (!account || !account.enabled || account.archivedAt) return blocked("XHS_ACCOUNT_UNAVAILABLE", { accountId: account?.id ?? null, testRunId: target.testRunId });
+      const job = this.options.repository.getJob(target.publishJobId);
+      const preparedRecord = this.options.repository.getPublishRecordByJob(target.publishJobId);
+      const authorization = this.options.repository.getOneShotPublicationAuthorization(target.testRunId);
+      if (!run || run.testRunId !== target.testRunId || !job || job.id !== target.publishJobId || !preparedRecord || preparedRecord.id !== target.publishRecordId) return blocked("TASK10S_EXECUTION_TARGET_INVALID", { accountId: account.id, testRunId: target.testRunId, jobId: target.publishJobId, publishRecordId: target.publishRecordId });
+      if (run.requestedLevel !== "L5_PUBLISH" || !["Pending", "Scheduled", "Retry", "NeedsUserAction"].includes(job.status) || preparedRecord.status !== "Prepared") {
+        return blocked("TASK10S_RETAINED_EDITOR_PREPARED_JOB_REQUIRED", { accountId: account.id, testRunId: run.testRunId, jobId: job.id, jobStatus: job.status, preparedRecordStatus: preparedRecord.status });
+      }
       if (!authorization
         || authorization.authorization !== OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH
         || authorization.state !== "AUTHORIZED_UNUSED"
         || authorization.platformKey !== "xiaohongshu"
         || authorization.accountId !== account.id
-        || authorization.operationId !== TASK10S_CANONICAL_AUTHORIZATION_ID
+        || authorization.operationId !== target.testRunId
         || authorization.mode !== ONE_SHOT_REAL_PUBLISH_ACCEPTANCE
         || authorization.publicationTransactionCount !== 0
         || authorization.publicationCommitActionCount !== 0
@@ -482,7 +498,9 @@ export class PlatformSelfTestService {
         }
         this.options.logger?.info("PLATFORM_SELF_TEST", "TASK10S_COMPLETE_RETAINED_EDITOR_STARTED", "Task10S retained-editor fixed completion action 已通过 Main-side preflight；将复用已有图片编辑器，不执行上传", { action: RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, accountId: account.id, testRunId: run.testRunId, jobId: job.id, contextDebugId: runtime.contextDebugId, pageDebugId: runtime.canonicalPageDebugId, uploadCallCount: 0 });
         const execution = await this.options.publisher.executeTask10sRetainedEditor(job.id, { userActionId: run.testRunId, triggerSource: "RUN_SELF_TEST" }, "VISIBLE", authorization);
-        const after = this.options.repository.getOneShotPublicationAuthorization(TASK10S_CANONICAL_AUTHORIZATION_ID);
+        const after = this.options.repository.getOneShotPublicationAuthorization(target.testRunId);
+        const reconciledRecord = this.options.repository.getPublishRecordByJob(target.publishJobId);
+        if (!reconciledRecord || reconciledRecord.id !== target.publishRecordId) return blocked("TASK10S_RECONCILIATION_TARGET_MISMATCH", { accountId: account.id, testRunId: target.testRunId, jobId: target.publishJobId, publishRecordId: target.publishRecordId });
         const finalSubmitClickCount = after?.finalSubmitAttemptCount === 1 ? 1 as const : 0 as const;
         const passed = ["Success", "Published", "Publishing"].includes(execution.job.status) && finalSubmitClickCount === 1;
         return {
@@ -500,6 +518,9 @@ export class PlatformSelfTestService {
           finalSubmitClickCount,
           publicationTransactionCount: after?.publicationTransactionCount === 1 ? 1 : 0,
           authorizationState: after?.state ?? "NOT_VERIFIED",
+          reconciliationTargetJobId: target.publishJobId,
+          reconciliationTargetRecordId: target.publishRecordId,
+          reconciliationRecordStatus: reconciledRecord.status ?? null,
           message: execution.message,
           jobStatus: execution.job.status,
           evidence: { contextIdentityAttestationPass: identityAttestationPass, sameContext: true, sourcePageIdentity: attestation.sourcePageIdentity, currentPageIdentity: runtime.canonicalPageDebugId, trustedArticleId: article.id, trustedArticleTitle: article.title, trustedArticleBody: article.body }
@@ -508,7 +529,7 @@ export class PlatformSelfTestService {
         this.controlledOperations.delete(account.id);
       }
     } catch (error) {
-      const after = this.options.repository.getOneShotPublicationAuthorization(TASK10S_CANONICAL_AUTHORIZATION_ID);
+      const after = this.options.repository.getOneShotPublicationAuthorization(effectiveTestRunId);
       const finalSubmitStarted = after?.finalSubmitActionStarted === true;
       return blocked(error instanceof Error ? error.message : "TASK10S_RETAINED_EDITOR_COMPLETION_FAILED", {
         finalSubmitClickCount: finalSubmitStarted ? 1 : 0,
@@ -945,12 +966,14 @@ export class PlatformSelfTestService {
    * creates or changes Jobs, Records, Articles, authorizations, or submit
    * state, and it stops after the editor and closed-shadow surfaces are ready.
    */
-  async recoverTask10sPreparedEditor(requestedAccountId?: string): Promise<Task10sPreparedEditorRecoveryResult> {
+  async recoverTask10sPreparedEditor(): Promise<Task10sPreparedEditorRecoveryResult>;
+  async recoverTask10sPreparedEditor(requestedTestRunId: string): Promise<Task10sPreparedEditorRecoveryResult>;
+  async recoverTask10sPreparedEditor(requestedTestRunId?: string): Promise<Task10sPreparedEditorRecoveryResult> {
     const blocked = (failureCode: string, overrides: Partial<Task10sPreparedEditorRecoveryResult> = {}): Task10sPreparedEditorRecoveryResult => ({
       action: RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY,
       status: "BLOCKED",
       failureCode,
-      testRunId: TASK10S_CANONICAL_AUTHORIZATION_ID,
+      testRunId: requestedTestRunId ?? TASK10S_CANONICAL_AUTHORIZATION_ID,
       readyForFreshIdentityAttestation: false,
       finalSubmitClickCount: 0,
       mousePressedCount: 0,
@@ -958,21 +981,24 @@ export class PlatformSelfTestService {
       publicationTransactionCount: 0,
       ...overrides
     });
-    const accountId = requestedAccountId ?? this.options.repository.getPlatformSelfTestRun(TASK10S_CANONICAL_AUTHORIZATION_ID)?.accountId;
-    if (!accountId) return blocked("RECOVERY_ACCOUNT_UNRESOLVED");
+    const effectiveTestRunId = requestedTestRunId ?? TASK10S_CANONICAL_AUTHORIZATION_ID;
+    const resolved = resolveTask10sExecutionTarget(this.options.repository, effectiveTestRunId);
+    if (resolved.status !== "PASS") return blocked(resolved.failureCode);
+    const target = resolved.target;
+    const accountId = target.accountId;
     if (this.controlledOperations.has(accountId)) return blocked("TASK10S_PREPARED_EDITOR_RECOVERY_ALREADY_RUNNING");
     this.controlledOperations.add(accountId);
     try {
       const repository = this.options.repository;
       const account = repository.getAccountById(accountId, "xiaohongshu");
       if (!account || !account.enabled || account.archivedAt) return blocked("RECOVERY_ACCOUNT_UNAVAILABLE", { accountId: account?.id ?? null });
-      const run = repository.getPlatformSelfTestRun(TASK10S_CANONICAL_AUTHORIZATION_ID);
-      if (!run || run.platformKey !== "xiaohongshu" || run.testRunId !== TASK10S_CANONICAL_AUTHORIZATION_ID) return blocked("RECOVERY_RUN_UNAVAILABLE", { accountId: account.id });
+      const run = repository.getPlatformSelfTestRun(target.testRunId);
+      if (!run || run.platformKey !== "xiaohongshu" || run.testRunId !== target.testRunId) return blocked("RECOVERY_RUN_UNAVAILABLE", { accountId: account.id });
       const platformAccountId = account.platformAccountId ?? account.id;
-      const job = run.publishJobId ? repository.getJob(run.publishJobId) : null;
-      const preparedRecord = job ? repository.getPublishRecordByJob(job.id) : null;
+      const job = repository.getJob(target.publishJobId);
+      const preparedRecord = repository.getPublishRecordByJob(target.publishJobId);
       const article = job ? repository.getArticle(job.articleId) : null;
-      const authorization = repository.getOneShotPublicationAuthorization(run.testRunId);
+      const authorization = repository.getOneShotPublicationAuthorization(target.testRunId);
       const countRows = (sql: string, ...args: unknown[]): number => Number((repository.db.prepare(sql).get(...args) as { count?: number } | undefined)?.count ?? 0);
       const publishJobCountForRun = run.publishJobId ? countRows("SELECT COUNT(*) AS count FROM publish_jobs WHERE id=?", run.publishJobId) : 0;
       const preparedRecordCountForJob = job ? countRows("SELECT COUNT(*) AS count FROM publish_records WHERE job_id=? AND status='Prepared'", job.id) : 0;

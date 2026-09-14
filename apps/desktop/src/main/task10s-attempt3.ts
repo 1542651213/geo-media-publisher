@@ -12,6 +12,8 @@ export const RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 = "RUN_XHS_TASK10S_CONTR
 export const XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG = "--xhs-task10s-attempt3-dispatch-dry-run" as const;
 export const RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN = "RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN" as const;
 export const XHS_TASK10S_COMPLETE_RETAINED_EDITOR_FLAG = "--xhs-task10s-complete-retained-editor" as const;
+/** Explicit live route; the legacy flag remains diagnostics-only. */
+export const XHS_TASK10S_COMPLETE_RETAINED_EDITOR_RUN_FLAG = "--xhs-task10s-complete-retained-editor-run" as const;
 export const RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR = "RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR" as const;
 export const TASK10S_CANONICAL_AUTHORIZATION_ID = "6cb27b65-b122-4430-b8c7-aa83c59c8cac" as const;
 export const TASK10S_SAFE_FIXTURE_NAME = "task10s-safe-test.png" as const;

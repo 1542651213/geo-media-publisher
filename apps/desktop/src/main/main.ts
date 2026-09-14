@@ -29,7 +29,7 @@ const initialDiagnosticInvocation = parseDiagnosticActionWithTrace(process.argv)
 const initialDiagnosticAction = initialDiagnosticInvocation.action;
 const primaryInstanceLockAcquired = app.requestSingleInstanceLock(initialDiagnosticAction ? { action: initialDiagnosticAction } : undefined);
 let queuedDiagnosticAction: DiagnosticAction | null = initialDiagnosticAction;
-let queuedDiagnosticInvocationContext: FixedDiagnosticInvocationContext | undefined = (initialDiagnosticAction === RUN_XHS_TASK10S_ARM_RUN || initialDiagnosticAction === RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW) && initialDiagnosticInvocation.testRunId
+let queuedDiagnosticInvocationContext: FixedDiagnosticInvocationContext | undefined = (initialDiagnosticAction === RUN_XHS_TASK10S_ARM_RUN || initialDiagnosticAction === RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW || initialDiagnosticAction === RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY || initialDiagnosticAction === RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR) && initialDiagnosticInvocation.testRunId
   ? { testRunId: initialDiagnosticInvocation.testRunId }
   : undefined;
 let fixedDiagnosticActionRunner: ((action: DiagnosticAction, context?: FixedDiagnosticInvocationContext) => Promise<boolean>) | null = null;
@@ -774,9 +774,9 @@ async function createWindow(): Promise<void> {
       return platformSelfTests.runTask10sControlledUploadAttempt5();
     },
     writeTask10sControlledUploadAttempt5Evidence,
-    runTask10sCompleteRetainedEditor: async () => {
+    runTask10sCompleteRetainedEditor: async (testRunId) => {
       logger.info("PLATFORM_SELF_TEST", "TASK10S_COMPLETE_RETAINED_EDITOR_TRIGGER_RECEIVED", "收到固定 Main-side Task10S retained-editor completion trigger", { action: RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, accountId: resolveXhsAccountId() });
-      return platformSelfTests.runTask10sCompleteRetainedEditor();
+      return testRunId ? platformSelfTests.runTask10sCompleteRetainedEditor(testRunId) : platformSelfTests.runTask10sCompleteRetainedEditor("__explicit_target_required__");
     },
     writeTask10sCompleteRetainedEditorEvidence,
     armTask10sRun: (testRunId) => platformSelfTests.armTask10sRun(testRunId),
@@ -794,9 +794,9 @@ async function createWindow(): Promise<void> {
       return platformSelfTests.runTask10sFreshPublishFlow(undefined, testRunId);
     },
     writeTask10sFreshPublishFlowEvidence,
-    recoverTask10sPreparedEditor: async () => {
+    recoverTask10sPreparedEditor: async (testRunId) => {
       logger.info("PLATFORM_SELF_TEST", "TASK10S_PREPARED_EDITOR_RECOVERY_TRIGGER_RECEIVED", "收到固定 Main-side Prepared Job 编辑器恢复 trigger", { action: RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY, accountId: resolveXhsAccountId() });
-      return platformSelfTests.recoverTask10sPreparedEditor();
+      return testRunId ? platformSelfTests.recoverTask10sPreparedEditor(testRunId) : platformSelfTests.recoverTask10sPreparedEditor("__explicit_target_required__");
     },
     writeTask10sPreparedEditorRecoveryEvidence,
     runTask10sAttempt3DispatchDryRun: () => platformSelfTests.runTask10sAttempt3DispatchDryRun(),
@@ -856,13 +856,13 @@ if (primaryInstanceLockAcquired) {
         queuedDiagnosticAction = action;
         queuedDiagnosticInvocationContext = action === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN
           ? { dispatchTrace: parsed.trace }
-          : (action === RUN_XHS_TASK10S_ARM_RUN || action === RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW) && parsed.testRunId ? { testRunId: parsed.testRunId } : undefined;
+          : (action === RUN_XHS_TASK10S_ARM_RUN || action === RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW || action === RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY || action === RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR) && parsed.testRunId ? { testRunId: parsed.testRunId } : undefined;
       }
       return;
     }
     void runFixedDiagnosticAction(action, action === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN
       ? { dispatchTrace: parsed.trace }
-      : (action === RUN_XHS_TASK10S_ARM_RUN || action === RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW) && parsed.testRunId ? { testRunId: parsed.testRunId } : undefined);
+      : (action === RUN_XHS_TASK10S_ARM_RUN || action === RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW || action === RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY || action === RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR) && parsed.testRunId ? { testRunId: parsed.testRunId } : undefined);
   });
 }
 

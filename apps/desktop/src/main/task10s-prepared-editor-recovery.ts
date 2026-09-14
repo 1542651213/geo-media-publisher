@@ -1,4 +1,6 @@
 export const XHS_TASK10S_PREPARED_EDITOR_RECOVERY_FLAG = "--xhs-task10s-recover-prepared-editor" as const;
+/** Explicit live route; the legacy flag remains diagnostics-only. */
+export const XHS_TASK10S_PREPARED_EDITOR_RECOVERY_RUN_FLAG = "--xhs-task10s-recover-prepared-editor-run" as const;
 export const RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY = "RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY" as const;
 
 export interface Task10sPreparedEditorRecoveryResult {
