@@ -125,6 +125,15 @@ export class XhsIdentityService {
     return result;
   }
 
+  /** Ensure the current authenticated Context has an identity Page before creating the completion attestation. */
+  async ensureCurrentContextIdentityPage(accountId: string): Promise<XhsContextIdentityAttestationResult> {
+    const ensured = await this.ensureIdentityPage(accountId);
+    if (ensured.status !== "PASS" || !ensured.identityMatch || !ensured.observedCreatorId) {
+      return { status: "BLOCKED", failureCode: ensured.failureCode ?? "XHS_CURRENT_CONTEXT_IDENTITY_PAGE_RECOVERY_FAILED" };
+    }
+    return this.establishContextIdentityAttestation(accountId);
+  }
+
   async validateContextIdentityAttestation(accountId: string): Promise<ReturnType<typeof validateXhsContextIdentityAttestation>> {
     const account = this.requireAccount(accountId);
     const attestation = this.contextIdentityAttestations.get(account.id);

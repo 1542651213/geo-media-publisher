@@ -452,6 +452,10 @@ export class PlatformSelfTestService {
       if (!runtime.sessionExists || runtime.browserConnected !== true || !runtime.contextExists || !runtime.canonicalPageExists || runtime.canonicalPageClosed === true || runtime.runtimeAuthState !== "AUTHENTICATED") {
         return blocked("TASK10S_RETAINED_EDITOR_RUNTIME_UNAVAILABLE", { accountId: account.id, testRunId: run.testRunId, jobId: job.id, contextDebugId: runtime.contextDebugId, pageDebugId: runtime.canonicalPageDebugId });
       }
+      const identityRecovery = await this.xhsIdentity.ensureCurrentContextIdentityPage(account.id);
+      if (identityRecovery.status !== "PASS") {
+        return blocked("TASK10S_RETAINED_EDITOR_CONTEXT_IDENTITY_ATTESTATION_FAILED", { accountId: account.id, testRunId: run.testRunId, jobId: job.id, contextDebugId: runtime.contextDebugId, pageDebugId: runtime.canonicalPageDebugId, expectedCreatorId: this.expectedCreatorId(account), failureCode: identityRecovery.failureCode });
+      }
       const identityAttestation = await this.xhsIdentity.validateContextIdentityAttestation(account.id);
       const identityAttestationPass = identityAttestation.valid;
       const attestation = this.xhsIdentity.getContextIdentityAttestation(account.id);
