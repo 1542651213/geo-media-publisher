@@ -65,6 +65,68 @@ function setup(input: { observedId: string | null; expectedId?: string | null; e
 }
 
 describe("Task10V XHS identity proof", () => {
+  it("invokes bootstrap on the repository instance for existing bindings", async () => {
+    const boundAccount = { ...account };
+    const existingBinding = binding("960803317");
+    const reader = {
+      verifyIdentityOnContextPage: vi.fn(async () => ({ status: "PASS", failureCode: null, proof: {
+        browserSessionId: "session-a",
+        contextId: "context-1",
+        pageId: "page-home",
+        pageOrigin: "https://creator.xiaohongshu.com",
+        pagePathname: "/new/home",
+        creatorId: "960803317",
+        verifiedAt: "2026-09-07T08:00:00.000Z",
+        expiresAt: "2026-09-07T08:05:00.000Z"
+      } })),
+      getBrowserRuntimeSnapshot: vi.fn(() => ({
+        platformKey: "xiaohongshu",
+        accountId: boundAccount.id,
+        sessionExists: true,
+        browserSessionIdentity: "session-a",
+        contextDebugId: "context-1",
+        canonicalPageDebugId: "page-draft",
+        browserConnected: true,
+        contextExists: true,
+        contextPageCount: 2,
+        canonicalPageExists: true,
+        canonicalPageClosed: false,
+        canonicalPageContextMatchesSession: true,
+        runtimeAuthState: "AUTHENTICATED",
+        contextLaunchCount: 1,
+        canonicalPagePromotionCount: 1,
+        activeOperation: null,
+        mutexLocked: false,
+        operationInProgress: false,
+        lastDisconnectAt: null,
+        lastDisconnectContextDebugId: null,
+        lastDisconnectReason: null
+      }))
+    };
+    const repository = {
+      db: {},
+      getAccountById: vi.fn(() => boundAccount),
+      getPlatformAccountIdentityBinding: vi.fn(() => existingBinding),
+      bindPlatformAccountIdentity: vi.fn(),
+      convergeUnusedOneShotAuthorization: vi.fn(),
+      bootstrapXhsCreatorIdentity(this: { db: object }, input: { accountId: string; observedCreatorId: string }) {
+        if (!this.db) throw new TypeError("Cannot read properties of undefined (reading 'db')");
+        expect(input.accountId).toBe(boundAccount.id);
+        expect(input.observedCreatorId).toBe("960803317");
+        return { account: boundAccount, binding: existingBinding };
+      }
+    };
+    const registry = { getForContent: vi.fn(() => reader) } as unknown as AdapterRegistry;
+    const service = new XhsIdentityService({ repository, registry });
+
+    await expect(service.bootstrapCreatorIdentity(boundAccount.id)).resolves.toMatchObject({
+      expectedExternalCreatorId: "960803317",
+      observed: { externalCreatorId: "960803317" },
+      verified: true,
+      mismatch: false
+    });
+  });
+
   it("requires the stable Creator ID and converges only after an exact match", async () => {
     const fixture = setup();
     const result = await fixture.service.verifyAndConverge(account.id);

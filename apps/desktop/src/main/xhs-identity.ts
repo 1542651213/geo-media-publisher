@@ -495,8 +495,7 @@ export class XhsIdentityService {
    */
   async bootstrapCreatorIdentity(accountId: string): Promise<CreatorIdentityVerificationResult> {
     const account = this.requireAccount(accountId);
-    const bootstrap = this.options.repository.bootstrapXhsCreatorIdentity;
-    if (typeof bootstrap !== "function") throw Object.assign(new Error("当前数据库未提供 XHS Creator identity bootstrap"), { code: "XHS_IDENTITY_BOOTSTRAP_UNAVAILABLE" });
+    if (typeof this.options.repository.bootstrapXhsCreatorIdentity !== "function") throw Object.assign(new Error("当前数据库未提供 XHS Creator identity bootstrap"), { code: "XHS_IDENTITY_BOOTSTRAP_UNAVAILABLE" });
     const adapter = this.options.registry.getForContent("xiaohongshu", "article") as IdentityReader;
     if (typeof adapter.getBrowserRuntimeSnapshot !== "function") throw Object.assign(new Error("当前小红书运行时未提供 BrowserSession runtime snapshot"), { code: "XHS_RUNTIME_SNAPSHOT_UNAVAILABLE" });
     const runtime = adapter.getBrowserRuntimeSnapshot(this.context(account));
@@ -516,7 +515,7 @@ export class XhsIdentityService {
     const existingBinding = this.options.repository.getPlatformAccountIdentityBinding("xiaohongshu", account.id);
     const expectedBefore = existingBinding?.externalCreatorId ?? account.externalAccountId ?? null;
     if (expectedBefore && expectedBefore !== observedCreatorId) throw Object.assign(new Error("当前登录的小红书 Creator 身份与已绑定账号不一致"), { code: "XHS_CREATOR_IDENTITY_MISMATCH" });
-    const persisted = bootstrap({ accountId: account.id, observedCreatorId, displayName: null, profileUrl: null });
+    const persisted = this.options.repository.bootstrapXhsCreatorIdentity({ accountId: account.id, observedCreatorId, displayName: null, profileUrl: null });
     const reloadedAccount = this.options.repository.getAccountById(account.id, "xiaohongshu");
     const reloadedBinding = this.options.repository.getPlatformAccountIdentityBinding("xiaohongshu", account.id);
     if (!reloadedAccount || !reloadedBinding || reloadedAccount.externalAccountId !== observedCreatorId || reloadedBinding.accountId !== account.id || reloadedBinding.externalCreatorId !== observedCreatorId || persisted.account.externalAccountId !== observedCreatorId || persisted.binding.externalCreatorId !== observedCreatorId) {
