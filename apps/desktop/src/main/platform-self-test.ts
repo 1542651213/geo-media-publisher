@@ -844,9 +844,44 @@ export class PlatformSelfTestService {
       if (initialRun.platformKey !== "xiaohongshu" || initialRun.accountId !== account.id || initialRun.platformAccountId !== (account.platformAccountId ?? account.id)) return blocked("TASK10S_ARM_RUN_ACCOUNT_MISMATCH", { resolvedTestRunId: requested, accountId: account.id });
       if (initialRun.publishJobId) return blocked("TASK10S_ARM_JOB_ALREADY_EXISTS", { resolvedTestRunId: requested, accountId: account.id });
       const existingAuthorization = repository.getOneShotPublicationAuthorization(requested);
-      if (existingAuthorization && (existingAuthorization.authorization !== OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH || existingAuthorization.platformKey !== account.platformKey || existingAuthorization.accountId !== account.id || existingAuthorization.operationId !== requested || existingAuthorization.mode !== ONE_SHOT_REAL_PUBLISH_ACCEPTANCE || existingAuthorization.state !== "AUTHORIZED_UNUSED" || existingAuthorization.publicationTransactionCount !== 0 || existingAuthorization.publicationCommitActionCount !== 0 || existingAuthorization.finalSubmitAttemptCount !== 0 || existingAuthorization.finalSubmitRetryCount !== 0 || existingAuthorization.finalSubmitActionStarted || existingAuthorization.finalSubmitActionCompleted)) return blocked("TASK10S_ARM_AUTHORIZATION_NOT_UNUSED", { resolvedTestRunId: requested, accountId: account.id });
-      const displacedAuthorization = repository.db.prepare("SELECT operation_id FROM one_shot_publication_authorizations WHERE account_id=? AND operation_id<>? LIMIT 1").get(account.id, requested) as { operation_id?: string } | undefined;
-      if (displacedAuthorization) return blocked("TASK10S_ARM_AUTHORIZATION_NOT_UNUSED", { resolvedTestRunId: requested, accountId: account.id });
+      const currentAuthorizationIdentityValid = existingAuthorization?.authorization === OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH
+        && existingAuthorization.platformKey === account.platformKey
+        && existingAuthorization.accountId === account.id
+        && existingAuthorization.operationId === requested
+        && existingAuthorization.mode === ONE_SHOT_REAL_PUBLISH_ACCEPTANCE;
+      const currentAuthorizationUnused = currentAuthorizationIdentityValid
+        && existingAuthorization?.state === "AUTHORIZED_UNUSED"
+        && existingAuthorization.publicationTransactionCount === 0
+        && existingAuthorization.publicationCommitActionCount === 0
+        && existingAuthorization.finalSubmitAttemptCount === 0
+        && existingAuthorization.finalSubmitRetryCount === 0
+        && !existingAuthorization.finalSubmitActionStarted
+        && !existingAuthorization.finalSubmitActionCompleted;
+      const currentAuthorizationIgnored = existingAuthorization?.state === "SUPERSEDED_UNUSED" || (existingAuthorization?.state as string | undefined) === "COMPLETION_FAILED";
+      if (existingAuthorization && !currentAuthorizationIgnored && (!currentAuthorizationIdentityValid || !currentAuthorizationUnused)) return blocked("TASK10S_ARM_AUTHORIZATION_NOT_UNUSED", { resolvedTestRunId: requested, accountId: account.id });
+      if (existingAuthorization && currentAuthorizationUnused) return blocked("TASK10S_ARM_AUTHORIZATION_NOT_UNUSED", { resolvedTestRunId: requested, accountId: account.id });
+
+      // Authorization conflicts are scoped to the same XHS one-shot operation
+      // scope. Historical superseded, terminal, and failed-job authorizations
+      // must not act as an account-global lock for a new Run.
+      const activeAuthorizationConflict = repository.db.prepare(`SELECT auth.operation_id
+        FROM one_shot_publication_authorizations auth
+        LEFT JOIN platform_self_test_runs run ON run.test_run_id=auth.operation_id
+        LEFT JOIN publish_jobs job ON job.id=run.publish_job_id
+        WHERE auth.authorization=? AND auth.platform_key=? AND auth.account_id=? AND auth.mode=?
+          AND auth.operation_id<>? AND auth.state='AUTHORIZED_UNUSED'
+          AND auth.publication_transaction_count=0 AND auth.publication_commit_action_count=0
+          AND auth.final_submit_attempt_count=0 AND auth.final_submit_retry_count=0
+          AND auth.final_submit_action_started=0 AND auth.final_submit_action_completed=0
+          AND (run.publish_job_id IS NULL OR job.status IS NULL OR job.status<>'Failed')
+        LIMIT 1`).get(
+        OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH,
+        account.platformKey,
+        account.id,
+        ONE_SHOT_REAL_PUBLISH_ACCEPTANCE,
+        requested
+      ) as { operation_id?: string } | undefined;
+      if (activeAuthorizationConflict) return blocked("TASK10S_ARM_AUTHORIZATION_NOT_UNUSED", { resolvedTestRunId: requested, accountId: account.id });
 
       const identity = await this.xhsIdentity.validateContextIdentityAttestation(account.id);
       const currentAttestation = this.xhsIdentity.getContextIdentityAttestation(account.id);
