@@ -44,6 +44,7 @@ function trusted(overrides: Partial<PreparedEditorRecoveryTrustedState> = {}): P
 function evidence(overrides: Partial<PreparedEditorRecoveryEvidence> = {}): PreparedEditorRecoveryEvidence {
   return {
     editorRecreated: true,
+    recoveryUsesJobBoundImageAsset: true,
     fixtureVerified: true,
     uploadAttempts: 1,
     uploadMutationCount: 1,
@@ -128,6 +129,10 @@ describe("Task10S Prepared Job editor recovery contract", () => {
 
   it("accepts the complete recovery browser evidence", () => {
     expect(evaluatePreparedEditorRecoveryEvidence(evidence())).toMatchObject({ status: "PASS" });
+  });
+
+  it("requires recovery to use the Prepared Job ImageAsset binding", () => {
+    expect(evaluatePreparedEditorRecoveryEvidence(evidence({ recoveryUsesJobBoundImageAsset: false }))).toMatchObject({ status: "BLOCKED", failureCode: "RECOVERY_JOB_MEDIA_NOT_BOUND" });
   });
 
   it("rejects an invalid fixture before upload can be accepted", () => {

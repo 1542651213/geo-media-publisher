@@ -10,6 +10,7 @@ export interface Task10sPreparedEditorRecoveryResult {
   jobId?: string | null;
   publishRecordId?: string | null;
   articleId?: string | null;
+  jobStatus?: string | null;
   operationId?: string | null;
   readyForFreshIdentityAttestation: boolean;
   evidence?: PreparedEditorRecoveryEvidence | null;
@@ -82,6 +83,7 @@ export interface PreparedEditorRecoveryValidationResult {
 
 export interface PreparedEditorRecoveryEvidence {
   editorRecreated: boolean;
+  recoveryUsesJobBoundImageAsset: boolean;
   fixtureVerified: boolean;
   uploadAttempts: number;
   uploadMutationCount: number;
@@ -169,6 +171,7 @@ export function countXhsPublishEditorPages(input: { pages: ReadonlyArray<{ urlOr
 
 export function evaluatePreparedEditorRecoveryEvidence(input: PreparedEditorRecoveryEvidence): PreparedEditorRecoveryValidationResult {
   if (!input.editorRecreated) return blocked("RECOVERY_EDITOR_NOT_RECREATED");
+  if (!input.recoveryUsesJobBoundImageAsset) return blocked("RECOVERY_JOB_MEDIA_NOT_BOUND");
   if (!input.fixtureVerified) return blocked("RECOVERY_FIXTURE_INVALID");
   if (input.uploadAttempts !== 1 || input.uploadMutationCount !== 1 || input.setInputFilesCount !== 1) return blocked("RECOVERY_UPLOAD_COUNT_INVALID");
   if (input.uploadRetryCount !== 0) return blocked("RECOVERY_UPLOAD_RETRY_OBSERVED");

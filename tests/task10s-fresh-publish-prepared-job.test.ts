@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -49,6 +50,10 @@ function closedShadowPass(): XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic
 function setup() {
   const dir = mkdtempSync(join(tmpdir(), "task10s-r41-"));
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+  const fixtureBytes = Buffer.from("offline fixture");
+  const fixturePath = join(dir, "task10s-safe-test.png");
+  writeFileSync(fixturePath, fixtureBytes);
+  const fixtureSha = createHash("sha256").update(fixtureBytes).digest("hex").toUpperCase();
   const database = openDatabase(join(dir, "test.db"), join(process.cwd(), "packages/db/migrations"));
   cleanup.push(() => database.db.close());
   const repo = database.repository;
@@ -71,7 +76,18 @@ function setup() {
   const publisher = { executeJob: forbidden, executeTask10sRetainedEditor: forbidden } as unknown as PublisherService;
   const options = { repository: repo, registry, publisher, resolveAccountSecrets: () => ({}) };
   const service = new PlatformSelfTestService(options);
-  vi.spyOn(attempt, "validateTask10sSafeFixture").mockReturnValue({ path: "offline-fixture", valid: true, failureCode: null } as ReturnType<typeof attempt.validateTask10sSafeFixture>);
+  vi.spyOn(attempt, "validateTask10sSafeFixture").mockReturnValue({
+    path: fixturePath,
+    exists: true,
+    fileName: "task10s-safe-test.png",
+    sizeBytes: fixtureBytes.length,
+    sha256: fixtureSha,
+    expectedName: "task10s-safe-test.png",
+    expectedSizeBytes: fixtureBytes.length,
+    expectedSha256: fixtureSha,
+    valid: true,
+    failureCode: null,
+  } as ReturnType<typeof attempt.validateTask10sSafeFixture>);
   vi.spyOn(XhsIdentityService.prototype, "establishContextIdentityAttestation").mockResolvedValue({ status: "PASS", attestation: { observedExternalCreatorId: "960803317", browserContextIdentity: "context" } } as Awaited<ReturnType<XhsIdentityService["establishContextIdentityAttestation"]>>);
   vi.spyOn(XhsIdentityService.prototype, "validateContextIdentityAttestation").mockResolvedValue({ valid: true } as Awaited<ReturnType<XhsIdentityService["validateContextIdentityAttestation"]>>);
   vi.spyOn(XhsIdentityService.prototype, "getContextIdentityAttestation").mockReturnValue({ observedExternalCreatorId: "960803317", browserContextIdentity: "context", sourcePageIdentity: "page" } as ReturnType<XhsIdentityService["getContextIdentityAttestation"]>);
@@ -83,7 +99,7 @@ function setup() {
     expect(method, "Main trusted ARM transition must exist").toBeTypeOf("function");
     return method!.call(service);
   };
-  return { repo, service, proof, runtime, forbidden, arm, options, adapter, contextPages, postUpload };
+  return { repo, service, proof, runtime, forbidden, arm, options, adapter, contextPages, postUpload, fixturePath, fixtureSha };
 }
 
 describe("r41 fresh prepared job transition (offline)", () => {
@@ -176,6 +192,8 @@ describe("r41 fresh prepared job transition (offline)", () => {
     expect(f.repo.getPlatformSelfTestRun(runId)?.publishJobId).toBe(jobs[0]!.id);
     expect(f.repo.getPublishRecords()).toHaveLength(1);
     expect(f.repo.getPublishRecordByJob(jobs[0]!.id)?.status).toBe("Prepared");
+    expect(jobs[0]!.selectedImageAssetId, "Task10S ARM must persist its Job-bound ImageAsset").toBeTruthy();
+    expect(f.repo.getPublishRecordByJob(jobs[0]!.id)?.selectedImageAssetId).toBe(jobs[0]!.selectedImageAssetId);
     expect(f.repo.getArticle(jobs[0]!.articleId)).toMatchObject({ title: "自动化发布测试1｜请忽略", body: "GEO Media Publisher 自动发布链路测试。" });
     expect(f.repo.getOneShotPublicationAuthorization(runId)).toEqual(authorization);
     expect(f.forbidden).not.toHaveBeenCalled();
@@ -192,6 +210,47 @@ describe("r41 fresh prepared job transition (offline)", () => {
     expect(f.repo.listJobs()).toHaveLength(1);
     expect(f.repo.getPublishRecords()).toHaveLength(1);
     expect(f.repo.getOneShotPublicationAuthorization(runId)?.state).toBe("AUTHORIZED_UNUSED");
+  });
+  it("blocks ARM when the verified fixture hash does not match the file", async () => {
+    const f = setup(); await f.service.runTask10sFreshPublishFlow();
+    vi.spyOn(attempt, "validateTask10sSafeFixture").mockReturnValue({
+      path: f.fixturePath,
+      exists: true,
+      fileName: "task10s-safe-test.png",
+      sizeBytes: 15,
+      sha256: f.fixtureSha,
+      expectedName: "task10s-safe-test.png",
+      expectedSizeBytes: 15,
+      expectedSha256: "00".repeat(32),
+      valid: true,
+      failureCode: null,
+    } as unknown as ReturnType<typeof attempt.validateTask10sSafeFixture>);
+    expect(await f.arm()).toMatchObject({ status: "BLOCKED", failureCode: "IMAGE_ASSET_HASH_MISMATCH", preparedJobMediaGate: "BLOCKED" });
+    expect(f.repo.listJobs()).toHaveLength(0);
+    expect(f.repo.getPublishRecords()).toHaveLength(0);
+  });
+  it.each(["null-binding", "missing-file", "hash-mismatch"])("fails closed during recovery for a Job media binding: %s", async (kind) => {
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(); await f.arm();
+    const job = f.repo.listJobs()[0]!;
+    if (kind === "null-binding") f.repo.db.prepare("UPDATE publish_jobs SET selected_image_asset_id=NULL WHERE id=?").run(job.id);
+    if (kind === "missing-file") rmSync(f.fixturePath, { force: true });
+    if (kind === "hash-mismatch") writeFileSync(f.fixturePath, Buffer.alloc(15, 3));
+    const before = f.repo.getPublishDomainCounts();
+    const result = await f.service.recoverTask10sPreparedEditor();
+    expect(result.status).toBe("BLOCKED");
+    expect(result.failureCode).toBe(kind === "null-binding" ? "JOB_IMAGE_ASSET_MISSING" : kind === "missing-file" ? "IMAGE_ASSET_FILE_MISSING" : "IMAGE_ASSET_HASH_MISMATCH");
+    expect(f.repo.getPublishDomainCounts()).toEqual(before);
+    expect(f.adapter.recoverPreparedEditor).toHaveBeenCalledTimes(0);
+  });
+  it("does not revive or retry a terminal Failed Job", async () => {
+    const f = setup(); await f.service.runTask10sFreshPublishFlow(); await f.arm();
+    const job = f.repo.listJobs()[0]!;
+    f.repo.db.prepare("UPDATE publish_jobs SET status='Failed',last_error_code='CONTENT_REJECTED' WHERE id=?").run(job.id);
+    const before = f.repo.getJob(job.id);
+    expect(await f.arm()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_ARM_JOB_ALREADY_EXISTS" });
+    expect(f.repo.getJob(job.id)).toMatchObject({ status: "Failed", lastErrorCode: "CONTENT_REJECTED", selectedImageAssetId: before?.selectedImageAssetId });
+    expect(await f.service.recoverTask10sPreparedEditor()).toMatchObject({ status: "BLOCKED", failureCode: "RECOVERY_JOB_STATUS_NOT_ELIGIBLE" });
+    expect(f.adapter.recoverPreparedEditor).toHaveBeenCalledTimes(0);
   });
   it("resolves retained-editor content from the current Prepared Job Article", async () => {
     const f = setup(); await f.service.runTask10sFreshPublishFlow(); await f.arm();

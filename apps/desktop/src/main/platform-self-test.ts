@@ -17,6 +17,7 @@ import type { CreatorIdentityVerificationResult, FailedOneShotConfirmationIdenti
 import { emptyTask10sControlledUploadAttemptResult, reserveTask10sAttempt, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, TASK10S_ATTEMPT_3, TASK10S_ATTEMPT_4, TASK10S_ATTEMPT_5, TASK10S_CANONICAL_AUTHORIZATION_ID, TASK10S_EXPECTED_CREATOR_ID, TASK10S_SAFE_FIXTURE_NAME, TASK10S_SAFE_FIXTURE_SIZE, TASK10S_SAFE_FIXTURE_SHA256, task10sSafeFixturePath, validateTask10sSafeFixture, type Task10sAttempt3DispatchDryRunResult, type Task10sAttempt3FileInputReadback, type Task10sControlledUploadAttemptResult, type Task10sControlledUploadAttemptSpec, type Task10sRetainedEditorCompletionResult } from "./task10s-attempt3";
 import { blockedTask10sFreshPublishFlowResult, buildTask10sFreshPublishFlowInput, isTask10sFreshPublishFlowReady, isTask10sFreshPublishStartPath, RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, XHS_TASK10S_FRESH_PUBLISH_FLOW_BODY, XHS_TASK10S_FRESH_PUBLISH_FLOW_TITLE, type Task10sFreshPublishFlowResult } from "./task10s-fresh-publish-flow";
 import { evaluatePreparedEditorRecoveryEvidence, validatePreparedEditorRecoveryTrustedState, RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY, type PreparedEditorRecoveryEvidence, type Task10sPreparedEditorRecoveryResult } from "./task10s-prepared-editor-recovery";
+import { validateTask10sImageAssetBinding, type Task10sImageAssetBindingResult } from "./task10s-media-binding";
 
 const ARTICLE_TEST_TITLE = "Geo Media Publisher 发布链路测试";
 const ZHIHU_TEST_TITLE_PREFIX = "Geo Media Publisher 知乎发布测试";
@@ -53,6 +54,8 @@ export interface Task10sFreshCompletionArmResult {
   finalSubmitClickCount: 0;
   mousePressedCount: 0;
   publicationTransactionCount: 0;
+  preparedJobMediaGate?: "PASS" | "BLOCKED";
+  selectedImageAssetId?: string | null;
 }
 const XHS_EXPLORATION_EVIDENCE_FILE = "xiaohongshu-task10r-publish-flow-exploration.json";
 function publishDomainCountsEqual(left: { publishJobs: number; submissionIntents: number; publishRecords: number }, right: { publishJobs: number; submissionIntents: number; publishRecords: number }): boolean {
@@ -748,7 +751,8 @@ export class PlatformSelfTestService {
       action: TASK10S_FRESH_COMPLETION_ARM, status: failureCode ? "BLOCKED" : "PASS", failureCode,
       testRunId: TASK10S_CANONICAL_AUTHORIZATION_ID, jobId,
       freshOperationId: this.task10sFreshEvidence?.result.operationId,
-      finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0
+      finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0,
+      preparedJobMediaGate: failureCode ? "BLOCKED" : "PASS"
     });
     const accountId = XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID;
     if (this.controlledOperations.has(accountId)) return result("TASK10S_FRESH_ARM_ALREADY_RUNNING");
@@ -815,16 +819,20 @@ export class PlatformSelfTestService {
         const runtime = adapter.getBrowserRuntimeSnapshot(this.context(account, run, "VISIBLE"));
         if (!identity.valid || !cached?.sessionId || !cached.pageId || !fresh.identityAttestation.contextId || !runtime.sessionExists || runtime.browserConnected !== true || !runtime.contextExists || !runtime.canonicalPageExists || runtime.canonicalPageClosed === true || runtime.runtimeAuthState !== "AUTHENTICATED"
           || runtime.browserSessionIdentity !== cached.sessionId || runtime.contextDebugId !== fresh.identityAttestation.contextId || runtime.canonicalPageDebugId !== cached.pageId) return result("TASK10S_FRESH_ARM_RUNTIME_BINDING_MISMATCH");
-        const job = repository.createPlatformSelfTestPublishJob({ testRunId: run.testRunId, title: fresh.fixedContent.title, body: fresh.fixedContent.body, dryRun: false });
+        const fixture = validateTask10sSafeFixture();
+        if (!fixture.valid) return result("TASK10S_FRESH_ARM_MEDIA_FIXTURE_INVALID");
+        const media = this.ensureTask10sImageAsset(fixture);
+        if (media.gate.status !== "PASS" || !media.asset) return result(media.gate.failureCode ?? "TASK10S_FRESH_ARM_PREPARED_JOB_MEDIA_GATE_FAILED");
+        const job = repository.createPlatformSelfTestPublishJob({ testRunId: run.testRunId, title: fresh.fixedContent.title, body: fresh.fixedContent.body, dryRun: false, selectedImageAssetId: media.asset.id });
         repository.insertPublishRecord({ jobId: job.id, accountId: account.id, platformAccountId: account.platformAccountId, platformKey: account.platformKey, articleId: job.articleId,
           publishedUrl: null, publishedExternalId: null, success: false, dryRun: false, status: "Prepared", publishMode: "ASSISTED", automationType: adapter.automationType,
           browserSessionIdHash: account.browserSessionId, operator: process.env.USERNAME?.trim() || process.env.USER?.trim() || "desktop-user", verificationStatus: "WaitingUser", editorOpenedAt: null,
-          titleFilled: true, bodyFilled: true, selectedImageAssetId: null, imageSelectionMode: "none",
+          titleFilled: true, bodyFilled: true, selectedImageAssetId: media.asset.id, imageSelectionMode: "manual",
           response: { action: TASK10S_FRESH_COMPLETION_ARM, freshOperationId: fresh.operationId, authorizationOperationId: authorization.operationId, authorizationState: authorization.state,
-            freshFlowEvidence: fresh, imageSource: "SAFE_TEST_FIXTURE", finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0 }
+            freshFlowEvidence: fresh, imageSource: "SAFE_TEST_FIXTURE", preparedJobMediaGate: "PASS", selectedImageAssetId: media.asset.id, finalSubmitClickCount: 0, mousePressedCount: 0, publicationTransactionCount: 0 }
         });
         repository.confirmJob(job.id, false);
-        return result(null, job.id);
+        return { ...result(null, job.id), preparedJobMediaGate: "PASS", selectedImageAssetId: media.asset.id };
       })();
       this.options.logger?.info("PLATFORM_SELF_TEST", "TASK10S_FRESH_COMPLETION_ARM_STOPPED", "Fresh completion ARM 已停止；未执行发布", { ...outcome });
       return outcome;
@@ -874,10 +882,15 @@ export class PlatformSelfTestService {
       const preparedRecordCountForJob = job ? countRows("SELECT COUNT(*) AS count FROM publish_records WHERE job_id=? AND status='Prepared'", job.id) : 0;
       if (!run.publishJobId) return blocked("RECOVERY_RUN_PUBLISH_JOB_MISSING", { accountId: account.id });
       if (!job) return blocked("RECOVERY_JOB_MISSING", { accountId: account.id });
+      if (!["Pending", "Scheduled", "Retry", "NeedsUserAction"].includes(job.status)) return blocked("RECOVERY_JOB_STATUS_NOT_ELIGIBLE", { accountId: account.id, jobId: job.id, jobStatus: job.status });
       if (!preparedRecord) return blocked("RECOVERY_PREPARED_RECORD_MISSING", { accountId: account.id, jobId: job.id });
       if (preparedRecord.status !== "Prepared") return blocked("RECOVERY_RECORD_NOT_PREPARED", { accountId: account.id, jobId: job.id, publishRecordId: preparedRecord.id });
       if (!article) return blocked("RECOVERY_ARTICLE_MISSING", { accountId: account.id, jobId: job.id });
       if (!authorization) return blocked("RECOVERY_AUTHORIZATION_NOT_UNUSED", { accountId: account.id, jobId: job.id });
+      const fixture = validateTask10sSafeFixture();
+      const jobImageAsset = job.selectedImageAssetId ? repository.getImageAsset(job.selectedImageAssetId) : null;
+      const mediaGate = validateTask10sImageAssetBinding(jobImageAsset, fixture);
+      if (mediaGate.status !== "PASS" || !jobImageAsset || !mediaGate.imagePath) return blocked(mediaGate.failureCode ?? "RECOVERY_JOB_MEDIA_GATE_FAILED", { accountId: account.id, jobId: job.id, publishRecordId: preparedRecord.id, articleId: article.id });
 
       const adapter = this.options.registry.getForContent("xiaohongshu", "article");
       if (!isAutomationAdapter(adapter) || typeof adapter.recoverPreparedEditor !== "function" || typeof adapter.getBrowserRuntimeSnapshot !== "function") return blocked("RECOVERY_ADAPTER_UNAVAILABLE", { accountId: account.id, jobId: job.id, publishRecordId: preparedRecord.id, articleId: article.id });
@@ -911,14 +924,12 @@ export class PlatformSelfTestService {
       const existingEditorCount = pagesBefore.inventoryStatus === "PASS" ? pagesBefore.pages.filter((page) => !page.isClosed && page.urlOrigin === "https://creator.xiaohongshu.com" && page.pathname === "/publish/publish").length : -1;
       if (existingEditorCount < 0) return blocked("RECOVERY_CONTEXT_PAGE_INVENTORY_UNAVAILABLE", { accountId: account.id, jobId: job.id, publishRecordId: preparedRecord.id, articleId: article.id });
       if (existingEditorCount > 0) return blocked("EDITOR_ALREADY_EXISTS", { accountId: account.id, jobId: job.id, publishRecordId: preparedRecord.id, articleId: article.id });
-      const fixture = validateTask10sSafeFixture();
-      if (!fixture.valid) return blocked("RECOVERY_FIXTURE_INVALID", { accountId: account.id, jobId: job.id, publishRecordId: preparedRecord.id, articleId: article.id });
       const beforeCounts = repository.getPublishDomainCounts();
       const beforeAuthCount = countRows("SELECT COUNT(*) AS count FROM one_shot_publication_authorizations WHERE operation_id=?", run.testRunId);
       const beforeArticle = { id: article.id, title: article.title, body: article.body, contentHash: article.contentHash };
       const operationId = randomUUID();
       this.options.logger?.info("PLATFORM_SELF_TEST", "TASK10S_PREPARED_EDITOR_RECOVERY_STARTED", "开始恢复已有 Prepared Job 对应的小红书编辑器；不会创建发布域记录或执行发布", { action: RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY, accountId: account.id, testRunId: run.testRunId, jobId: job.id, articleId: article.id, operationId });
-      const exploration = await adapter.recoverPreparedEditor(context, { imagePath: fixture.path, imageSource: "SAFE_TEST_FIXTURE", title: article.title, body: article.body, operationId });
+      const exploration = await adapter.recoverPreparedEditor(context, { imagePath: mediaGate.imagePath, imageSource: "SAFE_TEST_FIXTURE", title: article.title, body: article.body, operationId });
       const postUpload = await this.xhsIdentity.inspectCurrentXiaohongshuPostUploadReconciliation(account.id);
       const closedShadow = await this.xhsIdentity.inspectCurrentXiaohongshuClosedShadowFinalSubmit(account.id);
       const pagesAfter = await this.xhsIdentity.inspectXhsContextPages(account.id);
@@ -929,6 +940,7 @@ export class PlatformSelfTestService {
       const editorRecreated = pagesAfter.inventoryStatus === "PASS" && pagesAfter.pages.some((page) => !page.isClosed && page.urlOrigin === "https://creator.xiaohongshu.com" && page.pathname === "/publish/publish");
       const evidence: PreparedEditorRecoveryEvidence = {
         editorRecreated,
+        recoveryUsesJobBoundImageAsset: mediaGate.assetId === jobImageAsset.id && mediaGate.imagePath === jobImageAsset.filePath && job.selectedImageAssetId === jobImageAsset.id,
         fixtureVerified: fixture.valid,
         uploadAttempts: exploration.uploadAttempts,
         uploadMutationCount: exploration.uploadMutationCount,
@@ -1816,6 +1828,31 @@ export class PlatformSelfTestService {
 
   private findTestImage() {
     return this.options.repository.listImageAssets(undefined, true).find((image) => image.universal || [...image.usage, ...image.tags].some((label) => /^(测试|通用)$/u.test(label.trim()))) ?? null;
+  }
+
+  private ensureTask10sImageAsset(fixture: ReturnType<typeof validateTask10sSafeFixture>): {
+    asset: NonNullable<ReturnType<AppRepository["getImageAsset"]>> | null;
+    gate: Task10sImageAssetBindingResult;
+  } {
+    const repository = this.options.repository;
+    const existing = repository.listImageAssets(undefined, true)
+      .filter((image) => image.originalFileName === fixture.expectedName && image.filePath === fixture.path)
+      .find((image) => validateTask10sImageAssetBinding(image, fixture).status === "PASS") ?? null;
+    if (existing) return { asset: existing, gate: validateTask10sImageAssetBinding(existing, fixture) };
+    const created = repository.createImageAsset({
+      brandId: repository.listBrands()[0]?.id ?? null,
+      name: "Task10S SAFE_TEST_FIXTURE",
+      filePath: fixture.path,
+      originalFileName: fixture.expectedName,
+      mimeType: "image/png",
+      size: fixture.expectedSizeBytes,
+      tags: ["测试"],
+      usage: ["测试"],
+      platform: ["xiaohongshu"],
+      universal: true
+    });
+    const gate = validateTask10sImageAssetBinding(created, fixture);
+    return { asset: gate.status === "PASS" ? created : null, gate };
   }
 
   private ensureSafeTestImage() {
