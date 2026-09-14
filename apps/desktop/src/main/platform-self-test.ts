@@ -842,7 +842,8 @@ export class PlatformSelfTestService {
       if (displacedAuthorization) return blocked("TASK10S_ARM_AUTHORIZATION_NOT_UNUSED", { resolvedTestRunId: requested, accountId: account.id });
 
       const identity = await this.xhsIdentity.validateContextIdentityAttestation(account.id);
-      if (!identity.valid) return blocked("TASK10S_ARM_IDENTITY_ATTESTATION_INVALID", { resolvedTestRunId: requested, accountId: account.id });
+      const currentAttestation = this.xhsIdentity.getContextIdentityAttestation(account.id);
+      if (!identity.valid || !currentAttestation || currentAttestation.observedExternalCreatorId !== expectedCreatorId) return blocked("TASK10S_ARM_IDENTITY_ATTESTATION_INVALID", { resolvedTestRunId: requested, accountId: account.id });
       const cached = this.task10sFreshEvidence;
       const fresh = cached?.result;
       const exploration = fresh?.exploration;
