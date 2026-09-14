@@ -29,7 +29,7 @@ const initialDiagnosticInvocation = parseDiagnosticActionWithTrace(process.argv)
 const initialDiagnosticAction = initialDiagnosticInvocation.action;
 const primaryInstanceLockAcquired = app.requestSingleInstanceLock(initialDiagnosticAction ? { action: initialDiagnosticAction } : undefined);
 let queuedDiagnosticAction: DiagnosticAction | null = initialDiagnosticAction;
-let queuedDiagnosticInvocationContext: FixedDiagnosticInvocationContext | undefined = initialDiagnosticAction === RUN_XHS_TASK10S_ARM_RUN && initialDiagnosticInvocation.testRunId
+let queuedDiagnosticInvocationContext: FixedDiagnosticInvocationContext | undefined = (initialDiagnosticAction === RUN_XHS_TASK10S_ARM_RUN || initialDiagnosticAction === RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW) && initialDiagnosticInvocation.testRunId
   ? { testRunId: initialDiagnosticInvocation.testRunId }
   : undefined;
 let fixedDiagnosticActionRunner: ((action: DiagnosticAction, context?: FixedDiagnosticInvocationContext) => Promise<boolean>) | null = null;
@@ -856,13 +856,13 @@ if (primaryInstanceLockAcquired) {
         queuedDiagnosticAction = action;
         queuedDiagnosticInvocationContext = action === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN
           ? { dispatchTrace: parsed.trace }
-          : action === RUN_XHS_TASK10S_ARM_RUN && parsed.testRunId ? { testRunId: parsed.testRunId } : undefined;
+          : (action === RUN_XHS_TASK10S_ARM_RUN || action === RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW) && parsed.testRunId ? { testRunId: parsed.testRunId } : undefined;
       }
       return;
     }
     void runFixedDiagnosticAction(action, action === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN
       ? { dispatchTrace: parsed.trace }
-      : action === RUN_XHS_TASK10S_ARM_RUN && parsed.testRunId ? { testRunId: parsed.testRunId } : undefined);
+      : (action === RUN_XHS_TASK10S_ARM_RUN || action === RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW) && parsed.testRunId ? { testRunId: parsed.testRunId } : undefined);
   });
 }
 

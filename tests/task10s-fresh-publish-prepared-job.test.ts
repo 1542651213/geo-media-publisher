@@ -411,3 +411,58 @@ describe("r51 explicit ARM-only boundaries (offline)", () => {
   it("keeps the old no-argument action fail-closed", async () => { const f = setup({ withAuthorization: false }); expect(await f.service.armTask10sFreshCompletion()).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_ARM_TEST_RUN_ID_REQUIRED" }); expect(f.repo.listJobs()).toHaveLength(0); });
   it("does not create an authorization when evidence validation fails", async () => { const f = setup({ withAuthorization: false }); f.proof.forbiddenMutationObserved = true; await ready(f); expect(await f.service.armTask10sRun(runId)).toMatchObject({ status: "BLOCKED" }); expect(f.repo.getOneShotPublicationAuthorization(runId)).toBeNull(); });
 });
+
+describe("r52 parameterized fresh-flow run routing", () => {
+  it("binds fresh-flow evidence to the explicit requested run", async () => {
+    const f = setup({ withAuthorization: false, requestedRunId: "r52-run-a" });
+    const result = await f.service.runTask10sFreshPublishFlow(accountId, f.requestedRunId);
+
+    expect(result.testRunId).toBe(f.requestedRunId);
+    expect(result.accountId).toBe(accountId);
+  });
+
+  it("fails before browser exploration when the requested run already has a Job", async () => {
+    const f = setup({ withAuthorization: false, requestedRunId: "r52-run-with-job" });
+    f.repo.db.prepare("UPDATE platform_self_test_runs SET publish_confirmed_at=? WHERE test_run_id=?").run(new Date().toISOString(), f.requestedRunId);
+    f.repo.createPlatformSelfTestPublishJob({ testRunId: f.requestedRunId, title: "existing", body: "existing", dryRun: false });
+    const exploration = vi.spyOn(f.adapter, "runPublishFlowExploration");
+
+    const result = await f.service.runTask10sFreshPublishFlow(accountId, f.requestedRunId);
+
+    expect(result).toMatchObject({ status: "BLOCKED", testRunId: f.requestedRunId, failureCode: "TASK10S_FRESH_RUN_JOB_ALREADY_EXISTS" });
+    expect(exploration).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the current BrowserSession belongs to another account", async () => {
+    const f = setup({ withAuthorization: false, requestedRunId: "r52-run-runtime-account" });
+    f.runtime.accountId = "different-account";
+    const exploration = vi.spyOn(f.adapter, "runPublishFlowExploration");
+
+    const result = await f.service.runTask10sFreshPublishFlow(accountId, f.requestedRunId);
+
+    expect(result).toMatchObject({ status: "BLOCKED", failureCode: "XHS_FRESH_PUBLISH_FLOW_ACCOUNT_MISMATCH" });
+    expect(exploration).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the attested Creator does not match the Run account binding", async () => {
+    const f = setup({ withAuthorization: false, requestedRunId: "r52-run-creator-mismatch" });
+    f.repo.db.prepare("DELETE FROM platform_account_identity_bindings WHERE account_id=?").run(accountId);
+    f.repo.db.prepare("UPDATE accounts SET external_account_id=? WHERE id=?").run("different-creator", accountId);
+    const exploration = vi.spyOn(f.adapter, "runPublishFlowExploration");
+
+    const result = await f.service.runTask10sFreshPublishFlow(accountId, f.requestedRunId);
+
+    expect(result).toMatchObject({ status: "BLOCKED", failureCode: "TASK10S_FRESH_RUN_CREATOR_IDENTITY_MISMATCH" });
+    expect(exploration).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown requested Run without falling back to the canonical Run", async () => {
+    const f = setup({ withAuthorization: false, requestedRunId: "r52-run-known" });
+    const exploration = vi.spyOn(f.adapter, "runPublishFlowExploration");
+
+    const result = await f.service.runTask10sFreshPublishFlow(accountId, "r52-run-missing");
+
+    expect(result).toMatchObject({ status: "BLOCKED", testRunId: "r52-run-missing", failureCode: "TASK10S_FRESH_RUN_UNAVAILABLE" });
+    expect(exploration).not.toHaveBeenCalled();
+  });
+});

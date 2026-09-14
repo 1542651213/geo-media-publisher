@@ -7,7 +7,7 @@ import {
   RUN_XHS_TASK10S_ARM_RUN
 } from "../apps/desktop/src/main/diagnostic-trigger";
 
-describe("r51 parameterized Task10S ARM (RED)", () => {
+describe("r52 parameterized Task10S ARM routing", () => {
   it("accepts an explicit testRunId instead of silently selecting the historical run", () => {
     expect(parseDiagnosticAction(["Geo Media Publisher.exe", XHS_TASK10S_ARM_RUN_FLAG, "run-a"])).toBe(RUN_XHS_TASK10S_ARM_RUN);
   });
@@ -16,8 +16,8 @@ describe("r51 parameterized Task10S ARM (RED)", () => {
     expect(parseDiagnosticAction(["Geo Media Publisher.exe", XHS_TASK10S_ARM_RUN_FLAG])).toBeNull();
   });
 
-  it("rejects extra tokens and preserves the explicit id in the dispatch trace", () => {
-    expect(parseDiagnosticAction(["Geo Media Publisher.exe", XHS_TASK10S_ARM_RUN_FLAG, "run-a", "extra"])).toBeNull();
+  it("keeps the explicit id when trailing launcher tokens are present", () => {
+    expect(parseDiagnosticAction(["Geo Media Publisher.exe", XHS_TASK10S_ARM_RUN_FLAG, "run-a", "extra"])).toBe(RUN_XHS_TASK10S_ARM_RUN);
     expect(parseDiagnosticActionWithTrace(["Geo Media Publisher.exe", XHS_TASK10S_ARM_RUN_FLAG, "run-a"]).testRunId).toBe("run-a");
   });
 

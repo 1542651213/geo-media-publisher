@@ -38,6 +38,7 @@ export const ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION = "ESTABLISH_XHS_CONTEXT
 
 export const XHS_TASK10S_ARM_FRESH_COMPLETION_FLAG = "--xhs-task10s-arm-fresh-completion" as const;
 export const XHS_TASK10S_ARM_RUN_FLAG = "--xhs-task10s-arm-run" as const;
+export const XHS_TASK10S_FRESH_RUN_FLAG = "--xhs-task10s-fresh-run" as const;
 export type DiagnosticAction = typeof TASK10S_ARM_RUN | typeof TASK10S_FRESH_COMPLETION_ARM | typeof RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY | typeof RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE | typeof PROBE_XHS_CANONICAL_PAGE | typeof INSPECT_XHS_CONTEXT_PAGES | typeof INSPECT_XHS_PUBLISH_ENTRY_DOM | typeof INSPECT_XHS_POST_UPLOAD_RECONCILIATION | typeof INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS | typeof INSPECT_XHS_FILE_INPUT_STATE | typeof INSPECT_XHS_FINAL_SUBMIT_DOM | typeof INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM | typeof INSPECT_XHS_CLOSED_SHADOW_FINAL_SUBMIT | typeof ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 | typeof RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 | typeof RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN | typeof RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR | typeof RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW;
 
 function actionForValue(value: unknown): DiagnosticAction | null {
@@ -85,6 +86,7 @@ function actionForFlag(value: string | undefined): DiagnosticAction | null {
   if (value === XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN_FLAG) return RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN;
   if (value === XHS_TASK10S_COMPLETE_RETAINED_EDITOR_FLAG) return RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR;
   if (value === XHS_TASK10S_FRESH_PUBLISH_FLOW_FLAG) return RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW;
+  if (value === XHS_TASK10S_FRESH_RUN_FLAG) return RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW;
   return null;
 }
 
@@ -268,16 +270,52 @@ interface DiagnosticActionParseResult {
   testRunId: string | null;
 }
 
-function parseDiagnosticActionInternal(commandLine: readonly string[], additionalData?: unknown): DiagnosticActionParseResult {
-  const args = normalizeSecondInstanceArgv(commandLine);
-  const parameterizedArm = args[0] === XHS_TASK10S_ARM_RUN_FLAG;
-  if (parameterizedArm) {
-    if (additionalData !== undefined) return { action: null, rejectionCode: "INVALID_PARAMETERIZED_ARM_ADDITIONAL_DATA", testRunId: null };
-    if (args.length !== 2 || !args[1]?.trim()) return { action: null, rejectionCode: "TASK10S_ARM_TEST_RUN_ID_REQUIRED", testRunId: null };
-    return { action: TASK10S_ARM_RUN, rejectionCode: null, testRunId: args[1].trim() };
+export interface Task10sDiagnosticCommandParseResult {
+  action: DiagnosticAction | null;
+  testRunId: string | null;
+  rejectionCode: string | null;
+}
+
+interface ParameterizedDiagnosticFlag {
+  flag: string;
+  action: DiagnosticAction;
+}
+
+const PARAMETERIZED_DIAGNOSTIC_FLAGS: readonly ParameterizedDiagnosticFlag[] = [
+  { flag: XHS_TASK10S_ARM_RUN_FLAG, action: TASK10S_ARM_RUN },
+  { flag: XHS_TASK10S_FRESH_RUN_FLAG, action: RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW }
+];
+
+function exactFlagMatches(commandLine: readonly string[], flag: string): number[] {
+  const matches: number[] = [];
+  for (let index = 1; index < commandLine.length; index += 1) {
+    if (commandLine[index] === flag) matches.push(index);
   }
+  return matches;
+}
+
+function parseParameterizedDiagnosticCommand(commandLine: readonly string[], _additionalData?: unknown): DiagnosticActionParseResult | null {
+  const matches = PARAMETERIZED_DIAGNOSTIC_FLAGS.flatMap((spec) => exactFlagMatches(commandLine, spec.flag).map((index) => ({ ...spec, index })));
+  if (matches.length === 0) return null;
+  if (matches.length > 1) return { action: null, rejectionCode: "TASK10S_MULTIPLE_PARAMETERIZED_FLAGS", testRunId: null };
+
+  const match = matches[0];
+  const candidate = commandLine[match.index + 1]?.trim() ?? "";
+  if (!candidate || candidate.startsWith("-")) return { action: null, rejectionCode: "TASK10S_TEST_RUN_ID_REQUIRED", testRunId: null };
+
+  // An explicit command-line route carries the authoritative run id. Electron
+  // may also provide stale or launcher metadata as additionalData, which must
+  // not shadow the exact parameterized command.
+  return { action: match.action, rejectionCode: null, testRunId: candidate };
+}
+
+export function parseTask10sDiagnosticCommand(commandLine: readonly string[], additionalData?: unknown): Task10sDiagnosticCommandParseResult {
+  const parameterized = parseParameterizedDiagnosticCommand(commandLine, additionalData);
+  if (parameterized) return parameterized;
+
+  const args = normalizeSecondInstanceArgv(commandLine);
   const cliAction = args.length === 1 ? actionForFlag(args[0]) : null;
-  if (additionalData !== undefined) {
+  if (additionalData !== undefined && additionalData !== null) {
     const additionalAction = parseFixedAdditionalData(additionalData);
     if (!additionalAction) return { action: null, rejectionCode: "INVALID_ADDITIONAL_DATA", testRunId: null };
     if (additionalAction === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3 || additionalAction === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4 || additionalAction === RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5 || additionalAction === RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN) {
@@ -289,6 +327,10 @@ function parseDiagnosticActionInternal(commandLine: readonly string[], additiona
   }
   if (cliAction) return { action: cliAction, rejectionCode: null, testRunId: null };
   return { action: null, rejectionCode: args.length === 0 ? "NO_FIXED_ACTION" : "UNKNOWN_OR_EXTRA_ARGUMENT", testRunId: null };
+}
+
+function parseDiagnosticActionInternal(commandLine: readonly string[], additionalData?: unknown): DiagnosticActionParseResult {
+  return parseTask10sDiagnosticCommand(commandLine, additionalData);
 }
 
 function actionParseResult(action: DiagnosticAction | null, args: readonly string[]): Task10sAttempt3DispatchTrace["actionParseResult"] {

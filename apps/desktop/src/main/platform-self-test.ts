@@ -668,15 +668,17 @@ export class PlatformSelfTestService {
     this.task10sFreshEvidence = null;
     this.task10sClosedShadowEvidence = null;
     const operationId = randomUUID();
-    const requestedRun = requestedTestRunId ? this.options.repository.getPlatformSelfTestRun(requestedTestRunId) : null;
-    if (requestedTestRunId && (!requestedRun || requestedRun.testRunId !== requestedTestRunId || requestedRun.requestedLevel !== "L5_PUBLISH")) return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: requestedAccountId ?? null, failureCode: "TASK10S_FRESH_RUN_UNAVAILABLE" });
-    const account = this.selectedXhsAccount(requestedAccountId);
-    if (!account || !account.enabled || account.archivedAt) return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account?.id ?? null, failureCode: "XHS_ACCOUNT_UNAVAILABLE" });
-    if (requestedRun && (requestedRun.accountId !== account.id || requestedRun.platformKey !== account.platformKey || requestedRun.platformAccountId !== (account.platformAccountId ?? account.id))) return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account.id, failureCode: "TASK10S_FRESH_RUN_ACCOUNT_MISMATCH" });
+    const requested = requestedTestRunId?.trim() || null;
+    const requestedRun = requested ? this.options.repository.getPlatformSelfTestRun(requested) : null;
+    if (requested && (!requestedRun || requestedRun.testRunId !== requested || requestedRun.requestedLevel !== "L5_PUBLISH" || !requestedRun.accountId)) return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requested, accountId: requestedAccountId ?? null, failureCode: "TASK10S_FRESH_RUN_UNAVAILABLE" });
+    if (requestedRun?.publishJobId) return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requested, accountId: requestedRun.accountId, failureCode: "TASK10S_FRESH_RUN_JOB_ALREADY_EXISTS" });
+    const account = this.selectedXhsAccount(requestedAccountId ?? requestedRun?.accountId ?? undefined);
+    if (!account || !account.enabled || account.archivedAt) return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requested, accountId: account?.id ?? null, failureCode: "XHS_ACCOUNT_UNAVAILABLE" });
+    if (requestedRun && (requestedRun.accountId !== account.id || requestedRun.platformKey !== account.platformKey || requestedRun.platformAccountId !== (account.platformAccountId ?? account.id))) return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requested, accountId: account.id, failureCode: "TASK10S_FRESH_RUN_ACCOUNT_MISMATCH" });
 
     const adapter = this.options.registry.getForContent("xiaohongshu", "article");
     if (!isAutomationAdapter(adapter) || typeof adapter.runPublishFlowExploration !== "function" || typeof adapter.getBrowserRuntimeSnapshot !== "function" || typeof adapter.getBrowserSessionEvidence !== "function") {
-      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_ADAPTER_UNAVAILABLE" });
+      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requested, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_ADAPTER_UNAVAILABLE" });
     }
 
     const context: AccountContext = {
@@ -691,22 +693,27 @@ export class PlatformSelfTestService {
     const pathname = safeUrlPath(sessionEvidence?.pageUrl ?? null);
     const origin = safeUrlOrigin(sessionEvidence?.pageUrl ?? null);
     if (runtime.platformKey !== account.platformKey || runtime.accountId !== account.id) {
-      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_ACCOUNT_MISMATCH" });
+      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requested, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_ACCOUNT_MISMATCH" });
     }
     if (!runtime.sessionExists || runtime.browserConnected !== true || !runtime.contextExists || !runtime.canonicalPageExists || runtime.canonicalPageClosed === true || runtime.runtimeAuthState !== "AUTHENTICATED") {
-      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_RUNTIME_UNAVAILABLE" });
+      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requested, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_RUNTIME_UNAVAILABLE" });
     }
+    if (requestedRun && runtime.accountId !== requestedRun.accountId) return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requested, accountId: account.id, failureCode: "TASK10S_FRESH_RUN_RUNTIME_ACCOUNT_MISMATCH" });
     if (origin !== "https://creator.xiaohongshu.com" || !isTask10sFreshPublishStartPath(pathname ?? "")) {
-      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account.id, failureCode: "FRESH_PUBLISH_REQUIRES_CREATOR_HOME" });
+      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requested, accountId: account.id, failureCode: "FRESH_PUBLISH_REQUIRES_CREATOR_HOME" });
     }
 
     const identity = await this.xhsIdentity.establishContextIdentityAttestation(account.id);
     if (identity.status !== "PASS") {
       const identityEvidence = { status: "BLOCKED" as const, creatorId: null, contextId: runtime.contextDebugId, failureCode: identity.failureCode };
-      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account.id, failureCode: identity.failureCode, identityAttestation: identityEvidence });
+      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requested, accountId: account.id, failureCode: identity.failureCode, identityAttestation: identityEvidence });
     }
     const attestation = identity.attestation;
     const identityEvidence = { status: "PASS" as const, creatorId: attestation.observedExternalCreatorId, contextId: attestation.browserContextIdentity, failureCode: null };
+    const expectedCreatorId = this.expectedCreatorId(account);
+    if (!expectedCreatorId || attestation.observedExternalCreatorId !== expectedCreatorId) {
+      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requested, accountId: account.id, failureCode: "TASK10S_FRESH_RUN_CREATOR_IDENTITY_MISMATCH", identityAttestation: identityEvidence });
+    }
 
     const fixture = validateTask10sSafeFixture();
     const fixtureEvidence: Task10sFreshPublishFlowResult["fixture"] = {
@@ -718,9 +725,9 @@ export class PlatformSelfTestService {
       failureCode: fixture.failureCode
     };
     if (!fixture.valid) {
-      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account.id, failureCode: fixture.failureCode ?? "FIXTURE_INVALID", fixture: fixtureEvidence, identityAttestation: identityEvidence });
+      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requested, accountId: account.id, failureCode: fixture.failureCode ?? "FIXTURE_INVALID", fixture: fixtureEvidence, identityAttestation: identityEvidence });
     }
-    if (this.controlledOperations.has(account.id)) return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_ALREADY_RUNNING", fixture: fixtureEvidence, identityAttestation: identityEvidence });
+    if (this.controlledOperations.has(account.id)) return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requested, accountId: account.id, failureCode: "XHS_FRESH_PUBLISH_FLOW_ALREADY_RUNNING", fixture: fixtureEvidence, identityAttestation: identityEvidence });
 
     const before = this.options.repository.getPublishDomainCounts();
     this.controlledOperations.add(account.id);
@@ -754,7 +761,7 @@ export class PlatformSelfTestService {
         action: RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW,
         status: persistedExploration.status,
         operationId,
-        testRunId: requestedTestRunId ?? null,
+        testRunId: requested,
         accountId: account.id,
         newPublishEntry,
         identityAttestation: identityEvidence,
@@ -769,7 +776,7 @@ export class PlatformSelfTestService {
       if (!safetyViolation) this.task10sFreshEvidence = { result: structuredClone(result), sessionId: runtime.browserSessionIdentity ?? null, pageId: runtime.canonicalPageDebugId };
       return result;
     } catch (error) {
-      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requestedTestRunId, accountId: account.id, failureCode: error instanceof Error ? error.message : "XHS_FRESH_PUBLISH_FLOW_FAILED", fixture: fixtureEvidence, identityAttestation: identityEvidence });
+      return blockedTask10sFreshPublishFlowResult({ operationId, testRunId: requested, accountId: account.id, failureCode: error instanceof Error ? error.message : "XHS_FRESH_PUBLISH_FLOW_FAILED", fixture: fixtureEvidence, identityAttestation: identityEvidence });
     } finally {
       this.controlledOperations.delete(account.id);
     }
