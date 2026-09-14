@@ -288,25 +288,57 @@ const PARAMETERIZED_DIAGNOSTIC_FLAGS: readonly ParameterizedDiagnosticFlag[] = [
 
 function exactFlagMatches(commandLine: readonly string[], flag: string): number[] {
   const matches: number[] = [];
-  for (let index = 1; index < commandLine.length; index += 1) {
+  for (let index = 0; index < commandLine.length; index += 1) {
     if (commandLine[index] === flag) matches.push(index);
   }
   return matches;
 }
 
-function parseParameterizedDiagnosticCommand(commandLine: readonly string[], _additionalData?: unknown): DiagnosticActionParseResult | null {
+const TASK10S_RUN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+function isTask10sRunId(value: string): boolean {
+  return TASK10S_RUN_ID_PATTERN.test(value);
+}
+
+function isTask10sLauncherArgument(value: string): boolean {
+  return value.startsWith("-") || isKnownElectronLauncherPositional(value);
+}
+
+/**
+ * Parses only the parameterized Task10S command routes. The run id is found
+ * by UUID shape after the exact action flag so Electron launcher arguments can
+ * be interleaved without changing the route. No fallback run is consulted.
+ */
+export function parseTask10sCommand(commandLine: readonly string[]): Task10sDiagnosticCommandParseResult {
   const matches = PARAMETERIZED_DIAGNOSTIC_FLAGS.flatMap((spec) => exactFlagMatches(commandLine, spec.flag).map((index) => ({ ...spec, index })));
-  if (matches.length === 0) return null;
-  if (matches.length > 1) return { action: null, rejectionCode: "TASK10S_MULTIPLE_PARAMETERIZED_FLAGS", testRunId: null };
+  if (matches.length === 0) return { action: null, rejectionCode: null, testRunId: null };
+  if (matches.length > 1) return { action: null, rejectionCode: "TASK10S_MULTIPLE_ACTIONS", testRunId: null };
 
   const match = matches[0];
-  const candidate = commandLine[match.index + 1]?.trim() ?? "";
-  if (!candidate || candidate.startsWith("-")) return { action: null, rejectionCode: "TASK10S_TEST_RUN_ID_REQUIRED", testRunId: null };
+  const trailingArguments = commandLine.slice(match.index + 1).map((value) => value.trim()).filter((value) => value.length > 0);
+  const runIdCandidates = trailingArguments.filter(isTask10sRunId);
+  if (runIdCandidates.length > 1) return { action: null, rejectionCode: "TASK10S_INVALID_RUN_ID", testRunId: null };
+  if (runIdCandidates.length === 1) {
+    const runId = runIdCandidates[0];
+    const precedingNonLauncherArgument = trailingArguments
+      .slice(0, trailingArguments.indexOf(runId))
+      .some((value) => !isTask10sLauncherArgument(value));
+    if (precedingNonLauncherArgument) return { action: null, rejectionCode: "TASK10S_INVALID_RUN_ID", testRunId: null };
+    return { action: match.action, rejectionCode: null, testRunId: runId };
+  }
 
-  // An explicit command-line route carries the authoritative run id. Electron
-  // may also provide stale or launcher metadata as additionalData, which must
-  // not shadow the exact parameterized command.
-  return { action: match.action, rejectionCode: null, testRunId: candidate };
+  const nonLauncherArgument = trailingArguments.some((value) => !isTask10sLauncherArgument(value));
+  return {
+    action: null,
+    rejectionCode: nonLauncherArgument ? "TASK10S_INVALID_RUN_ID" : "TASK10S_TEST_RUN_ID_REQUIRED",
+    testRunId: null
+  };
+}
+
+function parseParameterizedDiagnosticCommand(commandLine: readonly string[], _additionalData?: unknown): DiagnosticActionParseResult | null {
+  const parsed = parseTask10sCommand(commandLine);
+  if (parsed.action || parsed.rejectionCode) return parsed;
+  return null;
 }
 
 export function parseTask10sDiagnosticCommand(commandLine: readonly string[], additionalData?: unknown): Task10sDiagnosticCommandParseResult {
