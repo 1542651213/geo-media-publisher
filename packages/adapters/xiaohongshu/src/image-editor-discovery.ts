@@ -1,5 +1,6 @@
 import type { Locator, Page } from "playwright-core";
 import type { PreSubmitGateFailureCode, PreSubmitGateFailureStage } from "@publisher/adapters-core";
+import { recoverNativeFilePicker, type NativeFilePickerRecoveryProbe, type NativeFilePickerRecoveryResult } from "./native-file-picker-recovery";
 
 export type ImageEditorShellStatus = "IMAGE_EDITOR_SHELL_READY" | "IMAGE_EDITOR_SHELL_NOT_READY" | "IMAGE_EDITOR_SHELL_TIMEOUT";
 export type ImageEditorInspectionStatus = "READY" | "FAILED";
@@ -375,6 +376,9 @@ export interface ImageEditorDiagnostic {
   selfTestMode?: "POST_UPLOAD_DISCOVERY_ONLY";
   uploadMutationCount?: number;
   uploadAttemptIndex?: number;
+  nativeFilePickerDetected?: boolean;
+  nativeFilePickerCancelled?: boolean;
+  nativeFilePickerRecovery?: NativeFilePickerRecoveryResult["status"];
 }
 
 export interface ImagePostEditorInspectionResult {
@@ -420,6 +424,9 @@ export interface ImagePostUploadEditorInspectionResult extends ImagePostEditorIn
   terminalStateReached: boolean;
   intermediateState: "NONE" | "IMAGE_POST_MEDIA_PREVIEW" | "IMAGE_POST_MEDIA_EDITING" | "IMAGE_POST_CONFIRMATION_REQUIRED";
   postUploadReadinessDurationMs: number;
+  nativeFilePickerDetected: boolean;
+  nativeFilePickerCancelled: boolean;
+  nativeFilePickerRecovery: NativeFilePickerRecoveryResult["status"];
 }
 
 export interface PreUploadImageEditorContractResult {
@@ -441,6 +448,7 @@ export interface ImageEditorInspectionOptions {
   stableSampleCount?: number;
   requiredControls?: readonly ImageEditorControlKind[];
   postUploadReadiness?: boolean;
+  nativeFilePickerRecovery?: NativeFilePickerRecoveryProbe;
   emit?: (diagnostic: ImageEditorDiagnostic) => void;
 }
 
@@ -1968,10 +1976,14 @@ function postUploadControlFailureCode(code: PreSubmitGateFailureCode | undefined
 }
 
 export async function inspectPostUploadImageEditor(page: Page, metadata: ImageEditorInspectionMetadata, options: ImageEditorInspectionOptions = {}): Promise<ImagePostUploadEditorInspectionResult> {
+  const nativeFilePickerRecovery = await recoverNativeFilePicker(options.nativeFilePickerRecovery);
   emit(options, metadata, "POST_UPLOAD_EDITOR_READINESS_STARTED", {
     sanitizedUrl: sanitizeUrl(page.url()),
     expectedPhase: "IMAGE_POST_POST_UPLOAD_EDITOR",
-    observedPhase: "IMAGE_POST_TRANSITIONING"
+    observedPhase: "IMAGE_POST_TRANSITIONING",
+    nativeFilePickerDetected: nativeFilePickerRecovery.detected,
+    nativeFilePickerCancelled: nativeFilePickerRecovery.cancelled,
+    nativeFilePickerRecovery: nativeFilePickerRecovery.status
   });
   const startedAt = Date.now();
   const forwardedEmitter = (diagnostic: ImageEditorDiagnostic): void => {
@@ -2033,10 +2045,12 @@ export async function inspectPostUploadImageEditor(page: Page, metadata: ImageEd
   const controlsReady = inspected.status === "READY" && phaseState.phase === "IMAGE_POST_POST_UPLOAD_EDITOR";
   const completionReady = !uploadBusy && previewReady;
   const isAuthenticated = !inspected.loginPagePresent && !inspected.securityVerificationPresent;
-  const ready = controlsReady && completionReady && isAuthenticated && inspected.contentType === "IMAGE_POST" && inspected.contentTypeReady;
+  const ready = nativeFilePickerRecovery.status !== "BLOCKED" && controlsReady && completionReady && isAuthenticated && inspected.contentType === "IMAGE_POST" && inspected.contentTypeReady;
   const observedPhase: ImageEditorPhase = phaseState.phase;
   const confidence: ImageEditorPhaseConfidence = ready ? "HIGH" : phaseState.confidence;
-  const reason = ready
+  const reason = nativeFilePickerRecovery.status === "BLOCKED"
+    ? "native file picker was detected but could not be safely cancelled"
+    : ready
     ? "upload completion and stable post-upload editor controls are present"
     : uploadBusy
       ? "upload is still busy"
@@ -2045,7 +2059,11 @@ export async function inspectPostUploadImageEditor(page: Page, metadata: ImageEd
         : phaseState.reason;
   const postUploadControlsStatus: ImageEditorPostUploadControlsStatus = ready ? "READY" : "FAIL";
   if (!ready) {
-    if (inspected.loginPagePresent) {
+    if (nativeFilePickerRecovery.status === "BLOCKED") {
+      inspected.failureCode = "POST_UPLOAD_EDITOR_TIMEOUT";
+      inspected.failureStage = "EDITOR_DISCOVERY";
+      inspected.missingSignal = "native-file-picker-cancel";
+    } else if (inspected.loginPagePresent) {
       inspected.failureCode = "AUTH_REDIRECTED_TO_LOGIN";
       inspected.failureStage = "AUTHENTICATION";
       inspected.missingSignal = "login-url";
@@ -2135,6 +2153,9 @@ export async function inspectPostUploadImageEditor(page: Page, metadata: ImageEd
     terminalStateReached: phaseState.terminalStateReached,
     intermediateState: phaseState.intermediateState,
     postUploadReadinessDurationMs: lastSample?.elapsedMs ?? Math.max(0, Date.now() - startedAt),
+    nativeFilePickerDetected: nativeFilePickerRecovery.detected,
+    nativeFilePickerCancelled: nativeFilePickerRecovery.cancelled,
+    nativeFilePickerRecovery: nativeFilePickerRecovery.status,
     status: ready ? "READY" : "FAILED"
   };
   if (ready) {

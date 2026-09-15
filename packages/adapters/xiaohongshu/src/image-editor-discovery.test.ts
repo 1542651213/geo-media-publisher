@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { chromium } from "playwright-core";
 import type { Page } from "playwright-core";
 import {
@@ -18,6 +18,7 @@ import {
   type ImageEditorTabCandidateEvidence,
   type ImageEditorUploadControlRelationship
 } from "./image-editor-discovery";
+import type { NativeFilePickerRecoveryProbe } from "./native-file-picker-recovery";
 
 const metadata: ImageEditorInspectionMetadata = {
   operationId: "operation-editor-1",
@@ -596,6 +597,54 @@ describe("Xiaohongshu image editor discovery", () => {
       "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED",
       "POST_UPLOAD_EDITOR_INSPECTION_COMPLETED"
     ]));
+  });
+
+  it("enters post-upload discovery directly when no native picker is open", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const picker: NativeFilePickerRecoveryProbe = { isOpen: async () => false, cancel };
+    const result = await inspectPostUploadImageEditor(pageFor([snapshot(), snapshot()]), metadata, {
+      maxWaitMs: 80,
+      probeIntervalMs: 0,
+      stableSampleCount: 2,
+      nativeFilePickerRecovery: picker
+    });
+
+    expect(result).toMatchObject({ status: "READY", nativeFilePickerDetected: false, nativeFilePickerCancelled: false, nativeFilePickerRecovery: "NOT_DETECTED" });
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
+  it("cancels a detected native picker before post-upload discovery", async () => {
+    let open = true;
+    const cancel = vi.fn(async () => { open = false; });
+    const picker: NativeFilePickerRecoveryProbe = { isOpen: async () => open, cancel };
+    const result = await inspectPostUploadImageEditor(pageFor([snapshot(), snapshot()]), metadata, {
+      maxWaitMs: 80,
+      probeIntervalMs: 0,
+      stableSampleCount: 2,
+      nativeFilePickerRecovery: picker
+    });
+
+    expect(result).toMatchObject({ status: "READY", nativeFilePickerDetected: true, nativeFilePickerCancelled: true, nativeFilePickerRecovery: "CANCELLED" });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when the picker is cancelled but the editor never becomes ready", async () => {
+    let open = true;
+    const cancel = vi.fn(async () => { open = false; });
+    const picker: NativeFilePickerRecoveryProbe = { isOpen: async () => open, cancel };
+    const result = await inspectPostUploadImageEditor(pageFor([
+      snapshot({ titleCandidates: [], bodyCandidates: [], finalSubmitCandidates: [] }),
+      snapshot({ titleCandidates: [], bodyCandidates: [], finalSubmitCandidates: [] })
+    ]), metadata, {
+      maxWaitMs: 80,
+      probeIntervalMs: 0,
+      stableSampleCount: 2,
+      nativeFilePickerRecovery: picker
+    });
+
+    expect(result.status).toBe("FAILED");
+    expect(result.nativeFilePickerRecovery).toBe("CANCELLED");
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a unique disabled final-submit control present while reporting it as not enabled", async () => {

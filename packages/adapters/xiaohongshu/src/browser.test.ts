@@ -48,6 +48,8 @@ type FixtureOptions = {
   fileInputCount?: number;
   intermediateAction?: boolean;
   editorScopedImageItemCount?: number;
+  nativePickerOpenAfterUpload?: boolean;
+  nativePickerCancelFails?: boolean;
 };
 
 interface Fixture {
@@ -62,6 +64,7 @@ interface Fixture {
   operationPages: Page[];
   calls: string[];
   session: BrowserSession;
+  keyboardPress: ReturnType<typeof vi.fn>;
   phaseSnapshot: () => Record<string, unknown>;
   postUploadSnapshot: () => Record<string, unknown>;
 }
@@ -167,7 +170,11 @@ function setupPage(options: FixtureOptions = {}): Fixture {
   const operationContextDebugIds: string[] = [];
   const operationPages: Page[] = [];
   const submitClick = vi.fn(async () => { calls.push("final-submit-click"); });
-  const inputSetFiles = vi.fn(async () => { imageUploaded = true; calls.push("image-set-input-files"); });
+  const inputSetFiles = vi.fn(async () => {
+    imageUploaded = true;
+    if (options.nativePickerOpenAfterUpload) setActivePageUrl?.("https://creator.xiaohongshu.com/publish/publish?openFilePicker=true");
+    calls.push("image-set-input-files");
+  });
   const entryClick = vi.fn(async () => {
     if (options.publishEntryClickFails) throw new Error("publish entry click failed");
     const publishUrl = "https://creator.xiaohongshu.com/publish/publish";
@@ -318,6 +325,9 @@ function setupPage(options: FixtureOptions = {}): Fixture {
   const createPage = (initialUrl: string, onClose?: () => void): Page => {
     let pageUrl = initialUrl;
     let closed = false;
+    const keyboardPress = vi.fn(async (_key: string) => {
+      if (options.nativePickerCancelFails) throw new Error("picker cancel failed");
+    });
     const page = {
       goto: vi.fn(async (_url: string) => {
         pageUrl = options.loginPage ? "https://www.xiaohongshu.com/login" : creatorHomeUrl;
@@ -334,6 +344,7 @@ function setupPage(options: FixtureOptions = {}): Fixture {
       }),
       isClosed: vi.fn(() => closed),
       context: vi.fn(() => pageContextRef.value as BrowserSession["context"]),
+      keyboard: { press: keyboardPress },
       locator: vi.fn((selector: string) => {
         currentUrl = pageUrl;
         if (selector === "body") return pageRoot;
@@ -481,7 +492,8 @@ function setupPage(options: FixtureOptions = {}): Fixture {
       processingSignalPresent: Boolean(options.imageLoading)
     };
   };
-  const fixture = { page, manager, submitClick, inputSetFiles, entryClick, open, operationPageDebugIds, operationContextDebugIds, operationPages, calls, session, phaseSnapshot, postUploadSnapshot };
+  const keyboardPress = (page as unknown as { keyboard: { press: ReturnType<typeof vi.fn> } }).keyboard.press;
+  const fixture = { page, manager, submitClick, inputSetFiles, entryClick, open, operationPageDebugIds, operationContextDebugIds, operationPages, calls, session, keyboardPress, phaseSnapshot, postUploadSnapshot };
   installSharedConnectionLifecycle(fixture);
   installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
   return fixture;
@@ -2148,6 +2160,45 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
       expect.objectContaining({ code: "IMAGE_UPLOAD_COMPLETED" }),
       expect.objectContaining({ code: "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED" })
     ]));
+  });
+
+  it("cancels an explicit native picker marker before controlled editor discovery without retrying upload", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", nativePickerOpenAfterUpload: true });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager } as never);
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    fixture.manager.setRuntimeAuthState?.({ platformKey: "xiaohongshu", accountId: "account-a" }, "AUTHENTICATED", null);
+    const result = await adapter.runControlledPostUploadDiscovery(ctx, { imagePath: "C:/fixtures/task10n-safe-test.png", imageSource: "SAFE_TEST_FIXTURE" });
+
+    expect(result).toMatchObject({ status: "PASS", uploadMutationCount: 1, postUploadControlsStatus: "READY" });
+    expect(fixture.inputSetFiles).toHaveBeenCalledTimes(1);
+    expect(fixture.keyboardPress).toHaveBeenCalledTimes(1);
+    expect(fixture.keyboardPress).toHaveBeenCalledWith("Escape");
+    expect(fixture.submitClick).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when picker cancellation fails before exploration can mutate content", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", nativePickerOpenAfterUpload: true, nativePickerCancelFails: true });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager } as never);
+    const ctx = context("account-a");
+
+    await adapter.connectAccount(ctx);
+    fixture.manager.setRuntimeAuthState?.({ platformKey: "xiaohongshu", accountId: "account-a" }, "AUTHENTICATED", null);
+    const result = await adapter.runPublishFlowExploration(ctx, {
+      imagePath: "C:/fixtures/task10n-safe-test.png",
+      imageSource: "SAFE_TEST_FIXTURE",
+      title: "不应写入",
+      body: "不应写入"
+    });
+
+    expect(result).toMatchObject({ status: "BLOCKED", blocker: "POST_UPLOAD_EDITOR_TIMEOUT", uploadAttempts: 1, contentMutationCount: 0, finalSubmitCount: 0 });
+    expect(fixture.inputSetFiles).toHaveBeenCalledTimes(1);
+    expect(fixture.calls).not.toContain("title-fill");
+    expect(fixture.calls).not.toContain("body-fill");
+    expect(fixture.submitClick).not.toHaveBeenCalled();
   });
 
   it("runs publish-flow exploration through title/body readback and proves final submit without clicking", async () => {

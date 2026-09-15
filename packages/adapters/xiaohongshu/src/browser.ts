@@ -90,6 +90,7 @@ import { containsExpectedXiaohongshuSafeFixture, inspectXiaohongshuFileInputStat
 import { readXiaohongshuUploadInputImmediately, type XiaohongshuUploadFileExpectation, type XiaohongshuUploadInputImmediateReadback } from "./upload-delivery-diagnostic";
 import { ensureXhsIdentityPage, type IdentityPageEnsureResult } from "./ensure-identity-page";
 import { normalizeXiaohongshuEditorText } from "./editor-text-normalization";
+import { createXhsNativeFilePickerRecovery, recoverNativeFilePicker } from "./native-file-picker-recovery";
 export { normalizeXiaohongshuEditorText } from "./editor-text-normalization";
 export type { XiaohongshuPostUploadBoundingRect, XiaohongshuPostUploadFinalSubmitProof, XiaohongshuPostUploadImageItemSafe, XiaohongshuPostUploadReconciliationDomSnapshot, XiaohongshuPostUploadReconciliationResult, XiaohongshuPostUploadReconciliationState } from "./post-upload-reconciliation-diagnostic";
 export { classifyXiaohongshuPostUploadTerminalReadiness } from "./post-upload-terminal-readiness";
@@ -2897,7 +2898,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       const imageEvidence = await this.uploadImages(canonical.page, [input.imagePath], { ctx, session: canonical.session, metadata, selfTestMode: "POST_UPLOAD_DISCOVERY_ONLY", expectedFileMetadata: TASK10S_SAFE_FIXTURE_EXPECTATION, onMutationStarted: input.onUploadMutationStarted });
       const uploadCompletionObserved = imageEvidence.verified === true;
       if (!uploadCompletionObserved) return failure("UPLOAD_COMPLETION_NOT_OBSERVED", "EDITOR_DISCOVERY", "upload-completion", 1);
-      const postUploadInspection = await inspectPostUploadImageEditor(canonical.page, metadata, { emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
+      const postUploadInspection = await inspectPostUploadImageEditor(canonical.page, metadata, { nativeFilePickerRecovery: createXhsNativeFilePickerRecovery(canonical.page), emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
       const postUploadPassed = postUploadInspection.status === "READY" && postUploadInspection.phase === "IMAGE_POST_POST_UPLOAD_EDITOR" && postUploadInspection.postUploadControlsStatus === "READY";
       const result: ControlledPostUploadDiscoveryResult = {
         mode: "POST_UPLOAD_DISCOVERY_ONLY",
@@ -3283,8 +3284,17 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       return buildResult("BLOCKED");
     }
 
+    const nativeFilePickerRecovery = createXhsNativeFilePickerRecovery(canonical.page);
+
     if (input.postUploadReadinessStrategy === "TERMINAL_CLASSIFIER") {
       try {
+        const nativePickerRecovery = await recoverNativeFilePicker(nativeFilePickerRecovery);
+        states.push({ phase: "NATIVE_FILE_PICKER_RECOVERY", ...nativePickerRecovery });
+        addTimeline("POST_UPLOAD_EDITOR_DISCOVERY", "NATIVE_FILE_PICKER_RECOVERY", nativePickerRecovery.status === "BLOCKED" ? "BLOCKED" : nativePickerRecovery.status === "CANCELLED" ? "CANCELLED" : "NOT_DETECTED");
+        if (nativePickerRecovery.status === "BLOCKED") {
+          blocker = "NATIVE_FILE_PICKER_CANCEL_FAILED";
+          return buildResult("BLOCKED");
+        }
         const postUploadSnapshot = await inspectXiaohongshuPostUploadReconciliationDom(canonical.page);
         const postUploadReconciliation = reconcileXiaohongshuPostUploadSnapshot(postUploadSnapshot);
         const terminalReadiness = classifyXiaohongshuPostUploadTerminalReadiness({
@@ -3317,6 +3327,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       }
     } else {
       let postUploadInspection = await inspectPostUploadImageEditor(canonical.page, metadata, {
+        nativeFilePickerRecovery,
         readinessWindowMs: Math.max(0, Math.min(10_000, budgets.maxDurationMs - (Date.now() - startedAt))),
         readinessSampleIntervalMs: 80,
         emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic)
@@ -3326,6 +3337,10 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         forbiddenMutationObserved = true;
         blocker = "FORBIDDEN_DESTRUCTIVE_ACTION_SIGNAL";
         return buildResult("SAFETY_BOUNDARY_VIOLATION");
+      }
+      if (postUploadInspection.nativeFilePickerRecovery === "BLOCKED") {
+        blocker = postUploadInspection.failureCode ?? "POST_UPLOAD_PHASE_NOT_READY";
+        return buildResult("BLOCKED");
       }
       const intermediateActions: Array<Record<string, unknown>> = [];
       let intermediateActionCount = 0;
@@ -3361,11 +3376,15 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
           intermediateActions.push(actionEntry);
           actions.push(actionEntry);
           this.emitEditorEntryDiagnostic({ code: "XHS_PUBLISH_FLOW_INTERMEDIATE_ACTION", timestamp: new Date().toISOString(), operationId, platformKey: "xiaohongshu", accountId: ctx.accountId, contextDebugId: canonical.session.contextDebugId ?? "unknown-context", pageDebugId: canonical.pageDebugId, pageRole: "CANONICAL_AUTHENTICATED", pageSource: "EXISTING_CANONICAL_PAGE", createdNewPage: false, action: "XHS_PUBLISH_FLOW_INTERMEDIATE_ACTION", status: "CLICKED", phase, intermediateActionClickCount: counters.intermediateActionClickCount, finalSubmitCount: 0 });
-          postUploadInspection = await inspectPostUploadImageEditor(canonical.page, metadata, { readinessWindowMs: Math.max(0, Math.min(10_000, budgets.maxDurationMs - (Date.now() - startedAt))), readinessSampleIntervalMs: 80, emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
+          postUploadInspection = await inspectPostUploadImageEditor(canonical.page, metadata, { nativeFilePickerRecovery, readinessWindowMs: Math.max(0, Math.min(10_000, budgets.maxDurationMs - (Date.now() - startedAt))), readinessSampleIntervalMs: 80, emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
           states.push(postUploadInspection as unknown as Record<string, unknown>);
           if (postUploadInspection.forbiddenActionSignalPresent === true) {
             forbiddenMutationObserved = true;
             blocker = "FORBIDDEN_DESTRUCTIVE_ACTION_SIGNAL";
+            break;
+          }
+          if (postUploadInspection.nativeFilePickerRecovery === "BLOCKED") {
+            blocker = postUploadInspection.failureCode ?? "POST_UPLOAD_PHASE_NOT_READY";
             break;
           }
           const after = intermediateActions[intermediateActions.length - 1];
@@ -4000,6 +4019,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const imageEvidence = await this.uploadImages(page, article.images ?? [], { ctx, session: opened.session, metadata: editorMetadata });
     gates.push("image_upload");
     const postUploadInspection = await inspectPostUploadImageEditor(page, editorMetadata, {
+      nativeFilePickerRecovery: createXhsNativeFilePickerRecovery(page),
       emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic)
     });
     if (postUploadInspection.status !== "READY") {
