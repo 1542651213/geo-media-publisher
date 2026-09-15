@@ -83,6 +83,10 @@ describe("Task10S retained-editor completion gate", () => {
     expect(evaluateTask10sRetainedEditorGate(freshPreparedArticleInput())).toMatchObject({ status: "READY_TO_SUBMIT", titleReadbackExact: true, bodyReadbackExact: true });
   });
 
+  it("accepts normalized editor title readback for a fullwidth bound Article title", () => {
+    expect(evaluateTask10sRetainedEditorGate(freshPreparedArticleInput({ titleReadback: "自动化发布测试1|请忽略" }))).toMatchObject({ status: "READY_TO_SUBMIT", titleReadbackExact: true });
+  });
+
   it("requires strict editor readback against the bound Article", () => {
     expect(evaluateTask10sRetainedEditorGate(freshPreparedArticleInput({ titleReadback: "其他标题" }))).toMatchObject({ status: "BLOCKED", failureCode: "TITLE_READBACK_NOT_EXACT" });
     expect(evaluateTask10sRetainedEditorGate(freshPreparedArticleInput({ bodyReadback: "其他正文" }))).toMatchObject({ status: "BLOCKED", failureCode: "BODY_READBACK_NOT_EXACT" });

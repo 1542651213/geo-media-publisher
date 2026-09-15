@@ -1,5 +1,6 @@
 import type { Task10sFinalSurfaceResolution } from "./task10s-final-surface";
 import { parseXiaohongshuImageCounterText } from "./post-upload-reconciliation-diagnostic";
+import { normalizeXiaohongshuEditorText } from "./editor-text-normalization";
 
 export type Task10sRetainedEditorPostUploadState = "EDITOR_READY" | "PROCESSING" | "REJECTED" | "AMBIGUOUS";
 
@@ -62,7 +63,7 @@ export function evaluateTask10sRetainedEditorGate(input: Task10sRetainedEditorGa
   if (!input.noExplicitUploadError) return blocked("EXPLICIT_UPLOAD_ERROR");
   if (!input.initialPublishSurface.present) return blocked("INITIAL_FINAL_SURFACE_NOT_PRESENT");
   if (!input.trustedArticleTitle.trim() || !input.trustedArticleBody.trim()) return blocked("PREPARED_ARTICLE_CONTENT_NOT_AVAILABLE");
-  if (input.titleReadback !== input.trustedArticleTitle) return blocked("TITLE_READBACK_NOT_EXACT");
+  if (normalizeXiaohongshuEditorText(input.titleReadback) !== normalizeXiaohongshuEditorText(input.trustedArticleTitle)) return blocked("TITLE_READBACK_NOT_EXACT");
   if (input.bodyReadback !== input.trustedArticleBody) return blocked("BODY_READBACK_NOT_EXACT");
   if (!input.requiredFieldsPass) return blocked("REQUIRED_FIELDS_NOT_VERIFIED");
   if (!input.contextIdentityAttestationPass) return blocked("CONTEXT_IDENTITY_ATTESTATION_INVALID");
