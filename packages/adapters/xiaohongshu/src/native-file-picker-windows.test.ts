@@ -1,10 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { classifyNativeCancelFailure, NativePowerShellExecError, windowsPickerCancelScript, windowsPickerScanScript } from "./native-file-picker-windows";
+import { classifyNativeCancelFailure, NativePowerShellExecError, NATIVE_FILE_PICKER_HELPER_TIMEOUT_MS, windowsPickerCancelScript, windowsPickerScanScript } from "./native-file-picker-windows";
 
 const profilePath = "C:\\Users\\Administrator\\AppData\\Roaming\\codex-media-publisher\\browser-profiles\\xiaohongshu\\54b390ac-d81e-440a-baeb-d00f9f346cc3";
 
 describe("R62 Windows native picker bridge", () => {
+  it("uses a bounded helper timeout that covers verified Win32 cancellation", () => {
+    expect(NATIVE_FILE_PICKER_HELPER_TIMEOUT_MS).toBe(5_000);
+  });
+
   it("classifies a timed out helper without mistaking Add-Type in the command for a compile error", () => {
     const diagnostics = classifyNativeCancelFailure(new NativePowerShellExecError("Command timed out", {
       configuredTimeoutMs: 2_000,

@@ -1,6 +1,13 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+/**
+ * The helper performs Win32/UIA inspection and a bounded close verification.
+ * Keep the process deadline finite while allowing the verified action to
+ * finish on Windows hosts where PowerShell startup/teardown exceeds 2s.
+ */
+export const NATIVE_FILE_PICKER_HELPER_TIMEOUT_MS = 5_000;
+
 const execFileAsync = promisify(execFile);
 
 export type NativeFilePickerFailureCode =
@@ -474,7 +481,7 @@ export function windowsPickerCancelScript(profilePath: string, identity: NativeF
 }
 
 export function createWindowsNativeFilePickerBridge(options: WindowsNativeFilePickerBridgeOptions): NativeFilePickerSystemBridge {
-  const timeoutMs = Math.max(500, options.timeoutMs ?? 2_000);
+  const timeoutMs = Math.max(500, options.timeoutMs ?? NATIVE_FILE_PICKER_HELPER_TIMEOUT_MS);
   return {
     inspect: async () => {
       try {
