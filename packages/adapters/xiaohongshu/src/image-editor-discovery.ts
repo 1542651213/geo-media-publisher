@@ -379,6 +379,12 @@ export interface ImageEditorDiagnostic {
   nativeFilePickerDetected?: boolean;
   nativeFilePickerCancelled?: boolean;
   nativeFilePickerRecovery?: NativeFilePickerRecoveryResult["status"];
+  nativeFilePickerWindowIdBefore?: string | null;
+  nativeFilePickerWindowIdAfter?: string | null;
+  nativeFilePickerOpenBefore?: boolean;
+  nativeFilePickerOpenAfter?: boolean | null;
+  nativeFilePickerCancelActionSent?: boolean;
+  nativeFilePickerCancelEffectVerified?: boolean;
 }
 
 export interface ImagePostEditorInspectionResult {
@@ -427,6 +433,12 @@ export interface ImagePostUploadEditorInspectionResult extends ImagePostEditorIn
   nativeFilePickerDetected: boolean;
   nativeFilePickerCancelled: boolean;
   nativeFilePickerRecovery: NativeFilePickerRecoveryResult["status"];
+  nativeFilePickerWindowIdBefore: string | null;
+  nativeFilePickerWindowIdAfter: string | null;
+  nativeFilePickerOpenBefore: boolean;
+  nativeFilePickerOpenAfter: boolean | null;
+  nativeFilePickerCancelActionSent: boolean;
+  nativeFilePickerCancelEffectVerified: boolean;
 }
 
 export interface PreUploadImageEditorContractResult {
@@ -1983,7 +1995,13 @@ export async function inspectPostUploadImageEditor(page: Page, metadata: ImageEd
     observedPhase: "IMAGE_POST_TRANSITIONING",
     nativeFilePickerDetected: nativeFilePickerRecovery.detected,
     nativeFilePickerCancelled: nativeFilePickerRecovery.cancelled,
-    nativeFilePickerRecovery: nativeFilePickerRecovery.status
+    nativeFilePickerRecovery: nativeFilePickerRecovery.status,
+    nativeFilePickerWindowIdBefore: nativeFilePickerRecovery.pickerWindowIdBefore,
+    nativeFilePickerWindowIdAfter: nativeFilePickerRecovery.pickerWindowIdAfter,
+    nativeFilePickerOpenBefore: nativeFilePickerRecovery.pickerOpenBefore,
+    nativeFilePickerOpenAfter: nativeFilePickerRecovery.pickerOpenAfter,
+    nativeFilePickerCancelActionSent: nativeFilePickerRecovery.cancelActionSent,
+    nativeFilePickerCancelEffectVerified: nativeFilePickerRecovery.cancelEffectVerified
   });
   const startedAt = Date.now();
   const forwardedEmitter = (diagnostic: ImageEditorDiagnostic): void => {
@@ -2107,6 +2125,15 @@ export async function inspectPostUploadImageEditor(page: Page, metadata: ImageEd
     postUploadIntermediateState: phaseState.intermediateState === "NONE" ? null : phaseState.intermediateState,
     postUploadReadinessDurationMs: lastSample?.elapsedMs ?? Math.max(0, Date.now() - startedAt),
     postUploadReadinessSampleCount: inspected.readinessSamples.length,
+    nativeFilePickerDetected: nativeFilePickerRecovery.detected,
+    nativeFilePickerCancelled: nativeFilePickerRecovery.cancelled,
+    nativeFilePickerRecovery: nativeFilePickerRecovery.status,
+    nativeFilePickerWindowIdBefore: nativeFilePickerRecovery.pickerWindowIdBefore ?? null,
+    nativeFilePickerWindowIdAfter: nativeFilePickerRecovery.pickerWindowIdAfter ?? null,
+    nativeFilePickerOpenBefore: nativeFilePickerRecovery.pickerOpenBefore ?? false,
+    nativeFilePickerOpenAfter: nativeFilePickerRecovery.pickerOpenAfter ?? null,
+    nativeFilePickerCancelActionSent: nativeFilePickerRecovery.cancelActionSent ?? false,
+    nativeFilePickerCancelEffectVerified: nativeFilePickerRecovery.cancelEffectVerified ?? false,
     postUploadSemanticNodes: inspected.postUploadSemanticNodes ?? [],
     interactiveTopology: inspected.interactiveTopology ?? emptyInteractiveTopology(),
     mediaPreviewDiagnostics: mediaPreview,
@@ -2156,6 +2183,12 @@ export async function inspectPostUploadImageEditor(page: Page, metadata: ImageEd
     nativeFilePickerDetected: nativeFilePickerRecovery.detected,
     nativeFilePickerCancelled: nativeFilePickerRecovery.cancelled,
     nativeFilePickerRecovery: nativeFilePickerRecovery.status,
+    nativeFilePickerWindowIdBefore: nativeFilePickerRecovery.pickerWindowIdBefore ?? null,
+    nativeFilePickerWindowIdAfter: nativeFilePickerRecovery.pickerWindowIdAfter ?? null,
+    nativeFilePickerOpenBefore: nativeFilePickerRecovery.pickerOpenBefore ?? false,
+    nativeFilePickerOpenAfter: nativeFilePickerRecovery.pickerOpenAfter ?? null,
+    nativeFilePickerCancelActionSent: nativeFilePickerRecovery.cancelActionSent ?? false,
+    nativeFilePickerCancelEffectVerified: nativeFilePickerRecovery.cancelEffectVerified ?? false,
     status: ready ? "READY" : "FAILED"
   };
   if (ready) {

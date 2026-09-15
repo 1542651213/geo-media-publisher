@@ -2899,7 +2899,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       const imageEvidence = await this.uploadImages(canonical.page, [input.imagePath], { ctx, session: canonical.session, metadata, selfTestMode: "POST_UPLOAD_DISCOVERY_ONLY", expectedFileMetadata: TASK10S_SAFE_FIXTURE_EXPECTATION, onMutationStarted: input.onUploadMutationStarted });
       const uploadCompletionObserved = imageEvidence.verified === true;
       if (!uploadCompletionObserved) return failure("UPLOAD_COMPLETION_NOT_OBSERVED", "EDITOR_DISCOVERY", "upload-completion", 1);
-      const postUploadInspection = await inspectPostUploadImageEditor(canonical.page, metadata, { nativeFilePickerRecovery: createXhsNativeFilePickerRecovery(canonical.page), emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
+      const postUploadInspection = await inspectPostUploadImageEditor(canonical.page, metadata, { nativeFilePickerRecovery: createXhsNativeFilePickerRecovery(canonical.page, { profilePath: canonical.session.profilePath, browserChannel: canonical.session.browserChannel ?? null }), emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
       const postUploadPassed = postUploadInspection.status === "READY" && postUploadInspection.phase === "IMAGE_POST_POST_UPLOAD_EDITOR" && postUploadInspection.postUploadControlsStatus === "READY";
       const result: ControlledPostUploadDiscoveryResult = {
         mode: "POST_UPLOAD_DISCOVERY_ONLY",
@@ -3293,7 +3293,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       return buildResult("BLOCKED");
     }
 
-    const nativeFilePickerRecovery = createXhsNativeFilePickerRecovery(canonical.page);
+    const nativeFilePickerRecovery = createXhsNativeFilePickerRecovery(canonical.page, { profilePath: canonical.session.profilePath, browserChannel: canonical.session.browserChannel ?? null });
 
     if (input.postUploadReadinessStrategy === "TERMINAL_CLASSIFIER") {
       try {
@@ -3343,10 +3343,10 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic)
       });
       nativeFilePickerRecoveryResult = postUploadInspection.nativeFilePickerRecovery === "CANCELLED"
-        ? { status: "CANCELLED", detected: postUploadInspection.nativeFilePickerDetected, cancelled: true, failureCode: null }
+        ? { status: "CANCELLED", detected: postUploadInspection.nativeFilePickerDetected, cancelled: true, failureCode: null, pickerWindowIdBefore: postUploadInspection.nativeFilePickerWindowIdBefore, pickerWindowIdAfter: postUploadInspection.nativeFilePickerWindowIdAfter, pickerOpenBefore: postUploadInspection.nativeFilePickerOpenBefore, pickerOpenAfter: postUploadInspection.nativeFilePickerOpenAfter, cancelActionSent: postUploadInspection.nativeFilePickerCancelActionSent, cancelEffectVerified: postUploadInspection.nativeFilePickerCancelEffectVerified }
         : postUploadInspection.nativeFilePickerRecovery === "BLOCKED"
-          ? { status: "BLOCKED", detected: postUploadInspection.nativeFilePickerDetected, cancelled: false, failureCode: "NATIVE_FILE_PICKER_CANCEL_FAILED" }
-          : { status: "NOT_DETECTED", detected: false, cancelled: false, failureCode: null };
+          ? { status: "BLOCKED", detected: postUploadInspection.nativeFilePickerDetected, cancelled: false, failureCode: "NATIVE_FILE_PICKER_CANCEL_FAILED", pickerWindowIdBefore: postUploadInspection.nativeFilePickerWindowIdBefore, pickerWindowIdAfter: postUploadInspection.nativeFilePickerWindowIdAfter, pickerOpenBefore: postUploadInspection.nativeFilePickerOpenBefore, pickerOpenAfter: postUploadInspection.nativeFilePickerOpenAfter, cancelActionSent: postUploadInspection.nativeFilePickerCancelActionSent, cancelEffectVerified: postUploadInspection.nativeFilePickerCancelEffectVerified }
+          : { status: "NOT_DETECTED", detected: false, cancelled: false, failureCode: null, pickerWindowIdBefore: postUploadInspection.nativeFilePickerWindowIdBefore, pickerWindowIdAfter: postUploadInspection.nativeFilePickerWindowIdAfter, pickerOpenBefore: postUploadInspection.nativeFilePickerOpenBefore, pickerOpenAfter: postUploadInspection.nativeFilePickerOpenAfter, cancelActionSent: postUploadInspection.nativeFilePickerCancelActionSent, cancelEffectVerified: postUploadInspection.nativeFilePickerCancelEffectVerified };
       states.push(postUploadInspection as unknown as Record<string, unknown>);
       if (postUploadInspection.forbiddenActionSignalPresent === true) {
         forbiddenMutationObserved = true;
@@ -4061,7 +4061,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const imageEvidence = await this.uploadImages(page, article.images ?? [], { ctx, session: opened.session, metadata: editorMetadata });
     gates.push("image_upload");
     const postUploadInspection = await inspectPostUploadImageEditor(page, editorMetadata, {
-      nativeFilePickerRecovery: createXhsNativeFilePickerRecovery(page),
+      nativeFilePickerRecovery: createXhsNativeFilePickerRecovery(page, { profilePath: opened.session.profilePath, browserChannel: opened.session.browserChannel ?? null }),
       emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic)
     });
     if (postUploadInspection.status !== "READY") {

@@ -65,6 +65,7 @@ interface Fixture {
   calls: string[];
   session: BrowserSession;
   keyboardPress: ReturnType<typeof vi.fn>;
+  nativePickerCancel: ReturnType<typeof vi.fn>;
   phaseSnapshot: () => Record<string, unknown>;
   postUploadSnapshot: () => Record<string, unknown>;
 }
@@ -322,11 +323,20 @@ function setupPage(options: FixtureOptions = {}): Fixture {
   });
   const empty = locator();
   const pageRoot = locator({ innerText: vi.fn(async () => `${options.accountName ?? "XHS owner"} ${options.securityText ?? ""} ${options.imageFailed ? "图片上传失败" : ""}`) });
+  const nativePickerCancel = vi.fn(async () => {
+    if (options.nativePickerCancelFails) throw new Error("picker cancel failed");
+    setActivePageUrl?.("https://creator.xiaohongshu.com/publish/publish");
+    currentUrl = "https://creator.xiaohongshu.com/publish/publish";
+  });
   const createPage = (initialUrl: string, onClose?: () => void): Page => {
     let pageUrl = initialUrl;
     let closed = false;
     const keyboardPress = vi.fn(async (_key: string) => {
       if (options.nativePickerCancelFails) throw new Error("picker cancel failed");
+      if (_key === "Escape") {
+        setActivePageUrl?.("https://creator.xiaohongshu.com/publish/publish");
+        currentUrl = "https://creator.xiaohongshu.com/publish/publish";
+      }
     });
     const page = {
       goto: vi.fn(async (_url: string) => {
@@ -345,6 +355,7 @@ function setupPage(options: FixtureOptions = {}): Fixture {
       isClosed: vi.fn(() => closed),
       context: vi.fn(() => pageContextRef.value as BrowserSession["context"]),
       keyboard: { press: keyboardPress },
+      cancelNativeFilePicker: nativePickerCancel,
       locator: vi.fn((selector: string) => {
         currentUrl = pageUrl;
         if (selector === "body") return pageRoot;
@@ -396,7 +407,7 @@ function setupPage(options: FixtureOptions = {}): Fixture {
     hasStoredSession: true,
     sessionIdHash: `session-${options.accountId ?? "account-a"}`,
     storageMode: "PERSISTENT_PROFILE",
-    profilePath: "C:/profiles/xiaohongshu/account-a",
+    profilePath: null,
     browserChannel: "chrome",
     credentialSnapshotInjected: false,
     contextDebugId: "context-debug-id",
@@ -493,7 +504,7 @@ function setupPage(options: FixtureOptions = {}): Fixture {
     };
   };
   const keyboardPress = (page as unknown as { keyboard: { press: ReturnType<typeof vi.fn> } }).keyboard.press;
-  const fixture = { page, manager, submitClick, inputSetFiles, entryClick, open, operationPageDebugIds, operationContextDebugIds, operationPages, calls, session, keyboardPress, phaseSnapshot, postUploadSnapshot };
+  const fixture = { page, manager, submitClick, inputSetFiles, entryClick, open, operationPageDebugIds, operationContextDebugIds, operationPages, calls, session, keyboardPress, nativePickerCancel, phaseSnapshot, postUploadSnapshot };
   installSharedConnectionLifecycle(fixture);
   installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"] });
   return fixture;
@@ -2174,8 +2185,8 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
 
     expect(result).toMatchObject({ status: "PASS", uploadMutationCount: 1, postUploadControlsStatus: "READY" });
     expect(fixture.inputSetFiles).toHaveBeenCalledTimes(1);
-    expect(fixture.keyboardPress).toHaveBeenCalledTimes(1);
-    expect(fixture.keyboardPress).toHaveBeenCalledWith("Escape");
+    expect(fixture.nativePickerCancel).toHaveBeenCalledTimes(1);
+    expect(fixture.keyboardPress).not.toHaveBeenCalled();
     expect(fixture.submitClick).not.toHaveBeenCalled();
   });
 
