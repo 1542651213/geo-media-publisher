@@ -10,7 +10,12 @@ export type NativeFilePickerFailureCode =
   | "NATIVE_FILE_PICKER_OWNER_NOT_VERIFIED"
   | "NATIVE_FILE_PICKER_CANCEL_UNAVAILABLE"
   | "NATIVE_FILE_PICKER_IDENTITY_MISMATCH"
-  | "CANCEL_INVOKE_PATTERN_UNAVAILABLE";
+  | "CANCEL_INVOKE_PATTERN_UNAVAILABLE"
+  | "CANCEL_IDENTITY_NOT_ESTABLISHED"
+  | "CANCEL_ACTION_UNAVAILABLE"
+  | "CANCEL_HELPER_COMPILE_FAILED"
+  | "CANCEL_ACTION_FAILED"
+  | "CANCEL_EFFECT_NOT_VERIFIED";
 
 export interface NativeFilePickerWindowIdentity {
   windowId: string;
@@ -26,6 +31,11 @@ export interface NativeFilePickerWindowIdentity {
   cancelControlUnique?: boolean;
   cancelControlType?: string | null;
   cancelWindowId?: string | null;
+  cancelName?: string | null;
+  cancelClass?: string | null;
+  cancelAutomationId?: string | null;
+  cancelControlId?: number | null;
+  cancelEnabled?: boolean | null;
   dialogVisible?: boolean;
   dialogEnabled?: boolean;
 }
@@ -45,6 +55,44 @@ export interface NativeFilePickerCancelResult {
   sendMessageTimeoutResult?: number | null;
   effectVerified?: boolean;
   closeStableSampleCount?: number;
+  dialogWindowId?: string | null;
+  cancelWindowId?: string | null;
+  cancelName?: string | null;
+  cancelClass?: string | null;
+  cancelAutomationId?: string | null;
+  cancelControlId?: number | null;
+  cancelEnabled?: boolean | null;
+  invokePatternAvailable?: boolean | null;
+  failureStage?: string | null;
+  underlyingFailureCode?: NativeFilePickerFailureCode | string | null;
+  nativeFailureStage?: string | null;
+  nativeFailureMessageSafe?: string | null;
+}
+
+export type NativeFilePickerCancelDiagnostics = Pick<NativeFilePickerCancelResult,
+  | "dialogWindowId"
+  | "cancelWindowId"
+  | "cancelName"
+  | "cancelClass"
+  | "cancelAutomationId"
+  | "cancelControlId"
+  | "cancelEnabled"
+  | "invokePatternAvailable"
+  | "failureStage"
+  | "underlyingFailureCode"
+  | "nativeFailureStage"
+  | "nativeFailureMessageSafe">;
+
+export class NativeFilePickerCancelError extends Error {
+  readonly failureCode: NativeFilePickerFailureCode;
+  readonly diagnostics: NativeFilePickerCancelDiagnostics;
+
+  constructor(failureCode: NativeFilePickerFailureCode, diagnostics: NativeFilePickerCancelDiagnostics = {}) {
+    super(failureCode);
+    this.name = "NativeFilePickerCancelError";
+    this.failureCode = failureCode;
+    this.diagnostics = diagnostics;
+  }
 }
 
 export interface NativeFilePickerSystemBridge {
@@ -74,6 +122,60 @@ async function runPowerShellJson<T>(command: string, timeoutMs: number): Promise
   return JSON.parse(output) as T;
 }
 
+function identityDiagnostics(identity: NativeFilePickerWindowIdentity): NativeFilePickerCancelDiagnostics {
+  return {
+    dialogWindowId: identity.windowId,
+    cancelWindowId: identity.cancelWindowId ?? null,
+    cancelName: identity.cancelName ?? null,
+    cancelClass: identity.cancelClass ?? null,
+    cancelAutomationId: identity.cancelAutomationId ?? null,
+    cancelControlId: identity.cancelControlId ?? null,
+    cancelEnabled: identity.cancelEnabled ?? null
+  };
+}
+
+function nativeFailureText(error: unknown): string {
+  if (error instanceof Error) {
+    const details = error as Error & { stderr?: unknown };
+    return [details.message, typeof details.stderr === "string" ? details.stderr : ""].filter(Boolean).join(" ");
+  }
+  return "";
+}
+
+function classifyNativeCancelFailure(error: unknown): NativeFilePickerCancelDiagnostics {
+  const text = nativeFailureText(error).toLowerCase();
+  if (text.includes("enumchildwindows") || text.includes("add-type") || text.includes("compilation")) {
+    return {
+      failureStage: "CANCEL_HELPER",
+      underlyingFailureCode: "CANCEL_HELPER_COMPILE_FAILED",
+      nativeFailureStage: "CANCEL_HELPER_ADD_TYPE",
+      nativeFailureMessageSafe: "CANCEL_HELPER_COMPILE_FAILED"
+    };
+  }
+  if (text.includes("identity_mismatch") || text.includes("identity_unavailable") || text.includes("identity_not_established")) {
+    return {
+      failureStage: "CANCEL_IDENTITY",
+      underlyingFailureCode: "CANCEL_IDENTITY_NOT_ESTABLISHED",
+      nativeFailureStage: "CANCEL_IDENTITY",
+      nativeFailureMessageSafe: "CANCEL_IDENTITY_NOT_ESTABLISHED"
+    };
+  }
+  if (text.includes("cancel_unavailable")) {
+    return {
+      failureStage: "CANCEL_IDENTITY",
+      underlyingFailureCode: "CANCEL_ACTION_UNAVAILABLE",
+      nativeFailureStage: "CANCEL_IDENTITY",
+      nativeFailureMessageSafe: "CANCEL_ACTION_UNAVAILABLE"
+    };
+  }
+  return {
+    failureStage: "CANCEL_ACTION",
+    underlyingFailureCode: "CANCEL_ACTION_FAILED",
+    nativeFailureStage: "CANCEL_ACTION",
+    nativeFailureMessageSafe: "CANCEL_ACTION_FAILED"
+  };
+}
+
 /** Win32 enumerates top-level windows; UIA is only used after a HWND is known. */
 export function windowsPickerScanScript(profilePath: string): string {
   const profile = powershellLiteral(profilePath);
@@ -96,6 +198,7 @@ export function windowsPickerScanScript(profilePath: string): string {
     "  [DllImport(\"user32.dll\")] public static extern IntPtr GetParent(IntPtr hWnd);",
     "  private delegate bool EnumChildWindowsProc(IntPtr hWnd, IntPtr lParam);",
     "  [DllImport(\"user32.dll\")] private static extern bool EnumChildWindows(IntPtr parent, EnumChildWindowsProc callback, IntPtr lParam);",
+    "  [DllImport(\"user32.dll\")] public static extern int GetDlgCtrlID(IntPtr hWnd);",
     "  [DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);",
     "  [DllImport(\"user32.dll\", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder className, int maxCount);",
     "  [DllImport(\"user32.dll\", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder title, int maxCount);",
@@ -121,9 +224,11 @@ export function windowsPickerScanScript(profilePath: string): string {
     "    $controls = @($dialog.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition))",
     "    $cancelControls = @($controls | Where-Object { $current = $_.Current; (@('取消','Cancel') -contains [string]$current.Name) -and [string]$current.ClassName -eq 'Button' -and [string]$current.AutomationId -eq '2' -and [bool]$current.IsEnabled })",
     "    $openControls = @($controls | Where-Object { $current = $_.Current; (@('打开','打开(O)','Open') -contains [string]$current.Name) -and [string]$current.ClassName -eq 'Button' -and [string]$current.AutomationId -eq '1' })",
-    "    $cancelType = if ($cancelControls.Count -eq 1) { [string]$cancelControls[0].Current.ControlType.ProgrammaticName } else { $null }",
-    "    $cancelWindowId = if ($cancelControls.Count -eq 1 -and [int64]$cancelControls[0].Current.NativeWindowHandle -gt 0) { 'hwnd:' + [int64]$cancelControls[0].Current.NativeWindowHandle } else { $null }",
-    "    $candidates += [pscustomobject]@{ windowId = ('hwnd:' + $row.Hwnd); processId = [int]$row.ProcessId; ownerWindowId = if ($row.OwnerHwnd -eq 0) { $null } else { 'hwnd:' + $row.OwnerHwnd }; ownerProcessId = if ($row.OwnerProcessId -eq 0) { $null } else { [int]$row.OwnerProcessId }; parentWindowId = if ($row.ParentHwnd -eq 0) { $null } else { 'hwnd:' + $row.ParentHwnd }; title = [string]$row.Title; className = [string]$row.ClassName; dialogVisible = [bool]$row.Visible; dialogEnabled = [bool]$row.Enabled; cancelButtonCount = $cancelControls.Count; cancelControlUnique = ($cancelControls.Count -eq 1); openButtonCount = $openControls.Count; openControlVerified = ($openControls.Count -eq 1); cancelControlType = $cancelType; cancelWindowId = $cancelWindowId }",
+    "    $cancelCurrent = if ($cancelControls.Count -eq 1) { $cancelControls[0].Current } else { $null }",
+    "    $cancelType = if ($null -ne $cancelCurrent) { [string]$cancelCurrent.ControlType.ProgrammaticName } else { $null }",
+    "    $cancelHwnd = if ($null -ne $cancelCurrent -and [int64]$cancelCurrent.NativeWindowHandle -gt 0) { [int]$cancelCurrent.NativeWindowHandle } else { 0 }",
+    "    $cancelWindowId = if ($cancelHwnd -gt 0) { 'hwnd:' + $cancelHwnd } else { $null }",
+    "    $candidates += [pscustomobject]@{ windowId = ('hwnd:' + $row.Hwnd); processId = [int]$row.ProcessId; ownerWindowId = if ($row.OwnerHwnd -eq 0) { $null } else { 'hwnd:' + $row.OwnerHwnd }; ownerProcessId = if ($row.OwnerProcessId -eq 0) { $null } else { [int]$row.OwnerProcessId }; parentWindowId = if ($row.ParentHwnd -eq 0) { $null } else { 'hwnd:' + $row.ParentHwnd }; title = [string]$row.Title; className = [string]$row.ClassName; dialogVisible = [bool]$row.Visible; dialogEnabled = [bool]$row.Enabled; cancelButtonCount = $cancelControls.Count; cancelControlUnique = ($cancelControls.Count -eq 1); openButtonCount = $openControls.Count; openControlVerified = ($openControls.Count -eq 1); cancelControlType = $cancelType; cancelWindowId = $cancelWindowId; cancelName = if ($null -ne $cancelCurrent) { [string]$cancelCurrent.Name } else { $null }; cancelClass = if ($null -ne $cancelCurrent) { [string]$cancelCurrent.ClassName } else { $null }; cancelAutomationId = if ($null -ne $cancelCurrent) { [string]$cancelCurrent.AutomationId } else { $null }; cancelControlId = if ($cancelHwnd -gt 0) { [GmpNativePickerWindow]::GetDlgCtrlID([IntPtr]$cancelHwnd) } else { $null }; cancelEnabled = if ($null -ne $cancelCurrent) { [bool]$cancelCurrent.IsEnabled } else { $null } }",
     "  } catch { }",
     "}",
     "if ($candidates.Count -gt 1) { [pscustomobject]@{ open = $false; verified = $false; identity = $null; failureCode = 'NATIVE_FILE_PICKER_AMBIGUOUS' } | ConvertTo-Json -Compress -Depth 8; exit 0 }",
@@ -162,6 +267,8 @@ export function windowsPickerCancelScript(profilePath: string, identity: NativeF
     "  [DllImport(\"user32.dll\")] public static extern bool IsChild(IntPtr parent, IntPtr child);",
     "  [DllImport(\"user32.dll\")] public static extern IntPtr GetWindow(IntPtr hWnd, uint command);",
     "  [DllImport(\"user32.dll\")] public static extern IntPtr GetParent(IntPtr hWnd);",
+    "  private delegate bool EnumChildWindowsProc(IntPtr hWnd, IntPtr lParam);",
+    "  [DllImport(\"user32.dll\")] private static extern bool EnumChildWindows(IntPtr parent, EnumChildWindowsProc callback, IntPtr lParam);",
     "  [DllImport(\"user32.dll\")] public static extern int GetDlgCtrlID(IntPtr hWnd);",
     "  [DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);",
     "  [DllImport(\"user32.dll\", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder className, int maxCount);",
@@ -211,6 +318,11 @@ export function windowsPickerCancelScript(profilePath: string, identity: NativeF
     "$cancelControlCount = $cancelControls.Count",
     "if ($cancelControlCount -ne 1) { throw 'NATIVE_FILE_PICKER_CANCEL_UNAVAILABLE' }",
     "$uiaCancelHwnd = [int]$cancelControls[0].Current.NativeWindowHandle",
+    "$cancelName = [string]$cancelControls[0].Current.Name",
+    "$cancelClass = [string]$cancelControls[0].Current.ClassName",
+    "$cancelAutomationId = [string]$cancelControls[0].Current.AutomationId",
+    "$cancelControlId = [GmpNativePickerWindow]::GetDlgCtrlID([IntPtr]$expectedCancelHwnd)",
+    "$cancelEnabled = [bool]$cancelControls[0].Current.IsEnabled",
     "if ($uiaCancelHwnd -ne $expectedCancelHwnd -or -not [GmpNativePickerWindow]::IsValidCancelChild($expectedHwnd, $expectedCancelHwnd, $expectedCancelControlId)) { throw 'NATIVE_FILE_PICKER_IDENTITY_MISMATCH' }",
     "$win32CancelControlCount = [GmpNativePickerWindow]::CountValidCancelChildren($expectedHwnd, $expectedCancelControlId)",
     "if ($win32CancelControlCount -ne 1) { throw 'NATIVE_FILE_PICKER_CANCEL_UNAVAILABLE' }",
@@ -219,14 +331,14 @@ export function windowsPickerCancelScript(profilePath: string, identity: NativeF
     "$openHwnd = [int]$openControls[0].Current.NativeWindowHandle",
     "if (-not [GmpNativePickerWindow]::IsValidOpenChild($expectedHwnd, $openHwnd)) { throw 'NATIVE_FILE_PICKER_IDENTITY_MISMATCH' }",
     "$mechanism = $null; $actionSent = $false; $messageResult = $null",
-    "try { $invoke = $cancelControls[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern) } catch { $invoke = $null }",
-    "if ($null -ne $invoke) { try { $invoke.Invoke(); $mechanism = 'UIA_INVOKE'; $actionSent = $true } catch { [pscustomobject]@{ actionSent = $false; failureCode = 'NATIVE_FILE_PICKER_CANCEL_FAILED'; mechanism = 'UIA_INVOKE' } | ConvertTo-Json -Compress; exit 0 } }",
-    "if (-not $actionSent) { $completed = [GmpNativePickerWindow]::SendBmClick($expectedCancelHwnd, 750, $SMTO_ABORTIFHUNG, [ref]$messageResult); if (-not $completed) { [pscustomobject]@{ actionSent = $false; failureCode = 'NATIVE_FILE_PICKER_CANCEL_FAILED'; mechanism = 'WIN32_BM_CLICK'; targetWindowId = ('hwnd:' + $expectedCancelHwnd); sendMessageTimeoutResult = $messageResult } | ConvertTo-Json -Compress; exit 0 }; $mechanism = 'WIN32_BM_CLICK'; $actionSent = $true }",
+    "$invokePatternAvailable = $false; try { $invoke = $cancelControls[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern); $invokePatternAvailable = $null -ne $invoke } catch { $invoke = $null; $invokePatternAvailable = $false }",
+    "if ($null -ne $invoke) { try { $invoke.Invoke(); $mechanism = 'UIA_INVOKE'; $actionSent = $true } catch { [pscustomobject]@{ actionSent = $false; failureCode = 'NATIVE_FILE_PICKER_CANCEL_FAILED'; mechanism = 'UIA_INVOKE'; dialogWindowId = ('hwnd:' + $expectedHwnd); cancelWindowId = ('hwnd:' + $expectedCancelHwnd); cancelName = $cancelName; cancelClass = $cancelClass; cancelAutomationId = $cancelAutomationId; cancelControlId = $cancelControlId; cancelEnabled = $cancelEnabled; invokePatternAvailable = $invokePatternAvailable; failureStage = 'CANCEL_ACTION'; underlyingFailureCode = 'CANCEL_ACTION_FAILED'; nativeFailureStage = 'UIA_INVOKE'; nativeFailureMessageSafe = 'CANCEL_ACTION_FAILED' } | ConvertTo-Json -Compress; exit 0 } }",
+    "if (-not $actionSent) { $completed = [GmpNativePickerWindow]::SendBmClick($expectedCancelHwnd, 750, $SMTO_ABORTIFHUNG, [ref]$messageResult); if (-not $completed) { [pscustomobject]@{ actionSent = $false; failureCode = 'NATIVE_FILE_PICKER_CANCEL_FAILED'; mechanism = 'WIN32_BM_CLICK'; targetWindowId = ('hwnd:' + $expectedCancelHwnd); sendMessageTimeoutResult = $messageResult; dialogWindowId = ('hwnd:' + $expectedHwnd); cancelWindowId = ('hwnd:' + $expectedCancelHwnd); cancelName = $cancelName; cancelClass = $cancelClass; cancelAutomationId = $cancelAutomationId; cancelControlId = $cancelControlId; cancelEnabled = $cancelEnabled; invokePatternAvailable = $invokePatternAvailable; failureStage = 'CANCEL_ACTION'; underlyingFailureCode = 'CANCEL_ACTION_FAILED'; nativeFailureStage = 'WIN32_BM_CLICK'; nativeFailureMessageSafe = 'CANCEL_ACTION_FAILED' } | ConvertTo-Json -Compress; exit 0 }; $mechanism = 'WIN32_BM_CLICK'; $actionSent = $true }",
     "$stableSamples = 0",
     "for ($i = 0; $i -lt 5; $i++) { Start-Sleep -Milliseconds 100; if (-not [GmpNativePickerWindow]::IsSameDialog($expectedHwnd, $expectedProcessId, $expectedOwnerProcessId, $expectedOwnerHwnd, $expectedParentHwnd)) { $stableSamples++ } else { $stableSamples = 0 } }",
     "$afterOpen = [GmpNativePickerWindow]::IsSameDialog($expectedHwnd, $expectedProcessId, $expectedOwnerProcessId, $expectedOwnerHwnd, $expectedParentHwnd)",
     "$effectVerified = $stableSamples -eq 5 -and -not $afterOpen",
-    "[pscustomobject]@{ actionSent = $actionSent; mechanism = $mechanism; cancelMechanism = $mechanism; targetWindowId = if ($mechanism -eq 'WIN32_BM_CLICK') { 'hwnd:' + $expectedCancelHwnd } else { $null }; sendMessageTimeoutResult = $messageResult; effectVerified = $effectVerified; closeStableSampleCount = $stableSamples; DIALOG_CLOSE_STABLE_SAMPLE_COUNT = $stableSamples; verifiedCancelChildCount = $win32CancelControlCount; pickerWindowIdAfter = if ($afterOpen) { 'hwnd:' + $expectedHwnd } else { $null }; pickerOpenAfter = $afterOpen; failureCode = if ($effectVerified) { $null } else { 'NATIVE_FILE_PICKER_CANCEL_FAILED' } } | ConvertTo-Json -Compress -Depth 8"
+    "[pscustomobject]@{ actionSent = $actionSent; mechanism = $mechanism; cancelMechanism = $mechanism; targetWindowId = if ($mechanism -eq 'WIN32_BM_CLICK') { 'hwnd:' + $expectedCancelHwnd } else { $null }; sendMessageTimeoutResult = $messageResult; effectVerified = $effectVerified; closeStableSampleCount = $stableSamples; DIALOG_CLOSE_STABLE_SAMPLE_COUNT = $stableSamples; verifiedCancelChildCount = $win32CancelControlCount; pickerWindowIdAfter = if ($afterOpen) { 'hwnd:' + $expectedHwnd } else { $null }; pickerOpenAfter = $afterOpen; dialogWindowId = ('hwnd:' + $expectedHwnd); cancelWindowId = ('hwnd:' + $expectedCancelHwnd); cancelName = $cancelName; cancelClass = $cancelClass; cancelAutomationId = $cancelAutomationId; cancelControlId = $cancelControlId; cancelEnabled = $cancelEnabled; invokePatternAvailable = $invokePatternAvailable; failureStage = if ($effectVerified) { $null } else { 'POST_ACTION_VERIFY' }; underlyingFailureCode = if ($effectVerified) { $null } else { 'CANCEL_EFFECT_NOT_VERIFIED' }; nativeFailureStage = if ($effectVerified) { $null } else { 'DIALOG_CLOSE_CHECK' }; nativeFailureMessageSafe = if ($effectVerified) { $null } else { 'CANCEL_EFFECT_NOT_VERIFIED' }; failureCode = if ($effectVerified) { $null } else { 'NATIVE_FILE_PICKER_CANCEL_FAILED' } } | ConvertTo-Json -Compress -Depth 8"
   ].join("\n");
 }
 
@@ -243,8 +355,11 @@ export function createWindowsNativeFilePickerBridge(options: WindowsNativeFilePi
     cancel: async (identity) => {
       try {
         return await runPowerShellJson<NativeFilePickerCancelResult>(windowsPickerCancelScript(options.profilePath, identity), timeoutMs);
-      } catch {
-        throw new Error("NATIVE_FILE_PICKER_CANCEL_FAILED");
+      } catch (error) {
+        throw new NativeFilePickerCancelError("NATIVE_FILE_PICKER_CANCEL_FAILED", {
+          ...identityDiagnostics(identity),
+          ...classifyNativeCancelFailure(error)
+        });
       }
     }
   };

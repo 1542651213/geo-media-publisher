@@ -1,4 +1,4 @@
-import { createWindowsNativeFilePickerBridge, type NativeFilePickerCancelResult, type NativeFilePickerFailureCode, type NativeFilePickerInspection, type NativeFilePickerSystemBridge } from "./native-file-picker-windows";
+import { createWindowsNativeFilePickerBridge, NativeFilePickerCancelError, type NativeFilePickerCancelResult, type NativeFilePickerCancelDiagnostics, type NativeFilePickerFailureCode, type NativeFilePickerInspection, type NativeFilePickerSystemBridge, type NativeFilePickerWindowIdentity } from "./native-file-picker-windows";
 
 const nativeFilePickerFailureCodes: readonly NativeFilePickerFailureCode[] = [
   "NATIVE_FILE_PICKER_CANCEL_FAILED",
@@ -7,7 +7,12 @@ const nativeFilePickerFailureCodes: readonly NativeFilePickerFailureCode[] = [
   "NATIVE_FILE_PICKER_OWNER_NOT_VERIFIED",
   "NATIVE_FILE_PICKER_CANCEL_UNAVAILABLE",
   "NATIVE_FILE_PICKER_IDENTITY_MISMATCH",
-  "CANCEL_INVOKE_PATTERN_UNAVAILABLE"
+  "CANCEL_INVOKE_PATTERN_UNAVAILABLE",
+  "CANCEL_IDENTITY_NOT_ESTABLISHED",
+  "CANCEL_ACTION_UNAVAILABLE",
+  "CANCEL_HELPER_COMPILE_FAILED",
+  "CANCEL_ACTION_FAILED",
+  "CANCEL_EFFECT_NOT_VERIFIED"
 ];
 
 function failureCodeFrom(error: unknown, fallback: NativeFilePickerFailureCode): NativeFilePickerFailureCode {
@@ -44,6 +49,42 @@ export interface NativeFilePickerRecoveryResult {
   cancelEffectVerified?: boolean;
   cancelMechanism?: NativeFilePickerCancelResult["mechanism"] | null;
   dialogCloseStableSampleCount?: number | null;
+  dialogWindowId?: string | null;
+  cancelWindowId?: string | null;
+  cancelName?: string | null;
+  cancelClass?: string | null;
+  cancelAutomationId?: string | null;
+  cancelControlId?: number | null;
+  cancelEnabled?: boolean | null;
+  invokePatternAvailable?: boolean | null;
+  failureStage?: string | null;
+  underlyingFailureCode?: NativeFilePickerFailureCode | string | null;
+  nativeFailureStage?: string | null;
+  nativeFailureMessageSafe?: string | null;
+}
+
+function identityEvidence(identity: NativeFilePickerWindowIdentity | null): NativeFilePickerCancelDiagnostics {
+  return identity
+    ? {
+        dialogWindowId: identity.windowId,
+        cancelWindowId: identity.cancelWindowId ?? null,
+        cancelName: identity.cancelName ?? null,
+        cancelClass: identity.cancelClass ?? null,
+        cancelAutomationId: identity.cancelAutomationId ?? null,
+        cancelControlId: identity.cancelControlId ?? null,
+        cancelEnabled: identity.cancelEnabled ?? null
+      }
+    : {};
+}
+
+function cancelErrorEvidence(error: unknown): NativeFilePickerCancelDiagnostics {
+  if (error instanceof NativeFilePickerCancelError) return error.diagnostics;
+  return {
+    failureStage: "CANCEL_ACTION",
+    underlyingFailureCode: "CANCEL_ACTION_FAILED",
+    nativeFailureStage: "CANCEL_ACTION",
+    nativeFailureMessageSafe: "CANCEL_ACTION_FAILED"
+  };
 }
 
 export interface NativeFilePickerPage {
@@ -94,7 +135,12 @@ export function createXhsNativeFilePickerRecovery(page: NativeFilePickerPage, op
       if (systemBridge) {
         if (!lastInspection?.open || !lastInspection.identity) throw new Error("NATIVE_FILE_PICKER_IDENTITY_UNAVAILABLE");
         const result = await systemBridge.cancel(lastInspection.identity);
-        if (!result.actionSent) throw new Error(result.failureCode ?? "NATIVE_FILE_PICKER_CANCEL_FAILED");
+        if (!result.actionSent) {
+          throw new NativeFilePickerCancelError(result.failureCode ?? "NATIVE_FILE_PICKER_CANCEL_FAILED", {
+            ...identityEvidence(lastInspection.identity),
+            ...result
+          });
+        }
         cancellationAttempted = true;
         return result;
       }
@@ -124,6 +170,18 @@ export async function recoverNativeFilePicker(probe?: NativeFilePickerRecoveryPr
     cancelEffectVerified: false,
     cancelMechanism: null,
     dialogCloseStableSampleCount: null,
+    dialogWindowId: null,
+    cancelWindowId: null,
+    cancelName: null,
+    cancelClass: null,
+    cancelAutomationId: null,
+    cancelControlId: null,
+    cancelEnabled: null,
+    invokePatternAvailable: null,
+    failureStage: null,
+    underlyingFailureCode: null,
+    nativeFailureStage: null,
+    nativeFailureMessageSafe: null,
     ...values
   });
   if (!probe) return empty("NOT_DETECTED", false, null, { pickerOpenAfter: false });
@@ -132,24 +190,29 @@ export async function recoverNativeFilePicker(probe?: NativeFilePickerRecoveryPr
     let before: NativeFilePickerInspection;
     try { before = await inspect(); } catch { return empty("BLOCKED", false, "NATIVE_FILE_PICKER_STATE_UNVERIFIED"); }
     const beforeWindowId = before.identity?.windowId ?? null;
-    if (!before.verified) return empty("BLOCKED", before.open, before.failureCode ?? "NATIVE_FILE_PICKER_STATE_UNVERIFIED", { pickerWindowIdBefore: beforeWindowId, pickerOpenBefore: before.open });
-    if (!before.open) return empty("NOT_DETECTED", false, null, { pickerWindowIdBefore: beforeWindowId, pickerOpenBefore: false, pickerOpenAfter: false });
-    if (!before.identity) return empty("BLOCKED", true, "NATIVE_FILE_PICKER_STATE_UNVERIFIED", { pickerOpenBefore: true });
+    const beforeEvidence = identityEvidence(before.identity);
+    if (!before.verified) return empty("BLOCKED", before.open, before.failureCode ?? "NATIVE_FILE_PICKER_STATE_UNVERIFIED", { ...beforeEvidence, pickerWindowIdBefore: beforeWindowId, pickerOpenBefore: before.open, failureStage: "PRE_ACTION_INSPECTION", underlyingFailureCode: "CANCEL_IDENTITY_NOT_ESTABLISHED", nativeFailureStage: "PICKER_INSPECTION", nativeFailureMessageSafe: "CANCEL_IDENTITY_NOT_ESTABLISHED" });
+    if (!before.open) return empty("NOT_DETECTED", false, null, { ...beforeEvidence, pickerWindowIdBefore: beforeWindowId, pickerOpenBefore: false, pickerOpenAfter: false });
+    if (!before.identity) return empty("BLOCKED", true, "NATIVE_FILE_PICKER_STATE_UNVERIFIED", { dialogWindowId: beforeWindowId, pickerOpenBefore: true, failureStage: "PRE_ACTION_INSPECTION", underlyingFailureCode: "CANCEL_IDENTITY_NOT_ESTABLISHED", nativeFailureStage: "PICKER_INSPECTION", nativeFailureMessageSafe: "CANCEL_IDENTITY_NOT_ESTABLISHED" });
     let cancelActionSent = false;
     let cancelResult: NativeFilePickerCancelResult | void;
     try {
       cancelResult = await probe.cancel();
       cancelActionSent = cancelResult && typeof cancelResult.actionSent === "boolean" ? cancelResult.actionSent : true;
     } catch (error) {
-      return empty("BLOCKED", true, failureCodeFrom(error, "NATIVE_FILE_PICKER_CANCEL_FAILED"), { pickerWindowIdBefore: beforeWindowId, pickerOpenBefore: true, cancelActionSent: false });
+      return empty("BLOCKED", true, failureCodeFrom(error, "NATIVE_FILE_PICKER_CANCEL_FAILED"), { ...beforeEvidence, ...cancelErrorEvidence(error), pickerWindowIdBefore: beforeWindowId, pickerOpenBefore: true, cancelActionSent: false });
     }
     let after: NativeFilePickerInspection;
-    try { after = await inspect(); } catch { return empty("BLOCKED", true, "NATIVE_FILE_PICKER_STATE_UNVERIFIED", { pickerWindowIdBefore: beforeWindowId, pickerOpenBefore: true, cancelActionSent }); }
+    if (cancelResult && typeof cancelResult.actionSent === "boolean" && !cancelResult.actionSent) {
+      return empty("BLOCKED", true, cancelResult.failureCode ?? "NATIVE_FILE_PICKER_CANCEL_FAILED", { ...beforeEvidence, ...cancelResult, pickerWindowIdBefore: beforeWindowId, pickerOpenBefore: true, cancelActionSent: false, cancelEffectVerified: false, failureStage: cancelResult.failureStage ?? "CANCEL_ACTION", underlyingFailureCode: cancelResult.underlyingFailureCode ?? "CANCEL_ACTION_FAILED", nativeFailureStage: cancelResult.nativeFailureStage ?? "CANCEL_ACTION", nativeFailureMessageSafe: cancelResult.nativeFailureMessageSafe ?? "CANCEL_ACTION_FAILED" });
+    }
+    try { after = await inspect(); } catch { return empty("BLOCKED", true, "NATIVE_FILE_PICKER_STATE_UNVERIFIED", { ...beforeEvidence, pickerWindowIdBefore: beforeWindowId, pickerOpenBefore: true, cancelActionSent, cancelEffectVerified: false, failureStage: "POST_ACTION_INSPECTION", underlyingFailureCode: "CANCEL_EFFECT_NOT_VERIFIED", nativeFailureStage: "PICKER_INSPECTION", nativeFailureMessageSafe: "CANCEL_EFFECT_NOT_VERIFIED" }); }
     const afterWindowId = after.identity?.windowId ?? null;
     const closeVerified = cancelResult?.effectVerified !== false && after.verified && !after.open && afterWindowId === null;
     const cancelEvidence = { cancelMechanism: cancelResult?.mechanism ?? null, dialogCloseStableSampleCount: cancelResult?.closeStableSampleCount ?? null };
-    if (!closeVerified) return empty("BLOCKED", true, after.failureCode ?? "NATIVE_FILE_PICKER_CANCEL_FAILED", { pickerWindowIdBefore: beforeWindowId, pickerWindowIdAfter: afterWindowId, pickerOpenBefore: true, pickerOpenAfter: after.open, cancelActionSent, cancelEffectVerified: false, ...cancelEvidence });
-    return empty("CANCELLED", true, null, { pickerWindowIdBefore: beforeWindowId, pickerWindowIdAfter: null, pickerOpenBefore: true, pickerOpenAfter: false, cancelActionSent, cancelEffectVerified: true, ...cancelEvidence });
+    const afterEvidence = identityEvidence(after.identity);
+    if (!closeVerified) return empty("BLOCKED", true, after.failureCode ?? "NATIVE_FILE_PICKER_CANCEL_FAILED", { ...beforeEvidence, ...afterEvidence, pickerWindowIdBefore: beforeWindowId, pickerWindowIdAfter: afterWindowId, pickerOpenBefore: true, pickerOpenAfter: after.open, cancelActionSent, cancelEffectVerified: false, failureStage: "POST_ACTION_VERIFY", underlyingFailureCode: "CANCEL_EFFECT_NOT_VERIFIED", nativeFailureStage: "DIALOG_CLOSE_CHECK", nativeFailureMessageSafe: "CANCEL_EFFECT_NOT_VERIFIED", ...cancelEvidence });
+    return empty("CANCELLED", true, null, { ...beforeEvidence, ...afterEvidence, pickerWindowIdBefore: beforeWindowId, pickerWindowIdAfter: null, pickerOpenBefore: true, pickerOpenAfter: false, cancelActionSent, cancelEffectVerified: true, ...cancelEvidence });
   }
 
   let detected = false;

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { windowsPickerCancelScript, windowsPickerScanScript } from "./native-file-picker-windows";
 
@@ -50,6 +51,11 @@ describe("R62 Windows native picker bridge", () => {
     expect(script).toContain("openControlVerified");
     expect(script).toContain("cancelButtonCount");
     expect(script).toContain("cancelControlUnique");
+    expect(script).toContain("cancelName");
+    expect(script).toContain("cancelClass");
+    expect(script).toContain("cancelAutomationId");
+    expect(script).toContain("cancelControlId");
+    expect(script).toContain("cancelEnabled");
   });
 
   it("adds a guarded Win32 BM_CLICK fallback when InvokePattern is unavailable", () => {
@@ -75,6 +81,64 @@ describe("R62 Windows native picker bridge", () => {
     expect(script).toContain("cancelMechanism");
     expect(script).toContain("DIALOG_CLOSE_STABLE_SAMPLE_COUNT");
     expect(script).toContain("effectVerified");
+  });
+
+  it("declares EnumChildWindows before the cancel helper calls it", () => {
+    const script = windowsPickerCancelScript(profilePath, {
+      windowId: "hwnd:8719212",
+      processId: 19656,
+      ownerWindowId: "hwnd:6425900",
+      ownerProcessId: 29520,
+      parentWindowId: "hwnd:6425900",
+      title: "打开",
+      className: "#32770",
+      cancelButtonCount: 1,
+      cancelWindowId: "hwnd:2690702"
+    });
+
+    const declaration = "private delegate bool EnumChildWindowsProc(IntPtr hWnd, IntPtr lParam);";
+    const importDeclaration = "[DllImport(\"user32.dll\")] private static extern bool EnumChildWindows(IntPtr parent, EnumChildWindowsProc callback, IntPtr lParam);";
+    expect(script).toContain(declaration);
+    expect(script).toContain(importDeclaration);
+    expect(script.indexOf(declaration)).toBeLessThan(script.indexOf("CountValidCancelChildren"));
+  });
+
+  it.skipIf(process.platform !== "win32")("compiles the cancel helper C# without executing an action", () => {
+    const script = windowsPickerCancelScript(profilePath, {
+      windowId: "hwnd:8719212",
+      processId: 19656,
+      ownerWindowId: "hwnd:6425900",
+      ownerProcessId: 29520,
+      parentWindowId: "hwnd:6425900",
+      title: "打开",
+      className: "#32770",
+      cancelButtonCount: 1,
+      cancelWindowId: "hwnd:2690702"
+    });
+    const start = script.indexOf("Add-Type @'\n") + "Add-Type @'\n".length;
+    const end = script.indexOf("\n'@ }", start);
+    expect(start).toBeGreaterThan("Add-Type @'\n".length - 1);
+    expect(end).toBeGreaterThan(start);
+    const powershell = `$ErrorActionPreference = 'Stop'\nAdd-Type @'\n${script.slice(start, end)}\n'@\n'compiled'`;
+    expect(execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", powershell], { encoding: "utf8" }).trim()).toBe("compiled");
+  });
+
+  it("emits safe cancellation diagnostics for action and effect failures", () => {
+    const script = windowsPickerCancelScript(profilePath, {
+      windowId: "hwnd:8719212",
+      processId: 19656,
+      ownerWindowId: "hwnd:6425900",
+      ownerProcessId: 29520,
+      parentWindowId: "hwnd:6425900",
+      title: "打开",
+      className: "#32770",
+      cancelButtonCount: 1,
+      cancelWindowId: "hwnd:2690702"
+    });
+
+    for (const field of ["dialogWindowId", "cancelWindowId", "cancelName", "cancelClass", "cancelAutomationId", "cancelControlId", "cancelEnabled", "invokePatternAvailable", "failureStage", "underlyingFailureCode", "nativeFailureStage", "nativeFailureMessageSafe"]) {
+      expect(script).toContain(field);
+    }
   });
 
   it("revalidates strict Cancel child identity before the fallback and never targets Open", () => {

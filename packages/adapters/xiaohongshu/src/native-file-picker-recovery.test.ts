@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createXhsNativeFilePickerRecovery, recoverNativeFilePicker, type NativeFilePickerRecoveryProbe } from "./native-file-picker-recovery";
+import { NativeFilePickerCancelError, type NativeFilePickerCancelResult, type NativeFilePickerWindowIdentity } from "./native-file-picker-windows";
 
 function probe(input: { open: boolean; cancel?: () => Promise<void> }): NativeFilePickerRecoveryProbe {
   return {
@@ -125,6 +126,110 @@ describe("XHS native file picker recovery", () => {
       cancelled: false,
       failureCode: "CANCEL_INVOKE_PATTERN_UNAVAILABLE",
       cancelActionSent: false
+    });
+  });
+
+  it("preserves Cancel identity and the underlying helper failure", async () => {
+    const identity: NativeFilePickerWindowIdentity = {
+      windowId: "hwnd:456",
+      processId: 10,
+      ownerWindowId: "hwnd:99",
+      ownerProcessId: 10,
+      parentWindowId: "hwnd:99",
+      title: "打开",
+      className: "#32770",
+      cancelButtonCount: 1,
+      cancelWindowId: "hwnd:789",
+      cancelName: "取消",
+      cancelClass: "Button",
+      cancelAutomationId: "2",
+      cancelControlId: 2,
+      cancelEnabled: true
+    };
+    const cancelResult: NativeFilePickerCancelResult = {
+      actionSent: false,
+      failureCode: "NATIVE_FILE_PICKER_CANCEL_FAILED",
+      dialogWindowId: "hwnd:456",
+      cancelWindowId: "hwnd:789",
+      cancelName: "取消",
+      cancelClass: "Button",
+      cancelAutomationId: "2",
+      cancelControlId: 2,
+      cancelEnabled: true,
+      invokePatternAvailable: false,
+      failureStage: "CANCEL_HELPER",
+      underlyingFailureCode: "CANCEL_HELPER_COMPILE_FAILED",
+      nativeFailureStage: "ADD_TYPE",
+      nativeFailureMessageSafe: "CANCEL_HELPER_COMPILE_FAILED"
+    };
+    const systemBridge = {
+      inspect: vi.fn(async () => ({ open: true, verified: true, identity, failureCode: null })),
+      cancel: vi.fn(async () => cancelResult)
+    };
+    const picker = createXhsNativeFilePickerRecovery({ url: () => "https://creator.xiaohongshu.com/publish/publish" }, { systemBridge });
+
+    await expect(recoverNativeFilePicker(picker)).resolves.toMatchObject({
+      status: "BLOCKED",
+      cancelActionSent: false,
+      dialogWindowId: "hwnd:456",
+      cancelWindowId: "hwnd:789",
+      cancelName: "取消",
+      cancelClass: "Button",
+      cancelAutomationId: "2",
+      cancelControlId: 2,
+      cancelEnabled: true,
+      invokePatternAvailable: false,
+      underlyingFailureCode: "CANCEL_HELPER_COMPILE_FAILED",
+      nativeFailureStage: "ADD_TYPE",
+      nativeFailureMessageSafe: "CANCEL_HELPER_COMPILE_FAILED"
+    });
+  });
+
+  it("preserves typed helper compile failure diagnostics from the Windows bridge", async () => {
+    const identity: NativeFilePickerWindowIdentity = {
+      windowId: "hwnd:457",
+      processId: 10,
+      ownerWindowId: "hwnd:99",
+      ownerProcessId: 10,
+      title: "打开",
+      className: "#32770",
+      cancelButtonCount: 1,
+      cancelWindowId: "hwnd:790",
+      cancelName: "取消",
+      cancelClass: "Button",
+      cancelAutomationId: "2",
+      cancelControlId: 2,
+      cancelEnabled: true
+    };
+    const picker = createXhsNativeFilePickerRecovery({ url: () => "https://creator.xiaohongshu.com/publish/publish" }, {
+      systemBridge: {
+        inspect: vi.fn(async () => ({ open: true, verified: true, identity, failureCode: null })),
+        cancel: vi.fn(async () => {
+          throw new NativeFilePickerCancelError("NATIVE_FILE_PICKER_CANCEL_FAILED", {
+            dialogWindowId: "hwnd:457",
+            cancelWindowId: "hwnd:790",
+            cancelName: "取消",
+            cancelClass: "Button",
+            cancelAutomationId: "2",
+            cancelControlId: 2,
+            cancelEnabled: true,
+            invokePatternAvailable: false,
+            failureStage: "CANCEL_HELPER",
+            underlyingFailureCode: "CANCEL_HELPER_COMPILE_FAILED",
+            nativeFailureStage: "CANCEL_HELPER_ADD_TYPE",
+            nativeFailureMessageSafe: "CANCEL_HELPER_COMPILE_FAILED"
+          });
+        })
+      }
+    });
+
+    await expect(recoverNativeFilePicker(picker)).resolves.toMatchObject({
+      status: "BLOCKED",
+      underlyingFailureCode: "CANCEL_HELPER_COMPILE_FAILED",
+      nativeFailureStage: "CANCEL_HELPER_ADD_TYPE",
+      nativeFailureMessageSafe: "CANCEL_HELPER_COMPILE_FAILED",
+      cancelName: "取消",
+      cancelControlId: 2
     });
   });
 
