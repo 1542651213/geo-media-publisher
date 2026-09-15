@@ -111,6 +111,23 @@ describe("XHS native file picker recovery", () => {
     expect(picker.cancel).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves InvokePattern-unavailable as a fail-closed diagnostic", async () => {
+    const identity = { windowId: "hwnd:789", processId: 10, ownerWindowId: "hwnd:99", ownerProcessId: 10, title: "打开", className: "#32770", cancelButtonCount: 1 };
+    const systemBridge = {
+      inspect: vi.fn(async () => ({ open: true, verified: true, identity, failureCode: null })),
+      cancel: vi.fn(async () => ({ actionSent: false, failureCode: "CANCEL_INVOKE_PATTERN_UNAVAILABLE" as const }))
+    };
+    const picker = createXhsNativeFilePickerRecovery({ url: () => "https://creator.xiaohongshu.com/publish/publish" }, { systemBridge });
+
+    await expect(recoverNativeFilePicker(picker)).resolves.toMatchObject({
+      status: "BLOCKED",
+      detected: true,
+      cancelled: false,
+      failureCode: "CANCEL_INVOKE_PATTERN_UNAVAILABLE",
+      cancelActionSent: false
+    });
+  });
+
   it("fails closed when only the URL marker and keyboard are available", async () => {
     const press = vi.fn(async (_key: string) => undefined);
     const page = {

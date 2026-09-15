@@ -1,5 +1,22 @@
 import { createWindowsNativeFilePickerBridge, type NativeFilePickerFailureCode, type NativeFilePickerInspection, type NativeFilePickerSystemBridge } from "./native-file-picker-windows";
 
+const nativeFilePickerFailureCodes: readonly NativeFilePickerFailureCode[] = [
+  "NATIVE_FILE_PICKER_CANCEL_FAILED",
+  "NATIVE_FILE_PICKER_STATE_UNVERIFIED",
+  "NATIVE_FILE_PICKER_AMBIGUOUS",
+  "NATIVE_FILE_PICKER_OWNER_NOT_VERIFIED",
+  "NATIVE_FILE_PICKER_CANCEL_UNAVAILABLE",
+  "NATIVE_FILE_PICKER_IDENTITY_MISMATCH",
+  "CANCEL_INVOKE_PATTERN_UNAVAILABLE"
+];
+
+function failureCodeFrom(error: unknown, fallback: NativeFilePickerFailureCode): NativeFilePickerFailureCode {
+  const message = error instanceof Error ? error.message : "";
+  return (nativeFilePickerFailureCodes as readonly string[]).includes(message)
+    ? message as NativeFilePickerFailureCode
+    : fallback;
+}
+
 /**
  * A deliberately narrow hook for recovering an OS file picker which may have
  * remained open after the single upload mutation. The adapter never selects a
@@ -75,7 +92,7 @@ export function createXhsNativeFilePickerRecovery(page: NativeFilePickerPage, op
       if (systemBridge) {
         if (!lastInspection?.open || !lastInspection.identity) throw new Error("NATIVE_FILE_PICKER_IDENTITY_UNAVAILABLE");
         const result = await systemBridge.cancel(lastInspection.identity);
-        if (!result.actionSent) throw new Error("NATIVE_FILE_PICKER_CANCEL_FAILED");
+        if (!result.actionSent) throw new Error(result.failureCode ?? "NATIVE_FILE_PICKER_CANCEL_FAILED");
         cancellationAttempted = true;
         return;
       }
@@ -118,8 +135,8 @@ export async function recoverNativeFilePicker(probe?: NativeFilePickerRecoveryPr
     try {
       await probe.cancel();
       cancelActionSent = true;
-    } catch {
-      return empty("BLOCKED", true, "NATIVE_FILE_PICKER_CANCEL_FAILED", { pickerWindowIdBefore: beforeWindowId, pickerOpenBefore: true, cancelActionSent: false });
+    } catch (error) {
+      return empty("BLOCKED", true, failureCodeFrom(error, "NATIVE_FILE_PICKER_CANCEL_FAILED"), { pickerWindowIdBefore: beforeWindowId, pickerOpenBefore: true, cancelActionSent: false });
     }
     let after: NativeFilePickerInspection;
     try { after = await inspect(); } catch { return empty("BLOCKED", true, "NATIVE_FILE_PICKER_STATE_UNVERIFIED", { pickerWindowIdBefore: beforeWindowId, pickerOpenBefore: true, cancelActionSent }); }

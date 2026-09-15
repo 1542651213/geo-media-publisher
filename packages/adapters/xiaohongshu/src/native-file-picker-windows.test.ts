@@ -1,0 +1,54 @@
+import { describe, expect, it } from "vitest";
+import { windowsPickerCancelScript, windowsPickerScanScript } from "./native-file-picker-windows";
+
+const profilePath = "C:\\Users\\Administrator\\AppData\\Roaming\\codex-media-publisher\\browser-profiles\\xiaohongshu\\54b390ac-d81e-440a-baeb-d00f9f346cc3";
+
+describe("R62 Windows native picker bridge", () => {
+  it("uses Win32 EnumWindows as the top-level picker authority", () => {
+    const script = windowsPickerScanScript(profilePath);
+
+    expect(script).toContain("EnumWindows");
+    expect(script).toContain("IsWindowVisible");
+    expect(script).toContain("GetParent");
+    expect(script).toContain("ParentProcessId");
+    expect(script).toContain("FromHandle");
+    expect(script).not.toContain("RootElement");
+    expect(script).not.toContain("TreeScope]::Children");
+  });
+
+  it("inspects the native dialog from its HWND and accepts Pane/Button controls by class", () => {
+    const scanScript = windowsPickerScanScript(profilePath);
+    const cancelScript = windowsPickerCancelScript(profilePath, {
+      windowId: "hwnd:1379786",
+      processId: 13848,
+      ownerWindowId: "hwnd:2098414",
+      ownerProcessId: 25296,
+      title: "打开",
+      className: "#32770",
+      cancelButtonCount: 1
+    });
+
+    expect(scanScript).toContain("AutomationElement]::FromHandle");
+    expect(scanScript).toContain("AutomationId");
+    expect(scanScript).toContain("@('取消','Cancel')");
+    expect(scanScript).not.toContain("Current.ControlType -eq [System.Windows.Automation.ControlType]::Button");
+    expect(cancelScript).toContain("AutomationElement]::FromHandle");
+    expect(cancelScript).toContain("CANCEL_INVOKE_PATTERN_UNAVAILABLE");
+    expect(cancelScript).not.toContain("mouse");
+    expect(cancelScript).not.toContain("SendKeys");
+  });
+
+  it("requires the real Cancel identity and cross-checks Open without clicking", () => {
+    const script = windowsPickerScanScript(profilePath);
+
+    expect(script).toContain("ClassName");
+    expect(script).toContain("AutomationId");
+    expect(script).toContain("Enabled");
+    expect(script).toContain("@('打开','打开(O)','Open')");
+    expect(script).toContain("@('取消','Cancel')");
+    expect(script).toContain("openButtonCount");
+    expect(script).toContain("openControlVerified");
+    expect(script).toContain("cancelButtonCount");
+    expect(script).toContain("cancelControlUnique");
+  });
+});
