@@ -217,7 +217,20 @@ describe("XHS native file picker recovery", () => {
             failureStage: "CANCEL_HELPER",
             underlyingFailureCode: "CANCEL_HELPER_COMPILE_FAILED",
             nativeFailureStage: "CANCEL_HELPER_ADD_TYPE",
-            nativeFailureMessageSafe: "CANCEL_HELPER_COMPILE_FAILED"
+            nativeFailureMessageSafe: "CANCEL_HELPER_COMPILE_FAILED",
+            configuredTimeoutMs: 2_000,
+            nativeProcessElapsedMs: 2_001,
+            nativeProcessExitCode: null,
+            nativeProcessSignal: "SIGTERM",
+            nativeProcessKilled: true,
+            nativeProcessTimedOut: true,
+            nativeExecErrorName: "Error",
+            nativeExecErrorCode: null,
+            nativeExecErrorMessageSafe: "Command failed: powershell.exe <command omitted>",
+            stdoutLength: 0,
+            stderrLength: 0,
+            stderrSafe: null,
+            stdoutSafeTail: null
           });
         })
       }
@@ -229,7 +242,10 @@ describe("XHS native file picker recovery", () => {
       nativeFailureStage: "CANCEL_HELPER_ADD_TYPE",
       nativeFailureMessageSafe: "CANCEL_HELPER_COMPILE_FAILED",
       cancelName: "取消",
-      cancelControlId: 2
+      cancelControlId: 2,
+      configuredTimeoutMs: 2_000,
+      nativeProcessElapsedMs: 2_001,
+      nativeProcessTimedOut: true
     });
   });
 

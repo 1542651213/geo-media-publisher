@@ -14,8 +14,29 @@ export type NativeFilePickerFailureCode =
   | "CANCEL_IDENTITY_NOT_ESTABLISHED"
   | "CANCEL_ACTION_UNAVAILABLE"
   | "CANCEL_HELPER_COMPILE_FAILED"
+  | "CANCEL_HELPER_TIMEOUT"
+  | "CANCEL_HELPER_PROCESS_EXIT_FAILED"
+  | "CANCEL_HELPER_STDERR_FAILURE"
+  | "CANCEL_HELPER_JSON_PARSE_FAILED"
+  | "UNKNOWN_NATIVE_HELPER_FAILURE"
   | "CANCEL_ACTION_FAILED"
   | "CANCEL_EFFECT_NOT_VERIFIED";
+
+export interface NativePowerShellProcessDiagnostics {
+  configuredTimeoutMs: number | null;
+  nativeProcessElapsedMs: number | null;
+  nativeProcessExitCode: number | string | null;
+  nativeProcessSignal: string | null;
+  nativeProcessKilled: boolean | null;
+  nativeProcessTimedOut: boolean | null;
+  nativeExecErrorName: string | null;
+  nativeExecErrorCode: number | string | null;
+  nativeExecErrorMessageSafe: string | null;
+  stdoutLength: number;
+  stderrLength: number;
+  stderrSafe: string | null;
+  stdoutSafeTail: string | null;
+}
 
 export interface NativeFilePickerWindowIdentity {
   windowId: string;
@@ -67,6 +88,19 @@ export interface NativeFilePickerCancelResult {
   underlyingFailureCode?: NativeFilePickerFailureCode | string | null;
   nativeFailureStage?: string | null;
   nativeFailureMessageSafe?: string | null;
+  configuredTimeoutMs?: number | null;
+  nativeProcessElapsedMs?: number | null;
+  nativeProcessExitCode?: number | string | null;
+  nativeProcessSignal?: string | null;
+  nativeProcessKilled?: boolean | null;
+  nativeProcessTimedOut?: boolean | null;
+  nativeExecErrorName?: string | null;
+  nativeExecErrorCode?: number | string | null;
+  nativeExecErrorMessageSafe?: string | null;
+  stdoutLength?: number;
+  stderrLength?: number;
+  stderrSafe?: string | null;
+  stdoutSafeTail?: string | null;
 }
 
 export type NativeFilePickerCancelDiagnostics = Pick<NativeFilePickerCancelResult,
@@ -81,7 +115,34 @@ export type NativeFilePickerCancelDiagnostics = Pick<NativeFilePickerCancelResul
   | "failureStage"
   | "underlyingFailureCode"
   | "nativeFailureStage"
-  | "nativeFailureMessageSafe">;
+  | "nativeFailureMessageSafe"
+  | "configuredTimeoutMs"
+  | "nativeProcessElapsedMs"
+  | "nativeProcessExitCode"
+  | "nativeProcessSignal"
+  | "nativeProcessKilled"
+  | "nativeProcessTimedOut"
+  | "nativeExecErrorName"
+  | "nativeExecErrorCode"
+  | "nativeExecErrorMessageSafe"
+  | "stdoutLength"
+  | "stderrLength"
+  | "stderrSafe"
+  | "stdoutSafeTail">;
+
+export type NativePowerShellFailureKind = "PROCESS" | "EMPTY_RESPONSE" | "JSON_PARSE";
+
+export class NativePowerShellExecError extends Error {
+  readonly diagnostics: NativePowerShellProcessDiagnostics;
+  readonly kind: NativePowerShellFailureKind;
+
+  constructor(message: string, diagnostics: NativePowerShellProcessDiagnostics, kind: NativePowerShellFailureKind = "PROCESS") {
+    super(message);
+    this.name = "NativePowerShellExecError";
+    this.diagnostics = diagnostics;
+    this.kind = kind;
+  }
+}
 
 export class NativeFilePickerCancelError extends Error {
   readonly failureCode: NativeFilePickerFailureCode;
@@ -114,12 +175,79 @@ function emptyInspection(failureCode: NativeFilePickerFailureCode): NativeFilePi
   return { open: false, verified: false, identity: null, failureCode };
 }
 
+function sanitizeNativeText(value: unknown, limit = 2_048): string | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  const compact = value
+    .replaceAll("\0", "")
+    .replace(/[A-Za-z]:\\[^\s\r\n]*/gu, "<path>")
+    .replace(/\r?\n/gu, " ");
+  return compact.length > limit ? `…${compact.slice(-limit)}` : compact;
+}
+
+function safeExecErrorMessage(error: unknown): string | null {
+  if (!(error instanceof Error)) return null;
+  const commandMarker = error.message.search(/powershell\.exe/iu);
+  const message = commandMarker >= 0
+    ? `${error.message.slice(0, commandMarker)}powershell.exe <command omitted>`
+    : error.message;
+  return sanitizeNativeText(message);
+}
+
+type NativeProcessErrorLike = Error & {
+  code?: number | string;
+  signal?: string | null;
+  killed?: boolean;
+  stdout?: string;
+  stderr?: string;
+};
+
+function processDiagnosticsFrom(error: unknown, timeoutMs: number | null, elapsedMs: number, stdout = "", stderr = ""): NativePowerShellProcessDiagnostics {
+  const details = (error instanceof Error ? error : null) as NativeProcessErrorLike | null;
+  const exitCode = details?.code ?? null;
+  const signal = details?.signal ?? null;
+  const killed = typeof details?.killed === "boolean" ? details.killed : null;
+  const timedOut = Boolean(exitCode === "ETIMEDOUT" || (killed === true && signal === "SIGTERM"));
+  return {
+    configuredTimeoutMs: timeoutMs,
+    nativeProcessElapsedMs: elapsedMs,
+    nativeProcessExitCode: exitCode,
+    nativeProcessSignal: signal,
+    nativeProcessKilled: killed,
+    nativeProcessTimedOut: timedOut,
+    nativeExecErrorName: details?.name ?? null,
+    nativeExecErrorCode: exitCode,
+    nativeExecErrorMessageSafe: safeExecErrorMessage(error),
+    stdoutLength: stdout.length,
+    stderrLength: stderr.length,
+    stderrSafe: sanitizeNativeText(stderr),
+    stdoutSafeTail: sanitizeNativeText(stdout)
+  };
+}
+
 async function runPowerShellJson<T>(command: string, timeoutMs: number): Promise<T> {
   if (process.platform !== "win32") throw new Error("NATIVE_FILE_PICKER_WINDOWS_ONLY");
-  const result = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], { windowsHide: true, timeout: timeoutMs, maxBuffer: 1_000_000 });
+  const startedAt = Date.now();
+  let result: { stdout: string; stderr: string };
+  try {
+    result = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], { windowsHide: true, timeout: timeoutMs, maxBuffer: 1_000_000 });
+  } catch (error) {
+    const details = (error instanceof Error ? error : null) as NativeProcessErrorLike | null;
+    const stdout = typeof details?.stdout === "string" ? details.stdout : "";
+    const stderr = typeof details?.stderr === "string" ? details.stderr : "";
+    throw new NativePowerShellExecError("NATIVE_FILE_PICKER_PROCESS_FAILED", processDiagnosticsFrom(error, timeoutMs, Date.now() - startedAt, stdout, stderr));
+  }
   const output = result.stdout.trim();
-  if (!output) throw new Error("NATIVE_FILE_PICKER_EMPTY_RESPONSE");
-  return JSON.parse(output) as T;
+  const processDiagnostics = processDiagnosticsFrom(null, timeoutMs, Date.now() - startedAt, result.stdout, result.stderr);
+  if (!output) throw new NativePowerShellExecError("NATIVE_FILE_PICKER_EMPTY_RESPONSE", processDiagnostics, "EMPTY_RESPONSE");
+  try {
+    return JSON.parse(output) as T;
+  } catch (error) {
+    throw new NativePowerShellExecError("NATIVE_FILE_PICKER_INVALID_JSON", {
+      ...processDiagnostics,
+      nativeExecErrorName: error instanceof Error ? error.name : "SyntaxError",
+      nativeExecErrorMessageSafe: sanitizeNativeText(error instanceof Error ? error.message : String(error))
+    }, "JSON_PARSE");
+  }
 }
 
 function identityDiagnostics(identity: NativeFilePickerWindowIdentity): NativeFilePickerCancelDiagnostics {
@@ -137,42 +265,45 @@ function identityDiagnostics(identity: NativeFilePickerWindowIdentity): NativeFi
 function nativeFailureText(error: unknown): string {
   if (error instanceof Error) {
     const details = error as Error & { stderr?: unknown };
-    return [details.message, typeof details.stderr === "string" ? details.stderr : ""].filter(Boolean).join(" ");
+    const processDetails = error instanceof NativePowerShellExecError ? error.diagnostics : null;
+    return [details.message, typeof details.stderr === "string" ? details.stderr : "", processDetails?.stderrSafe ?? ""].filter(Boolean).join(" ");
   }
   return "";
 }
 
-function classifyNativeCancelFailure(error: unknown): NativeFilePickerCancelDiagnostics {
-  const text = nativeFailureText(error).toLowerCase();
-  if (text.includes("enumchildwindows") || text.includes("add-type") || text.includes("compilation")) {
-    return {
-      failureStage: "CANCEL_HELPER",
-      underlyingFailureCode: "CANCEL_HELPER_COMPILE_FAILED",
-      nativeFailureStage: "CANCEL_HELPER_ADD_TYPE",
-      nativeFailureMessageSafe: "CANCEL_HELPER_COMPILE_FAILED"
-    };
-  }
-  if (text.includes("identity_mismatch") || text.includes("identity_unavailable") || text.includes("identity_not_established")) {
-    return {
-      failureStage: "CANCEL_IDENTITY",
-      underlyingFailureCode: "CANCEL_IDENTITY_NOT_ESTABLISHED",
-      nativeFailureStage: "CANCEL_IDENTITY",
-      nativeFailureMessageSafe: "CANCEL_IDENTITY_NOT_ESTABLISHED"
-    };
-  }
-  if (text.includes("cancel_unavailable")) {
-    return {
-      failureStage: "CANCEL_IDENTITY",
-      underlyingFailureCode: "CANCEL_ACTION_UNAVAILABLE",
-      nativeFailureStage: "CANCEL_IDENTITY",
-      nativeFailureMessageSafe: "CANCEL_ACTION_UNAVAILABLE"
-    };
+export function classifyNativeCancelFailure(error: unknown): NativeFilePickerCancelDiagnostics {
+  const processDiagnostics = error instanceof NativePowerShellExecError
+    ? error.diagnostics
+    : processDiagnosticsFrom(error, null, 0);
+  const text = nativeFailureText(error);
+  const compilerDiagnostic = /\bCS\d{4}\b/iu.test(text) && /(add-type|compil|error)/iu.test(text);
+  let underlyingFailureCode: NativeFilePickerFailureCode;
+  let nativeFailureStage: string;
+  if (processDiagnostics.nativeProcessTimedOut === true) {
+    underlyingFailureCode = "CANCEL_HELPER_TIMEOUT";
+    nativeFailureStage = "CANCEL_HELPER_PROCESS";
+  } else if (compilerDiagnostic) {
+    underlyingFailureCode = "CANCEL_HELPER_COMPILE_FAILED";
+    nativeFailureStage = "CANCEL_HELPER_ADD_TYPE";
+  } else if (error instanceof NativePowerShellExecError && error.kind === "JSON_PARSE") {
+    underlyingFailureCode = "CANCEL_HELPER_JSON_PARSE_FAILED";
+    nativeFailureStage = "CANCEL_HELPER_JSON";
+  } else if (processDiagnostics.nativeProcessExitCode !== null || processDiagnostics.nativeProcessSignal !== null) {
+    underlyingFailureCode = "CANCEL_HELPER_PROCESS_EXIT_FAILED";
+    nativeFailureStage = "CANCEL_HELPER_PROCESS";
+  } else if (processDiagnostics.stderrLength > 0) {
+    underlyingFailureCode = "CANCEL_HELPER_STDERR_FAILURE";
+    nativeFailureStage = "CANCEL_HELPER_PROCESS";
+  } else {
+    underlyingFailureCode = "UNKNOWN_NATIVE_HELPER_FAILURE";
+    nativeFailureStage = "CANCEL_HELPER";
   }
   return {
-    failureStage: "CANCEL_ACTION",
-    underlyingFailureCode: "CANCEL_ACTION_FAILED",
-    nativeFailureStage: "CANCEL_ACTION",
-    nativeFailureMessageSafe: "CANCEL_ACTION_FAILED"
+    ...processDiagnostics,
+    failureStage: "CANCEL_HELPER",
+    underlyingFailureCode,
+    nativeFailureStage,
+    nativeFailureMessageSafe: underlyingFailureCode
   };
 }
 

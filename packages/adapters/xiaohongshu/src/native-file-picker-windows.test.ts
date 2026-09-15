@@ -1,10 +1,116 @@
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { windowsPickerCancelScript, windowsPickerScanScript } from "./native-file-picker-windows";
+import { classifyNativeCancelFailure, NativePowerShellExecError, windowsPickerCancelScript, windowsPickerScanScript } from "./native-file-picker-windows";
 
 const profilePath = "C:\\Users\\Administrator\\AppData\\Roaming\\codex-media-publisher\\browser-profiles\\xiaohongshu\\54b390ac-d81e-440a-baeb-d00f9f346cc3";
 
 describe("R62 Windows native picker bridge", () => {
+  it("classifies a timed out helper without mistaking Add-Type in the command for a compile error", () => {
+    const diagnostics = classifyNativeCancelFailure(new NativePowerShellExecError("Command timed out", {
+      configuredTimeoutMs: 2_000,
+      nativeProcessElapsedMs: 2_001,
+      nativeProcessExitCode: null,
+      nativeProcessSignal: "SIGTERM",
+      nativeProcessKilled: true,
+      nativeProcessTimedOut: true,
+      nativeExecErrorName: "Error",
+      nativeExecErrorCode: null,
+      nativeExecErrorMessageSafe: "Command failed: powershell.exe <command omitted>",
+      stdoutLength: 0,
+      stderrLength: 0,
+      stderrSafe: null,
+      stdoutSafeTail: null
+    }));
+
+    expect(diagnostics.underlyingFailureCode).toBe("CANCEL_HELPER_TIMEOUT");
+    expect(diagnostics.nativeFailureStage).toBe("CANCEL_HELPER_PROCESS");
+  });
+
+  it("classifies only a real CS compiler diagnostic as a helper compile failure", () => {
+    const diagnostics = classifyNativeCancelFailure(new NativePowerShellExecError("Command failed", {
+      configuredTimeoutMs: 2_000,
+      nativeProcessElapsedMs: 300,
+      nativeProcessExitCode: 1,
+      nativeProcessSignal: null,
+      nativeProcessKilled: false,
+      nativeProcessTimedOut: false,
+      nativeExecErrorName: "Error",
+      nativeExecErrorCode: 1,
+      nativeExecErrorMessageSafe: "Command failed: powershell.exe <command omitted>",
+      stdoutLength: 0,
+      stderrLength: 74,
+      stderrSafe: "Add-Type : error CS1002: ; expected",
+      stdoutSafeTail: null
+    }));
+
+    expect(diagnostics.underlyingFailureCode).toBe("CANCEL_HELPER_COMPILE_FAILED");
+    expect(diagnostics.nativeFailureStage).toBe("CANCEL_HELPER_ADD_TYPE");
+  });
+
+  it("classifies a non-zero helper exit without compiler diagnostics separately", () => {
+    const diagnostics = classifyNativeCancelFailure(new NativePowerShellExecError("Command failed", {
+      configuredTimeoutMs: 2_000,
+      nativeProcessElapsedMs: 300,
+      nativeProcessExitCode: 1,
+      nativeProcessSignal: null,
+      nativeProcessKilled: false,
+      nativeProcessTimedOut: false,
+      nativeExecErrorName: "Error",
+      nativeExecErrorCode: 1,
+      nativeExecErrorMessageSafe: "Command failed: powershell.exe <command omitted>",
+      stdoutLength: 0,
+      stderrLength: 21,
+      stderrSafe: "native helper failed",
+      stdoutSafeTail: null
+    }));
+
+    expect(diagnostics.underlyingFailureCode).toBe("CANCEL_HELPER_PROCESS_EXIT_FAILED");
+  });
+
+  it("classifies invalid JSON separately", () => {
+    const diagnostics = classifyNativeCancelFailure(new NativePowerShellExecError("NATIVE_FILE_PICKER_INVALID_JSON", {
+      configuredTimeoutMs: 2_000,
+      nativeProcessElapsedMs: 300,
+      nativeProcessExitCode: 0,
+      nativeProcessSignal: null,
+      nativeProcessKilled: false,
+      nativeProcessTimedOut: false,
+      nativeExecErrorName: "SyntaxError",
+      nativeExecErrorCode: null,
+      nativeExecErrorMessageSafe: "Unexpected token",
+      stdoutLength: 7,
+      stderrLength: 0,
+      stderrSafe: null,
+      stdoutSafeTail: "not-json"
+    }, "JSON_PARSE"));
+
+    expect(diagnostics.underlyingFailureCode).toBe("CANCEL_HELPER_JSON_PARSE_FAILED");
+  });
+
+  it("keeps established Cancel identity fields with process failure evidence", () => {
+    const diagnostics = classifyNativeCancelFailure(new NativePowerShellExecError("Command failed", {
+      configuredTimeoutMs: 2_000,
+      nativeProcessElapsedMs: 300,
+      nativeProcessExitCode: 1,
+      nativeProcessSignal: null,
+      nativeProcessKilled: false,
+      nativeProcessTimedOut: false,
+      nativeExecErrorName: "Error",
+      nativeExecErrorCode: 1,
+      nativeExecErrorMessageSafe: "Command failed: powershell.exe <command omitted>",
+      stdoutLength: 0,
+      stderrLength: 21,
+      stderrSafe: "native helper failed",
+      stdoutSafeTail: null
+    }));
+
+    expect(diagnostics).toMatchObject({
+      configuredTimeoutMs: 2_000,
+      nativeProcessExitCode: 1,
+      stderrSafe: "native helper failed"
+    });
+  });
+
   it("uses Win32 EnumWindows as the top-level picker authority", () => {
     const script = windowsPickerScanScript(profilePath);
 

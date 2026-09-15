@@ -11,6 +11,11 @@ const nativeFilePickerFailureCodes: readonly NativeFilePickerFailureCode[] = [
   "CANCEL_IDENTITY_NOT_ESTABLISHED",
   "CANCEL_ACTION_UNAVAILABLE",
   "CANCEL_HELPER_COMPILE_FAILED",
+  "CANCEL_HELPER_TIMEOUT",
+  "CANCEL_HELPER_PROCESS_EXIT_FAILED",
+  "CANCEL_HELPER_STDERR_FAILURE",
+  "CANCEL_HELPER_JSON_PARSE_FAILED",
+  "UNKNOWN_NATIVE_HELPER_FAILURE",
   "CANCEL_ACTION_FAILED",
   "CANCEL_EFFECT_NOT_VERIFIED"
 ];
@@ -61,6 +66,19 @@ export interface NativeFilePickerRecoveryResult {
   underlyingFailureCode?: NativeFilePickerFailureCode | string | null;
   nativeFailureStage?: string | null;
   nativeFailureMessageSafe?: string | null;
+  configuredTimeoutMs?: number | null;
+  nativeProcessElapsedMs?: number | null;
+  nativeProcessExitCode?: number | string | null;
+  nativeProcessSignal?: string | null;
+  nativeProcessKilled?: boolean | null;
+  nativeProcessTimedOut?: boolean | null;
+  nativeExecErrorName?: string | null;
+  nativeExecErrorCode?: number | string | null;
+  nativeExecErrorMessageSafe?: string | null;
+  stdoutLength?: number;
+  stderrLength?: number;
+  stderrSafe?: string | null;
+  stdoutSafeTail?: string | null;
 }
 
 function identityEvidence(identity: NativeFilePickerWindowIdentity | null): NativeFilePickerCancelDiagnostics {
@@ -182,6 +200,19 @@ export async function recoverNativeFilePicker(probe?: NativeFilePickerRecoveryPr
     underlyingFailureCode: null,
     nativeFailureStage: null,
     nativeFailureMessageSafe: null,
+    configuredTimeoutMs: null,
+    nativeProcessElapsedMs: null,
+    nativeProcessExitCode: null,
+    nativeProcessSignal: null,
+    nativeProcessKilled: null,
+    nativeProcessTimedOut: null,
+    nativeExecErrorName: null,
+    nativeExecErrorCode: null,
+    nativeExecErrorMessageSafe: null,
+    stdoutLength: 0,
+    stderrLength: 0,
+    stderrSafe: null,
+    stdoutSafeTail: null,
     ...values
   });
   if (!probe) return empty("NOT_DETECTED", false, null, { pickerOpenAfter: false });
