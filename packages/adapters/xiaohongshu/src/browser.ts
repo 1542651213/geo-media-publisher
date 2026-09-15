@@ -90,7 +90,8 @@ import { containsExpectedXiaohongshuSafeFixture, inspectXiaohongshuFileInputStat
 import { readXiaohongshuUploadInputImmediately, type XiaohongshuUploadFileExpectation, type XiaohongshuUploadInputImmediateReadback } from "./upload-delivery-diagnostic";
 import { ensureXhsIdentityPage, type IdentityPageEnsureResult } from "./ensure-identity-page";
 import { normalizeXiaohongshuEditorText } from "./editor-text-normalization";
-import { createXhsNativeFilePickerRecovery, recoverNativeFilePicker } from "./native-file-picker-recovery";
+import { createXhsNativeFilePickerRecovery, recoverNativeFilePicker, type NativeFilePickerRecoveryResult } from "./native-file-picker-recovery";
+import { stabilizeAfterNativeFilePickerCancel, type PickerCancelFinalControl, type PickerCancelStabilizationResult } from "./picker-cancel-stabilization";
 export { normalizeXiaohongshuEditorText } from "./editor-text-normalization";
 export type { XiaohongshuPostUploadBoundingRect, XiaohongshuPostUploadFinalSubmitProof, XiaohongshuPostUploadImageItemSafe, XiaohongshuPostUploadReconciliationDomSnapshot, XiaohongshuPostUploadReconciliationResult, XiaohongshuPostUploadReconciliationState } from "./post-upload-reconciliation-diagnostic";
 export { classifyXiaohongshuPostUploadTerminalReadiness } from "./post-upload-terminal-readiness";
@@ -3080,6 +3081,8 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     let bodyEvidence = emptyExplorationFieldEvidence();
     let requiredSettings: { status: string; mutations: readonly Record<string, unknown>[] } = { status: "NOT_REQUIRED", mutations: [] };
     let finalSubmit: { status: string; visible: boolean; enabled: boolean; hitTestValid: boolean; label?: string } = { status: "NOT_DISCOVERED", visible: false, enabled: false, hitTestValid: false };
+    let nativeFilePickerRecoveryResult: NativeFilePickerRecoveryResult | null = null;
+    let pickerCancelStabilization: PickerCancelStabilizationResult | null = null;
     let forbiddenMutationObserved = false;
     let blocker: string | null = null;
     let canonical = await this.activeCanonicalPage(ctx).catch(() => null);
@@ -3136,6 +3139,12 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         bodyReadbackVerified: bodyEvidence.readbackVerified,
         requiredSettings,
         finalSubmit,
+        ...(pickerCancelStabilization ? {
+          afterPickerCancelUrl: pickerCancelStabilization.afterPickerCancelUrl,
+          afterPickerCancelWaitMs: pickerCancelStabilization.afterPickerCancelWaitMs,
+          finalControlDiscoveryRetryCount: pickerCancelStabilization.finalControlDiscoveryRetryCount,
+          finalControlFoundAfterWait: pickerCancelStabilization.finalControlFoundAfterWait
+        } : {}),
         forbiddenMutationObserved,
         blocker,
         ...(blocker ? { failureCode: blocker, failureStage: "EXPLORATION", missingSignal: blocker } : {}),
@@ -3289,6 +3298,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     if (input.postUploadReadinessStrategy === "TERMINAL_CLASSIFIER") {
       try {
         const nativePickerRecovery = await recoverNativeFilePicker(nativeFilePickerRecovery);
+        nativeFilePickerRecoveryResult = nativePickerRecovery;
         states.push({ phase: "NATIVE_FILE_PICKER_RECOVERY", ...nativePickerRecovery });
         addTimeline("POST_UPLOAD_EDITOR_DISCOVERY", "NATIVE_FILE_PICKER_RECOVERY", nativePickerRecovery.status === "BLOCKED" ? "BLOCKED" : nativePickerRecovery.status === "CANCELLED" ? "CANCELLED" : "NOT_DETECTED");
         if (nativePickerRecovery.status === "BLOCKED") {
@@ -3332,6 +3342,11 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         readinessSampleIntervalMs: 80,
         emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic)
       });
+      nativeFilePickerRecoveryResult = postUploadInspection.nativeFilePickerRecovery === "CANCELLED"
+        ? { status: "CANCELLED", detected: postUploadInspection.nativeFilePickerDetected, cancelled: true, failureCode: null }
+        : postUploadInspection.nativeFilePickerRecovery === "BLOCKED"
+          ? { status: "BLOCKED", detected: postUploadInspection.nativeFilePickerDetected, cancelled: false, failureCode: "NATIVE_FILE_PICKER_CANCEL_FAILED" }
+          : { status: "NOT_DETECTED", detected: false, cancelled: false, failureCode: null };
       states.push(postUploadInspection as unknown as Record<string, unknown>);
       if (postUploadInspection.forbiddenActionSignalPresent === true) {
         forbiddenMutationObserved = true;
@@ -3444,7 +3459,19 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const settings = await this.inspectPublishSettings(canonical.page);
     selectors.push({ field: "settings", status: classifyXiaohongshuPublishSettings(settings), requiredCount: settings.filter((setting) => setting.required).length });
 
-    finalSubmit = await this.inspectFinalSubmitForExploration(canonical.page);
+    if (nativeFilePickerRecoveryResult?.status === "CANCELLED") {
+      pickerCancelStabilization = await stabilizeAfterNativeFilePickerCancel(canonical.page, {
+        maxWaitMs: Math.max(0, Math.min(10_000, budgets.maxDurationMs - (Date.now() - startedAt))),
+        retryIntervalMs: 80,
+        stableSampleCount: 2,
+        discoverFinalControl: async () => this.inspectClosedShadowFinalSubmitForExploration(canonical.page)
+      });
+      states.push({ phase: "PICKER_CANCEL_STABILIZATION", ...pickerCancelStabilization });
+      addTimeline("POST_UPLOAD_EDITOR_DISCOVERY", "PICKER_CANCEL_STABILIZATION", pickerCancelStabilization.finalControlFoundAfterWait ? "PASS" : "BLOCKED");
+      finalSubmit = pickerCancelStabilization.finalControl;
+    } else {
+      finalSubmit = await this.inspectFinalSubmitForExploration(canonical.page);
+    }
     selectors.push({ field: "finalSubmit", ...finalSubmit });
     addTimeline("FINAL_SUBMIT_READY", "READ_ONLY_CONTROL_DISCOVERY", finalSubmit.status === "FOUND_UNIQUE" && finalSubmit.visible && finalSubmit.enabled && finalSubmit.hitTestValid ? "PASS" : "BLOCKED");
     if (finalSubmit.status !== "FOUND_UNIQUE" || !finalSubmit.visible || !finalSubmit.enabled || !finalSubmit.hitTestValid) {
@@ -3515,6 +3542,21 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     if (!match.enabled) return { status: "DISABLED", ...match };
     if (!match.hitTestValid) return { status: "HITTEST_INVALID", ...match };
     return { status: "FOUND_UNIQUE", ...match };
+  }
+
+  private async inspectClosedShadowFinalSubmitForExploration(page: Page): Promise<PickerCancelFinalControl> {
+    const resolution = await inspectTask10sClosedShadowPublishSurface(page);
+    const visible = Boolean(resolution.host?.rendered && resolution.innerButton?.rendered);
+    const status = resolution.present
+      ? resolution.enabled ? "FOUND_UNIQUE" : "DISABLED"
+      : resolution.status === "AMBIGUOUS" ? "AMBIGUOUS" : "NOT_FOUND";
+    return {
+      status,
+      visible,
+      enabled: resolution.enabled,
+      hitTestValid: resolution.present && resolution.enabled && resolution.innerButton?.boundingRect !== null,
+      ...(resolution.innerButton?.exactText ? { label: resolution.innerButton.exactText } : {})
+    };
   }
 
   private async satisfyRequiredSettings(page: Page, mutationBudget: number): Promise<{ status: string; mutations: readonly Record<string, unknown>[] }> {

@@ -20,6 +20,7 @@ export * from "./post-upload-terminal-readiness";
 export * from "./file-input-diagnostic";
 export * from "./upload-delivery-diagnostic";
 export * from "./native-file-picker-recovery";
+export * from "./picker-cancel-stabilization";
 export * from "./publish-flow-exploration";
 export * from "./identity";
 

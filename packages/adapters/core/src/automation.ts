@@ -131,6 +131,11 @@ export interface PublishFlowExplorationResult {
   bodyReadbackVerified: boolean;
   requiredSettings: { status: string; mutations: readonly Record<string, unknown>[] };
   finalSubmit: { status: string; visible: boolean; enabled: boolean; hitTestValid: boolean; label?: string };
+  /** Read-only stabilization evidence collected after a native picker cancel. */
+  afterPickerCancelUrl?: string;
+  afterPickerCancelWaitMs?: number;
+  finalControlDiscoveryRetryCount?: number;
+  finalControlFoundAfterWait?: boolean;
   forbiddenMutationObserved: boolean;
   blocker: string | null;
   failureCode?: string | null;
