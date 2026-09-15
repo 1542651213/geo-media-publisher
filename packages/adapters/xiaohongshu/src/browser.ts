@@ -3464,6 +3464,24 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         maxWaitMs: Math.max(0, Math.min(10_000, budgets.maxDurationMs - (Date.now() - startedAt))),
         retryIntervalMs: 80,
         stableSampleCount: 2,
+        clearOpenPickerMarker: async () => {
+          const evaluatePage = canonical!.page as unknown as { evaluate?: <T>(pageFunction: () => T) => Promise<T> };
+          if (typeof evaluatePage.evaluate !== "function") return false;
+          try {
+            return Boolean(await evaluatePage.evaluate(() => {
+              const current = new URL(window.location.href);
+              if (current.searchParams.get("openFilePicker") === "true") {
+                current.searchParams.delete("openFilePicker");
+                const nextUrl = `${current.pathname}${current.search}${current.hash}`;
+                window.history.replaceState(window.history.state, document.title, nextUrl);
+                window.dispatchEvent(new PopStateEvent("popstate"));
+              }
+              return new URL(window.location.href).searchParams.get("openFilePicker") !== "true";
+            }));
+          } catch {
+            return false;
+          }
+        },
         discoverFinalControl: async () => this.inspectClosedShadowFinalSubmitForExploration(canonical.page)
       });
       states.push({ phase: "PICKER_CANCEL_STABILIZATION", ...pickerCancelStabilization });

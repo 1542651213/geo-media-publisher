@@ -15,6 +15,12 @@ export interface PickerCancelStabilizationOptions {
   maxWaitMs?: number;
   retryIntervalMs?: number;
   stableSampleCount?: number;
+  /**
+   * Clears only the stale browser-side picker route marker after the native
+   * dialog has already been verified closed. This is intentionally optional;
+   * without a verified clear the bounded loop remains fail-closed.
+   */
+  clearOpenPickerMarker?: () => boolean | Promise<boolean>;
   discoverFinalControl: () => Promise<PickerCancelFinalControl>;
 }
 
@@ -80,6 +86,7 @@ export async function stabilizeAfterNativeFilePickerCancel(
   let retryCount = 0;
   let stableCount = 0;
   let previousFingerprint = "";
+  let markerClearAttempted = false;
   let lastUrl = "";
   let lastControl: PickerCancelFinalControl = {
     status: "NOT_FOUND",
@@ -95,6 +102,23 @@ export async function stabilizeAfterNativeFilePickerCancel(
       lastUrl = "";
     }
     if (hasOpenPickerMarker(lastUrl)) {
+      if (!markerClearAttempted && typeof options.clearOpenPickerMarker === "function") {
+        markerClearAttempted = true;
+        try {
+          const cleared = await options.clearOpenPickerMarker();
+          if (cleared) {
+            try {
+              lastUrl = await page.url();
+            } catch {
+              // Keep the last safe URL if the page closes during the clear.
+            }
+            if (!hasOpenPickerMarker(lastUrl)) continue;
+          }
+        } catch {
+          // Keep the route marker as a fail-closed signal when the page-side
+          // cleanup cannot be verified.
+        }
+      }
       stableCount = 0;
       previousFingerprint = "";
       await waitForRetry(page, retryIntervalMs);

@@ -71,4 +71,32 @@ describe("picker cancel editor stabilization", () => {
     expect(result.finalControlFoundAfterWait).toBe(false);
     expect(result.finalControl.status).toBe("NOT_FOUND");
   });
+
+  it("clears a stale picker marker after the native dialog is already verified closed", async () => {
+    let currentUrl = "https://creator.xiaohongshu.com/publish/publish?openFilePicker=true";
+    let clearCalls = 0;
+    let discoveryCalls = 0;
+    const result = await stabilizeAfterNativeFilePickerCancel({
+      url: () => currentUrl,
+      waitForTimeout: async () => undefined
+    }, {
+      maxWaitMs: 80,
+      retryIntervalMs: 0,
+      stableSampleCount: 2,
+      clearOpenPickerMarker: async () => {
+        clearCalls += 1;
+        currentUrl = "https://creator.xiaohongshu.com/publish/publish";
+        return true;
+      },
+      discoverFinalControl: async () => {
+        discoveryCalls += 1;
+        return control({ status: "FOUND_UNIQUE", visible: true, enabled: true, hitTestValid: true });
+      }
+    });
+
+    expect(clearCalls).toBe(1);
+    expect(discoveryCalls).toBeGreaterThanOrEqual(2);
+    expect(result.finalControlFoundAfterWait).toBe(true);
+    expect(result.afterPickerCancelUrl).toBe("https://creator.xiaohongshu.com/publish/publish");
+  });
 });
