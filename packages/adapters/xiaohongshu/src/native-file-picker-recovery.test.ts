@@ -128,6 +128,29 @@ describe("XHS native file picker recovery", () => {
     });
   });
 
+  it("reports a verified Win32 BM_CLICK cancellation and stable close samples", async () => {
+    const identity = { windowId: "hwnd:3935410", processId: 15276, ownerWindowId: "hwnd:8391932", ownerProcessId: 8000, title: "打开", className: "#32770", cancelButtonCount: 1 };
+    let inspectCount = 0;
+    const systemBridge = {
+      inspect: vi.fn(async () => {
+        inspectCount += 1;
+        return inspectCount === 1
+          ? { open: true, verified: true, identity, failureCode: null }
+          : { open: false, verified: true, identity: null, failureCode: null };
+      }),
+      cancel: vi.fn(async () => ({ actionSent: true, mechanism: "WIN32_BM_CLICK" as const, effectVerified: true, closeStableSampleCount: 3 }))
+    };
+    const picker = createXhsNativeFilePickerRecovery({ url: () => "https://creator.xiaohongshu.com/publish/publish" }, { systemBridge });
+
+    await expect(recoverNativeFilePicker(picker)).resolves.toMatchObject({
+      status: "CANCELLED",
+      cancelActionSent: true,
+      cancelEffectVerified: true,
+      cancelMechanism: "WIN32_BM_CLICK",
+      dialogCloseStableSampleCount: 3
+    });
+  });
+
   it("fails closed when only the URL marker and keyboard are available", async () => {
     const press = vi.fn(async (_key: string) => undefined);
     const page = {

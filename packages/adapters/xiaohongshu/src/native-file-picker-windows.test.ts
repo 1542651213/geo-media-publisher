@@ -51,4 +51,48 @@ describe("R62 Windows native picker bridge", () => {
     expect(script).toContain("cancelButtonCount");
     expect(script).toContain("cancelControlUnique");
   });
+
+  it("adds a guarded Win32 BM_CLICK fallback when InvokePattern is unavailable", () => {
+    const script = windowsPickerCancelScript(profilePath, {
+      windowId: "hwnd:3935410",
+      processId: 15276,
+      ownerWindowId: "hwnd:8391932",
+      ownerProcessId: 8000,
+      title: "打开",
+      className: "#32770",
+      cancelButtonCount: 1,
+      cancelControlUnique: true,
+      cancelControlType: "ControlType.Pane"
+    });
+
+    expect(script).toContain("SendMessageTimeout");
+    expect(script).toContain("BM_CLICK");
+    expect(script).toContain("SMTO_ABORTIFHUNG");
+    expect(script).toContain("IsChild");
+    expect(script).toContain("EnumChildWindows");
+    expect(script).toContain("CountValidCancelChildren");
+    expect(script).toContain("GetDlgCtrlID");
+    expect(script).toContain("cancelMechanism");
+    expect(script).toContain("DIALOG_CLOSE_STABLE_SAMPLE_COUNT");
+    expect(script).toContain("effectVerified");
+  });
+
+  it("revalidates strict Cancel child identity before the fallback and never targets Open", () => {
+    const script = windowsPickerCancelScript(profilePath, {
+      windowId: "hwnd:3935410",
+      processId: 15276,
+      ownerWindowId: "hwnd:8391932",
+      ownerProcessId: 8000,
+      title: "打开",
+      className: "#32770",
+      cancelButtonCount: 1
+    });
+
+    expect(script).toContain("cancelControlCount");
+    expect(script).toContain("GetWindowText");
+    expect(script).toContain("ClassName");
+    expect(script).toContain("NATIVE_FILE_PICKER_CANCEL_FAILED");
+    expect(script).toContain("expectedCancelControlId");
+    expect(script).not.toContain("$expectedOpenControlId");
+  });
 });
