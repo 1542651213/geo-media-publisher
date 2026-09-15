@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  ONE_SHOT_REAL_PUBLISH_ACCEPTANCE,
+  OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH,
+  OneShotPublicationGuard,
+  type OneShotFinalSubmitPreflight,
+  type OneShotPublicationAuthorization
+} from "@publisher/adapters-core";
+import {
   clickTask10sClosedShadowPublishSurface,
   resolveTask10sClosedShadowPublishSurface,
+  runTask10sClosedShadowFinalSubmit,
   type Task10sClosedShadowDomSnapshot,
   type Task10sClosedShadowHostSafe,
   type Task10sClosedShadowInnerButtonSafe
@@ -125,7 +133,7 @@ function cdpTree(buttonNodeId: number): Record<string, unknown> {
   };
 }
 
-function fakeCdpSession(options: { releaseFails?: boolean; nodeId?: number } = {}) {
+function fakeCdpSession(options: { pressFails?: boolean; releaseFails?: boolean; nodeId?: number } = {}) {
   const calls: Array<{ method: string; params?: Record<string, unknown> }> = [];
   const session = {
     send: vi.fn(async (method: string, params?: Record<string, unknown>) => {
@@ -137,6 +145,7 @@ function fakeCdpSession(options: { releaseFails?: boolean; nodeId?: number } = {
         { name: "pointer-events", value: "auto" }
       ] };
       if (method === "DOM.getBoxModel") return { model: { content: [10, 20, 130, 20, 130, 56, 10, 56] } };
+      if (method === "Input.dispatchMouseEvent" && params?.type === "mousePressed" && options.pressFails) throw new Error("press timeout");
       if (method === "Input.dispatchMouseEvent" && params?.type === "mouseReleased" && options.releaseFails) throw new Error("release timeout");
       return {};
     }),
@@ -202,5 +211,104 @@ describe("Task10S closed-shadow CDP click", () => {
     await expect(clickTask10sClosedShadowPublishSurface(page)).resolves.toMatchObject({ status: "CLICK_DISPATCHED" });
     expect(nodeIds).toContain(11);
     expect(nodeIds).toContain(22);
+  });
+});
+
+const ACCOUNT_ID = "54b390ac-d81e-440a-baeb-d00f9f346cc3";
+const OPERATION_ID = "task10s-r58-boundary";
+
+function authorization(overrides: Partial<OneShotPublicationAuthorization> = {}): OneShotPublicationAuthorization {
+  return {
+    authorization: OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH,
+    state: "AUTHORIZED_UNUSED",
+    platformKey: "xiaohongshu",
+    accountId: ACCOUNT_ID,
+    operationId: OPERATION_ID,
+    mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE,
+    publicationTransactionCount: 0,
+    publicationCommitActionCount: 0,
+    finalSubmitAttemptCount: 0,
+    finalSubmitRetryCount: 0,
+    finalSubmitActionStarted: false,
+    finalSubmitActionCompleted: false,
+    ...overrides
+  };
+}
+
+function preflight(overrides: Partial<OneShotFinalSubmitPreflight> = {}): OneShotFinalSubmitPreflight {
+  return {
+    authorization: OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH,
+    authorizationState: "AUTHORIZED_UNUSED",
+    platformKey: "xiaohongshu",
+    accountId: ACCOUNT_ID,
+    operationId: OPERATION_ID,
+    mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE,
+    authenticated: true,
+    sameCanonicalContext: true,
+    sameCanonicalPage: true,
+    mutexOwned: true,
+    editorPhase: "IMAGE_POST_POST_UPLOAD_EDITOR",
+    safeFixtureUploaded: true,
+    titleReadbackVerified: true,
+    bodyReadbackVerified: true,
+    requiredFieldsPass: true,
+    loginPagePresent: false,
+    securityVerificationPresent: false,
+    finalSubmitControl: { status: "FOUND_UNIQUE", visible: true, enabled: true, hitTestValid: true },
+    ...overrides
+  };
+}
+
+describe("Task10S retained final-submit boundary ownership", () => {
+  it("rejects duplicate boundary ownership before mousePressed", async () => {
+    const { session, calls } = fakeCdpSession();
+    const page = { context: () => ({ newCDPSession: async () => session }) } as never;
+    const guard = new OneShotPublicationGuard(authorization(), { onFinalMousePressDispatchStarted: vi.fn() });
+
+    await expect(guard.startFinalSubmit(preflight(), async () => {
+      const result = await clickTask10sClosedShadowPublishSurface(page, {
+        beforeMousePress: async () => { await guard.beginFinalMousePress(); }
+      });
+      if (result.status !== "CLICK_DISPATCHED") throw new Error(result.failureCode ?? result.status);
+    })).rejects.toThrow("FINAL_SUBMIT_ALREADY_USED");
+    expect(calls.filter((call) => call.method === "Input.dispatchMouseEvent")).toHaveLength(0);
+  });
+
+  it("owns the durable boundary once and dispatches immediately after persistence", async () => {
+    const { session, calls } = fakeCdpSession();
+    const page = { context: () => ({ newCDPSession: async () => session }) } as never;
+    const order: string[] = [];
+    const guard = new OneShotPublicationGuard(authorization(), { onFinalMousePressDispatchStarted: () => { order.push("persist"); } });
+
+    const result = await runTask10sClosedShadowFinalSubmit(page, guard, preflight(), () => { order.push("side-effect-marker"); });
+
+    expect(result.status).toBe("CLICK_DISPATCHED");
+    expect(guard.authorization.finalSubmitAttemptCount).toBe(1);
+    expect(guard.authorization.publicationTransactionCount).toBe(1);
+    expect(order).toEqual(["side-effect-marker", "persist"]);
+    expect(calls.filter((call) => call.method === "Input.dispatchMouseEvent").map((call) => call.params?.type)).toEqual(["mousePressed", "mouseReleased"]);
+  });
+
+  it("does not persist or dispatch when preflight fails", async () => {
+    const { session, calls } = fakeCdpSession();
+    const page = { context: () => ({ newCDPSession: async () => session }) } as never;
+    const persisted = vi.fn();
+    const guard = new OneShotPublicationGuard(authorization(), { onFinalMousePressDispatchStarted: persisted });
+
+    await expect(runTask10sClosedShadowFinalSubmit(page, guard, preflight({ requiredFieldsPass: false }))).rejects.toThrow("FINAL_SUBMIT_PREFLIGHT_FAILED");
+    expect(persisted).not.toHaveBeenCalled();
+    expect(calls.filter((call) => call.method === "Input.dispatchMouseEvent")).toHaveLength(0);
+  });
+
+  it("locks permanently when mousePressed is ambiguous and never retries", async () => {
+    const { session, calls } = fakeCdpSession({ pressFails: true });
+    const page = { context: () => ({ newCDPSession: async () => session }) } as never;
+    const guard = new OneShotPublicationGuard(authorization(), { onFinalMousePressDispatchStarted: vi.fn() });
+
+    const first = await runTask10sClosedShadowFinalSubmit(page, guard, preflight());
+    expect(first.status).toBe("FAILED");
+    expect(guard.authorization.finalSubmitAttemptCount).toBe(1);
+    expect(calls.filter((call) => call.method === "Input.dispatchMouseEvent" && call.params?.type === "mousePressed")).toHaveLength(1);
+    await expect(runTask10sClosedShadowFinalSubmit(page, guard, preflight())).rejects.toThrow("FINAL_SUBMIT_ALREADY_USED");
   });
 });

@@ -1,4 +1,5 @@
 import type { Page } from "playwright-core";
+import type { OneShotFinalSubmitPreflight, OneShotPublicationGuard } from "@publisher/adapters-core";
 import type { Task10sFinalSurfaceResolution } from "./task10s-final-surface";
 
 const XHS_PUBLISH_HOST = "XHS-PUBLISH-BTN" as const;
@@ -375,4 +376,24 @@ export async function clickTask10sClosedShadowPublishSurface(page: Page, options
   } finally {
     await session?.detach?.().catch(() => undefined);
   }
+}
+
+/**
+ * Runs the retained-editor final-submit action with one explicit owner for the
+ * durable mouse boundary. The guard is deliberately deferred until this
+ * helper has resolved a fresh closed-shadow node and box model; once the
+ * boundary is persisted, the click helper's next operation is mousePressed.
+ */
+export async function runTask10sClosedShadowFinalSubmit(
+  page: Page,
+  guard: OneShotPublicationGuard,
+  preflight: OneShotFinalSubmitPreflight,
+  markSubmissionSideEffect?: () => void
+): Promise<Task10sClosedShadowPublishClickResult> {
+  return guard.startFinalSubmit(preflight, async () => clickTask10sClosedShadowPublishSurface(page, {
+    beforeMousePress: async () => {
+      markSubmissionSideEffect?.();
+      await guard.beginFinalMousePress();
+    }
+  }), { deferDispatchLock: true });
 }

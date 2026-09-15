@@ -82,7 +82,7 @@ import { emptyXiaohongshuContextPageInventory, inspectXiaohongshuContextPage, ty
 import { emptyXiaohongshuPublishEditorDomRuntimeDiagnostic, inspectXiaohongshuPublishEditorDom, type XiaohongshuPublishEditorDomRuntimeDiagnostic } from "./publish-editor-dom-diagnostic";
 import { emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, inspectXiaohongshuPublishEditorSemanticCandidates, type XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic } from "./publish-editor-semantic-diagnostic";
 import { emptyXiaohongshuGlobalExactPublishDomRuntimeDiagnostic, inspectXiaohongshuGlobalExactPublishDom, type XiaohongshuGlobalExactPublishDomRuntimeDiagnostic } from "./global-exact-publish-diagnostic";
-import { clickTask10sClosedShadowPublishSurface, inspectTask10sClosedShadowPublishSurface } from "./task10s-closed-shadow-final-submit";
+import { inspectTask10sClosedShadowPublishSurface, runTask10sClosedShadowFinalSubmit } from "./task10s-closed-shadow-final-submit";
 import { evaluateTask10sRetainedEditorGate } from "./task10s-retained-editor-completion";
 import { emptyXiaohongshuPostUploadReconciliationDomSnapshot, inspectXiaohongshuPostUploadReconciliationDom, reconcileXiaohongshuPostUploadSnapshot, type XiaohongshuPostUploadReconciliationResult } from "./post-upload-reconciliation-diagnostic";
 import { classifyXiaohongshuPostUploadTerminalReadiness, type XiaohongshuPostUploadTerminalReadiness } from "./post-upload-terminal-readiness";
@@ -4216,19 +4216,8 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     };
     const beforeUrl = canonical.page.url();
     try {
-      await guard.startFinalSubmit(preflight, async () => {
-        try {
-          const clickResult = await clickTask10sClosedShadowPublishSurface(canonical.page, {
-            beforeMousePress: async () => {
-              await guard.beginFinalMousePress();
-              attempt.markSubmissionSideEffect?.();
-            }
-          });
-          if (clickResult.status !== "CLICK_DISPATCHED") throw new Error(clickResult.failureCode ?? clickResult.status);
-        } catch (error) {
-          throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", `Task10S closed-shadow 最终发布 action 已开始但 click 未正常返回：${error instanceof Error ? error.message : String(error)}`);
-        }
-      });
+      const clickResult = await runTask10sClosedShadowFinalSubmit(canonical.page, guard, preflight, attempt.markSubmissionSideEffect);
+      if (clickResult.status !== "CLICK_DISPATCHED") throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", `Task10S closed-shadow 最终发布 action 已开始但 click 未正常返回：${clickResult.failureCode ?? clickResult.status}`);
     } catch (error) {
       if (guard.hasFinalMousePressStarted()) await guard.markSubmissionReconciliationRequired().catch(() => undefined);
       if (error instanceof OneShotPublicationGuardError) throw new BrowserAutomationError("USER_ACTION_REQUIRED", `${error.code}: 未执行 Task10S 最终发布`);
