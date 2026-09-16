@@ -1734,7 +1734,7 @@ NotImplemented：3
 
 ## 2026-09-16 — XHS pipeline hardening consolidation (offline/staging only)
 
-本轮从 `905c6f8b77ac72d91895b8f6d5e05708f4bb1247` 开始，当前源码 HEAD 为 `d785e1c4162cb1ece616ed8b35a1d04726442fb5`。所有改动均保留在独立的小提交中，未触碰真实 XHS 发布、生产账号资料或生产发布记录。
+本轮从 `905c6f8b77ac72d91895b8f6d5e05708f4bb1247` 开始，当前源码 HEAD 为 `af38bba164638a1262e1992e4ac23d578b85a58c`。所有改动均保留在独立的小提交中，未触碰真实 XHS 发布、生产账号资料或生产发布记录。
 
 已完成：
 
@@ -1751,7 +1751,7 @@ NotImplemented：3
 
 - better-sqlite3 已按 Electron `37.10.3` / ABI `136` 重建；host Node ABI 127 不用于直接加载该 native binary。
 - 全量测试：`162` 个测试文件、`1315` 个测试通过。
-- typecheck、lint、build、正式 `package:dir` 通过。
+- typecheck、lint、build、正式 `package:dir` 通过，且内置迁移 parity fail-fast 检查。
 - staging：`D:\GEO\releases\release-xhs-hardening-20260916-r1\win-unpacked`。
 - staging `app.asar` SHA256：`5EC51BF784931DF5BA09964A3F3390C3D8B8D145380B1BC27AB31A02F3D388D1`。
 - staging `better_sqlite3.node` SHA256：`AFA1DCAEDFC94D399413F18662D5FDA9C7025A23BC8CEF064D2986A0CEF2F60E`。
