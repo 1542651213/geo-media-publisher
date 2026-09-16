@@ -360,7 +360,7 @@ export class PublisherService {
           if (browserImageUpload) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_STARTED", "开始向平台编辑器上传任务主图", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
           const published = await withTimeout(adapter.publishArticle(ctx, input), this.options.operationTimeoutMs ?? 120_000, "Platform article publish");
           if (browserImageUpload && published.response.imageUploaded !== true) throw Object.assign(new Error("平台编辑器未返回图片上传完成证据，不能声明图片已插入"), { code: "UPLOAD_FAILED" });
-          if (browserImageUpload && published.response.imageUploaded === true) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_PASSED", "平台编辑器已返回图片 DOM 上传证据", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
+          if (selectedImage && published.response.imageUploaded === true) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_PASSED", "平台编辑器已返回图片 DOM 上传证据", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
           return published;
       };
       let result: PublishResult;
