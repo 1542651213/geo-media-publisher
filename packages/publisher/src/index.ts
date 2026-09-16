@@ -169,19 +169,34 @@ export class PublisherService {
     retainSession: boolean
   ): Promise<T> {
     const scopedLifecycle = !retainSession && typeof adapter.runWithBrowserSession === "function";
+    let result: T | undefined;
+    let operationError: unknown;
     try {
-      return scopedLifecycle ? await adapter.runWithBrowserSession!(ctx, operation, task) : await task();
+      result = scopedLifecycle ? await adapter.runWithBrowserSession!(ctx, operation, task) : await task();
     } catch (error) {
+      operationError = error;
       this.logger.warn("PUBLISHER", "BROWSER_SESSION_OPERATION_FAILED", "浏览器任务生命周期执行失败", {
         operation,
         platformKey: ctx.platformKey,
         accountId: ctx.accountId,
         errorCode: errorCode(error)
       });
-      throw error;
-    } finally {
-      if (!retainSession && !scopedLifecycle) await adapter.releaseOperationSession?.(ctx).catch(() => undefined);
     }
+    if (!retainSession && !scopedLifecycle && adapter.releaseOperationSession) {
+      try {
+        await adapter.releaseOperationSession(ctx);
+      } catch (cleanupError) {
+        this.logger.warn("PUBLISHER", "BROWSER_SESSION_CLEANUP_FAILED", "浏览器任务生命周期清理失败", {
+          operation,
+          platformKey: ctx.platformKey,
+          accountId: ctx.accountId,
+          errorCode: errorCode(cleanupError)
+        });
+        if (operationError === undefined) throw cleanupError;
+      }
+    }
+    if (operationError !== undefined) throw operationError;
+    return result as T;
   }
 
   async checkAccountLogin(accountId: string, action?: UserInitiatedAction, _browserExecutionMode?: BrowserExecutionMode): Promise<void> {
@@ -305,9 +320,7 @@ export class PublisherService {
       if (preparedRecord?.response.OWNER_FINAL_SUBMIT_AUTHORIZATION === "OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH" && !oneShotAuthorization) throw Object.assign(new Error("ONE_SHOT_AUTHORIZATION_REQUIRED"), { code: "USER_ACTION_REQUIRED" });
       const usePlatformFinalSubmit = !job.dryRun && typeof adapter.finalSubmit === "function" && preparedRecord?.status === "Prepared";
       platformFinalSubmitPath = usePlatformFinalSubmit;
-      let result: PublishResult;
-      if (!usePlatformFinalSubmit && executionMode === "STANDARD" && isAutomationAdapter(adapter)) {
-        result = await this.runAdapterBrowserOperation(adapter, ctx, "PublisherService.executeJob", async () => {
+      const executeOrdinaryOperation = async (): Promise<PublishResult> => {
           const login = await withTimeout(adapter.checkLogin(ctx), this.options.loginCheckTimeoutMs ?? 30_000, "Platform login check");
           if (login === "expired" || login === "logged_out") throw Object.assign(new Error("Account login expired"), { code: "LOGIN_EXPIRED" });
           if (login !== "logged_in") throw Object.assign(new Error("Platform verification requires user action"), { code: "USER_ACTION_REQUIRED" });
@@ -343,19 +356,21 @@ export class PublisherService {
             if (!validation.valid) throw Object.assign(new Error(validation.errors.join("; ")), { code: "CONTENT_REJECTED" });
           }
           if (!job.dryRun) submissionIntentId = this.repository.prepareSubmissionIntent(job.id).id;
-          if (selectedImage) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_STARTED", "开始向平台编辑器上传任务主图", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
+          const browserImageUpload = selectedImage && this.isBrowserAutomationPlatform(job.platformKey, job.contentKind ?? "article");
+          if (browserImageUpload) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_STARTED", "开始向平台编辑器上传任务主图", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
           const published = await withTimeout(adapter.publishArticle(ctx, input), this.options.operationTimeoutMs ?? 120_000, "Platform article publish");
-          if (selectedImage && published.response.imageUploaded !== true) throw Object.assign(new Error("平台编辑器未返回图片上传完成证据，不能声明图片已插入"), { code: "UPLOAD_FAILED" });
-          if (selectedImage) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_PASSED", "平台编辑器已返回图片 DOM 上传证据", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
+          if (browserImageUpload && published.response.imageUploaded !== true) throw Object.assign(new Error("平台编辑器未返回图片上传完成证据，不能声明图片已插入"), { code: "UPLOAD_FAILED" });
+          if (browserImageUpload && published.response.imageUploaded === true) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_PASSED", "平台编辑器已返回图片 DOM 上传证据", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
           return published;
-        }, false);
-      } else {
+      };
+      let result: PublishResult;
       if (!usePlatformFinalSubmit) {
-        const login = await withTimeout(adapter.checkLogin(ctx), this.options.loginCheckTimeoutMs ?? 30_000, "Platform login check");
-        if (login === "expired" || login === "logged_out") throw Object.assign(new Error("Account login expired"), { code: "LOGIN_EXPIRED" });
-        if (login !== "logged_in") throw Object.assign(new Error("Platform verification requires user action"), { code: "USER_ACTION_REQUIRED" });
-      }
-      if (job.contentKind === "video") {
+        result = isAutomationAdapter(adapter) && executionMode === "STANDARD"
+          ? await this.runAdapterBrowserOperation(adapter, ctx, "PublisherService.executeJob", executeOrdinaryOperation, false)
+          : await executeOrdinaryOperation().finally(async () => {
+            if (isAutomationAdapter(adapter)) await adapter.releaseOperationSession?.(ctx).catch(() => undefined);
+          });
+      } else if (job.contentKind === "video") {
         if (!adapter.publishVideo) throw Object.assign(new Error("该平台 Adapter 尚未实现视频发布"), { code: "PERMISSION_DENIED" });
         const asset = job.videoAssetId ? this.repository.getVideoAsset(job.videoAssetId) : null;
         if (!asset) throw Object.assign(new Error("视频素材不存在"), { code: "CONTENT_REJECTED" });
@@ -390,7 +405,6 @@ export class PublisherService {
         }
         if (!job.dryRun) submissionIntentId = this.repository.prepareSubmissionIntent(job.id).id;
         if (selectedImage && this.isBrowserAutomationPlatform(job.platformKey, job.contentKind ?? "article")) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_STARTED", "开始向平台编辑器上传任务主图", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
-        if (usePlatformFinalSubmit && adapter.finalSubmit) {
           if (adapter.prepareFinalSubmit) await withTimeout(adapter.prepareFinalSubmit(ctx, input), this.options.operationTimeoutMs ?? 120_000, "Platform final-submit preflight");
           const intent = this.repository.getSubmissionIntentByJob(job.id);
           if (!intent) throw new Error("Persisted submission intent is missing before platform final submit");
@@ -406,7 +420,7 @@ export class PublisherService {
             ...(executionMode === "TASK10S_RETAINED_EDITOR" ? { task10sRetainedEditor: true as const } : {})
           };
           try {
-            result = await withTimeout(adapter.finalSubmit(ctx, input, attempt), this.options.operationTimeoutMs ?? 120_000, "Platform final submit");
+            result = await withTimeout(adapter.finalSubmit!(ctx, input, attempt), this.options.operationTimeoutMs ?? 120_000, "Platform final submit");
             if (oneShotGuard) {
               oneShotGuard.markFinalSubmitCompleted();
               if (oneShotOperationId) this.repository.completeOneShotPublicationAuthorization(oneShotOperationId);
@@ -425,14 +439,8 @@ export class PublisherService {
             throw error;
           }
           if (isAutomationAdapter(adapter)) await adapter.releaseOperationSession?.(ctx).catch(() => undefined);
-        } else {
-          result = await withTimeout(adapter.publishArticle(ctx, input), this.options.operationTimeoutMs ?? 120_000, "Platform article publish").finally(async () => {
-            if (isAutomationAdapter(adapter)) await adapter.releaseOperationSession?.(ctx).catch(() => undefined);
-          });
-        }
         if (selectedImage && this.isBrowserAutomationPlatform(job.platformKey, job.contentKind ?? "article") && result.response.imageUploaded !== true) throw Object.assign(new Error("平台编辑器未返回图片上传完成证据，不能声明图片已插入"), { code: "UPLOAD_FAILED" });
         if (selectedImage && result.response.imageUploaded === true) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_PASSED", "平台编辑器已返回图片 DOM 上传证据", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
-      }
       }
       if (!result.success) throw Object.assign(new Error("Platform rejected publish request"), { code: "UNKNOWN" });
       result = {

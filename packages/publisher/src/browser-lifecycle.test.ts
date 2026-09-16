@@ -19,6 +19,7 @@ class ScopedBrowserAdapter implements PlatformAdapter {
   readonly automationType = "BrowserAutomation" as const;
   readonly events: string[] = [];
   prepareError: Error | null = null;
+  beforeScopeEnd: (() => void) | null = null;
   readonly releaseOperationSession = vi.fn(async (_ctx: AccountContext) => undefined);
   readonly checkLogin = vi.fn(async (_ctx: AccountContext): Promise<LoginStatus> => { this.events.push("check-login"); return "logged_in"; });
   readonly validateArticle = vi.fn(async (_article: PublishArticleInput): Promise<ValidationResult> => { this.events.push("validate"); return { valid: true, errors: [], warnings: [] }; });
@@ -34,7 +35,7 @@ class ScopedBrowserAdapter implements PlatformAdapter {
   readonly runWithBrowserSession = vi.fn(async <T>(_ctx: AccountContext, operation: string, task: () => Promise<T>): Promise<T> => {
     this.events.push(`scope-start:${operation}`);
     try { return await task(); }
-    finally { this.events.push(`scope-end:${operation}`); }
+    finally { this.beforeScopeEnd?.(); this.events.push(`scope-end:${operation}`); }
   });
 
   getCapabilities() { return { ...defaultCapabilities, imagePost: false, coverImage: false }; }
@@ -81,7 +82,8 @@ afterEach(() => {
 
 describe("PublisherService scoped browser lifecycle", () => {
   it("runs assisted preparation inside one adapter-owned browser scope without double release", async () => {
-    const { publisher, adapter, job } = fixture();
+    const { database, publisher, adapter, job } = fixture();
+    adapter.beforeScopeEnd = () => expect(database.repository.getPublishRecordByJob(job.id)).toBeNull();
 
     await expect(publisher.prepareArticle(job.id)).resolves.toMatchObject({ message: "prepared" });
 
@@ -94,11 +96,12 @@ describe("PublisherService scoped browser lifecycle", () => {
       "prepare",
       "scope-end:PublisherService.prepareArticle"
     ]);
+    expect(database.repository.getPublishRecordByJob(job.id)?.status).toBe("Prepared");
   });
 
   it("preserves the original operation error and logs sanitized lifecycle diagnostics", async () => {
     const { publisher, adapter, job, logs } = fixture();
-    const failure = Object.assign(new Error("browser crashed with private details"), { code: "PLATFORM_CHANGED" });
+    const failure = Object.assign(new Error("browser crashed with private details"), { code: "USER_ACTION_REQUIRED" });
     adapter.prepareError = failure;
 
     await expect(publisher.prepareArticle(job.id)).rejects.toBe(failure);
@@ -106,8 +109,36 @@ describe("PublisherService scoped browser lifecycle", () => {
     expect(adapter.events.at(-1)).toBe("scope-end:PublisherService.prepareArticle");
     expect(logs).toContainEqual(expect.objectContaining({
       code: "BROWSER_SESSION_OPERATION_FAILED",
+      context: expect.objectContaining({ operation: "PublisherService.prepareArticle", errorCode: "USER_ACTION_REQUIRED" })
+    }));
+    expect(JSON.stringify(logs)).not.toContain("private details");
+  });
+
+  it("surfaces fallback cleanup failure after a successful operation and logs sanitized diagnostics", async () => {
+    const { publisher, adapter, job, logs } = fixture();
+    Object.defineProperty(adapter, "runWithBrowserSession", { value: undefined });
+    const cleanupFailure = Object.assign(new Error("cleanup leaked private path"), { code: "PLATFORM_CHANGED" });
+    adapter.releaseOperationSession.mockRejectedValueOnce(cleanupFailure);
+
+    await expect(publisher.prepareArticle(job.id)).rejects.toBe(cleanupFailure);
+
+    expect(logs).toContainEqual(expect.objectContaining({
+      code: "BROWSER_SESSION_CLEANUP_FAILED",
       context: expect.objectContaining({ operation: "PublisherService.prepareArticle", errorCode: "PLATFORM_CHANGED" })
     }));
+    expect(JSON.stringify(logs)).not.toContain("private path");
+  });
+
+  it("preserves an operation error when fallback cleanup also rejects", async () => {
+    const { publisher, adapter, job, logs } = fixture();
+    Object.defineProperty(adapter, "runWithBrowserSession", { value: undefined });
+    const operationFailure = Object.assign(new Error("operation private details"), { code: "CONTENT_REJECTED" });
+    adapter.prepareError = operationFailure;
+    adapter.releaseOperationSession.mockRejectedValueOnce(Object.assign(new Error("cleanup private details"), { code: "PLATFORM_CHANGED" }));
+
+    await expect(publisher.prepareArticle(job.id)).rejects.toBe(operationFailure);
+
+    expect(logs.map(({ code }) => code)).toEqual(expect.arrayContaining(["BROWSER_SESSION_OPERATION_FAILED", "BROWSER_SESSION_CLEANUP_FAILED"]));
     expect(JSON.stringify(logs)).not.toContain("private details");
   });
 
