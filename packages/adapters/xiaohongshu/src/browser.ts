@@ -89,10 +89,11 @@ import { classifyXiaohongshuPostUploadTerminalReadiness, type XiaohongshuPostUpl
 import { containsExpectedXiaohongshuSafeFixture, inspectXiaohongshuFileInputState, type XiaohongshuFileInputFixtureMatch, type XiaohongshuFileInputSafeNode } from "./file-input-diagnostic";
 import { readXiaohongshuUploadInputImmediately, type XiaohongshuUploadFileExpectation, type XiaohongshuUploadInputImmediateReadback } from "./upload-delivery-diagnostic";
 import { ensureXhsIdentityPage, type IdentityPageEnsureResult } from "./ensure-identity-page";
-import { normalizeXiaohongshuEditorText } from "./editor-text-normalization";
+import { classifyXiaohongshuEditorReadback, normalizeXiaohongshuEditorText, type XiaohongshuEditorReadbackVerification } from "./editor-text-normalization";
 import { createXhsNativeFilePickerRecovery, recoverNativeFilePicker, type NativeFilePickerRecoveryResult } from "./native-file-picker-recovery";
 import { stabilizeAfterNativeFilePickerCancel, type PickerCancelFinalControl, type PickerCancelStabilizationResult } from "./picker-cancel-stabilization";
-export { normalizeXiaohongshuEditorText } from "./editor-text-normalization";
+export { classifyXiaohongshuEditorReadback, normalizeXiaohongshuEditorText } from "./editor-text-normalization";
+export type { XiaohongshuEditorReadbackStatus, XiaohongshuEditorReadbackVerification } from "./editor-text-normalization";
 export type { XiaohongshuPostUploadBoundingRect, XiaohongshuPostUploadFinalSubmitProof, XiaohongshuPostUploadImageItemSafe, XiaohongshuPostUploadReconciliationDomSnapshot, XiaohongshuPostUploadReconciliationResult, XiaohongshuPostUploadReconciliationState } from "./post-upload-reconciliation-diagnostic";
 export { classifyXiaohongshuPostUploadTerminalReadiness } from "./post-upload-terminal-readiness";
 export type { XiaohongshuPostUploadTerminalReadiness, XiaohongshuPostUploadTerminalReadinessBlocker, XiaohongshuPostUploadTerminalReadinessInput } from "./post-upload-terminal-readiness";
@@ -956,14 +957,16 @@ export class XiaohongshuGateError extends BrowserAutomationError {
   readonly failureCode?: PreSubmitGateFailureCode;
   readonly failureStage?: PreSubmitGateFailureStage;
   readonly missingSignal?: string;
+  readonly bodyReadback?: XiaohongshuEditorReadbackVerification;
 
-  constructor(code: XiaohongshuGateCode, adapterCode: ConstructorParameters<typeof BrowserAutomationError>[0], message: string, failure?: { failureCode: PreSubmitGateFailureCode; failureStage: PreSubmitGateFailureStage; missingSignal?: string }) {
+  constructor(code: XiaohongshuGateCode, adapterCode: ConstructorParameters<typeof BrowserAutomationError>[0], message: string, failure?: { failureCode?: PreSubmitGateFailureCode; failureStage?: PreSubmitGateFailureStage; missingSignal?: string; bodyReadback?: XiaohongshuEditorReadbackVerification }) {
     super(adapterCode, `${code}: ${message}`);
     this.name = "XiaohongshuGateError";
     this.gateCode = code;
     this.failureCode = failure?.failureCode;
     this.failureStage = failure?.failureStage;
     this.missingSignal = failure?.missingSignal;
+    this.bodyReadback = failure?.bodyReadback;
   }
 }
 
@@ -1728,9 +1731,12 @@ async function waitForProbe(page: XhsDocument, milliseconds = 250): Promise<void
   if (typeof candidate.waitForTimeout === "function") await candidate.waitForTimeout(milliseconds);
 }
 
+async function readEditorRaw(locator: Locator, field: "title" | "body"): Promise<string> {
+  return field === "title" ? await inputValue(locator) : await innerText(locator);
+}
+
 async function readEditor(locator: Locator, field: "title" | "body"): Promise<string> {
-  const value = field === "title" ? await inputValue(locator) : await innerText(locator);
-  return normalizeXiaohongshuEditorText(value);
+  return normalizeXiaohongshuEditorText(await readEditorRaw(locator, field));
 }
 
 export function classifyXiaohongshuPublishSettings(settings: Array<{ label: string; required: boolean; value: string }>): "KNOWN" | "UNKNOWN" {
@@ -4175,8 +4181,23 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const body = await this.discoverUniqueEditor(page, "body");
     gates.push("body_editor", "body_write");
     await body.fill(article.body);
-    const bodyReadback = await readEditor(body, "body");
-    if (bodyReadback !== normalizeXiaohongshuEditorText(article.body)) throw new XiaohongshuGateError("CONTENT_BODY_NOT_VERIFIED", "CONTENT_REJECTED", "正文 strict readback 与请求内容不一致");
+    const bodyReadbackRaw = await readEditorRaw(body, "body");
+    const bodyReadbackVerification = classifyXiaohongshuEditorReadback(article.body, bodyReadbackRaw);
+    const bodyReadback = normalizeXiaohongshuEditorText(bodyReadbackRaw);
+    if (bodyReadbackVerification.status === "FAIL") {
+      const telemetry = {
+        expectedLength: bodyReadbackVerification.expectedLength,
+        actualLength: bodyReadbackVerification.actualLength,
+        expectedHash: bodyReadbackVerification.expectedHash,
+        actualHash: bodyReadbackVerification.actualHash,
+        firstDifferenceIndex: bodyReadbackVerification.firstDifferenceIndex,
+        expectedCharacter: bodyReadbackVerification.expectedCharacter,
+        actualCharacter: bodyReadbackVerification.actualCharacter,
+        expectedCodePoint: bodyReadbackVerification.expectedCodePoint,
+        actualCodePoint: bodyReadbackVerification.actualCodePoint
+      };
+      throw new XiaohongshuGateError("CONTENT_BODY_NOT_VERIFIED", "CONTENT_REJECTED", `正文回读失败：${JSON.stringify(telemetry)}`, { bodyReadback: bodyReadbackVerification });
+    }
     gates.push("body_readback");
 
     const requiredFields = await this.inspectRequiredFields(page);
@@ -4238,6 +4259,8 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         bodyEditor: "verified",
         bodyReadback: true,
         bodyReadbackValue: bodyReadback,
+        bodyReadbackStatus: bodyReadbackVerification.status,
+        bodyReadbackTelemetry: bodyReadbackVerification,
         requiredFieldsStatus: "KNOWN",
         requiredFields,
         publishSettingsStatus: classifyXiaohongshuPublishSettings(publishSettings),

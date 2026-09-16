@@ -1829,7 +1829,31 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     const mismatch = setupPage({ bodyReadback: `${article.body} 额外内容` });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: mismatch.manager });
     await adapter.connectAccount(context());
-    await expect(adapter.preparePublish(context(), article)).rejects.toMatchObject({ code: "CONTENT_REJECTED", message: expect.stringContaining("CONTENT_BODY_NOT_VERIFIED") });
+    await expect(adapter.preparePublish(context(), article)).rejects.toMatchObject({
+      code: "CONTENT_REJECTED",
+      message: expect.stringContaining("CONTENT_BODY_NOT_VERIFIED"),
+      bodyReadback: {
+        status: "FAIL",
+        expectedHash: expect.stringMatching(/^[0-9A-F]{64}$/),
+        actualHash: expect.stringMatching(/^[0-9A-F]{64}$/),
+        firstDifferenceIndex: expect.any(Number)
+      }
+    });
+  });
+
+  it("accepts normalized body readback and reports PASS_WITH_NORMALIZATION telemetry", async () => {
+    const normalizedArticle = { ...article, body: "第一行\n第二行 文本" };
+    const fixture = setupPage({ bodyReadback: "第一行\r\n第二行\u00a0  文本\u200b", settings: [{ label: "公开范围", required: false, value: "公开" }] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context());
+
+    const result = await adapter.preparePublish(context(), normalizedArticle);
+
+    expect(result.response).toMatchObject({
+      bodyReadback: true,
+      bodyReadbackStatus: "PASS_WITH_NORMALIZATION",
+      bodyReadbackTelemetry: { status: "PASS_WITH_NORMALIZATION", expectedHash: expect.stringMatching(/^[0-9A-F]{64}$/) }
+    });
   });
 
   it("reports missing required fields and classifies publish settings", async () => {
