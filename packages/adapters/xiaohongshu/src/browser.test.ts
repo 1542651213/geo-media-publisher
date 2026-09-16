@@ -50,6 +50,7 @@ type FixtureOptions = {
   editorScopedImageItemCount?: number;
   nativePickerOpenAfterUpload?: boolean;
   nativePickerCancelFails?: boolean;
+  closedShadowFinalSubmit?: boolean;
 };
 
 interface Fixture {
@@ -396,7 +397,40 @@ function setupPage(options: FixtureOptions = {}): Fixture {
       const operationPage = createPage(creatorHomeUrl);
       contextPages = [...contextPages, operationPage];
       return operationPage;
-    })
+    }),
+    ...(options.closedShadowFinalSubmit ? {
+      newCDPSession: vi.fn(async () => ({
+        send: vi.fn(async (method: string) => {
+          if (method === "DOM.getDocument") {
+            return {
+              root: {
+                nodeId: 1,
+                nodeName: "HTML",
+                children: [{
+                  nodeId: 2,
+                  nodeName: "XHS-PUBLISH-BTN",
+                  attributes: ["is-publish", "true", "is-save-draft", "true", "submit-text", "发布", "save-text", "暂存离开", "submit-disabled", "false", "submit-loading", "false"],
+                  shadowRoots: [{
+                    nodeId: 3,
+                    nodeName: "#document-fragment",
+                    children: [{
+                      nodeId: 4,
+                      nodeName: "BUTTON",
+                      attributes: ["type", "button", "aria-disabled", "false", "aria-busy", "false"],
+                      children: [{ nodeId: 5, nodeName: "#text", nodeValue: "发布" }]
+                    }]
+                  }]
+                }]
+              }
+            };
+          }
+          if (method === "CSS.getComputedStyleForNode") return { computedStyle: [{ name: "display", value: "block" }, { name: "visibility", value: "visible" }, { name: "pointer-events", value: "auto" }] };
+          if (method === "DOM.getBoxModel") return { model: { border: [0, 0, 120, 0, 120, 40, 0, 40] } };
+          return {};
+        }),
+        detach: vi.fn(async () => undefined)
+      }))
+    } : {})
   };
   pageContextRef.value = context as unknown as BrowserSession["context"];
   const session = {
@@ -1687,6 +1721,22 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(fixture.calls.indexOf("image-post-entry-click")).toBeLessThan(fixture.calls.indexOf("image-set-input-files"));
     expect(fixture.calls.indexOf("image-set-input-files")).toBeLessThan(fixture.calls.indexOf("title-fill"));
     expect(fixture.calls.indexOf("title-fill")).toBeLessThan(fixture.calls.indexOf("body-fill"));
+    expect(fixture.submitClick).not.toHaveBeenCalled();
+  });
+
+  it("uses terminal readiness when the final publish control is only in closed shadow DOM", async () => {
+    const fixture = setupPage({ closedShadowFinalSubmit: true, submitCount: 0, settings: [{ label: "公开范围", required: false, value: "公开" }] });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
+    await adapter.connectAccount(context());
+
+    const result = await adapter.preparePublish(context(), article);
+
+    expect(result).toMatchObject({
+      prepared: true,
+      titleFilled: true,
+      bodyFilled: true,
+      response: { imageUploaded: true, titleReadback: true, bodyReadback: true, finalSubmitClickCount: 0 }
+    });
     expect(fixture.submitClick).not.toHaveBeenCalled();
   });
 

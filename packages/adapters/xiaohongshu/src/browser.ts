@@ -4078,21 +4078,94 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     });
     const imageEvidence = await this.uploadImages(page, article.images ?? [], { ctx, session: opened.session, metadata: editorMetadata });
     gates.push("image_upload");
-    const postUploadInspection = await inspectPostUploadImageEditor(page, editorMetadata, {
-      nativeFilePickerRecovery: createXhsNativeFilePickerRecovery(page, { profilePath: opened.session.profilePath, browserChannel: opened.session.browserChannel ?? null }),
-      emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic)
+    const nativeFilePickerRecovery = createXhsNativeFilePickerRecovery(page, { profilePath: opened.session.profilePath, browserChannel: opened.session.browserChannel ?? null });
+    const nativePickerRecovery = await recoverNativeFilePicker(nativeFilePickerRecovery);
+    if (nativePickerRecovery.status === "BLOCKED") {
+      throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", `上传后图文编辑器 discovery 未通过：${nativePickerRecovery.failureCode ?? "NATIVE_FILE_PICKER_CANCEL_FAILED"}`, {
+        // Keep the public gate taxonomy compatible with the existing image
+        // editor contract while retaining the native recovery code in the
+        // diagnostic signal.
+        failureCode: "POST_UPLOAD_EDITOR_TIMEOUT",
+        failureStage: "EDITOR_DISCOVERY",
+        missingSignal: `native-file-picker-cancel:${nativePickerRecovery.failureCode ?? "NATIVE_FILE_PICKER_CANCEL_FAILED"}`
+      });
+    }
+
+    const postUploadSnapshot = await inspectXiaohongshuPostUploadReconciliationDom(page);
+    const postUploadReconciliation = reconcileXiaohongshuPostUploadSnapshot(postUploadSnapshot);
+    const terminalReadiness = classifyXiaohongshuPostUploadTerminalReadiness({
+      originalPostUploadState: postUploadReconciliation.postUploadState,
+      editorScopedImageAssetCount: postUploadReconciliation.imageAssetRenderedCount,
+      imageCounterTextSafe: postUploadReconciliation.imageCounterTextSafe,
+      titleControlPresent: postUploadReconciliation.titleControlPresent,
+      bodyControlPresent: postUploadReconciliation.bodyControlPresent,
+      uploadErrorSignalPresent: postUploadReconciliation.explicitUploadErrorSignals.length > 0,
+      busySignalPresent: postUploadReconciliation.processingSignalPresent
     });
-    if (postUploadInspection.status !== "READY") {
-      const failureCode = postUploadInspection.failureCode ?? "POST_UPLOAD_PHASE_NOT_READY";
+    if (!terminalReadiness.ready) {
+      const failureCode = "POST_UPLOAD_EDITOR_TIMEOUT";
       throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", `上传后图文编辑器 discovery 未通过：${failureCode}`, {
         failureCode,
-        failureStage: postUploadInspection.failureStage ?? "EDITOR_DISCOVERY",
-        missingSignal: postUploadInspection.missingSignal ?? "post-upload-editor-discovery"
+        failureStage: "EDITOR_DISCOVERY",
+        missingSignal: terminalReadiness.blockerCodes.join(",") || "post-upload-terminal-readiness"
       });
+    }
+
+    if (nativePickerRecovery.status === "CANCELLED") {
+      const pickerCancelStabilization = await stabilizeAfterNativeFilePickerCancel(page, {
+        maxWaitMs: 10_000,
+        retryIntervalMs: 80,
+        stableSampleCount: 2,
+        clearOpenPickerMarker: async () => {
+          const evaluatePage = page as unknown as { evaluate?: <T>(pageFunction: () => T) => Promise<T> };
+          if (typeof evaluatePage.evaluate !== "function") return false;
+          try {
+            return Boolean(await evaluatePage.evaluate(() => {
+              const current = new URL(window.location.href);
+              if (current.searchParams.get("openFilePicker") === "true") {
+                current.searchParams.delete("openFilePicker");
+                const nextUrl = `${current.pathname}${current.search}${current.hash}`;
+                window.history.replaceState(window.history.state, document.title, nextUrl);
+                window.dispatchEvent(new PopStateEvent("popstate"));
+              }
+              return new URL(window.location.href).searchParams.get("openFilePicker") !== "true";
+            }));
+          } catch {
+            return false;
+          }
+        },
+        discoverFinalControl: async () => this.inspectClosedShadowFinalSubmitForExploration(page)
+      });
+      if (!pickerCancelStabilization.finalControlFoundAfterWait) {
+        throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "上传后图文编辑器 discovery 未通过：POST_UPLOAD_EDITOR_TIMEOUT", {
+          failureCode: "POST_UPLOAD_EDITOR_TIMEOUT",
+          failureStage: "EDITOR_DISCOVERY",
+          missingSignal: "picker-cancel-stabilization"
+        });
+      }
     }
     gates.push("post_upload_editor_discovery");
 
-    const title = await this.discoverUniqueEditor(page, "title");
+    let title: Locator;
+    try {
+      title = await this.discoverUniqueEditor(page, "title");
+    } catch (error) {
+      // Preserve the post-upload failure contract that the staged classifier
+      // exposed before terminal readiness became authoritative.  The terminal
+      // classifier decides whether the editor is ready; this wrapper keeps
+      // ambiguous/missing editor controls fail-closed and diagnosable.
+      if (error instanceof XiaohongshuGateError && error.gateCode === "CONTENT_TITLE_NOT_VERIFIED") {
+        const failureCode: PreSubmitGateFailureCode = /matches=\d+/iu.test(error.message)
+          ? "TITLE_EDITOR_AMBIGUOUS_POST_UPLOAD"
+          : "TITLE_EDITOR_NOT_FOUND_POST_UPLOAD";
+        throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", `上传后图文编辑器 discovery 未通过：${failureCode}`, {
+          failureCode,
+          failureStage: "EDITOR_DISCOVERY",
+          missingSignal: "title-editor"
+        });
+      }
+      throw error;
+    }
     gates.push("title_editor", "title_write");
     await title.fill(article.title);
     const titleReadback = await readEditor(title, "title");
@@ -4112,7 +4185,31 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
 
     const publishSettings = await this.inspectPublishSettings(page);
     gates.push("publish_settings");
-    const finalSubmitControl = await this.inspectFinalSubmitControl(page);
+    let finalSubmitControl: XiaohongshuFinalSubmitControlEvidence;
+    try {
+      finalSubmitControl = await this.inspectFinalSubmitControl(page);
+    } catch (error) {
+      const closedShadowSurface = await inspectTask10sClosedShadowPublishSurface(page);
+      if (!closedShadowSurface.present || !closedShadowSurface.enabled) {
+        if (error instanceof XiaohongshuGateError && error.gateCode === "FINAL_SUBMIT_CONTROL_NOT_VERIFIED" && /matches=\d+/iu.test(error.message)) {
+          throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "上传后图文编辑器 discovery 未通过：FINAL_SUBMIT_CONTROL_AMBIGUOUS_POST_UPLOAD", {
+            failureCode: "FINAL_SUBMIT_CONTROL_AMBIGUOUS_POST_UPLOAD",
+            failureStage: "EDITOR_DISCOVERY",
+            missingSignal: "final-submit-control"
+          });
+        }
+        throw error;
+      }
+      finalSubmitControl = {
+        verified: true,
+        visible: true,
+        enabled: true,
+        unique: true,
+        label: "发布",
+        selector: "closed-shadow:XHS-PUBLISH-BTN",
+        secondConfirmation: "unknown"
+      };
+    }
     gates.push("final_submit_control_discovery");
 
     return {
