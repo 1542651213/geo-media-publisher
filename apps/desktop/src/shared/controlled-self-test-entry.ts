@@ -83,6 +83,17 @@ export function supportsOneShotRealPublishAcceptance(platform: ControlledEntryPl
     && !account.archivedAt;
 }
 
+export function canLaunchOneShotRealPublishFromAccountCard(input: {
+  account: ControlledEntryAccount;
+  platform: ControlledEntryPlatform;
+  connected: boolean;
+  busy: boolean;
+}): boolean {
+  return supportsOneShotRealPublishAcceptance(input.platform, input.account)
+    && input.connected
+    && !input.busy;
+}
+
 export function buildOneShotRealPublishRequest(input: {
   account: ControlledEntryAccount;
   platform: ControlledEntryPlatform;

@@ -4,6 +4,7 @@ import type { Account, Platform } from "@publisher/domain";
 import {
   ONE_SHOT_REAL_PUBLISH_ACCEPTANCE_CONFIRMATION,
   ONE_SHOT_REAL_PUBLISH_ACCEPTANCE_MODE,
+  canLaunchOneShotRealPublishFromAccountCard,
   buildOneShotRealPublishRequest,
   supportsOneShotRealPublishAcceptance
 } from "../apps/desktop/src/shared/controlled-self-test-entry";
@@ -43,5 +44,14 @@ describe("Task10S one-shot entry", () => {
     expect(buildOneShotRealPublishRequest({ ...input, connected: false })).toBeNull();
     expect(buildOneShotRealPublishRequest({ ...input, busy: true })).toBeNull();
     expect(buildOneShotRealPublishRequest({ ...input, confirmed: false })).toBeNull();
+  });
+
+  it("enables the account-card entry only for a connected eligible XHS account", () => {
+    const input = { account: account(), platform: platform(), connected: true, busy: false };
+    expect(canLaunchOneShotRealPublishFromAccountCard(input)).toBe(true);
+    expect(canLaunchOneShotRealPublishFromAccountCard({ ...input, connected: false })).toBe(false);
+    expect(canLaunchOneShotRealPublishFromAccountCard({ ...input, busy: true })).toBe(false);
+    expect(canLaunchOneShotRealPublishFromAccountCard({ ...input, account: account({ enabled: false }) })).toBe(false);
+    expect(canLaunchOneShotRealPublishFromAccountCard({ ...input, platform: platform({ platformKey: "weibo" }) })).toBe(false);
   });
 });
