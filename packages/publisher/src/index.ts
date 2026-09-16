@@ -1,6 +1,6 @@
 import { isAutomationAdapter, OneShotPublicationGuard, withUserInitiatedActionSettings, type AdapterRegistry, type AutomationAdapter, type BrowserExecutionMode, type BrowserPublishAttemptContext, type OneShotPublicationAuthorization, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
-import { canReuseArticle, decideFailure, evaluateContentQualityGate, validatePlatformArticle, type Account, type AccountContext, type AdapterManifest, type ErrorCode, type PlatformCapability, type PublishArticleInput, type PublishJob, type PublishMode, type PublishResult, type PublishVideoInput, type XhsContextIdentityAttestation } from "@publisher/domain";
+import { canReuseArticle, decideFailure, ERROR_CODES, evaluateContentQualityGate, validatePlatformArticle, type Account, type AccountContext, type AdapterManifest, type ErrorCode, type PlatformCapability, type PublishArticleInput, type PublishJob, type PublishMode, type PublishResult, type PublishVideoInput, type XhsContextIdentityAttestation } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
 
 export { preparedPublishMessage } from "./publish-capability";
@@ -33,7 +33,7 @@ function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: string)
 function errorCode(error: unknown): ErrorCode {
   if (typeof error === "object" && error !== null && "code" in error) {
     const code = (error as { code: unknown }).code;
-    const allowed: ErrorCode[] = ["NETWORK_ERROR", "LOGIN_EXPIRED", "AUTH_REQUIRED", "USER_ACTION_REQUIRED", "UPLOAD_FAILED", "PLATFORM_CHANGED", "CONTENT_REJECTED", "RATE_LIMITED", "PERMISSION_DENIED", "API_REVIEW_REQUIRED", "PROCESSING", "TIMEOUT", "SUBMISSION_UNCERTAIN", "FINAL_SUBMIT_ALREADY_USED", "FINAL_SUBMIT_CONTROL_NOT_FOUND", "REQUIRED_FIELD_MISSING", "EXTERNAL_EVIDENCE_INCOMPLETE", "RECONCILIATION_UNCERTAIN", "CONFIRMED_NOT_PUBLISHED", "UNKNOWN"];
+    const allowed: ErrorCode[] = [...ERROR_CODES];
     if (typeof code === "string" && allowed.includes(code as ErrorCode)) return code as ErrorCode;
   }
   return "UNKNOWN";
