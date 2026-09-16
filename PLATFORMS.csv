@@ -1,0 +1,42 @@
+﻿platform_key,display_name,category,first_version_target,implementation_note,research_status,lifecycle_status,transport,official_website,blocking_reason,last_verified_at,integration_mode
+douyin,抖音,内容/视频,是,官方开放平台视频发布Adapter,verified,WaitingForUser,official_api,https://open.douyin.com/,需开放平台应用审核及video.create权限,2026-08-20,OAuth
+kuaishou,快手,内容/视频,是,官方文档标注视频发布接入暂停；Adapter 保留契约注入和安全失败边界,verified,Blocked,official_api,https://open.kuaishou.com/,官方当前暂停接入，需平台恢复/客服确认后才能真实验证,2026-08-20,Blocked
+wechat_channels,视频号,内容/视频,是,先SemiAuto：自动准备内容并打开视频号助手，用户最终确认,partial,WaitingForUser,semi_auto,https://channels.weixin.qq.com/,系统不自动绕过验证或点击最终发布,2026-08-21,SemiAuto
+xiaohongshu,小红书,图文,是,用户自有账号 BrowserAutomation gate-only：登录、身份识别、图片/标题/正文/发布控件 discovery；不点击最终发布,partial,WaitingForUser,browser,https://creator.xiaohongshu.com/,必须由账号所有者完成登录和平台正常安全验证；本轮只验证真实页面，不执行最终发布,2026-08-27,BrowserAutomation
+bilibili,哔哩哔哩,视频/专栏,是,用户自有账号 Browser Automation：登录、保存Session、打开创作中心、生成任务,partial,WaitingForUser,browser,https://member.bilibili.com/,首阶段不自动点击最终发布；需用户完成验证码/安全验证并确认真实发布,2026-08-21,BrowserAutomation
+baijiahao,百家号,图文,是,用户自有账号 Browser Automation：登录、保存Session、打开作者后台、生成草稿任务,partial,WaitingForUser,browser,https://baijiahao.baidu.com/,首阶段不自动点击最终发布；需用户完成验证码/安全验证并确认真实发布,2026-08-21,BrowserAutomation
+toutiao,头条号,图文/内容,是,官方开放平台视频发布Adapter,verified,WaitingForUser,official_api,https://open.douyin.com/platform/,需应用审核和头条视频发布权限,2026-08-20,API
+weibo,新浪微博,内容,是,官方 API/CLI contract 未完成审阅时保留用户自有账号 Browser Automation,partial,WaitingForUser,browser,https://weibo.com/,首阶段不自动点击最终发布；API contract 审阅后可单独切回官方 API,2026-08-21,BrowserAutomation
+zhihu,知乎,图文/问答,是,用户自有账号 Browser Automation：登录、保存Session、打开创作中心、生成任务,partial,WaitingForUser,browser,https://www.zhihu.com/creator,首阶段不自动点击最终发布；不绕过验证码、风控或平台验证,2026-08-21,BrowserAutomation
+qq_public,企鹅号,图文/内容,是,用户自有账号 Browser Automation：登录、保存Session、打开官方后台、生成任务,partial,WaitingForUser,browser,https://om.qq.com/,只允许用户自己的账号；平台资质、真实提交和回查仍等待用户确认,2026-08-21,BrowserAutomation
+sohu_media,搜狐号,图文/图集/短视频,是,用户自有账号 Browser Automation：登录、保存Session、打开创作中心、生成任务,partial,WaitingForUser,browser,https://mp.sohu.com/,首阶段不自动点击最终发布；需用户完成验证码/安全验证并确认真实发布,2026-08-21,BrowserAutomation
+yidian,一点号,图文,是,创作后台人工投稿,manual_only,ManualOnly,manual,https://mp.yidianzixun.com/,未确认公开第三方内容写入API,2026-08-20,Manual
+dayu,大鱼号,图文/内容,是,创作后台人工投稿,manual_only,ManualOnly,manual,https://mp.dayu.com/,未确认公开第三方内容写入API,2026-08-20,Manual
+netease_media,网易号,图文,是,创作后台人工投稿,manual_only,ManualOnly,manual,https://mp.163.com/,未确认公开第三方内容写入API,2026-08-20,Manual
+iqiyi,爱奇艺,视频/内容,是,官方创作者API已确认但尚无Adapter,verified,NotImplemented,official_api,https://creator-open.iqiyi.com/api-reference,需真实控制台确认当前endpoint合同和Token资格,2026-08-20,API
+weishi,腾讯微视,视频,是,客户端人工创作分享,manual_only,ManualOnly,manual,https://www.tencent.com/products/weishi/,未发现公开第三方发布或回查API,2026-08-20,Manual
+wechat_official,微信公众号,图文,是,官方草稿和发布API Adapter,verified,WaitingForUser,official_api,https://developers.weixin.qq.com/doc/offiaccount/,需AppID和AppSecret及发布接口权限,2026-08-20,API
+sohu_video,搜狐视频,视频,是,创作中心人工上传,manual_only,ManualOnly,manual,https://tv.sohu.com/s/center/index.html,开放平台不是第三方作品写入接口,2026-08-20,Manual
+pipixia,皮皮虾,内容/视频,是,创作中心人工投稿,manual_only,ManualOnly,manual,https://mp.pipix.com/,未发现公开发布SDK或API,2026-08-20,Manual
+tencent_video,腾讯视频,视频,是,腾讯视频页面人工上传,manual_only,ManualOnly,manual,https://v.qq.com/u/upload.html,不可复用企鹅号接口冒充腾讯视频写入API,2026-08-20,Manual
+duoduo_video,多多视频,视频,是,创作者后台人工上传,manual_only,ManualOnly,manual,https://live.yangkeduo.com/creator,开放平台为电商能力而非视频作品发布,2026-08-20,Manual
+meipai,美拍,视频,是,美拍客户端人工发布,manual_only,ManualOnly,manual,https://www.meipai.com/,未发现公开发布API且社区规则限制机器垃圾内容,2026-08-20,Manual
+acfun,AcFun,视频/文章,是,创作后台人工投稿,manual_only,ManualOnly,manual,https://member.acfun.cn/,未发现公开第三方投稿或回查API,2026-08-20,Manual
+kuaichuan,快传号,内容,是,创作后台人工投稿,manual_only,ManualOnly,manual,https://kuaichuan.360kuai.com/,未发现公开发布API且AI内容需声明,2026-08-20,Manual
+xueqiu,雪球号,图文/财经,是,仅人工发布,manual_only,ManualOnly,manual,https://xueqiu.com/,未确认公开内容写入API且财经内容风险高,2026-08-20,Manual
+fengwang,蜂网,内容,是,风行号后台人工入驻和投稿,manual_only,ManualOnly,manual,https://o.fun.tv/,未发现公开发布API,2026-08-20,Manual
+dewu,得物,内容,是,社区内容仅人工发布,manual_only,ManualOnly,manual,https://www.dewu.com/,商家开放平台不是社区发布API且条款限制自动化,2026-08-20,Manual
+douban,豆瓣,图文,是,仅人工发布,manual_only,ManualOnly,manual,https://www.douban.com/,未确认公开内容写入API,2026-08-20,Manual
+csdn,CSDN,图文/技术,是,创作后台人工发布,manual_only,ManualOnly,manual,https://mp.csdn.net/,未确认公开第三方内容写入API,2026-08-20,Manual
+jianshu,简书,图文,是,创作后台人工发布,manual_only,ManualOnly,manual,https://www.jianshu.com/writer,未确认公开第三方内容写入API,2026-08-20,Manual
+autohome,车家号,汽车内容,是,车家号后台人工投稿,manual_only,ManualOnly,manual,https://chejiahao.autohome.com.cn/,无公开内容写API且条款禁止机器人自动程序,2026-08-20,Manual
+xiaohongshu_business,小红书商家号,商业内容,是,仅使用商家后台人工内容操作,manual_only,ManualOnly,manual,https://ark.xiaohongshu.com/,经营API不是社区笔记发布API,2026-08-20,Manual
+yiche,易车号,汽车内容,是,易车号后台人工投稿,manual_only,ManualOnly,manual,https://mp.yiche.com/,公开API为数据读取且无作者内容写入,2026-08-20,Manual
+xiaohongshu_private,小红书私信版,消息/运营,是,仅平台允许的人工作业,manual_only,ManualOnly,manual,https://miniapp.xiaohongshu.com/,客服消息仅用户发起且不支持主动营销,2026-08-20,Manual
+tiktok,TikTok,视频,是,现有官方Content Posting Adapter仍需审核凭据,verified,Developing,official_api,https://developers.tiktok.com/,需应用审核权限和真实账号契约验证,2026-08-20,OAuth
+youtube,YouTube,视频,是,现有官方Data API Adapter仍需审核凭据,verified,Developing,official_api,https://developers.google.com/youtube/v3,需OAuth授权及真实账号非公开测试,2026-08-20,OAuth
+facebook,Facebook Pages,内容,是,官方Pages API文本及链接Feed Adapter,verified,WaitingForUser,official_api,https://developers.facebook.com/docs/graph-api/reference/page/feed/,仅Pages且真实 Dry Run 需账号所有者完成 OAuth、Page 权限确认及 Advanced Access/App Review,2026-08-20,OAuth
+instagram,Instagram Professional,内容,是,官方Content Publishing API已确认但尚无Adapter,verified,NotImplemented,official_api,https://developers.facebook.com/docs/instagram-platform/content-publishing/,仅Business或Creator且需审核和公网媒体,2026-08-20,API
+other,其他账号,扩展,是,扩展占位不得实现万能Adapter,unverified,NotImplemented,manual,,,2026-08-20,Blocked
+lieju,列举网,分类信息/图文,是,用户自有账号 Browser Automation：逐账号独立 Session 并在官方表单等待用户确认,partial,WaitingForUser,browser,https://www.lieju.com/,分类地区联系方式拼图验证码和最终提交均由用户正常完成,2026-08-22,BrowserAutomation
+cnblogs,博客园,图文/技术,是,官方博客后台 Open API PAT：默认创建未发布草稿并回查审核状态,verified,WaitingForUser,official_api,https://www.cnblogs.com/,需用户配置 PAT 并完成真实连接与草稿验收,2026-08-22,API

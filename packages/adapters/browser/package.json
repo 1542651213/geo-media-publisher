@@ -1,0 +1,12 @@
+{
+  "name": "@publisher/adapters-browser",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@publisher/adapters-core": "workspace:*",
+    "@publisher/domain": "workspace:*",
+    "@publisher/security": "workspace:*"
+  }
+}

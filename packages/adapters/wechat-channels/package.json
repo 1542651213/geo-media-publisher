@@ -1,0 +1,8 @@
+{
+  "name": "@publisher/adapters-wechat-channels",
+  "version": "0.5.1",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts", "./semi-auto": "./src/semi-auto.ts" },
+  "dependencies": { "@publisher/adapters-core": "workspace:*", "@publisher/adapters-manual": "workspace:*", "@publisher/adapters-semi-auto": "workspace:*", "@publisher/domain": "workspace:*" }
+}

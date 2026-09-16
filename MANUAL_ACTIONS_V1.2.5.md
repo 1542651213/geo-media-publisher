@@ -1,0 +1,8 @@
+# V1.2.5 owner gate: Zhihu readback / Toutiao article preflight
+
+- This implementation pass performed no live platform action and no final-submit click. Do not treat local adapter fixtures as Login PASS, `READY_FOR_REAL_SELF_TEST`, `PublishPassed`, or external publish evidence.
+- Zhihu: if an owner later authorizes inspection, first use the existing account Session and the read-only reconciliation path for old `NeedsReconciliation` Jobs. Do not create a replacement Job or republish to resolve uncertainty. The final publish control remains inspection-only in this pass.
+- Toutiao: the official API adapter remains video-only (`supportsArticle=false`). The new `ToutiaoArticleBrowserAdapter` is a separate browser article module under the same formal platform ID `toutiao`; it can prepare title/body/required-field/cover evidence and identify the final control, but it has no submit click path.
+- Before any future real self-test, the owner must provide or approve a runtime routing/session path, complete normal platform login/security verification personally, confirm the exact test title/body and cover, inspect the final control, and approve one unique final submission. CAPTCHA, SMS, QR, security, or human verification must be completed through the platform normally; no bypass is allowed.
+- The future readiness gate is conjunctive: `Login PASS + Title PASS + Body PASS + Readback PASS + Required Fields PASS + Cover/Image Requirement PASS + Final Submit VERIFIED`. Until all of those are live and owner-reviewed, keep `WaitingForUser` / `NeedsUserAction`; never create real publish evidence or upgrade `PublishPassed`.
+

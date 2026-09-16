@@ -1,0 +1,63 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@publisher/domain": ["packages/domain/src/index.ts"],
+      "@publisher/db": ["packages/db/src/index.ts"],
+      "@publisher/ai": ["packages/ai/src/index.ts"],
+      "@publisher/image": ["packages/image/src/index.ts"],
+      "@publisher/logger": ["packages/logger/src/index.ts"],
+      "@publisher/adapters-core": ["packages/adapters/core/src/index.ts"],
+      "@publisher/adapters-browser": ["packages/adapters/browser/src/index.ts"],
+      "@publisher/adapters-semi-auto": ["packages/adapters/semi-auto/src/index.ts"],
+      "@publisher/adapters-manual": ["packages/adapters/manual/src/index.ts"],
+      "@publisher/adapters-test": ["packages/adapters/test/src/index.ts"],
+      "@publisher/publisher": ["packages/publisher/src/index.ts"],
+      "@publisher/security": ["packages/security/src/index.ts"],
+      "@publisher/adapters-wechat": ["packages/adapters/wechat/src/index.ts"],
+      "@publisher/adapters-douyin": ["packages/adapters/douyin/src/index.ts"],
+      "@publisher/adapters-kuaishou": ["packages/adapters/kuaishou/src/index.ts"],
+      "@publisher/adapters-bilibili": ["packages/adapters/bilibili/src/index.ts"],
+      "@publisher/adapters-youtube": ["packages/adapters/youtube/src/index.ts"],
+      "@publisher/adapters-tiktok": ["packages/adapters/tiktok/src/index.ts"],
+      "@publisher/adapters-toutiao": ["packages/adapters/toutiao/src/index.ts"],
+      "@publisher/adapters-facebook": ["packages/adapters/facebook/src/index.ts"],
+      "@publisher/adapters-weibo": ["packages/adapters/weibo/src/index.ts"],
+      "@publisher/adapters-baijiahao": ["packages/adapters/baijiahao/src/index.ts"],
+      "@publisher/adapters-zhihu": ["packages/adapters/zhihu/src/index.ts"],
+      "@publisher/adapters-sohu-media": ["packages/adapters/sohu-media/src/index.ts"],
+      "@publisher/adapters-wechat-channels": ["packages/adapters/wechat-channels/src/index.ts"],
+      "@publisher/adapters-xiaohongshu": ["packages/adapters/xiaohongshu/src/index.ts"],
+      "@publisher/adapters-xiaohongshu/*": ["packages/adapters/xiaohongshu/src/*"],
+      "@publisher/adapters-qq-public": ["packages/adapters/qq-public/src/index.ts"]
+      ,"@publisher/adapters-lieju": ["packages/adapters/lieju/src/index.ts"]
+      ,"@publisher/adapters-cnblogs": ["packages/adapters/cnblogs/src/index.ts"]
+      ,"@publisher/adapters-baijiahao/*": ["packages/adapters/baijiahao/src/*"]
+      ,"@publisher/adapters-bilibili/*": ["packages/adapters/bilibili/src/*"]
+      ,"@publisher/adapters-qq-public/*": ["packages/adapters/qq-public/src/*"]
+      ,"@publisher/adapters-sohu-media/*": ["packages/adapters/sohu-media/src/*"]
+      ,"@publisher/adapters-weibo/*": ["packages/adapters/weibo/src/*"]
+      ,"@publisher/adapters-zhihu/*": ["packages/adapters/zhihu/src/*"]
+      ,"@publisher/adapters-wechat-channels/*": ["packages/adapters/wechat-channels/src/*"]
+      ,"@publisher/adapters-lieju/*": ["packages/adapters/lieju/src/*"]
+    },
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["apps", "packages", "tests", "src", "electron.vite.config.ts", "vitest.config.ts", "scripts"],
+  "exclude": ["node_modules", "dist"]
+}
