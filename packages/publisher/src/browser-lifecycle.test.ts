@@ -34,9 +34,12 @@ class ScopedBrowserAdapter implements PlatformAdapter {
   });
   readonly runWithBrowserSession = vi.fn(async <T>(_ctx: AccountContext, operation: string, task: () => Promise<T>, options?: { retainSession?: boolean }): Promise<T> => {
     this.events.push(`scope-start:${operation}`);
-    if (options?.retainSession === true) this.events.push(`scope-retained:${operation}`);
     try { return await task(); }
-    finally { this.beforeScopeEnd?.(); this.events.push(`scope-end:${operation}`); }
+    finally {
+      this.beforeScopeEnd?.();
+      if (options?.retainSession === true) this.events.push(`scope-retained:${operation}`);
+      this.events.push(`scope-end:${operation}`);
+    }
   });
 
   getCapabilities() { return { ...defaultCapabilities, imagePost: false, coverImage: false }; }
