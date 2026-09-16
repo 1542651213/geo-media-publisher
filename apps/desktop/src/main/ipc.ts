@@ -13,7 +13,7 @@ import { CredentialDecryptError, type CredentialStatus, type CredentialStore } f
 import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STUDIO_PLATFORM_KEYS, EXCEL_ADVANCED_ARTICLE_HEADERS, EXCEL_SIMPLE_ARTICLE_HEADERS, ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, PROMOTION_STRENGTHS, SEARCH_INTENTS, checkGeneratedArticleQuality, selectRelevantBrandFacts, type AccountContext, type AccountProfile, type AccountStatus, type AIUsage, type CredentialField, type ContentStudioPlatformKey, type CreatorIdentityVerificationResult, type ExcelImportPreview, type ImageAsset } from "@publisher/domain";
 import { BrowserRuntimeError, assertExternalLaunchAllowed, browserSessionCredentialKey, browserSessionIdHash, isAutomationAdapter, type AdapterRegistry, type AutomationAdapter, type ExternalLaunchTriggerSource, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
-import type { PublisherService, PersistentScheduler } from "@publisher/publisher";
+import { preparedPublishMessage, type PublisherService, type PersistentScheduler } from "@publisher/publisher";
 import type { XhsEditorLoadDiagnosticResult, XhsEditorNetworkDiagnosticResult } from "@publisher/adapters-xiaohongshu/browser";
 import { resumePersistentBatches, runPersistentBatchTask } from "./ai-batch";
 import { CONTENT_STUDIO_PROMPT_VERSION, resumeContentStudioTasks, runContentStudioTask } from "./content-studio";
@@ -422,7 +422,7 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
     }
     const prepared = await publisher.prepareArticle(job.id, action);
     return finalPublishMode === "AUTO_PUBLISH"
-      ? { ...prepared, message: `${prepared.message}；该浏览器平台尚无已验证的最终提交能力，已降级为发布前确认。` }
+      ? { ...prepared, message: preparedPublishMessage(prepared.message, finalPublishMode, prepared.record?.response ?? {}) }
       : prepared;
   });
 

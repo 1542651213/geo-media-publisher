@@ -3,6 +3,8 @@ import type { AppRepository } from "@publisher/db";
 import { canReuseArticle, decideFailure, evaluateContentQualityGate, validatePlatformArticle, type Account, type AccountContext, type AdapterManifest, type ErrorCode, type PlatformCapability, type PublishArticleInput, type PublishJob, type PublishMode, type PublishResult, type PublishVideoInput, type XhsContextIdentityAttestation } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
 
+export { preparedPublishMessage } from "./publish-capability";
+
 export interface PublishExecutionResult { job: PublishJob; message: string; }
 export interface AssistedPrepareResult { job: PublishJob; record: ReturnType<AppRepository["getPublishRecordByJob"]>; message: string; }
 
@@ -166,13 +168,18 @@ export class PublisherService {
     ctx: AccountContext,
     operation: string,
     task: () => Promise<T>,
-    retainSession: boolean
+    retainSession: boolean,
+    keepSessionAfterOperation = false
   ): Promise<T> {
     const scopedLifecycle = !retainSession && typeof adapter.runWithBrowserSession === "function";
     let result: T | undefined;
     let operationError: unknown;
     try {
-      result = scopedLifecycle ? await adapter.runWithBrowserSession!(ctx, operation, task) : await task();
+      result = scopedLifecycle
+        ? keepSessionAfterOperation
+          ? await adapter.runWithBrowserSession!(ctx, operation, task, { retainSession: true })
+          : await adapter.runWithBrowserSession!(ctx, operation, task)
+        : await task();
     } catch (error) {
       operationError = error;
       this.logger.warn("PUBLISHER", "BROWSER_SESSION_OPERATION_FAILED", "浏览器任务生命周期执行失败", {
@@ -241,7 +248,7 @@ export class PublisherService {
         if (errorCode(error) === "UPLOAD_FAILED") this.logger.error("PUBLISHER", "IMAGE_UPLOAD_FAILED", error instanceof Error ? error.message : "图片上传失败", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage?.id ?? null });
         throw error;
       });
-    }, false);
+    }, false, true);
     if (selectedImage && prepared.response.imageUploaded !== true) {
       this.logger.error("PUBLISHER", "IMAGE_UPLOAD_FAILED", "平台编辑器未返回图片 DOM 上传证据", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
       throw Object.assign(new Error("平台编辑器未返回图片上传完成证据，不能声明图片已插入"), { code: "UPLOAD_FAILED" });

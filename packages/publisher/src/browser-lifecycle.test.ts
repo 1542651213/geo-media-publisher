@@ -32,8 +32,9 @@ class ScopedBrowserAdapter implements PlatformAdapter {
     this.events.push("publish");
     return { success: true, status: "published", externalId: "fixture", publishedUrl: "https://example.test/fixture", response: {} };
   });
-  readonly runWithBrowserSession = vi.fn(async <T>(_ctx: AccountContext, operation: string, task: () => Promise<T>): Promise<T> => {
+  readonly runWithBrowserSession = vi.fn(async <T>(_ctx: AccountContext, operation: string, task: () => Promise<T>, options?: { retainSession?: boolean }): Promise<T> => {
     this.events.push(`scope-start:${operation}`);
+    if (options?.retainSession === true) this.events.push(`scope-retained:${operation}`);
     try { return await task(); }
     finally { this.beforeScopeEnd?.(); this.events.push(`scope-end:${operation}`); }
   });
@@ -88,12 +89,14 @@ describe("PublisherService scoped browser lifecycle", () => {
     await expect(publisher.prepareArticle(job.id)).resolves.toMatchObject({ message: "prepared" });
 
     expect(adapter.runWithBrowserSession).toHaveBeenCalledTimes(1);
+    expect(adapter.runWithBrowserSession).toHaveBeenCalledWith(expect.anything(), "PublisherService.prepareArticle", expect.any(Function), { retainSession: true });
     expect(adapter.releaseOperationSession).not.toHaveBeenCalled();
     expect(adapter.events).toEqual([
       "scope-start:PublisherService.prepareArticle",
       "check-login",
       "validate",
       "prepare",
+      "scope-retained:PublisherService.prepareArticle",
       "scope-end:PublisherService.prepareArticle"
     ]);
     expect(database.repository.getPublishRecordByJob(job.id)?.status).toBe("Prepared");

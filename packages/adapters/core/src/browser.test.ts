@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import type { Browser, BrowserContext } from "playwright-core";
 import type { CredentialStore } from "@publisher/security";
-import { BrowserRuntimeError, BrowserSessionManager, BrowserSessionPageOwnershipError, ExternalLaunchBlockedError, browserExecutionModeFromSettings, type BrowserSessionLifecycleEvent, type BrowserSessionOperationPageLifecycleEvent, type UserInitiatedAction } from "./index";
+import { BrowserRuntimeError, BrowserSessionManager, BrowserSessionPageOwnershipError, ExternalLaunchBlockedError, browserExecutionModeFromSettings, type BrowserSession, type BrowserSessionLifecycleEvent, type BrowserSessionOperationPageLifecycleEvent, type UserInitiatedAction } from "./index";
 
 class MemoryCredentialStore implements CredentialStore {
   private readonly values = new Map<string, string>();
@@ -1042,6 +1042,21 @@ describe("scoped browser lifecycle", () => {
     expect(f.context.close).not.toHaveBeenCalled();
     await f.manager.close(session);
     expect(f.manager.getLifecycleState(identity)).toBe("CLOSED");
+  });
+
+  it("retains a successful prepared-editor session for the next operation", async () => {
+    const f = fixture();
+    const result = await f.manager.runScopedOperation(identity, userAction, "BACKGROUND", "prepare", async (session) => session.runtimeSessionIdentity, { retainSession: true });
+
+    expect(result).toEqual(expect.any(String));
+    expect(f.context.close).not.toHaveBeenCalled();
+    expect(f.manager.getLifecycleState(identity)).toBe("READY");
+    expect(f.manager.getActiveSession(identity)?.runtimeSessionIdentity).toBe(result);
+
+    const restored = await f.manager.runScopedOperation(identity, userAction, "BACKGROUND", "restore", async (session) => session.runtimeSessionIdentity, { retainSession: true });
+    expect(restored).toBe(result);
+    expect(f.launchBrowser).toHaveBeenCalledTimes(1);
+    await f.manager.close(f.manager.getActiveSession(identity) as BrowserSession);
   });
 
   it("preserves the original operation error when cleanup also fails", async () => {

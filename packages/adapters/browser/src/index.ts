@@ -12,7 +12,7 @@ import type {
   ValidationResult
 } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
-import { assertBrowserSessionPageOwnership, BrowserSessionManager, browserExecutionModeFromSettings, browserSessionCredentialKey, browserSessionIdHash, PlatformAdapterError, userInitiatedActionFromSettings, type BrowserExecutionMode, type BrowserRuntimeEvent, type BrowserSession, type BrowserSessionCanonicalPage, type BrowserSessionCloseInfo, type BrowserSessionContextPage, type BrowserSessionContextPageLifecycleEvent, type BrowserSessionRuntimeSnapshot, type BrowserSessionRuntimeState, type BrowserSessionStorageMode, type SystemBrowserChannel } from "@publisher/adapters-core";
+import { assertBrowserSessionPageOwnership, BrowserSessionManager, browserExecutionModeFromSettings, browserSessionCredentialKey, browserSessionIdHash, PlatformAdapterError, userInitiatedActionFromSettings, type BrowserExecutionMode, type BrowserRuntimeEvent, type BrowserSession, type BrowserSessionCanonicalPage, type BrowserSessionCloseInfo, type BrowserSessionContextPage, type BrowserSessionContextPageLifecycleEvent, type BrowserSessionOperationOptions, type BrowserSessionRuntimeSnapshot, type BrowserSessionRuntimeState, type BrowserSessionStorageMode, type SystemBrowserChannel } from "@publisher/adapters-core";
 import type { CredentialStore } from "@publisher/security";
 import type { AutomationAdapter, AutomationPrepareResult } from "@publisher/adapters-core";
 
@@ -266,21 +266,31 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     };
   }
 
-  async runWithBrowserSession<T>(ctx: AccountContext, callerOperation: string, task: () => Promise<T>): Promise<T> {
+  async runWithBrowserSession<T>(ctx: AccountContext, callerOperation: string, task: () => Promise<T>, options?: BrowserSessionOperationOptions): Promise<T> {
     const identity = this.identity(ctx);
+    const runOptions = options?.retainSession === true ? options : undefined;
+    const scopedTask = async (session: BrowserSession) => {
+      this.rememberActiveSession(identity, session);
+      try {
+        return await task();
+      } finally {
+        this.fallbackActiveSessions.delete(`${identity.platformKey}:${identity.accountId}`);
+      }
+    };
+    if (runOptions) return this.sessionManager.runScopedOperation(
+      identity,
+      userInitiatedActionFromSettings(ctx.settings),
+      browserExecutionModeFromSettings(ctx.settings),
+      callerOperation,
+      scopedTask,
+      runOptions
+    );
     return this.sessionManager.runScopedOperation(
       identity,
       userInitiatedActionFromSettings(ctx.settings),
       browserExecutionModeFromSettings(ctx.settings),
       callerOperation,
-      async (session) => {
-        this.rememberActiveSession(identity, session);
-        try {
-          return await task();
-        } finally {
-          this.fallbackActiveSessions.delete(`${identity.platformKey}:${identity.accountId}`);
-        }
-      }
+      scopedTask
     );
   }
 

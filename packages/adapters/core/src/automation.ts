@@ -8,7 +8,7 @@ import type {
   PublishStatusResult,
   ValidationResult
 } from "@publisher/domain";
-import type { BrowserSessionRuntimeSnapshot, BrowserSessionRuntimeState } from "./browser";
+import type { BrowserSessionOperationOptions, BrowserSessionRuntimeSnapshot, BrowserSessionRuntimeState } from "./browser";
 import type { PlatformAdapter } from "./index";
 import type { OneShotPublicationAuthorization, OneShotPublicationAuthorizationState, OneShotPublicationGuard } from "./one-shot-publication";
 export type { OneShotPublicationAuthorization, OneShotPublicationGuard } from "./one-shot-publication";
@@ -315,7 +315,7 @@ export interface AutomationAdapter extends PlatformAdapter {
   runOneShotRealPublishAcceptance?(ctx: AccountContext, input: OneShotRealPublishAcceptanceInput & { oneShotPublicationGuard: OneShotPublicationGuard }): Promise<OneShotRealPublishAcceptanceResult>;
   preparePublish(ctx: AccountContext, article: PublishArticleInput): Promise<AutomationPrepareResult>;
   /** Runs an ordinary task-owned operation in one account-scoped browser Session. Retained/manual flows must not use this hook. */
-  runWithBrowserSession?<T>(ctx: AccountContext, callerOperation: string, task: () => Promise<T>): Promise<T>;
+  runWithBrowserSession?<T>(ctx: AccountContext, callerOperation: string, task: () => Promise<T>, options?: BrowserSessionOperationOptions): Promise<T>;
   verifyPublish(ctx: AccountContext, externalId?: string): Promise<PublishStatusResult>;
   logout(ctx: AccountContext): Promise<void>;
   /** Releases the account/job session after a BACKGROUND operation; VISIBLE sessions remain available for user handling. */

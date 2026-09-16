@@ -116,6 +116,11 @@ export interface BrowserSession {
 export type BrowserRuntimeAuthState = "UNVERIFIED" | "CHECKING" | "AUTHENTICATED" | "NEEDS_USER_ACTION" | "DISCONNECTED";
 export type BrowserSessionLifecycleState = "CLOSED" | "OPENING" | "READY" | "RUNNING" | "CLOSING";
 
+/** Controls whether a successful scoped operation leaves its account session available for the next user-owned step. */
+export interface BrowserSessionOperationOptions {
+  retainSession?: boolean;
+}
+
 export interface BrowserSessionPlatformPolicy {
   retainContextAfterPageClose: boolean;
   requireActiveContextForOperations: boolean;
@@ -385,7 +390,8 @@ export class PlaywrightSessionManager {
     action: UserInitiatedAction,
     executionMode: BrowserExecutionMode,
     callerOperation: string,
-    task: (session: BrowserSession) => Promise<T>
+    task: (session: BrowserSession) => Promise<T>,
+    options: BrowserSessionOperationOptions = {}
   ): Promise<T> {
     const key = browserSessionCredentialKey(identity);
     if (this.scopedOperations.has(key)) throw new Error("A scoped browser operation is already running for this account");
@@ -413,7 +419,13 @@ export class PlaywrightSessionManager {
       // Disconnect handling already releases crashed sessions. Never close a
       // replacement session or overwrite its authentication diagnostics.
       if (session && this.activeSessions.get(key) === session) {
-        await this.close(session, { reason: "BACKGROUND_OPERATION_RELEASE", callerOperation });
+        if (options.retainSession === true && !taskFailed) {
+          // A successful prepare must keep its account-owned Context/Page alive
+          // so a later user confirmation can use the same identity and editor.
+          this.lifecycleStates.set(key, "READY");
+        } else {
+          await this.close(session, { reason: "BACKGROUND_OPERATION_RELEASE", callerOperation });
+        }
       } else if (session && !this.activeSessions.has(key) && this.browserConnected(session.browser) === true) {
         // An unexpectedly closed ephemeral Context can leave its Browser alive.
         await this.close(session, { reason: "CONTEXT_CRASH_CLEANUP", callerOperation });
