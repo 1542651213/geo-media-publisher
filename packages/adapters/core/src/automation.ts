@@ -314,6 +314,8 @@ export interface AutomationAdapter extends PlatformAdapter {
   /** Explicit Task10S path. It must be XHS/account/operation scoped and use the supplied guard for the only real submit. */
   runOneShotRealPublishAcceptance?(ctx: AccountContext, input: OneShotRealPublishAcceptanceInput & { oneShotPublicationGuard: OneShotPublicationGuard }): Promise<OneShotRealPublishAcceptanceResult>;
   preparePublish(ctx: AccountContext, article: PublishArticleInput): Promise<AutomationPrepareResult>;
+  /** Runs an ordinary task-owned operation in one account-scoped browser Session. Retained/manual flows must not use this hook. */
+  runWithBrowserSession?<T>(ctx: AccountContext, callerOperation: string, task: () => Promise<T>): Promise<T>;
   verifyPublish(ctx: AccountContext, externalId?: string): Promise<PublishStatusResult>;
   logout(ctx: AccountContext): Promise<void>;
   /** Releases the account/job session after a BACKGROUND operation; VISIBLE sessions remain available for user handling. */

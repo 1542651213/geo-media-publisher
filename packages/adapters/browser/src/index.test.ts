@@ -282,6 +282,69 @@ describe("BrowserAutomationAdapter login lifecycle", () => {
     expect(manager.close).toHaveBeenCalledTimes(1);
   });
 
+  it("runs a task in one account-scoped browser session owned by the manager", async () => {
+    const page = pageFixture("https://example.com/backend");
+    const session = {
+      sessionIdHash: "scoped-session",
+      executionMode: "BACKGROUND",
+      headless: true,
+      page,
+      context: { pages: vi.fn(() => [page]) }
+    } as unknown as BrowserSession;
+    const runScopedOperation = vi.fn(async (_identity: unknown, _action: unknown, _mode: unknown, _caller: unknown, task: (opened: BrowserSession) => Promise<string>) => task(session));
+    const manager = {
+      runScopedOperation,
+      getActiveSession: vi.fn(() => session),
+      hasStoredSession: vi.fn(() => true),
+      debugId: "manager-debug-id"
+    } as unknown as BrowserSessionManager;
+    const adapter = new TestBrowserAutomationAdapter(definition, { sessionManager: manager });
+    const ctx: AccountContext = {
+      ...context(),
+      settings: { userActionId: "88888888-8888-4888-8888-888888888888", triggerSource: "START_PUBLISH", browserExecutionMode: "BACKGROUND" }
+    };
+
+    const result = await adapter.runWithBrowserSession(ctx, "PublisherService.prepareArticle", async () => {
+      const active = await adapter.activeBackendPageForTest(ctx);
+      expect(active?.session).toBe(session);
+      return "prepared";
+    });
+
+    expect(result).toBe("prepared");
+    expect(runScopedOperation).toHaveBeenCalledWith(
+      { platformKey: definition.platformKey, accountId: ctx.accountId },
+      { userActionId: ctx.settings.userActionId, triggerSource: "START_PUBLISH" },
+      "BACKGROUND",
+      "PublisherService.prepareArticle",
+      expect.any(Function)
+    );
+  });
+
+  it("rethrows a scoped task error without clearing the stored account session", async () => {
+    const page = pageFixture("https://example.com/backend");
+    const session = {
+      sessionIdHash: "scoped-session",
+      executionMode: "BACKGROUND",
+      headless: true,
+      page,
+      context: { pages: vi.fn(() => [page]) }
+    } as unknown as BrowserSession;
+    const original = new Error("prepare failed");
+    const manager = {
+      runScopedOperation: vi.fn(async (_identity: unknown, _action: unknown, _mode: unknown, _caller: unknown, task: (opened: BrowserSession) => Promise<never>) => task(session)),
+      getActiveSession: vi.fn(() => session),
+      clear: vi.fn(),
+      hasStoredSession: vi.fn(() => true),
+      debugId: "manager-debug-id"
+    } as unknown as BrowserSessionManager;
+    const adapter = new BrowserAutomationAdapter(definition, { sessionManager: manager });
+
+    await expect(adapter.runWithBrowserSession(context(), "PublisherService.prepareArticle", async () => { throw original; })).rejects.toBe(original);
+
+    expect(manager.clear).not.toHaveBeenCalled();
+    expect(manager.hasStoredSession({ platformKey: definition.platformKey, accountId: "account-1" })).toBe(true);
+  });
+
   it("keeps the legacy context-closing release for ordinary browser platforms", async () => {
     const fixtureState = fixture(false, true);
 

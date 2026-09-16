@@ -266,6 +266,24 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     };
   }
 
+  async runWithBrowserSession<T>(ctx: AccountContext, callerOperation: string, task: () => Promise<T>): Promise<T> {
+    const identity = this.identity(ctx);
+    return this.sessionManager.runScopedOperation(
+      identity,
+      userInitiatedActionFromSettings(ctx.settings),
+      browserExecutionModeFromSettings(ctx.settings),
+      callerOperation,
+      async (session) => {
+        this.rememberActiveSession(identity, session);
+        try {
+          return await task();
+        } finally {
+          this.fallbackActiveSessions.delete(`${identity.platformKey}:${identity.accountId}`);
+        }
+      }
+    );
+  }
+
   async publishArticle(ctx: AccountContext, article: PublishArticleInput): Promise<PublishResult> {
     try {
       const prepared = await this.preparePublish(ctx, article);
