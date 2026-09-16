@@ -90,14 +90,13 @@ describe("Task10S retained-editor transaction mode", () => {
   });
 
   it("keeps the retained-editor one-shot path independent from the ordinary content gate", async () => {
-    const { database, publisher, adapter, jobId, authorization } = fixture();
-    const job = database.repository.getJob(jobId);
-    if (!job) throw new Error("fixture job was not created");
-    database.repository.updateArticle(job.articleId, { title: "" });
+    const { publisher, adapter, jobId, authorization } = fixture();
+    const contentGate = vi.spyOn(publisher as unknown as { assertContentQualityGate: (...args: unknown[]) => void }, "assertContentQualityGate");
 
     const result = await publisher.executeTask10sRetainedEditor(jobId, { userActionId: "task10s-retained-editor-content-gate", triggerSource: "RUN_SELF_TEST" }, "VISIBLE", authorization);
 
     expect(result.job.status).toBe("Success");
+    expect(contentGate).not.toHaveBeenCalled();
     expect(adapter.retainedEditorMarkerSeen).toBe(true);
     expect(adapter.finalSubmitCount).toBe(1);
   });

@@ -14,7 +14,7 @@ const tempDirs: string[] = [];
 const databases: Array<{ close(): void }> = [];
 
 class ContentGateAdapter implements PlatformAdapter {
-  readonly platformKey = "content-gate-test";
+  readonly platformKey = "zhihu";
   readonly manifest: AdapterManifest = { platformKey: this.platformKey, displayName: "Content gate fixture", category: "test", version: "r69", adapterStatus: "ready", authStrategy: "ManualSession", callbackStrategy: "ManualCodeCallback", status: "Stable", researchStatus: "verified", transport: "browser", integrationMode: "BrowserAutomation", supportsArticle: true, supportsVideo: false, officialWebsite: "https://example.test", credentialSchema: [], officialSources: ["https://example.test"] };
   readonly automationType = "BrowserAutomation" as const;
   readonly checkLogin = vi.fn(async (_ctx: AccountContext): Promise<LoginStatus> => "logged_in");
@@ -42,9 +42,9 @@ function fixture(input: { title: string; body: string }) {
   database.repository.seedDevelopment(join(process.cwd(), "PLATFORMS.csv"));
   database.repository.setSetting("contentReviewMode", "Off");
   const brand = database.repository.createBrand({ name: "Content gate brand", companyName: "Content gate company" });
-  const account = database.repository.createAccount({ platformKey: "content-gate-test", name: "Content gate account", allowAutoPublish: true });
+  const account = database.repository.createAccount({ platformKey: "zhihu", name: "Content gate account", allowAutoPublish: true });
   database.repository.updateAccount(account.id, { enabled: true, loginStatus: "logged_in" });
-  const article = database.repository.createArticle({ brandId: brand.id, topic: "content gate", keyword: "gate", city: "Nanjing", title: input.title, body: input.body, summary: "", tags: [], seoKeywords: [], articleType: "test", aiProvider: "fixture", aiModel: "fixture", generatedAt: new Date().toISOString(), reusePolicy: "always", contentHash: randomUUID(), qualityStatus: "passed", qualityWarnings: [], source: "test" });
+  const article = database.repository.createArticle({ brandId: brand.id, topic: "content gate", keyword: "gate", city: "Nanjing", title: input.title, body: input.body, summary: "", tags: [], seoKeywords: [], articleType: "article", aiProvider: "fixture", aiModel: "fixture", generatedAt: new Date().toISOString(), reusePolicy: "always", contentHash: randomUUID(), qualityStatus: "passed", qualityWarnings: [], source: "production" });
   if (!article) throw new Error("fixture article was not created");
   const job = database.repository.createArticlePublishJob({ articleId: article.id, platformKey: account.platformKey, platformAccountId: account.id, publishMode: "ASSISTED", finalPublishMode: "CONFIRM_BEFORE_PUBLISH" });
   const adapter = new ContentGateAdapter();
