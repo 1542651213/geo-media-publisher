@@ -1753,7 +1753,7 @@ NotImplemented：3
 - 全量测试：`162` 个测试文件、`1315` 个测试通过。
 - typecheck、lint、build、正式 `package:dir` 通过。
 - staging：`D:\GEO\releases\release-xhs-hardening-20260916-r1\win-unpacked`。
-- staging `app.asar` SHA256：`88B100132385650C7279051F26F44DFEBD579599D024946E436F37148045B696`。
+- staging `app.asar` SHA256：`5EC51BF784931DF5BA09964A3F3390C3D8B8D145380B1BC27AB31A02F3D388D1`。
 - staging `better_sqlite3.node` SHA256：`AFA1DCAEDFC94D399413F18662D5FDA9C7025A23BC8CEF064D2986A0CEF2F60E`。
 - packaged migration parity：PASS，source 与 package 均为最新 `0024_v151_platform_account_identity_binding.sql`。
 
