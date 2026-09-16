@@ -1731,3 +1731,32 @@ NotImplemented：3
 - 发布链路：视频素材 → 现有视频能力平台选择 → 账号与文章选择 → Adapter `validateVideo` 发布前检查 → 现有持久化 Job Queue。创建任务不会直接调用外部平台。
 - 平台适配字段以 JSON 保存并随视频素材保留；本轮不修改 Adapter，因此只有 Adapter 已支持的字段会参与真实发布，其余字段作为可审计素材配置保存。
 - 当前真实发布状态：未执行真实抖音上传；抖音仍为 `WaitingForUser`。微信公众号未修改，继续为 `WaitingForUser`。
+
+## 2026-09-16 — XHS pipeline hardening consolidation (offline/staging only)
+
+本轮从 `905c6f8b77ac72d91895b8f6d5e05708f4bb1247` 开始，当前源码 HEAD 为 `d785e1c4162cb1ece616ed8b35a1d04726442fb5`。所有改动均保留在独立的小提交中，未触碰真实 XHS 发布、生产账号资料或生产发布记录。
+
+已完成：
+
+- R69.4 正文回读加固：CRLF/CR、NBSP/窄 NBSP、制表符、格式零宽字符/BOM、空白边界、受控空格折叠、全角竖线兼容转换；保留 PASS、PASS_WITH_NORMALIZATION、FAIL、哈希、长度、首个差异和有界上下文证据；ZWJ/ZWNJ 与语义标点仍 fail-closed。
+- canonical XHS runtime probe：同一 session/context/page 下同时读取 `page.url()` 与 `location.href`，报告一致性和 session 存在性；evaluate 失败不降级为地址栏/OCR。
+- XHS Creator identity positive proof 继续以 account `external_account_id` 为期望值来源；低可信昵称/头像不能单独通过身份门。
+- active `AUTHORIZED_UNUSED` 在同账号/平台/模式范围内串行保护，重复请求复用现有授权，历史授权不删除；旧授权收敛为 `SUPERSEDED_UNUSED`。
+- XHS 账号卡增加“一次性真实发布测试”入口、确认提示、单飞保护和可见错误路径；保留 retained-editor 原路径。
+- Electron shutdown coordinator：RUNNING → SHUTTING_DOWN → CLEANUP_COMPLETE → EXITING，scheduler、browser sessions、DB 有界且幂等清理，防止 before-quit 递归阻止退出。
+- 启动健康证据报告 source/package/production migration 版本；staging migration 集合已覆盖 0000–0024。
+- XHS publish failure taxonomy 增加可审计的细粒度错误码。
+
+验证结果：
+
+- better-sqlite3 已按 Electron `37.10.3` / ABI `136` 重建；host Node ABI 127 不用于直接加载该 native binary。
+- 全量测试：`162` 个测试文件、`1315` 个测试通过。
+- typecheck、lint、build、正式 `package:dir` 通过。
+- staging：`D:\GEO\releases\release-xhs-hardening-20260916-r1\win-unpacked`。
+- staging `app.asar` SHA256：`88B100132385650C7279051F26F44DFEBD579599D024946E436F37148045B696`。
+- staging `better_sqlite3.node` SHA256：`AFA1DCAEDFC94D399413F18662D5FDA9C7025A23BC8CEF064D2986A0CEF2F60E`。
+- packaged migration parity：PASS，source 与 package 均为最新 `0024_v151_platform_account_identity_binding.sql`。
+
+今晚边界：`LIVE_XHS_OPERATION=NOT_RUN`、`UPLOAD_MUTATION_COUNT=0`、`TITLE_MUTATION_COUNT=0`、`BODY_MUTATION_COUNT=0`、`SETTINGS_MUTATION_COUNT=0`、`PUBLICATION_TRANSACTION_COUNT=0`、`FINAL_SUBMIT_COUNT=0`。未部署到生产安装目录；staging 仅供 Owner 明天验收。
+
+仍需 Owner 明天执行的 live 步骤见 [NEXT_OWNER_ACTIONS.md](NEXT_OWNER_ACTIONS.md)。
