@@ -30,6 +30,11 @@ describe("evaluateContentQualityGate", () => {
     expect(result.checks.imageCount).toEqual({ passed: false, actual: 19, minimum: 0, maximum: 18 });
   });
 
+  it("rejects fractional and negative image counts", () => {
+    expect(evaluateContentQualityGate({ title: "标题", body: "正文", imageCount: 1.5 }).failureCodes).toEqual(["IMAGE_COUNT_INVALID"]);
+    expect(evaluateContentQualityGate({ title: "标题", body: "正文", imageCount: -1 }).failureCodes).toEqual(["IMAGE_COUNT_INVALID"]);
+  });
+
   it("counts emoji as one Unicode code point", () => {
     const result = evaluateContentQualityGate({ title: "😀", body: "😀", imageCount: 0 });
     expect(result.checks.titleLength.actual).toBe(1);
