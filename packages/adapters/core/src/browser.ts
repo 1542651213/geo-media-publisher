@@ -396,6 +396,13 @@ export class PlaywrightSessionManager {
     let result!: T;
     try {
       session = await this.open(identity, action, executionMode);
+      // Opening yields to the event loop. A disconnect/close may have released
+      // this session before the caller resumes, so never revive it as RUNNING.
+      const activeSession = this.getActiveSession(identity);
+      if (activeSession !== session || this.browserConnected(session.browser) !== true || this.safeContextPages(session.context) === null) {
+        if (activeSession === session) this.handleBrowserDisconnected(identity, session);
+        throw new Error("BROWSER_SESSION_UNAVAILABLE_BEFORE_OPERATION");
+      }
       this.lifecycleStates.set(key, "RUNNING");
       result = await task(session);
     } catch (error) {

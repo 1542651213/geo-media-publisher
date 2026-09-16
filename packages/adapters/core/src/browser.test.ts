@@ -1106,6 +1106,26 @@ describe("scoped browser lifecycle", () => {
     expect(f.context.close).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["browser disconnect", "context close"])("does not start a task after %s between open and callback", async (failure) => {
+    const f = fixture();
+    const open = f.manager.open.bind(f.manager);
+    vi.spyOn(f.manager, "open").mockImplementationOnce(async (...args) => {
+      const session = await open(...args);
+      if (failure === "browser disconnect") f.crash();
+      else f.closeContext();
+      return session;
+    });
+    const task = vi.fn(async () => "must not execute");
+
+    await expect(f.manager.runScopedOperation(identity, userAction, "BACKGROUND", "prepare", task)).rejects.toThrow("BROWSER_SESSION_UNAVAILABLE_BEFORE_OPERATION");
+
+    expect(task).not.toHaveBeenCalled();
+    expect(f.manager.getLifecycleState(identity)).toBe("CLOSED");
+    expect(f.manager.getRuntimeAuthState(identity).state).toBe("DISCONNECTED");
+    expect(f.manager.getActiveSession(identity)).toBeNull();
+    expect(f.credentials.get("session:test:scoped-account")).toBe(stored);
+  });
+
   it("releases an unexpectedly closed context even while the browser is connected", async () => {
     const f = fixture();
     const original = new Error("context closed during prepare");
