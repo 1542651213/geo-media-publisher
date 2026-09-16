@@ -302,7 +302,7 @@ async function createWindow(): Promise<void> {
   const databasePath = join(dataDirectory, "publisher.db");
   const appLogPath = join(dataDirectory, "logs", "app.log");
   const logger = createFileLogger(appLogPath);
-  const database = openDatabase(databasePath, migrationsDir, (event) => logger.info("DATABASE", event.code, "数据库迁移生命周期事件", { migrationId: event.migrationId, discoveredMigrationCount: event.discoveredMigrationCount, appliedMigrationCount: event.appliedMigrationCount, latestMigrationId: event.latestMigrationId, productionSchemaVersion: event.productionSchemaVersion, authTablePresent: event.authTablePresent }));
+  const database = openDatabase(databasePath, migrationsDir, (event) => logger.info("DATABASE", event.code, "数据库迁移生命周期事件", { migrationId: event.migrationId, discoveredMigrationCount: event.discoveredMigrationCount, appliedMigrationCount: event.appliedMigrationCount, latestMigrationId: event.latestMigrationId, latestSourceMigration: event.latestSourceMigrationId, latestPackagedMigration: event.latestPackagedMigrationId, productionSchemaVersion: event.productionSchemaVersion, schemaUpToDate: event.schemaUpToDate, authTablePresent: event.authTablePresent }));
   let databaseClosed = false;
   databaseCloser = () => {
     if (databaseClosed) return;

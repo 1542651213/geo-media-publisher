@@ -17,11 +17,27 @@ export interface MigrationEvent {
   discoveredMigrationCount?: number;
   appliedMigrationCount?: number;
   latestMigrationId?: string | null;
+  latestSourceMigrationId?: string | null;
+  latestPackagedMigrationId?: string | null;
   productionSchemaVersion?: string | null;
+  schemaUpToDate?: boolean;
   authTablePresent?: boolean;
 }
 
 export type MigrationObserver = (event: MigrationEvent) => void;
+
+export interface MigrationInventory {
+  ids: string[];
+  latestId: string | null;
+  latestVersion: string | null;
+}
+
+export function readMigrationInventory(migrationsDir: string): MigrationInventory {
+  if (!existsSync(migrationsDir)) throw new Error(`Migration directory not found: ${migrationsDir}`);
+  const ids = readdirSync(migrationsDir).filter((file) => file.endsWith(".sql")).sort();
+  const latestId = ids.at(-1) ?? null;
+  return { ids, latestId, latestVersion: latestId ? latestId.slice(0, 4) : null };
+}
 
 export function openDatabase(filePath: string, migrationsDir: string, observeMigration?: MigrationObserver): { db: Database.Database; repository: AppRepository } {
   mkdirSync(join(filePath, ".."), { recursive: true });
@@ -34,10 +50,10 @@ export function openDatabase(filePath: string, migrationsDir: string, observeMig
 
 export function runMigrations(db: Database.Database, migrationsDir: string, observeMigration?: MigrationObserver): void {
   db.exec("CREATE TABLE IF NOT EXISTS migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)");
-  if (!existsSync(migrationsDir)) throw new Error(`Migration directory not found: ${migrationsDir}`);
-  const files = readdirSync(migrationsDir).filter((file) => file.endsWith(".sql")).sort();
-  const latestMigrationId = files.at(-1) ?? null;
-  observeMigration?.({ code: "MIGRATION_DISCOVERY", discoveredMigrationCount: files.length, latestMigrationId });
+  const inventory = readMigrationInventory(migrationsDir);
+  const files = inventory.ids;
+  const latestMigrationId = inventory.latestId;
+  observeMigration?.({ code: "MIGRATION_DISCOVERY", discoveredMigrationCount: files.length, latestMigrationId, latestSourceMigrationId: latestMigrationId, latestPackagedMigrationId: latestMigrationId });
   const apply = db.transaction((file: string, sql: string) => {
     db.exec(sql);
     db.prepare("INSERT INTO migrations (id, applied_at) VALUES (?, ?)").run(file, new Date().toISOString());
@@ -58,7 +74,10 @@ export function runMigrations(db: Database.Database, migrationsDir: string, obse
     }
   }
   const authTablePresent = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='one_shot_publication_authorizations'").get());
-  if (files.includes("0023_v150_one_shot_publication_authorization.sql") && authTablePresent) observeMigration?.({ code: "TASK10S_SCHEMA_READY", migrationId: "0023_v150_one_shot_publication_authorization.sql", latestMigrationId, productionSchemaVersion: "0023", authTablePresent });
+  const appliedIds = (db.prepare("SELECT id FROM migrations ORDER BY id").all() as Array<{ id: string }>).map((item) => item.id);
+  const productionSchemaVersion = appliedIds.at(-1)?.slice(0, 4) ?? null;
+  const schemaUpToDate = files.length === appliedIds.length && files.every((file, index) => appliedIds[index] === file);
+  if (files.includes("0023_v150_one_shot_publication_authorization.sql") && authTablePresent) observeMigration?.({ code: "TASK10S_SCHEMA_READY", migrationId: "0023_v150_one_shot_publication_authorization.sql", latestMigrationId, latestSourceMigrationId: latestMigrationId, latestPackagedMigrationId: latestMigrationId, productionSchemaVersion, schemaUpToDate, authTablePresent });
 }
 
 export async function backupDatabase(db: Database.Database, backupPath: string): Promise<void> {
