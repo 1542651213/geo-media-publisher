@@ -1,4 +1,4 @@
-import { isAutomationAdapter, OneShotPublicationGuard, withUserInitiatedActionSettings, type AdapterRegistry, type BrowserExecutionMode, type BrowserPublishAttemptContext, type OneShotPublicationAuthorization, type UserInitiatedAction } from "@publisher/adapters-core";
+import { isAutomationAdapter, OneShotPublicationGuard, withUserInitiatedActionSettings, type AdapterRegistry, type AutomationAdapter, type BrowserExecutionMode, type BrowserPublishAttemptContext, type OneShotPublicationAuthorization, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
 import { canReuseArticle, decideFailure, evaluateContentQualityGate, validatePlatformArticle, type Account, type AccountContext, type AdapterManifest, type ErrorCode, type PlatformCapability, type PublishArticleInput, type PublishJob, type PublishMode, type PublishResult, type PublishVideoInput, type XhsContextIdentityAttestation } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
@@ -161,6 +161,29 @@ export class PublisherService {
     return preferenceAllowsBackground && platformAllowsBackground ? "BACKGROUND" : "VISIBLE";
   }
 
+  private async runAdapterBrowserOperation<T>(
+    adapter: AutomationAdapter,
+    ctx: AccountContext,
+    operation: string,
+    task: () => Promise<T>,
+    retainSession: boolean
+  ): Promise<T> {
+    const scopedLifecycle = !retainSession && typeof adapter.runWithBrowserSession === "function";
+    try {
+      return scopedLifecycle ? await adapter.runWithBrowserSession!(ctx, operation, task) : await task();
+    } catch (error) {
+      this.logger.warn("PUBLISHER", "BROWSER_SESSION_OPERATION_FAILED", "浏览器任务生命周期执行失败", {
+        operation,
+        platformKey: ctx.platformKey,
+        accountId: ctx.accountId,
+        errorCode: errorCode(error)
+      });
+      throw error;
+    } finally {
+      if (!retainSession && !scopedLifecycle) await adapter.releaseOperationSession?.(ctx).catch(() => undefined);
+    }
+  }
+
   async checkAccountLogin(accountId: string, action?: UserInitiatedAction, _browserExecutionMode?: BrowserExecutionMode): Promise<void> {
     const account = this.repository.listAccounts().find((item) => item.id === accountId);
     if (!account || !account.enabled) return;
@@ -193,17 +216,17 @@ export class PublisherService {
     if (!isAutomationAdapter(adapter)) throw Object.assign(new Error("当前平台没有浏览器辅助发布能力"), { code: "PERMISSION_DENIED" });
     const effectiveBrowserExecutionMode = this.resolveBrowserExecutionMode(job.platformKey, browserExecutionMode, job.contentKind ?? "article");
     const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: false, manualConfirmationRequired: true }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
-    const login = await withTimeout(adapter.checkLogin(ctx), this.options.loginCheckTimeoutMs ?? 30_000, "Platform login check");
-    if (login !== "logged_in") throw Object.assign(new Error("知乎账号 Session 未通过登录检查，请先完成正常登录验证"), { code: login === "expired" || login === "logged_out" ? "LOGIN_EXPIRED" : "USER_ACTION_REQUIRED" });
-    const validation = await adapter.validateArticle(input);
-    if (!validation.valid) throw Object.assign(new Error(validation.errors.join("；")), { code: "CONTENT_REJECTED" });
-    if (selectedImage) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_STARTED", "开始向平台编辑器上传任务主图", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
-    const prepared = await withTimeout(adapter.preparePublish(ctx, input), this.options.operationTimeoutMs ?? 120_000, "Platform assisted prepare").catch((error: unknown) => {
-      if (errorCode(error) === "UPLOAD_FAILED") this.logger.error("PUBLISHER", "IMAGE_UPLOAD_FAILED", error instanceof Error ? error.message : "图片上传失败", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage?.id ?? null });
-      throw error;
-    }).finally(async () => {
-      await adapter.releaseOperationSession?.(ctx).catch(() => undefined);
-    });
+    const prepared = await this.runAdapterBrowserOperation(adapter, ctx, "PublisherService.prepareArticle", async () => {
+      const login = await withTimeout(adapter.checkLogin(ctx), this.options.loginCheckTimeoutMs ?? 30_000, "Platform login check");
+      if (login !== "logged_in") throw Object.assign(new Error("知乎账号 Session 未通过登录检查，请先完成正常登录验证"), { code: login === "expired" || login === "logged_out" ? "LOGIN_EXPIRED" : "USER_ACTION_REQUIRED" });
+      const validation = await adapter.validateArticle(input);
+      if (!validation.valid) throw Object.assign(new Error(validation.errors.join("；")), { code: "CONTENT_REJECTED" });
+      if (selectedImage) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_STARTED", "开始向平台编辑器上传任务主图", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
+      return withTimeout(adapter.preparePublish(ctx, input), this.options.operationTimeoutMs ?? 120_000, "Platform assisted prepare").catch((error: unknown) => {
+        if (errorCode(error) === "UPLOAD_FAILED") this.logger.error("PUBLISHER", "IMAGE_UPLOAD_FAILED", error instanceof Error ? error.message : "图片上传失败", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage?.id ?? null });
+        throw error;
+      });
+    }, false);
     if (selectedImage && prepared.response.imageUploaded !== true) {
       this.logger.error("PUBLISHER", "IMAGE_UPLOAD_FAILED", "平台编辑器未返回图片 DOM 上传证据", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
       throw Object.assign(new Error("平台编辑器未返回图片上传完成证据，不能声明图片已插入"), { code: "UPLOAD_FAILED" });
@@ -282,12 +305,56 @@ export class PublisherService {
       if (preparedRecord?.response.OWNER_FINAL_SUBMIT_AUTHORIZATION === "OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH" && !oneShotAuthorization) throw Object.assign(new Error("ONE_SHOT_AUTHORIZATION_REQUIRED"), { code: "USER_ACTION_REQUIRED" });
       const usePlatformFinalSubmit = !job.dryRun && typeof adapter.finalSubmit === "function" && preparedRecord?.status === "Prepared";
       platformFinalSubmitPath = usePlatformFinalSubmit;
+      let result: PublishResult;
+      if (!usePlatformFinalSubmit && executionMode === "STANDARD" && isAutomationAdapter(adapter)) {
+        result = await this.runAdapterBrowserOperation(adapter, ctx, "PublisherService.executeJob", async () => {
+          const login = await withTimeout(adapter.checkLogin(ctx), this.options.loginCheckTimeoutMs ?? 30_000, "Platform login check");
+          if (login === "expired" || login === "logged_out") throw Object.assign(new Error("Account login expired"), { code: "LOGIN_EXPIRED" });
+          if (login !== "logged_in") throw Object.assign(new Error("Platform verification requires user action"), { code: "USER_ACTION_REQUIRED" });
+          if (job.contentKind === "video") {
+            if (!adapter.publishVideo) throw Object.assign(new Error("该平台 Adapter 尚未实现视频发布"), { code: "PERMISSION_DENIED" });
+            const asset = job.videoAssetId ? this.repository.getVideoAsset(job.videoAssetId) : null;
+            if (!asset) throw Object.assign(new Error("视频素材不存在"), { code: "CONTENT_REJECTED" });
+            const payload = this.repository.getPublishPayload(job.id);
+            const input: PublishVideoInput = {
+              title: typeof payload.title === "string" && payload.title.trim() ? payload.title : article.title,
+              description: typeof payload.description === "string" ? payload.description : article.body,
+              tags: Array.isArray(payload.tags) ? payload.tags.filter((item): item is string => typeof item === "string") : article.tags,
+              videoPath: asset.localPath,
+              ...(typeof payload.coverPath === "string" && payload.coverPath ? { coverPath: payload.coverPath } : {})
+            };
+            if (adapter.validateVideo) {
+              const validation = await adapter.validateVideo(input);
+              if (!validation.valid) throw Object.assign(new Error(validation.errors.join("; ")), { code: "CONTENT_REJECTED" });
+            }
+            if (!job.dryRun) submissionIntentId = this.repository.prepareSubmissionIntent(job.id).id;
+            return withTimeout(adapter.publishVideo(ctx, input), this.options.operationTimeoutMs ?? 120_000, "Platform video publish");
+          }
+          const input = articleInput;
+          if (!input) throw new Error("Article input is missing for an article publish job");
+          const selectedImage = job.selectedImageAssetId ? this.repository.getImageAsset(job.selectedImageAssetId) : null;
+          if (adapter.validateArticle) {
+            const validation = await adapter.validateArticle(input);
+            if (!validation.valid) throw Object.assign(new Error(validation.errors.join("; ")), { code: "CONTENT_REJECTED" });
+          }
+          const profile = this.repository.getPlatformProfile(job.platformKey);
+          if (profile) {
+            const validation = validatePlatformArticle(input, profile);
+            if (!validation.valid) throw Object.assign(new Error(validation.errors.join("; ")), { code: "CONTENT_REJECTED" });
+          }
+          if (!job.dryRun) submissionIntentId = this.repository.prepareSubmissionIntent(job.id).id;
+          if (selectedImage) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_STARTED", "开始向平台编辑器上传任务主图", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
+          const published = await withTimeout(adapter.publishArticle(ctx, input), this.options.operationTimeoutMs ?? 120_000, "Platform article publish");
+          if (selectedImage && published.response.imageUploaded !== true) throw Object.assign(new Error("平台编辑器未返回图片上传完成证据，不能声明图片已插入"), { code: "UPLOAD_FAILED" });
+          if (selectedImage) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_PASSED", "平台编辑器已返回图片 DOM 上传证据", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
+          return published;
+        }, false);
+      } else {
       if (!usePlatformFinalSubmit) {
         const login = await withTimeout(adapter.checkLogin(ctx), this.options.loginCheckTimeoutMs ?? 30_000, "Platform login check");
         if (login === "expired" || login === "logged_out") throw Object.assign(new Error("Account login expired"), { code: "LOGIN_EXPIRED" });
         if (login !== "logged_in") throw Object.assign(new Error("Platform verification requires user action"), { code: "USER_ACTION_REQUIRED" });
       }
-      let result: PublishResult;
       if (job.contentKind === "video") {
         if (!adapter.publishVideo) throw Object.assign(new Error("该平台 Adapter 尚未实现视频发布"), { code: "PERMISSION_DENIED" });
         const asset = job.videoAssetId ? this.repository.getVideoAsset(job.videoAssetId) : null;
@@ -365,6 +432,7 @@ export class PublisherService {
         }
         if (selectedImage && this.isBrowserAutomationPlatform(job.platformKey, job.contentKind ?? "article") && result.response.imageUploaded !== true) throw Object.assign(new Error("平台编辑器未返回图片上传完成证据，不能声明图片已插入"), { code: "UPLOAD_FAILED" });
         if (selectedImage && result.response.imageUploaded === true) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_PASSED", "平台编辑器已返回图片 DOM 上传证据", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
+      }
       }
       if (!result.success) throw Object.assign(new Error("Platform rejected publish request"), { code: "UNKNOWN" });
       result = {

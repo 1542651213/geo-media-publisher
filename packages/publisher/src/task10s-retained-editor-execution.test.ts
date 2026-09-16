@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AdapterRegistry, defaultCapabilities, type AutomationPrepareResult, type BrowserPublishAttemptContext, type PlatformAdapter } from "@publisher/adapters-core";
 import { openDatabase } from "@publisher/db";
 import { OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH, ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, type AccountContext, type AdapterManifest, type LoginSession, type LoginStatus, type OneShotPublicationAuthorization, type PublishArticleInput, type PublishResult, type PublishStatusResult, type ValidationResult } from "@publisher/domain";
@@ -18,6 +18,7 @@ class RetainedEditorAdapter implements PlatformAdapter {
   guardSeen: BrowserPublishAttemptContext["oneShotPublicationGuard"];
   retainedEditorMarkerSeen: boolean | undefined;
   finalSubmitCount = 0;
+  readonly runWithBrowserSession = vi.fn(async <T>(_ctx: AccountContext, _operation: string, task: () => Promise<T>): Promise<T> => task());
 
   getCapabilities() { return { ...defaultCapabilities, imagePost: true, coverImage: false }; }
   getCredentialSchema() { return []; }
@@ -76,6 +77,7 @@ describe("Task10S retained-editor transaction mode", () => {
     expect(adapter.retainedEditorMarkerSeen).toBe(true);
     expect(adapter.guardSeen?.authorization.state).toBe("AUTHORIZED_UNUSED");
     expect(adapter.finalSubmitCount).toBe(1);
+    expect(adapter.runWithBrowserSession).not.toHaveBeenCalled();
     expect(database.repository.getSubmissionIntentByJob(jobId)?.finalSubmitCount).toBe(0);
     expect(database.repository.getOneShotPublicationAuthorization(authorization.operationId)?.state).toBe("AUTHORIZED_UNUSED");
   });
