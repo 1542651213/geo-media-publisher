@@ -13,6 +13,7 @@ export type XiaohongshuEditorNormalizationReason =
   | "CR_TO_LF"
   | "NBSP_TO_SPACE"
   | "NARROW_NBSP_TO_SPACE"
+  | "FULLWIDTH_VERTICAL_BAR_TO_ASCII"
   | "ZERO_WIDTH_REMOVED"
   | "BOM_REMOVED"
   | "TAB_TO_SPACE"
@@ -88,6 +89,7 @@ function normalizeWithReasons(value: string): { value: string; reasons: Xiaohong
   if (/(?<!\r)\r(?!\n)|^\r/gu.test(normalized)) reasons.add("CR_TO_LF");
   if (/\u00a0/gu.test(normalized)) reasons.add("NBSP_TO_SPACE");
   if (/\u202f/gu.test(normalized)) reasons.add("NARROW_NBSP_TO_SPACE");
+  if (/｜/gu.test(normalized)) reasons.add("FULLWIDTH_VERTICAL_BAR_TO_ASCII");
   if (/[\u200b\u2060]/gu.test(normalized)) reasons.add("ZERO_WIDTH_REMOVED");
   if (/\ufeff/gu.test(normalized)) reasons.add("BOM_REMOVED");
   if (/\t/gu.test(normalized)) reasons.add("TAB_TO_SPACE");
@@ -95,6 +97,10 @@ function normalizeWithReasons(value: string): { value: string; reasons: Xiaohong
   normalized = normalized
     .replace(/\r\n?/gu, "\n")
     .replace(/\u00a0|\u202f/gu, " ")
+    // XHS may serialize the title separator as a fullwidth vertical bar;
+    // keep this compatibility conversion explicit rather than applying NFKC
+    // to unrelated CJK punctuation.
+    .replace(/｜/gu, "|")
     // These are formatting artifacts, unlike ZWJ/ZWNJ which are semantic.
     .replace(/[\u200b\u2060\ufeff]/gu, "")
     .split("\n")

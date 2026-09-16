@@ -76,6 +76,13 @@ describe("Xiaohongshu editor body readback", () => {
     expect(spacing.status).toBe("FAIL");
   });
 
+  it("records the explicit fullwidth vertical-bar compatibility normalization", () => {
+    const result = classifyXiaohongshuEditorReadback("标题|请忽略", "标题｜请忽略");
+
+    expect(result.status).toBe("PASS_WITH_NORMALIZATION");
+    expect(result.normalizationReasons).toContain("FULLWIDTH_VERTICAL_BAR_TO_ASCII");
+  });
+
   it("handles empty and long bodies without unbounded evidence", () => {
     expect(classifyXiaohongshuEditorReadback("", "").status).toBe("PASS");
     const expected = "x".repeat(10_000);
