@@ -14,6 +14,7 @@ import { runDeepSeekBenchmarkMode } from "./deepseek-benchmark-mode";
 import { createProcessDiagnostics } from "./process-diagnostics";
 import { recordAppStartup } from "./runtime-observability";
 import type { PlatformSelfTestService } from "./platform-self-test";
+import { ApplicationShutdownCoordinator } from "./application-shutdown";
 import { buildSecondInstanceDispatchTrace, createFixedDiagnosticRunner, ESTABLISH_XHS_CONTEXT_IDENTITY_ATTESTATION, INSPECT_XHS_CLOSED_SHADOW_FINAL_SUBMIT, INSPECT_XHS_CONTEXT_PAGES, INSPECT_XHS_FILE_INPUT_STATE, INSPECT_XHS_FINAL_SUBMIT_DOM, INSPECT_XHS_GLOBAL_EXACT_PUBLISH_DOM, INSPECT_XHS_POST_UPLOAD_RECONCILIATION, INSPECT_XHS_POST_UPLOAD_TERMINAL_READINESS, INSPECT_XHS_PUBLISH_ENTRY_DOM, parseDiagnosticActionWithTrace, RUN_XHS_TASK10S_ATTEMPT3_DISPATCH_DRY_RUN, RUN_XHS_TASK10S_ARM_RUN, RUN_XHS_TASK10S_COMPLETE_RETAINED_EDITOR, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT3, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT4, RUN_XHS_TASK10S_CONTROLLED_UPLOAD_ATTEMPT5, RUN_XHS_TASK10S_ENSURE_IDENTITY_PAGE, RUN_XHS_TASK10S_FRESH_PUBLISH_FLOW, RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY, type DiagnosticAction, type FixedDiagnosticInvocationContext, type Task10sAttempt3DispatchTrace, PROBE_XHS_CANONICAL_PAGE } from "./diagnostic-trigger";
 import type { XhsIdentityPageEnsureServiceResult } from "./xhs-identity";
 
@@ -23,8 +24,14 @@ processDiagnostics.installProcessHandlers();
 
 let scheduler: PersistentScheduler | null = null;
 const ownedBrowserSessionClosers = new Set<() => Promise<void>>();
-let shutdownStarted = false;
-let shutdownReady = false;
+let databaseCloser: (() => void | Promise<void>) | null = null;
+const shutdownCoordinator = new ApplicationShutdownCoordinator({
+  stopSchedulers: () => { scheduler?.stop(); },
+  closeBrowserSessions: async () => { await Promise.allSettled([...ownedBrowserSessionClosers].map((close) => close())); },
+  closeDatabase: async () => { await databaseCloser?.(); },
+  onEvent: (event) => processDiagnostics.record("APP_SHUTDOWN_TIMELINE", { phase: event }),
+  onError: (stage, error) => processDiagnostics.record("APP_SHUTDOWN_STAGE_FAILED", { phase: stage, error })
+});
 const initialDiagnosticInvocation = parseDiagnosticActionWithTrace(process.argv);
 const initialDiagnosticAction = initialDiagnosticInvocation.action;
 const primaryInstanceLockAcquired = app.requestSingleInstanceLock(initialDiagnosticAction ? { action: initialDiagnosticAction } : undefined);
@@ -296,6 +303,12 @@ async function createWindow(): Promise<void> {
   const appLogPath = join(dataDirectory, "logs", "app.log");
   const logger = createFileLogger(appLogPath);
   const database = openDatabase(databasePath, migrationsDir, (event) => logger.info("DATABASE", event.code, "数据库迁移生命周期事件", { migrationId: event.migrationId, discoveredMigrationCount: event.discoveredMigrationCount, appliedMigrationCount: event.appliedMigrationCount, latestMigrationId: event.latestMigrationId, productionSchemaVersion: event.productionSchemaVersion, authTablePresent: event.authTablePresent }));
+  let databaseClosed = false;
+  databaseCloser = () => {
+    if (databaseClosed) return;
+    databaseClosed = true;
+    database.db.close();
+  };
   const isDevelopment = isDevelopmentEnvironment(app.isPackaged);
   if (isDevelopment) database.repository.seedDevelopment(csvPath);
   else database.repository.seedPlatformCatalog(csvPath);
@@ -817,6 +830,8 @@ async function createWindow(): Promise<void> {
     backgroundColor: "#f4f6f9",
     webPreferences: { preload: join(__dirname, "../preload/preload.js"), contextIsolation: true, nodeIntegration: false, sandbox: true }
   });
+  window.on("close", () => shutdownCoordinator.record("WINDOW_CLOSE_REQUESTED"));
+  window.on("closed", () => shutdownCoordinator.record("WINDOW_DESTROYED"));
   if (process.env.ELECTRON_RENDERER_URL) await window.loadURL(process.env.ELECTRON_RENDERER_URL);
   else await window.loadFile(join(__dirname, "../renderer/index.html"));
 }
@@ -883,16 +898,7 @@ if (!primaryInstanceLockAcquired) {
   });
 }
 
-app.on("before-quit", (event) => {
-  scheduler?.stop();
-  if (shutdownReady) return;
-  event.preventDefault();
-  if (shutdownStarted) return;
-  shutdownStarted = true;
-  void Promise.allSettled([...ownedBrowserSessionClosers].map((close) => close())).finally(() => {
-    shutdownReady = true;
-    app.quit();
-  });
-});
+app.on("before-quit", (event) => shutdownCoordinator.handleBeforeQuit(event, () => app.quit()));
 
-app.on("window-all-closed", () => { scheduler?.stop(); if (process.platform !== "darwin") app.quit(); });
+app.on("window-all-closed", () => { shutdownCoordinator.record("WINDOW_DESTROYED"); if (process.platform !== "darwin") app.quit(); });
+app.on("will-quit", () => shutdownCoordinator.markMainExit());
