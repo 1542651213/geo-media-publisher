@@ -183,6 +183,7 @@ export class XhsIdentityService {
       failureCode: probe.failureCode,
       domLocationEvaluateStatus: probe.domLocationEvaluateStatus,
       pageUrlConsistency: probe.pageUrlConsistency,
+      sessionExists: probe.sessionExists ?? Boolean(probe.canonicalContextId),
       canonicalContextId: probe.canonicalContextId,
       canonicalPageId: probe.canonicalPageId,
       probedContextId: probe.probedContextId,

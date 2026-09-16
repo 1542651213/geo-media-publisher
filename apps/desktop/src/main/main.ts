@@ -74,7 +74,7 @@ function buildTask10wLiveProbeEvidence(input: {
   expectedCreatorIdProvenance: string;
 }): Record<string, unknown> {
   const { probe } = input;
-  const browserSessionExists = Boolean(probe.canonicalContextId || probe.canonicalPageId);
+  const browserSessionExists = probe.sessionExists ?? Boolean(probe.canonicalContextId || probe.canonicalPageId);
   const canonicalContextExists = Boolean(probe.canonicalContextId);
   const canonicalPageExists = Boolean(probe.canonicalPageId) && !probe.pageClosed;
   const contextCorrelation = !canonicalContextExists && !probe.probedContextId ? "NOT_RUN" : probe.pageContextMatchesSession ? "PASS" : "FAIL";

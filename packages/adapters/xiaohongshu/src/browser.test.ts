@@ -1553,6 +1553,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
 
     expect(result).toMatchObject({
       probeStatus: "PASS",
+      sessionExists: true,
       canonicalContextId: "context-debug-id",
       canonicalPageId: "canonical-page-debug-id",
       probedContextId: "context-debug-id",

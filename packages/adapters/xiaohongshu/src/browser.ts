@@ -513,6 +513,8 @@ export interface XiaohongshuCanonicalPageRuntimeProbe {
   failureErrorClass: string | null;
   canonicalContextId: string | null;
   canonicalPageId: string | null;
+  /** True when the probe resolved an account-owned live BrowserSession. */
+  sessionExists?: boolean;
   probedContextId: string | null;
   probedPageId: string | null;
   pageContextMatchesSession: boolean;
@@ -1551,6 +1553,7 @@ function emptyCanonicalPageRuntimeProbe(overrides: Partial<XiaohongshuCanonicalP
     failureErrorClass: null,
     canonicalContextId: null,
     canonicalPageId: null,
+    sessionExists: false,
     probedContextId: null,
     probedPageId: null,
     pageContextMatchesSession: false,
@@ -1871,6 +1874,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       const base = {
         canonicalContextId,
         canonicalPageId,
+        sessionExists: true,
         probedContextId: canonicalContextId,
         probedPageId: canonicalPageId,
         pageContextMatchesSession,
