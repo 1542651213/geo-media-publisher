@@ -2257,6 +2257,13 @@ export class AppRepository {
         if (!sameIdentity) throw new Error("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH");
         return { authorization: existing, created: false };
       }
+      const conflictingOperation = this.findActiveOneShotAuthorizationConflict({
+        platformKey: authorization.platformKey,
+        accountId: authorization.accountId,
+        mode: authorization.mode,
+        excludedOperationId: testRunId
+      });
+      if (conflictingOperation) throw new Error("ONE_SHOT_AUTHORIZATION_SCOPE_CONFLICT");
       const timestamp = now();
       const update = this.db.prepare("UPDATE platform_self_test_runs SET publish_confirmed_at=COALESCE(publish_confirmed_at,?),updated_at=? WHERE test_run_id=? AND requested_level='L5_PUBLISH'").run(timestamp, timestamp, testRunId);
       if (update.changes === 0) throw new Error("当前运行不是可确认的真实发布测试");
@@ -2647,11 +2654,13 @@ export class AppRepository {
   listReusableOneShotPublicationAuthorizations(input: { platformKey: "xiaohongshu"; accountId: string; mode: "ONE_SHOT_REAL_PUBLISH_ACCEPTANCE" }): OneShotPublicationAuthorization[] {
     const rows = this.db.prepare(`SELECT auth.* FROM one_shot_publication_authorizations auth
       INNER JOIN platform_self_test_runs run ON run.test_run_id=auth.operation_id
+      LEFT JOIN publish_jobs job ON job.id=run.publish_job_id
       WHERE auth.platform_key=? AND auth.account_id=? AND auth.mode=? AND auth.state='AUTHORIZED_UNUSED'
         AND auth.publication_transaction_count=0 AND auth.publication_commit_action_count=0
         AND auth.final_submit_attempt_count=0 AND auth.final_submit_retry_count=0
         AND auth.final_submit_action_started=0 AND auth.final_submit_action_completed=0
-        AND run.platform_key=? AND run.platform_account_id=? AND run.publish_job_id IS NULL
+        AND run.platform_key=? AND run.platform_account_id=?
+        AND (run.publish_job_id IS NULL OR job.status IS NULL OR job.status<>'Failed')
       ORDER BY auth.created_at DESC, auth.operation_id DESC`).all(
       input.platformKey, input.accountId, input.mode, input.platformKey, input.accountId
     ) as Row[];
@@ -2679,6 +2688,15 @@ export class AppRepository {
   }
 
   createOneShotPublicationAuthorization(authorization: OneShotPublicationAuthorization): OneShotPublicationAuthorization {
+    if (authorization.state === "AUTHORIZED_UNUSED") {
+      const conflictingOperation = this.findActiveOneShotAuthorizationConflict({
+        platformKey: authorization.platformKey,
+        accountId: authorization.accountId,
+        mode: authorization.mode,
+        excludedOperationId: authorization.operationId
+      });
+      if (conflictingOperation) throw new Error("ONE_SHOT_AUTHORIZATION_SCOPE_CONFLICT");
+    }
     const timestamp = now();
     this.db.prepare(`INSERT INTO one_shot_publication_authorizations (
       id,authorization,platform_key,account_id,operation_id,mode,state,publication_transaction_count,
@@ -2725,6 +2743,23 @@ export class AppRepository {
       AND publication_transaction_count=0 AND publication_commit_action_count=0
       AND final_submit_attempt_count=0 AND final_submit_retry_count=0`).run(timestamp, timestamp, operationId, accountId, platformKey);
     return result.changes === 1;
+  }
+
+  private findActiveOneShotAuthorizationConflict(input: { platformKey: string; accountId: string; mode: string; excludedOperationId: string }): string | null {
+    const row = this.db.prepare(`SELECT auth.operation_id FROM one_shot_publication_authorizations auth
+      INNER JOIN platform_self_test_runs run ON run.test_run_id=auth.operation_id
+      LEFT JOIN publish_jobs job ON job.id=run.publish_job_id
+      WHERE auth.platform_key=? AND auth.account_id=? AND auth.mode=? AND auth.operation_id<>?
+        AND auth.authorization='OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH'
+        AND auth.state='AUTHORIZED_UNUSED'
+        AND auth.publication_transaction_count=0 AND auth.publication_commit_action_count=0
+        AND auth.final_submit_attempt_count=0 AND auth.final_submit_retry_count=0
+        AND auth.final_submit_action_started=0 AND auth.final_submit_action_completed=0
+        AND (run.publish_job_id IS NULL OR job.status IS NULL OR job.status<>'Failed')
+      ORDER BY auth.created_at DESC, auth.operation_id DESC LIMIT 1`).get(
+      input.platformKey, input.accountId, input.mode, input.excludedOperationId
+    ) as { operation_id?: unknown } | undefined;
+    return typeof row?.operation_id === "string" ? row.operation_id : null;
   }
 
   /**

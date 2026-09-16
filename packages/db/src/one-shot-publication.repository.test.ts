@@ -69,6 +69,17 @@ describe("Task10S authorization persistence", () => {
     expect(database.db.prepare("SELECT COUNT(*) AS count FROM one_shot_publication_authorizations").get()).toMatchObject({ count: 0 });
   });
 
+  it("rejects a second active authorization in the same account and mode scope", () => {
+    const { database, authorization, run } = fixture();
+    database.repository.confirmPlatformSelfTestOneShotAtomically(run.testRunId, authorization);
+    const secondRun = database.repository.createPlatformSelfTestRun({ platformAccountId: run.platformAccountId, requestedLevel: "L5_PUBLISH" });
+    const secondAuthorization = { ...authorization, operationId: secondRun.testRunId };
+
+    expect(() => database.repository.confirmPlatformSelfTestOneShotAtomically(secondRun.testRunId, secondAuthorization)).toThrow("ONE_SHOT_AUTHORIZATION_SCOPE_CONFLICT");
+    expect(database.db.prepare("SELECT COUNT(*) AS count FROM one_shot_publication_authorizations WHERE account_id=? AND state='AUTHORIZED_UNUSED'").get(authorization.accountId)).toMatchObject({ count: 1 });
+    expect(database.repository.getPlatformSelfTestRun(secondRun.testRunId)?.publishConfirmedAt).toBeNull();
+  });
+
   it("rejects an operation identity that is not bound to the confirmation run", () => {
     const { database, authorization, run } = fixture();
 
