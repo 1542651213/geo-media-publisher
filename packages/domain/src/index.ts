@@ -10,4 +10,5 @@ export * from "./brand-facts";
 export * from "./brand-content-intent";
 export * from "./content-quality";
 export * from "./platform-content-rules";
+export * from "./content-quality-gate";
 export type * from "./quality-types";
