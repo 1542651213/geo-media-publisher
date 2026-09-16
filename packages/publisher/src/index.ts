@@ -1,6 +1,6 @@
 import { isAutomationAdapter, OneShotPublicationGuard, withUserInitiatedActionSettings, type AdapterRegistry, type BrowserExecutionMode, type BrowserPublishAttemptContext, type OneShotPublicationAuthorization, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
-import { canReuseArticle, decideFailure, validatePlatformArticle, type Account, type AccountContext, type AdapterManifest, type ErrorCode, type PlatformCapability, type PublishJob, type PublishMode, type PublishResult, type PublishVideoInput, type XhsContextIdentityAttestation } from "@publisher/domain";
+import { canReuseArticle, decideFailure, evaluateContentQualityGate, validatePlatformArticle, type Account, type AccountContext, type AdapterManifest, type ErrorCode, type PlatformCapability, type PublishArticleInput, type PublishJob, type PublishMode, type PublishResult, type PublishVideoInput, type XhsContextIdentityAttestation } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
 
 export interface PublishExecutionResult { job: PublishJob; message: string; }
@@ -185,15 +185,16 @@ export class PublisherService {
     const article = this.repository.getArticle(job.articleId);
     if (!account || !article) throw new Error("关联账号或文章不存在");
     this.repository.assertArticlePublishAllowed(article.id);
+    const variant = job.articleVariantId ? this.repository.getArticleVariant(job.articleVariantId) : null;
+    const selectedImage = job.selectedImageAssetId ? this.repository.getImageAsset(job.selectedImageAssetId) : null;
+    const input: PublishArticleInput = { articleId: article.id, title: variant?.title ?? article.title, body: variant?.body ?? article.body, summary: variant?.summary ?? article.summary, tags: article.tags, ...(selectedImage ? { images: [selectedImage.filePath] } : {}) };
+    this.assertContentQualityGate(job, input);
     const adapter = this.adapters.getForContent(job.platformKey, job.contentKind ?? "article");
     if (!isAutomationAdapter(adapter)) throw Object.assign(new Error("当前平台没有浏览器辅助发布能力"), { code: "PERMISSION_DENIED" });
     const effectiveBrowserExecutionMode = this.resolveBrowserExecutionMode(job.platformKey, browserExecutionMode, job.contentKind ?? "article");
     const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: false, manualConfirmationRequired: true }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
     const login = await withTimeout(adapter.checkLogin(ctx), this.options.loginCheckTimeoutMs ?? 30_000, "Platform login check");
     if (login !== "logged_in") throw Object.assign(new Error("知乎账号 Session 未通过登录检查，请先完成正常登录验证"), { code: login === "expired" || login === "logged_out" ? "LOGIN_EXPIRED" : "USER_ACTION_REQUIRED" });
-    const variant = job.articleVariantId ? this.repository.getArticleVariant(job.articleVariantId) : null;
-    const selectedImage = job.selectedImageAssetId ? this.repository.getImageAsset(job.selectedImageAssetId) : null;
-    const input = { articleId: article.id, title: variant?.title ?? article.title, body: variant?.body ?? article.body, summary: variant?.summary ?? article.summary, tags: article.tags, ...(selectedImage ? { images: [selectedImage.filePath] } : {}) };
     const validation = await adapter.validateArticle(input);
     if (!validation.valid) throw Object.assign(new Error(validation.errors.join("；")), { code: "CONTENT_REJECTED" });
     if (selectedImage) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_STARTED", "开始向平台编辑器上传任务主图", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
@@ -275,6 +276,8 @@ export class PublisherService {
         const attestation = this.options.resolveRuntimeIdentityAttestation?.(account.id) ?? null;
         if (attestation) ctx.runtimeIdentityAttestation = attestation;
       }
+      const articleInput = job.contentKind === "video" ? null : this.resolveArticleInput(job, article);
+      if (articleInput && executionMode === "STANDARD") this.assertContentQualityGate(job, articleInput);
       const preparedRecord = this.repository.getPublishRecordByJob(job.id);
       if (preparedRecord?.response.OWNER_FINAL_SUBMIT_AUTHORIZATION === "OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH" && !oneShotAuthorization) throw Object.assign(new Error("ONE_SHOT_AUTHORIZATION_REQUIRED"), { code: "USER_ACTION_REQUIRED" });
       const usePlatformFinalSubmit = !job.dryRun && typeof adapter.finalSubmit === "function" && preparedRecord?.status === "Prepared";
@@ -306,11 +309,9 @@ export class PublisherService {
           if (isAutomationAdapter(adapter)) await adapter.releaseOperationSession?.(ctx).catch(() => undefined);
         });
       } else {
-        const variant = job.articleVariantId ? this.repository.getArticleVariant(job.articleVariantId) : null;
-        const cover = (variant?.coverAssetId ?? article.coverAssetId) ? this.repository.getMediaAsset((variant?.coverAssetId ?? article.coverAssetId) as string) : null;
+        const input = articleInput;
+        if (!input) throw new Error("Article input is missing for an article publish job");
         const selectedImage = job.selectedImageAssetId ? this.repository.getImageAsset(job.selectedImageAssetId) : null;
-        if (job.selectedImageAssetId && !selectedImage) throw Object.assign(new Error("任务所选图片不存在，已停止发布"), { code: "UPLOAD_FAILED" });
-        const input = { articleId: article.id, title: variant?.title ?? article.title, body: variant?.body ?? article.body, summary: variant?.summary ?? article.summary, tags: article.tags, ...(cover ? { coverPath: cover.filePath } : {}), ...(selectedImage ? { images: [selectedImage.filePath] } : {}) };
         if (adapter.validateArticle) {
           const validation = await adapter.validateArticle(input);
           if (!validation.valid) throw Object.assign(new Error(validation.errors.join("; ")), { code: "CONTENT_REJECTED" });
@@ -408,6 +409,21 @@ export class PublisherService {
       }
       return this.fail(job, errorCode(error), error instanceof Error ? error.message : "Unknown publish error");
     }
+  }
+
+  private resolveArticleInput(job: PublishJob, article: NonNullable<ReturnType<AppRepository["getArticle"]>>): PublishArticleInput {
+    const variant = job.articleVariantId ? this.repository.getArticleVariant(job.articleVariantId) : null;
+    const cover = (variant?.coverAssetId ?? article.coverAssetId) ? this.repository.getMediaAsset((variant?.coverAssetId ?? article.coverAssetId) as string) : null;
+    const selectedImage = job.selectedImageAssetId ? this.repository.getImageAsset(job.selectedImageAssetId) : null;
+    if (job.selectedImageAssetId && !selectedImage) throw Object.assign(new Error("任务所选图片不存在，已停止发布"), { code: "UPLOAD_FAILED" });
+    return { articleId: article.id, title: variant?.title ?? article.title, body: variant?.body ?? article.body, summary: variant?.summary ?? article.summary, tags: article.tags, ...(cover ? { coverPath: cover.filePath } : {}), ...(selectedImage ? { images: [selectedImage.filePath] } : {}) };
+  }
+
+  private assertContentQualityGate(job: PublishJob, input: PublishArticleInput): void {
+    const contentGate = evaluateContentQualityGate({ title: input.title, body: input.body, imageCount: input.images?.length ?? 0 });
+    if (contentGate.passed) return;
+    this.logger.warn("PUBLISHER", "CONTENT_GATE_FAILED", "发布前内容质量门禁未通过", { jobId: job.id, platformKey: job.platformKey, contentGate });
+    throw Object.assign(new Error(`Content quality gate rejected publish: ${contentGate.failureCodes.join(", ")}`), { code: "CONTENT_REJECTED", contentGate });
   }
 
   private repairSubmittedJob(job: PublishJob): PublishExecutionResult {
