@@ -983,3 +983,139 @@ describe("BrowserSessionManager credential boundary", () => {
     expect(activeManager.getSessionSnapshot(identity)).toMatchObject({ sessionExists: true, canonicalPageExists: true, canonicalPageClosed: true, canonicalPageContextMatchesSession: false, contextPageCount: 1 });
   });
 });
+
+describe("scoped browser lifecycle", () => {
+  const identity = { platformKey: "test", accountId: "scoped-account" };
+  const stored = JSON.stringify({ cookies: [], origins: [] });
+  function fixture() {
+    const credentials = new MemoryCredentialStore();
+    credentials.set("session:test:scoped-account", stored);
+    const events: BrowserSessionLifecycleEvent[] = [];
+    let disconnected: (() => void) | undefined;
+    let contextClosed: (() => void) | undefined;
+    let connected = true;
+    const page = { isClosed: () => false };
+    const context = {
+      setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => page), pages: () => [page], close: vi.fn(async () => undefined),
+      on: (event: string, listener: () => void) => { if (event === "close") contextClosed = listener; }, off: vi.fn()
+    };
+    const browser = {
+      newContext: vi.fn(async () => context), close: vi.fn(async () => undefined), isConnected: () => connected,
+      on: (event: string, listener: () => void) => { if (event === "disconnected") disconnected = listener; },
+      off: vi.fn()
+    };
+    const launchBrowser = vi.fn(async () => browser as unknown as Browser);
+    const manager = new BrowserSessionManager(credentials, { launchBrowser, onSessionLifecycle: (event) => events.push(event) });
+    return { manager, credentials, browser, context, launchBrowser, events, crash: () => { connected = false; disconnected?.(); }, closeContext: () => contextClosed?.(), reconnect: () => { connected = true; } };
+  }
+
+  it("starts CLOSED without launching and scopes open, running and cleanup states", async () => {
+    const f = fixture();
+    expect(f.manager.getLifecycleState(identity)).toBe("CLOSED");
+    expect(f.manager.getSessionSnapshot(identity).lifecycleState).toBe("CLOSED");
+    expect(f.launchBrowser).not.toHaveBeenCalled();
+    f.launchBrowser.mockImplementationOnce(async () => {
+      expect(f.manager.getLifecycleState(identity)).toBe("OPENING");
+      return f.browser as unknown as Browser;
+    });
+    f.context.close.mockImplementationOnce(async () => { expect(f.manager.getLifecycleState(identity)).toBe("CLOSING"); });
+    const result = await f.manager.runScopedOperation(identity, userAction, "BACKGROUND", "prepare", async (session) => {
+      expect(f.manager.getLifecycleState(identity)).toBe("RUNNING");
+      expect(f.manager.getSessionSnapshot(identity)).toMatchObject({ activeOperation: "prepare", operationInProgress: true });
+      expect(session.hasStoredSession).toBe(true);
+      return "prepared";
+    });
+    expect(result).toBe("prepared");
+    expect(f.browser.newContext).toHaveBeenCalledWith({ storageState: JSON.parse(stored) });
+    expect(f.context.close).toHaveBeenCalledTimes(1);
+    expect(f.browser.close).toHaveBeenCalledTimes(1);
+    expect(f.manager.getLifecycleState(identity)).toBe("CLOSED");
+    expect(f.manager.getActiveSession(identity)).toBeNull();
+    expect(f.credentials.get("session:test:scoped-account")).toBe(stored);
+    expect(f.events.map((event) => event.phase)).toEqual(["OPEN_STARTED", "OPEN_COMPLETED", "CLOSE_STARTED", "CONTEXT_CLOSE_COMPLETED", "CLOSE_COMPLETED"]);
+  });
+
+  it("reports READY for an ordinary open and preserves the explicit retained-session lifetime", async () => {
+    const f = fixture();
+    const session = await f.manager.open(identity, userAction);
+    expect(f.manager.getLifecycleState(identity)).toBe("READY");
+    expect(f.context.close).not.toHaveBeenCalled();
+    await f.manager.close(session);
+    expect(f.manager.getLifecycleState(identity)).toBe("CLOSED");
+  });
+
+  it("preserves the original operation error when cleanup also fails", async () => {
+    const f = fixture();
+    const original = new Error("prepare failed");
+    f.context.close.mockRejectedValueOnce(new Error("cleanup failed"));
+    await expect(f.manager.runScopedOperation(identity, userAction, "BACKGROUND", "prepare", async () => { throw original; })).rejects.toBe(original);
+    expect(f.manager.getLifecycleState(identity)).toBe("CLOSED");
+    expect(f.events.at(-1)?.phase).toBe("CLOSE_FAILED");
+    expect(f.credentials.get("session:test:scoped-account")).toBe(stored);
+  });
+
+  it("surfaces cleanup failure after a successful operation", async () => {
+    const f = fixture();
+    const cleanupError = new Error("cleanup failed");
+    f.context.close.mockRejectedValueOnce(cleanupError);
+    await expect(f.manager.runScopedOperation(identity, userAction, "BACKGROUND", "prepare", async () => "ok")).rejects.toBe(cleanupError);
+    expect(f.manager.getLifecycleState(identity)).toBe("CLOSED");
+  });
+
+  it("returns CLOSED when opening fails without clearing the stored session", async () => {
+    const f = fixture();
+    f.launchBrowser.mockRejectedValue(new Error("launch failed"));
+    const task = vi.fn();
+    await expect(f.manager.runScopedOperation(identity, userAction, "BACKGROUND", "prepare", task)).rejects.toBeInstanceOf(BrowserRuntimeError);
+    expect(task).not.toHaveBeenCalled();
+    expect(f.manager.getLifecycleState(identity)).toBe("CLOSED");
+    expect(f.credentials.get("session:test:scoped-account")).toBe(stored);
+  });
+
+  it("recovers from a browser crash without retrying the operation or deleting credentials", async () => {
+    const f = fixture();
+    const original = new Error("browser disconnected during prepare");
+    const task = vi.fn(async () => {
+      f.manager.setRuntimeAuthState(identity, "AUTHENTICATED", null);
+      f.crash();
+      expect(f.manager.getLifecycleState(identity)).toBe("CLOSED");
+      expect(f.manager.getRuntimeAuthState(identity).state).toBe("DISCONNECTED");
+      throw original;
+    });
+    await expect(f.manager.runScopedOperation(identity, userAction, "BACKGROUND", "prepare", task)).rejects.toBe(original);
+    expect(task).toHaveBeenCalledTimes(1);
+    expect(f.manager.getLifecycleState(identity)).toBe("CLOSED");
+    expect(f.manager.getSessionSnapshot(identity).lastDisconnectReason).toBe("UNEXPECTED_BROWSER_DISCONNECT");
+    expect(f.credentials.get("session:test:scoped-account")).toBe(stored);
+    f.reconnect();
+    const recovered = await f.manager.open(identity, userAction);
+    expect(recovered.hasStoredSession).toBe(true);
+    expect(f.manager.getLifecycleState(identity)).toBe("READY");
+    expect(f.launchBrowser).toHaveBeenCalledTimes(2);
+    await f.manager.close(recovered);
+  });
+
+  it("rejects overlapping scoped operations before they share or close a browser", async () => {
+    const f = fixture();
+    await f.manager.runScopedOperation(identity, userAction, "BACKGROUND", "first", async () => {
+      const second = vi.fn();
+      await expect(f.manager.runScopedOperation(identity, userAction, "BACKGROUND", "second", second)).rejects.toThrow("already running");
+      expect(second).not.toHaveBeenCalled();
+      expect(f.context.close).not.toHaveBeenCalled();
+    });
+    expect(f.context.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases an unexpectedly closed context even while the browser is connected", async () => {
+    const f = fixture();
+    const original = new Error("context closed during prepare");
+    await expect(f.manager.runScopedOperation(identity, userAction, "BACKGROUND", "prepare", async () => {
+      f.closeContext();
+      expect(f.manager.getLifecycleState(identity)).toBe("CLOSED");
+      expect(f.manager.getActiveSession(identity)).toBeNull();
+      throw original;
+    })).rejects.toBe(original);
+    expect(f.manager.getRuntimeAuthState(identity).state).toBe("DISCONNECTED");
+    expect(f.credentials.get("session:test:scoped-account")).toBe(stored);
+  });
+});

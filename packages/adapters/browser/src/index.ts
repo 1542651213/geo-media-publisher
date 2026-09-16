@@ -397,6 +397,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     if (snapshot) return snapshot;
     const runtimeState = this.runtimeAuthState(identity);
     return {
+      lifecycleState: "CLOSED",
       platformKey: identity.platformKey,
       accountId: identity.accountId,
       sessionExists: false,
