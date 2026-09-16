@@ -21,9 +21,9 @@ R67 是当前已验收的 Xiaohongshu（小红书）发布基线，源码 tag �
 
 - Original frozen local R67 commit: `972b665f4a0c4f88d283e2f342b6348258ca1234`
 - GitHub source-only archive commit: `c428818fdd56255c07ee1893aee75675f70a5ddf`
-- GitHub tag: `xhs-task10s-r67` points to the source-only archive commit.`
-- Windows runnable build is distributed through the GitHub Release asset and is not stored in Git history.`
-- `COLD_START_PASS = YES`; `PLATFORM_POST_CONFIRMED = YES`.`
+- GitHub tag: `xhs-task10s-r67` points to the source-only archive commit.
+- Windows runnable build is distributed through the GitHub Release asset and is not stored in Git history.
+- `COLD_START_PASS = YES`; `PLATFORM_POST_CONFIRMED = YES`.
 
 ## 快速开始
 
@@ -72,5 +72,6 @@ pnpm package:dir
 平台侧可能已经明确显示内容发布成功，但 External ID 或 URL 尚未返回；此时内部 `PublishRecord` 可能暂时保持 `NeedsReconciliation` 或 `SUBMIT_RECONCILIATION_REQUIRED`。
 
 R67 的发布说明与校验值见 GitHub Release。源码 tag 与 Release asset 应保持同一冻结基线。
+
 
 
