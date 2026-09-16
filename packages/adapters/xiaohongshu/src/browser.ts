@@ -93,7 +93,7 @@ import { classifyXiaohongshuEditorReadback, normalizeXiaohongshuEditorText, type
 import { createXhsNativeFilePickerRecovery, recoverNativeFilePicker, type NativeFilePickerRecoveryResult } from "./native-file-picker-recovery";
 import { stabilizeAfterNativeFilePickerCancel, type PickerCancelFinalControl, type PickerCancelStabilizationResult } from "./picker-cancel-stabilization";
 export { classifyXiaohongshuEditorReadback, normalizeXiaohongshuEditorText } from "./editor-text-normalization";
-export type { XiaohongshuEditorReadbackStatus, XiaohongshuEditorReadbackVerification } from "./editor-text-normalization";
+export type { XiaohongshuEditorNormalizationReason, XiaohongshuEditorReadbackStatus, XiaohongshuEditorReadbackVerification } from "./editor-text-normalization";
 export type { XiaohongshuPostUploadBoundingRect, XiaohongshuPostUploadFinalSubmitProof, XiaohongshuPostUploadImageItemSafe, XiaohongshuPostUploadReconciliationDomSnapshot, XiaohongshuPostUploadReconciliationResult, XiaohongshuPostUploadReconciliationState } from "./post-upload-reconciliation-diagnostic";
 export { classifyXiaohongshuPostUploadTerminalReadiness } from "./post-upload-terminal-readiness";
 export type { XiaohongshuPostUploadTerminalReadiness, XiaohongshuPostUploadTerminalReadinessBlocker, XiaohongshuPostUploadTerminalReadinessInput } from "./post-upload-terminal-readiness";
@@ -4194,7 +4194,10 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         expectedCharacter: bodyReadbackVerification.expectedCharacter,
         actualCharacter: bodyReadbackVerification.actualCharacter,
         expectedCodePoint: bodyReadbackVerification.expectedCodePoint,
-        actualCodePoint: bodyReadbackVerification.actualCodePoint
+        actualCodePoint: bodyReadbackVerification.actualCodePoint,
+        normalizationReasons: bodyReadbackVerification.normalizationReasons,
+        expectedContextBeforeAfter: bodyReadbackVerification.expectedContextBeforeAfter,
+        actualContextBeforeAfter: bodyReadbackVerification.actualContextBeforeAfter
       };
       throw new XiaohongshuGateError("CONTENT_BODY_NOT_VERIFIED", "CONTENT_REJECTED", `正文回读失败：${JSON.stringify(telemetry)}`, { bodyReadback: bodyReadbackVerification });
     }
