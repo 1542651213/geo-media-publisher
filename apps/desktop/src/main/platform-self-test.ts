@@ -1265,7 +1265,7 @@ export class PlatformSelfTestService {
     if (payload.accountId !== account.id || payload.creatorId !== account.externalAccountId) throw new Error("ONE_SHOT_CONTENT_ACCOUNT_IDENTITY_MISMATCH");
     const image = this.options.repository.getImageAsset(payload.imageAssetId);
     if (!image || !image.enabled || !existsSync(image.filePath)) throw new Error("ONE_SHOT_CONTENT_IMAGE_BINDING_INVALID");
-    const binding = buildOneShotContentBinding(payload);
+    const binding = buildOneShotContentBinding({ ...payload, imageSha256: payload.imageSha256 ?? this.fileSha256(image.filePath) });
     const convergence = this.options.repository.convergeUnusedOneShotAuthorization({ platformKey: "xiaohongshu", accountId: account.id, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE });
     if (convergence.reusableOperationId) {
       const existing = this.options.repository.getPlatformSelfTestRun(convergence.reusableOperationId);
