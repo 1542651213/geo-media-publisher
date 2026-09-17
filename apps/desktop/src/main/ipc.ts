@@ -799,7 +799,10 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
   register("platform-self-test:request-publish", (_event, payload) => platformSelfTests.requestPublish(z.object({ platformAccountId: idSchema }).parse(payload).platformAccountId));
   register("platform-self-test:confirm-publish", async (_event, payload) => { const input = z.object({ testRunId: idSchema, testVideoPath: z.string().max(8192).optional() }).parse(payload); return platformSelfTests.confirmPublish(input.testRunId, input.testVideoPath); });
   register("platform-self-test:cancel-publish", (_event, payload) => platformSelfTests.cancelPublish(z.object({ testRunId: idSchema }).parse(payload).testRunId));
-  register("platform-self-test:request-one-shot-publish", (_event, payload) => platformSelfTests.requestOneShotPublish(z.object({ platformAccountId: idSchema }).parse(payload).platformAccountId));
+  register("platform-self-test:request-one-shot-publish", (_event, payload) => {
+    const input = z.object({ platformAccountId: idSchema, payload: z.object({ platformKey: z.literal("xiaohongshu"), accountId: idSchema, creatorId: z.string().min(1), title: z.string().min(1), body: z.string().min(1), imageAssetId: idSchema, imageSha256: z.string().regex(/^[a-f0-9]{64}$/iu).nullable().optional() }) }).parse(payload);
+    return platformSelfTests.requestOneShotPublish(input.platformAccountId, input.payload);
+  });
   register("platform-self-test:prepare-one-shot-prepublish", async (_event, payload) => platformSelfTests.prepareOneShotPrepublish(z.object({ testRunId: idSchema }).parse(payload).testRunId));
   register("platform-self-test:confirm-one-shot-publish", async (_event, payload) => {
     const input = z.object({ testRunId: idSchema }).parse(payload);

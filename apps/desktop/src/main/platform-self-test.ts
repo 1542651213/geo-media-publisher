@@ -19,6 +19,7 @@ import { blockedTask10sFreshPublishFlowResult, buildTask10sFreshPublishFlowInput
 import { evaluatePreparedEditorRecoveryEvidence, validatePreparedEditorRecoveryTrustedState, RUN_XHS_TASK10S_PREPARED_EDITOR_RECOVERY, type PreparedEditorRecoveryEvidence, type Task10sPreparedEditorRecoveryResult } from "./task10s-prepared-editor-recovery";
 import { validateTask10sImageAssetBinding, type Task10sImageAssetBindingResult } from "./task10s-media-binding";
 import { resolveTask10sExecutionTarget } from "./task10s-execution-target";
+import { buildOneShotContentBinding, validateOneShotContentPayload, verifyOneShotContentBinding, type OneShotContentPayload } from "./one-shot-content-binding";
 
 const ARTICLE_TEST_TITLE = "Geo Media Publisher 发布链路测试";
 const ZHIHU_TEST_TITLE_PREFIX = "Geo Media Publisher 知乎发布测试";
@@ -41,8 +42,6 @@ function safeSelfTestImagePath(fileName = "task10n-safe-test.png"): string {
 
 const XHS_EXPLORATION_TITLE = "小红书发布流程测试-请勿发布";
 const XHS_EXPLORATION_BODY = "自动化发布流程验证，仅用于本地测试，不执行最终发布。";
-const XHS_ONE_SHOT_TITLE = "自动化发布测试｜请忽略";
-const XHS_ONE_SHOT_BODY = "这是一条 GEO Media Publisher 小红书自动发布链路测试内容，请忽略。";
 const XHS_ONE_SHOT_CONFIRMATION = "本次会真实发布 1 条测试笔记，最多提交一次。";
 export const TASK10S_FRESH_COMPLETION_ARM = "TASK10S_FRESH_COMPLETION_ARM" as const;
 export interface Task10sFreshCompletionArmResult {
@@ -1129,19 +1128,21 @@ export class PlatformSelfTestService {
   async prepareOneShotPrepublish(testRunId: string): Promise<Task10SPrepublishResult> {
     const run = this.mustOneShotRun(testRunId);
     const account = this.account(run);
+    const binding = this.requireOneShotContentBinding(run);
     const authorization = this.options.repository.getOneShotPublicationAuthorization(testRunId);
-    if (!authorization || authorization.state !== "AUTHORIZED_UNUSED" || authorization.platformKey !== "xiaohongshu" || authorization.accountId !== account.id || authorization.mode !== ONE_SHOT_REAL_PUBLISH_ACCEPTANCE || authorization.publicationTransactionCount !== 0 || authorization.finalSubmitAttemptCount !== 0 || authorization.finalSubmitRetryCount !== 0 || authorization.finalSubmitActionStarted || authorization.finalSubmitActionCompleted) {
+    if (!authorization || authorization.contentBindingId !== binding.contentBindingId || authorization.state !== "AUTHORIZED_UNUSED" || authorization.platformKey !== "xiaohongshu" || authorization.accountId !== account.id || authorization.mode !== ONE_SHOT_REAL_PUBLISH_ACCEPTANCE || authorization.publicationTransactionCount !== 0 || authorization.finalSubmitAttemptCount !== 0 || authorization.finalSubmitRetryCount !== 0 || authorization.finalSubmitActionStarted || authorization.finalSubmitActionCompleted) {
       throw new Error("ONE_SHOT_PREPUBLISH_AUTHORIZATION_NOT_AVAILABLE");
     }
     const adapter = this.options.registry.getForContent("xiaohongshu", "article");
     if (!isAutomationAdapter(adapter)) throw new Error("当前小红书 Adapter 未提供安全预发布准备能力");
     if (this.controlledOperations.has(account.id)) throw new Error("XHS_ONE_SHOT_OPERATION_ALREADY_RUNNING");
     const before = this.task10sDatabaseSnapshot();
-    const fixture = this.ensureSafeTestImage();
+    const fixture = this.options.repository.getImageAsset(binding.imageAssetId);
+    if (!fixture || !fixture.enabled || !existsSync(fixture.filePath)) throw new Error("ONE_SHOT_CONTENT_IMAGE_BINDING_INVALID");
     const content: PublishArticleInput = {
       articleId: `task10s-${run.testRunId}`,
-      title: XHS_ONE_SHOT_TITLE,
-      body: XHS_ONE_SHOT_BODY,
+      title: binding.titleCanonical,
+      body: binding.bodyCanonical,
       summary: "自动化发布测试",
       tags: ["测试"],
       ...(adapter.getCapabilities().maxImageCount > 0 ? { images: [fixture.filePath] } : {})
@@ -1185,8 +1186,10 @@ export class PlatformSelfTestService {
       const editorPassed = editorStep?.result === "PASSED" && contextCorrelation === "PASS" && pageCorrelation === "PASS";
       const titleObserved = stringValue(preparedResponse?.titleReadbackValue);
       const bodyObserved = stringValue(preparedResponse?.bodyReadbackValue);
-      const titlePassed = titleStep?.result === "PASSED" && preparedContent.prepared?.titleFilled === true && titleObserved === XHS_ONE_SHOT_TITLE;
-      const bodyPassed = bodyStep?.result === "PASSED" && preparedContent.prepared?.bodyFilled === true && bodyObserved === XHS_ONE_SHOT_BODY;
+      const titleCheck = verifyOneShotContentBinding(binding, { platformKey: "xiaohongshu", accountId: account.id, creatorId: account.externalAccountId ?? binding.creatorId, title: titleObserved, body: binding.bodyCanonical, imageAssetId: preparedContent.imageAssetId ?? binding.imageAssetId, imageSha256: binding.imageSha256 });
+      const bodyCheck = verifyOneShotContentBinding(binding, { platformKey: "xiaohongshu", accountId: account.id, creatorId: account.externalAccountId ?? binding.creatorId, title: binding.titleCanonical, body: bodyObserved, imageAssetId: preparedContent.imageAssetId ?? binding.imageAssetId, imageSha256: binding.imageSha256 });
+      const titlePassed = titleStep?.result === "PASSED" && preparedContent.prepared?.titleFilled === true && titleCheck.status !== "FAIL";
+      const bodyPassed = bodyStep?.result === "PASSED" && preparedContent.prepared?.bodyFilled === true && bodyCheck.status !== "FAIL";
       const imagePassed = imageStep?.result === "PASSED" && preparedContent.imageAssetId !== null && imageSummary.verified;
       const requiredPassed = preparedResponse?.requiredFieldsStatus === "KNOWN" && requiredMissing.length === 0;
       const settingsPassed = preparedResponse?.publishSettingsStatus === "KNOWN" && Array.isArray(preparedResponse?.publishSettings);
@@ -1234,8 +1237,8 @@ export class PlatformSelfTestService {
         },
         safeFixture: { path: fixture.filePath, sha256: this.fileSha256(fixture.filePath), exists: existsSync(fixture.filePath), assetId: fixture.id },
         image: { attemptCount: imageSummary.verified ? 1 : 0, result: imagePassed ? "PASSED" : imageStep?.result ?? "NOT_TESTED", assetId: preparedContent.imageAssetId, domReadback: imageSummary.signal || null, previewCount: imageSummary.previewCount, error: imagePassed ? null : imageStep?.errorCode ?? "IMAGE_UPLOAD_NOT_VERIFIED" },
-        title: { attemptCount: titlePassed ? 1 : 0, expected: XHS_ONE_SHOT_TITLE, observed: titleObserved, readbackMatch: titlePassed },
-        body: { attemptCount: bodyPassed ? 1 : 0, expected: XHS_ONE_SHOT_BODY, observed: bodyObserved, readbackMatch: bodyPassed },
+        title: { attemptCount: titlePassed ? 1 : 0, expected: binding.titleCanonical, observed: titleObserved, readbackMatch: titlePassed },
+        body: { attemptCount: bodyPassed ? 1 : 0, expected: binding.bodyCanonical, observed: bodyObserved, readbackMatch: bodyPassed },
         requiredFields: { total: requiredFields.length, pass: requiredFields.length - requiredMissing.length, missing: requiredMissing, result: requiredPassed ? "PASS" : preparedResponse ? "BLOCKED" : "NOT_OBSERVED" },
         settings: { readOnlyCheck: settingsPassed ? "PASS" : preparedResponse ? "BLOCKED" : "NOT_OBSERVED", mutationCount: 0, values: settings },
         finalSubmit: { found: finalSubmitFound, enabled: finalSubmitEnabled, text: stringValue(finalControl?.label), count: finalSubmitFound ? 1 : 0, clickCount: finalSubmitClickCount },
@@ -1255,17 +1258,29 @@ export class PlatformSelfTestService {
     }
   }
 
-  requestOneShotPublish(platformAccountId: string): PlatformSelfTestRun {
+  requestOneShotPublish(platformAccountId: string, payload: OneShotContentPayload): PlatformSelfTestRun {
     const account = this.options.repository.listAccounts().find((item) => (item.id === platformAccountId || (item.platformAccountId ?? item.id) === platformAccountId) && item.platformKey === "xiaohongshu");
     if (!account || !account.enabled || account.archivedAt) throw new Error("小红书一次性真实发布测试账号不可用或未绑定到授权账号");
+    validateOneShotContentPayload(payload);
+    if (payload.accountId !== account.id || payload.creatorId !== account.externalAccountId) throw new Error("ONE_SHOT_CONTENT_ACCOUNT_IDENTITY_MISMATCH");
+    const image = this.options.repository.getImageAsset(payload.imageAssetId);
+    if (!image || !image.enabled || !existsSync(image.filePath)) throw new Error("ONE_SHOT_CONTENT_IMAGE_BINDING_INVALID");
+    const binding = buildOneShotContentBinding(payload);
     const convergence = this.options.repository.convergeUnusedOneShotAuthorization({ platformKey: "xiaohongshu", accountId: account.id, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE });
     if (convergence.reusableOperationId) {
       const existing = this.options.repository.getPlatformSelfTestRun(convergence.reusableOperationId);
       if (!existing) throw new Error("存在未关联自测运行的一次性授权；拒绝创建第三个授权");
-      this.options.logger?.info("PLATFORM_SELF_TEST", "ONE_SHOT_REUSABLE_AUTHORIZATION_REUSED", "复用现有一次性未消费授权，不创建新的授权", { platformKey: account.platformKey, accountId: account.id, operationId: convergence.reusableOperationId, activeUnusedAuthorizationCount: convergence.activeUnusedAuthorizationCount, supersededCount: convergence.supersededOperationIds.length });
-      return existing;
+      // A new explicitly bound acceptance must never inherit an older operation's
+      // authorization. Retire only an untouched AUTHORIZED_UNUSED operation; any
+      // consumed, active, or partially submitted operation remains fail-closed.
+      const superseded = this.options.repository.supersedeUnusedOneShotAuthorization({ operationId: convergence.reusableOperationId, platformKey: "xiaohongshu", accountId: account.id, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE });
+      if (!superseded) throw new Error("ONE_SHOT_CONTENT_BINDING_CONFLICT");
+      this.options.logger?.info("PLATFORM_SELF_TEST", "ONE_SHOT_STALE_AUTHORIZATION_SUPERSEDED", "显式内容绑定不复用历史一次性授权；已安全收敛未消费授权", { platformKey: account.platformKey, accountId: account.id, operationId: convergence.reusableOperationId });
+      const remaining = this.options.repository.convergeUnusedOneShotAuthorization({ platformKey: "xiaohongshu", accountId: account.id, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE });
+      if (remaining.reusableOperationId) throw new Error("ONE_SHOT_AUTHORIZATION_SCOPE_CONFLICT");
     }
-    const run = this.options.repository.createPlatformSelfTestRun({ platformAccountId: account.platformAccountId ?? account.id, requestedLevel: "L5_PUBLISH" });
+    this.options.repository.createOneShotContentBinding(binding);
+    const run = this.options.repository.createPlatformSelfTestRun({ platformAccountId: account.platformAccountId ?? account.id, requestedLevel: "L5_PUBLISH", contentBindingId: binding.contentBindingId });
     this.step(run, "L5_PUBLISH", "PUBLISH_CONFIRMATION", "WAITING_FOR_USER", "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED", XHS_ONE_SHOT_CONFIRMATION, `authorization:${OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH}:state:NOT_AUTHORIZED`);
     return this.options.repository.finishPlatformSelfTestRun(run.testRunId, "WAITING_FOR_USER");
   }
@@ -1369,6 +1384,7 @@ export class PlatformSelfTestService {
     let run = this.mustOneShotRun(testRunId);
     if (run.publishJobId) throw new Error("ONE_SHOT_PUBLICATION_ALREADY_STARTED");
     const account = this.account(run);
+    const binding = this.requireOneShotContentBinding(run);
     if (account.platformKey !== "xiaohongshu" || account.id !== run.accountId) throw new Error("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH");
     const adapter = this.options.registry.getForContent("xiaohongshu", "article");
     if (!isAutomationAdapter(adapter) || typeof adapter.finalSubmit !== "function") throw new Error("当前小红书 Adapter 未提供一次性真实发布能力");
@@ -1399,7 +1415,7 @@ export class PlatformSelfTestService {
     if (!existing && run.publishConfirmedAt) throw Object.assign(new Error("一次性发布确认状态不完整，尚未进入发布流程；请先完成正式取证处理。"), { code: "ONE_SHOT_CONFIRMATION_PARTIAL_STATE" });
     if (this.controlledOperations.has(account.id)) throw new Error("XHS_ONE_SHOT_OPERATION_ALREADY_RUNNING");
     const operationId = testRunId;
-    const authorization = createOwnerAuthorizedOneShotPublication({ operationId, platformKey: account.platformKey, accountId: account.id, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE });
+    const authorization = { ...createOwnerAuthorizedOneShotPublication({ operationId, platformKey: account.platformKey, accountId: account.id, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE }), contentBindingId: binding.contentBindingId };
     let persisted: ReturnType<AppRepository["confirmPlatformSelfTestOneShotAtomically"]> | null = null;
     if (!existing) {
       this.options.logger?.info("PLATFORM_SELF_TEST", "ONE_SHOT_CONFIRM_STARTED", "开始原子创建一次性发布确认与授权", { testRunId, platformKey: account.platformKey, platformAccountId: run.platformAccountId, operationId });
@@ -1432,13 +1448,19 @@ export class PlatformSelfTestService {
         this.step(run, "L5_PUBLISH", "PUBLISH_SUBMIT", failure.result, failure.errorCode === "UNKNOWN" ? "ACCOUNT_IDENTITY_UNVERIFIED" : failure.errorCode, "小红书 Creator 账号身份未通过正向 external ID 证明；尚未上传或创建发布任务。", `identity_verification:FAILED:${failure.message}`);
         return this.finish(run.testRunId);
       }
-      const safeImage = this.ensureSafeTestImage();
-      const content: PublishArticleInput = { articleId: `task10s-${run.testRunId}`, title: XHS_ONE_SHOT_TITLE, body: XHS_ONE_SHOT_BODY, summary: "自动化发布测试", tags: ["测试"], ...(safeImage && adapter.getCapabilities().maxImageCount > 0 ? { images: [safeImage.filePath] } : {}) };
+      const safeImage = this.options.repository.getImageAsset(binding.imageAssetId);
+      if (!safeImage || !safeImage.enabled || !existsSync(safeImage.filePath)) throw new Error("ONE_SHOT_CONTENT_IMAGE_BINDING_INVALID");
+      const content: PublishArticleInput = { articleId: `task10s-${run.testRunId}`, title: binding.titleCanonical, body: binding.bodyCanonical, summary: "自动化发布测试", tags: ["测试"], ...(adapter.getCapabilities().maxImageCount > 0 ? { images: [safeImage.filePath] } : {}) };
       const preparedContent = await this.runEditorAndContent(run, account, adapter, "VISIBLE", content);
       const preparedRun = this.options.repository.getPlatformSelfTestRun(run.testRunId) as PlatformSelfTestRun;
       const imageStep = preparedRun.steps.find((item) => item.stepKey === "IMAGE_FILL");
       if (!preparedContent.prepared || preparedContent.imageAssetId === null || imageStep?.result !== "PASSED") {
         this.step(run, "L5_PUBLISH", "PUBLISH_SUBMIT", "FAILED", "ONE_SHOT_PREPUBLISH_EVIDENCE_INCOMPLETE", "一次性真实发布要求 safe fixture 图片、编辑器、标题和正文都取得实际回读证据；未创建发布任务", "authorization_state:AUTHORIZED_UNUSED");
+        return this.finish(run.testRunId);
+      }
+      const contentCheck = verifyOneShotContentBinding(binding, { platformKey: "xiaohongshu", accountId: account.id, creatorId: account.externalAccountId ?? binding.creatorId, title: stringValue(preparedContent.prepared.response?.titleReadbackValue), body: stringValue(preparedContent.prepared.response?.bodyReadbackValue), imageAssetId: preparedContent.imageAssetId, imageSha256: binding.imageSha256 });
+      if (contentCheck.status === "FAIL") {
+        this.step(run, "L5_PUBLISH", "PUBLISH_SUBMIT", "FAILED", "AUTHORIZATION_INVALID_FOR_CONTENT", "一次性内容绑定与编辑器回读不一致；未创建发布任务", `content_binding:${binding.contentBindingId}:reasons:${contentCheck.reasons.join(",")}`);
         return this.finish(run.testRunId);
       }
       const preparedResponse = {
@@ -1459,8 +1481,8 @@ export class PlatformSelfTestService {
         PUBLIC_PAGE_VERIFIED: false,
         imageSource: "SAFE_TEST_FIXTURE"
       };
-      const job = this.options.repository.createPlatformSelfTestPublishJob({ testRunId: run.testRunId, title: content.title, body: content.body, dryRun: false, selectedImageAssetId: preparedContent.imageAssetId });
-      this.options.repository.insertPublishRecord({ jobId: job.id, accountId: account.id, platformAccountId: account.platformAccountId, platformKey: account.platformKey, articleId: job.articleId, publishedUrl: null, publishedExternalId: null, success: false, response: preparedResponse, dryRun: false, status: "Prepared", publishMode: "ASSISTED", automationType: adapter.automationType, browserSessionIdHash: preparedContent.prepared.sessionIdHash ?? account.browserSessionId, operator: process.env.USERNAME?.trim() || process.env.USER?.trim() || "desktop-user", verificationStatus: "WaitingUser", editorOpenedAt: preparedContent.prepared.editorOpenedAt ?? null, titleFilled: true, bodyFilled: true, selectedImageAssetId: preparedContent.imageAssetId, imageSelectionMode: "manual" });
+      const job = this.options.repository.createPlatformSelfTestPublishJob({ testRunId: run.testRunId, title: content.title, body: content.body, dryRun: false, selectedImageAssetId: preparedContent.imageAssetId, contentBindingId: binding.contentBindingId });
+      this.options.repository.insertPublishRecord({ jobId: job.id, accountId: account.id, platformAccountId: account.platformAccountId, platformKey: account.platformKey, articleId: job.articleId, publishedUrl: null, publishedExternalId: null, success: false, response: { ...preparedResponse, contentBindingId: binding.contentBindingId }, contentBindingId: binding.contentBindingId, dryRun: false, status: "Prepared", publishMode: "ASSISTED", automationType: adapter.automationType, browserSessionIdHash: preparedContent.prepared.sessionIdHash ?? account.browserSessionId, operator: process.env.USERNAME?.trim() || process.env.USER?.trim() || "desktop-user", verificationStatus: "WaitingUser", editorOpenedAt: preparedContent.prepared.editorOpenedAt ?? null, titleFilled: true, bodyFilled: true, selectedImageAssetId: preparedContent.imageAssetId, imageSelectionMode: "manual" });
       this.options.repository.confirmJob(job.id, false);
       const execution = await this.options.publisher.executeJob(job.id, { userActionId: operationId, triggerSource: "RUN_SELF_TEST" }, "VISIBLE", authorization);
       const completedJob = this.options.repository.getJob(job.id);
@@ -2059,6 +2081,13 @@ export class PlatformSelfTestService {
     const account = this.options.repository.getAccountById(run.accountId ?? run.platformAccountId, run.platformKey);
     if (!account || account.platformKey !== run.platformKey || (account.platformAccountId ?? account.id) !== run.platformAccountId || !account.enabled || Boolean(account.archivedAt)) throw new Error("平台自测账号绑定不可用");
     return account;
+  }
+
+  private requireOneShotContentBinding(run: PlatformSelfTestRun) {
+    if (!run.contentBindingId) throw new Error("ONE_SHOT_CONTENT_PAYLOAD_REQUIRED");
+    const binding = this.options.repository.getOneShotContentBinding(run.contentBindingId);
+    if (!binding || binding.platformKey !== "xiaohongshu" || binding.accountId !== run.accountId) throw new Error("ONE_SHOT_CONTENT_BINDING_MISSING");
+    return binding;
   }
 
   private selectedXhsAccount(accountId?: string): Account {

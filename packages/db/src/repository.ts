@@ -2118,7 +2118,7 @@ export class AppRepository {
     return toAccount(this.db.prepare("SELECT * FROM accounts WHERE id=?").get(id) as Row);
   }
 
-  createPlatformSelfTestRun(input: { platformAccountId: string; requestedLevel: PlatformSelfTestLevel }): PlatformSelfTestRun {
+  createPlatformSelfTestRun(input: { platformAccountId: string; requestedLevel: PlatformSelfTestLevel; contentBindingId?: string | null }): PlatformSelfTestRun {
     const account = this.listAccounts().find((item) => item.platformAccountId === input.platformAccountId || item.id === input.platformAccountId);
     if (!account) throw new Error("平台自测账号不存在");
     const id = randomUUID();
@@ -2126,7 +2126,18 @@ export class AppRepository {
     this.db.prepare(`INSERT INTO platform_self_test_runs (
       id,test_run_id,platform_key,platform_account_id,requested_level,overall_result,started_at,last_tested_at,cleanup_status,updated_at
     ) VALUES (?,?,?,?,?,'TESTING',?,?,?,?)`).run(id, id, account.platformKey, account.platformAccountId ?? account.id, input.requestedLevel, timestamp, timestamp, "NOT_AVAILABLE", timestamp);
+    if (input.contentBindingId) this.db.prepare("UPDATE platform_self_test_runs SET content_binding_id=?,updated_at=? WHERE test_run_id=?").run(input.contentBindingId, timestamp, id);
     return this.getPlatformSelfTestRun(id) as PlatformSelfTestRun;
+  }
+
+  createOneShotContentBinding(input: { contentBindingId: string; platformKey: string; accountId: string; creatorId: string; titleCanonical: string; bodyCanonical: string; titleSha256: string; bodySha256: string; imageAssetId: string; imageSha256?: string | null }): void {
+    const timestamp = now();
+    this.db.prepare("INSERT INTO one_shot_content_bindings (content_binding_id,platform_key,account_id,creator_id,title_canonical,body_canonical,title_sha256,body_sha256,image_asset_id,image_sha256,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").run(input.contentBindingId, input.platformKey, input.accountId, input.creatorId, input.titleCanonical, input.bodyCanonical, input.titleSha256, input.bodySha256, input.imageAssetId, input.imageSha256 ?? null, timestamp, timestamp);
+  }
+
+  getOneShotContentBinding(contentBindingId: string): { contentBindingId: string; platformKey: string; accountId: string; creatorId: string; titleCanonical: string; bodyCanonical: string; titleSha256: string; bodySha256: string; imageAssetId: string; imageSha256: string | null } | null {
+    const row = this.db.prepare("SELECT * FROM one_shot_content_bindings WHERE content_binding_id=?").get(contentBindingId) as Row | undefined;
+    return row ? { contentBindingId: textValue(row.content_binding_id), platformKey: textValue(row.platform_key), accountId: textValue(row.account_id), creatorId: textValue(row.creator_id), titleCanonical: textValue(row.title_canonical), bodyCanonical: textValue(row.body_canonical), titleSha256: textValue(row.title_sha256), bodySha256: textValue(row.body_sha256), imageAssetId: textValue(row.image_asset_id), imageSha256: typeof row.image_sha256 === "string" ? row.image_sha256 : null } : null;
   }
 
   getPlatformSelfTestRun(testRunId: string): PlatformSelfTestRun | null {
@@ -2247,13 +2258,15 @@ export class AppRepository {
     const transaction = this.db.transaction(() => {
       const run = this.getPlatformSelfTestRun(testRunId);
       if (!run || run.platformKey !== "xiaohongshu" || run.accountId !== authorization.accountId || run.platformAccountId !== authorization.accountId) throw new Error("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH");
+      if ((run.contentBindingId || authorization.contentBindingId) && run.contentBindingId !== authorization.contentBindingId) throw new Error("ONE_SHOT_AUTHORIZATION_CONTENT_BINDING_MISMATCH");
       const existing = this.getOneShotPublicationAuthorization(authorization.operationId);
       if (existing) {
         const sameIdentity = existing.authorization === authorization.authorization
           && existing.platformKey === authorization.platformKey
           && existing.accountId === authorization.accountId
           && existing.operationId === authorization.operationId
-          && existing.mode === authorization.mode;
+          && existing.mode === authorization.mode
+          && existing.contentBindingId === authorization.contentBindingId;
         if (!sameIdentity) throw new Error("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH");
         return { authorization: existing, created: false };
       }
@@ -2270,12 +2283,12 @@ export class AppRepository {
       this.db.prepare(`INSERT INTO one_shot_publication_authorizations (
         id,authorization,platform_key,account_id,operation_id,mode,state,publication_transaction_count,
         publication_commit_action_count,final_submit_attempt_count,final_submit_retry_count,
-        final_submit_action_started,final_submit_action_completed,created_at,updated_at,consumed_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        final_submit_action_started,final_submit_action_completed,created_at,updated_at,consumed_at,content_binding_id
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
         randomUUID(), authorization.authorization, authorization.platformKey, authorization.accountId, authorization.operationId,
         authorization.mode, authorization.state, authorization.publicationTransactionCount, authorization.publicationCommitActionCount,
         authorization.finalSubmitAttemptCount, authorization.finalSubmitRetryCount, authorization.finalSubmitActionStarted ? 1 : 0,
-        authorization.finalSubmitActionCompleted ? 1 : 0, timestamp, timestamp, authorization.consumedAt ?? null
+        authorization.finalSubmitActionCompleted ? 1 : 0, timestamp, timestamp, authorization.consumedAt ?? null, authorization.contentBindingId
       );
       return { authorization: this.getOneShotPublicationAuthorization(authorization.operationId) as OneShotPublicationAuthorization, created: true };
     });
@@ -2296,9 +2309,14 @@ export class AppRepository {
     return this.getPlatformSelfTestRun(testRunId) as PlatformSelfTestRun;
   }
 
-  createPlatformSelfTestPublishJob(input: { testRunId: string; title: string; body: string; dryRun: boolean; selectedImageAssetId?: string | null }): PublishJob {
+  createPlatformSelfTestPublishJob(input: { testRunId: string; title: string; body: string; dryRun: boolean; selectedImageAssetId?: string | null; contentBindingId?: string | null }): PublishJob {
     const run = this.getPlatformSelfTestRun(input.testRunId);
     if (!run) throw new Error("平台自测运行不存在");
+    if (input.contentBindingId) {
+      if (run.contentBindingId !== input.contentBindingId) throw new Error("ONE_SHOT_CONTENT_BINDING_MISMATCH");
+      const binding = this.getOneShotContentBinding(input.contentBindingId);
+      if (!binding || input.title !== binding.titleCanonical || input.body !== binding.bodyCanonical || (input.selectedImageAssetId ?? null) !== binding.imageAssetId) throw new Error("ONE_SHOT_CONTENT_BINDING_MISMATCH");
+    }
     if (!input.dryRun && !run.publishConfirmedAt) throw new Error("真实发布测试尚未获得用户明确确认");
     if (run.publishJobId) return this.getJob(run.publishJobId) as PublishJob;
     const account = this.listAccounts().find((item) => (item.platformAccountId ?? item.id) === run.platformAccountId && item.platformKey === run.platformKey);
@@ -2314,6 +2332,7 @@ export class AppRepository {
       qualityWarnings: [], source: "test", sourceNote: `platform-self-test:${run.testRunId}`
     });
     if (!article) throw new Error("平台自测内容创建失败");
+    if (input.contentBindingId) this.db.prepare("UPDATE articles SET content_binding_id=? WHERE id=?").run(input.contentBindingId, article.id);
     const jobId = randomUUID();
     const selectedImageAssetId = input.selectedImageAssetId ?? null;
     const imageSelectionMode = selectedImageAssetId ? "manual" : "none";
@@ -2321,8 +2340,9 @@ export class AppRepository {
       id,plan_id,account_id,platform_account_id,platform_key,article_id,article_variant_id,scheduled_at,status,max_attempts,created_at,
       dry_run,manual_confirmation_required,content_kind,selected_image_asset_id,image_selection_mode,publish_payload_json
     ) VALUES (?,NULL,?,?,?,?,NULL,?,'AwaitingConfirmation',1,?,?,?,?,?,?,?)`).run(
-      jobId, account.id, account.platformAccountId ?? account.id, account.platformKey, article.id, timestamp, timestamp, input.dryRun ? 1 : 0, 1, "article", selectedImageAssetId, imageSelectionMode, json({ selfTestRunId: run.testRunId, transparentTestContent: true })
+      jobId, account.id, account.platformAccountId ?? account.id, account.platformKey, article.id, timestamp, timestamp, input.dryRun ? 1 : 0, 1, "article", selectedImageAssetId, imageSelectionMode, json({ selfTestRunId: run.testRunId, transparentTestContent: true, contentBindingId: input.contentBindingId ?? null })
     );
+    this.db.prepare("UPDATE publish_jobs SET content_binding_id=? WHERE id=?").run(input.contentBindingId ?? null, jobId);
     this.db.prepare("UPDATE platform_self_test_runs SET test_article_id=?,publish_job_id=?,updated_at=? WHERE test_run_id=?").run(article.id, jobId, timestamp, run.testRunId);
     return this.getJob(jobId) as PublishJob;
   }
@@ -2687,6 +2707,17 @@ export class AppRepository {
     return transaction();
   }
 
+  supersedeUnusedOneShotAuthorization(input: { operationId: string; platformKey: "xiaohongshu"; accountId: string; mode: "ONE_SHOT_REAL_PUBLISH_ACCEPTANCE" }): boolean {
+    const result = this.db.prepare(`UPDATE one_shot_publication_authorizations SET state='SUPERSEDED_UNUSED', updated_at=?
+      WHERE operation_id=? AND platform_key=? AND account_id=? AND mode=? AND state='AUTHORIZED_UNUSED'
+        AND publication_transaction_count=0 AND publication_commit_action_count=0
+        AND final_submit_attempt_count=0 AND final_submit_retry_count=0
+        AND final_submit_action_started=0 AND final_submit_action_completed=0`).run(
+      now(), input.operationId, input.platformKey, input.accountId, input.mode
+    );
+    return result.changes === 1;
+  }
+
   createOneShotPublicationAuthorization(authorization: OneShotPublicationAuthorization): OneShotPublicationAuthorization {
     if (authorization.state === "AUTHORIZED_UNUSED") {
       const conflictingOperation = this.findActiveOneShotAuthorizationConflict({
@@ -2887,6 +2918,7 @@ export class AppRepository {
     const dryRun = input.dryRun ?? false;
     const record: PublishRecord = { ...input, platformAccountId: input.platformAccountId ?? input.accountId, status: input.status ?? (dryRun ? "DryRun" : input.success ? "Published" : "Failed"), dryRun, id: randomUUID(), publishedAt: now(), publishMode: input.publishMode ?? (dryRun ? "ASSISTED" : "MANUAL"), automationType: input.automationType ?? "Manual", browserSessionIdHash: input.browserSessionIdHash ?? null, operator: input.operator ?? "desktop-user", verificationStatus: input.verificationStatus ?? (dryRun ? "WaitingUser" : input.success ? "Verified" : "Failed"), editorOpenedAt: input.editorOpenedAt ?? null, titleFilled: input.titleFilled ?? null, bodyFilled: input.bodyFilled ?? null, selectedImageAssetId: input.selectedImageAssetId ?? null, imageSelectionMode: input.imageSelectionMode ?? "none" };
     this.db.prepare("INSERT INTO publish_records (id,job_id,account_id,platform_account_id,platform_key,article_id,published_url,published_external_id,success,response_json,published_at,dry_run,status,publish_mode,automation_type,browser_session_id_hash,operator,verification_status,editor_opened_at,title_filled,body_filled,selected_image_asset_id,image_selection_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(record.id, record.jobId, record.accountId, record.platformAccountId, record.platformKey, record.articleId, record.publishedUrl, record.publishedExternalId, record.success ? 1 : 0, json(record.response), record.publishedAt, record.dryRun ? 1 : 0, record.status, record.publishMode, record.automationType, record.browserSessionIdHash, record.operator, record.verificationStatus, record.editorOpenedAt, record.titleFilled === null || record.titleFilled === undefined ? null : record.titleFilled ? 1 : 0, record.bodyFilled === null || record.bodyFilled === undefined ? null : record.bodyFilled ? 1 : 0, record.selectedImageAssetId, record.imageSelectionMode);
+    if (record.contentBindingId) this.db.prepare("UPDATE publish_records SET content_binding_id=? WHERE id=?").run(record.contentBindingId, record.id);
     return record;
   }
 
@@ -3254,6 +3286,7 @@ function toArticle(row: Row): Article {
     contentFingerprint: typeof row.content_fingerprint === "string" ? row.content_fingerprint : textValue(row.content_hash),
     company: textValue(row.company), business: textValue(row.business), targetPlatforms: stringArray(row.target_platforms_json), sourceNote: textValue(row.source_note), importBatchId: typeof row.import_batch_id === "string" ? row.import_batch_id : null, importedAt: typeof row.imported_at === "string" ? row.imported_at : null, sourceFilename: typeof row.source_filename === "string" ? row.source_filename : null,
     contentStudioTaskId: typeof row.content_studio_task_id === "string" ? row.content_studio_task_id : null,
+    contentBindingId: typeof row.content_binding_id === "string" ? row.content_binding_id : null,
     benchmarkRunId: typeof row.benchmark_run_id === "string" ? row.benchmark_run_id : null,
     benchmarkId: typeof row.benchmark_id === "string" ? row.benchmark_id : null,
     promptVersion: typeof row.benchmark_prompt_version === "string" ? row.benchmark_prompt_version : typeof output.promptVersion === "string" ? output.promptVersion : typeof input.promptVersion === "string" ? input.promptVersion : null,
@@ -3324,7 +3357,8 @@ function toOneShotPublicationAuthorization(row: Row): OneShotPublicationAuthoriz
     finalSubmitActionCompleted: boolValue(row.final_submit_action_completed),
     createdAt: textValue(row.created_at),
     updatedAt: textValue(row.updated_at),
-    consumedAt: typeof row.consumed_at === "string" ? row.consumed_at : null
+    consumedAt: typeof row.consumed_at === "string" ? row.consumed_at : null,
+    contentBindingId: typeof row.content_binding_id === "string" ? row.content_binding_id : null
   };
 }
 function toPlatform(row: Row): Platform {
@@ -3370,8 +3404,8 @@ function selfTestLevel(value: unknown): PlatformSelfTestLevel { return ["L1_LOGI
 function selfTestResult(value: unknown): PlatformSelfTestResult { return ["NOT_TESTED", "TESTING", "PASSED", "PARTIAL_PASSED", "WAITING_FOR_USER", "FAILED", "NOT_SUPPORTED"].includes(textValue(value)) ? textValue(value) as PlatformSelfTestResult : "NOT_TESTED"; }
 function selfTestCleanupStatus(value: unknown): PlatformSelfTestCleanupStatus { return ["NOT_AVAILABLE", "AVAILABLE", "WAITING_FOR_CONFIRMATION", "CLEANED", "FAILED"].includes(textValue(value)) ? textValue(value) as PlatformSelfTestCleanupStatus : "NOT_AVAILABLE"; }
 function toPlatformSelfTestStep(row: Row): PlatformSelfTestStep { return { id: textValue(row.id), testRunId: textValue(row.test_run_id), platformKey: textValue(row.platform_key), platformAccountId: textValue(row.platform_account_id), testLevel: selfTestLevel(row.test_level), stepKey: textValue(row.step_key), startedAt: textValue(row.started_at), finishedAt: typeof row.finished_at === "string" ? row.finished_at : null, result: selfTestResult(row.result), errorCode: typeof row.error_code === "string" ? row.error_code : null, message: typeof row.message === "string" ? row.message : null, verificationSignal: typeof row.verification_signal === "string" ? row.verification_signal : null, externalId: typeof row.external_id === "string" ? row.external_id : null, externalUrl: typeof row.external_url === "string" ? row.external_url : null }; }
-function toPlatformSelfTestRun(row: Row, steps: PlatformSelfTestStep[]): PlatformSelfTestRun { const platformAccountId = textValue(row.platform_account_id); return { id: textValue(row.id), testRunId: textValue(row.test_run_id), platformKey: textValue(row.platform_key), accountId: platformAccountId, platformAccountId, requestedLevel: selfTestLevel(row.requested_level), overallResult: selfTestResult(row.overall_result), startedAt: textValue(row.started_at), finishedAt: typeof row.finished_at === "string" ? row.finished_at : null, lastTestedAt: textValue(row.last_tested_at), publishConfirmedAt: typeof row.publish_confirmed_at === "string" ? row.publish_confirmed_at : null, deleteConfirmedAt: typeof row.delete_confirmed_at === "string" ? row.delete_confirmed_at : null, testArticleId: typeof row.test_article_id === "string" ? row.test_article_id : null, publishJobId: typeof row.publish_job_id === "string" ? row.publish_job_id : null, publishRecordId: typeof row.publish_record_id === "string" ? row.publish_record_id : null, externalId: typeof row.external_id === "string" ? row.external_id : null, externalUrl: typeof row.external_url === "string" ? row.external_url : null, cleanupStatus: selfTestCleanupStatus(row.cleanup_status), cleanedAt: typeof row.cleaned_at === "string" ? row.cleaned_at : null, steps }; }
-function toJob(row: Row): PublishJob { const imageSelectionMode = ["random", "manual", "none"].includes(textValue(row.image_selection_mode)) ? textValue(row.image_selection_mode) as PublishJob["imageSelectionMode"] : "none"; const finalPublishMode = ["PREPARE_ONLY", "CONFIRM_BEFORE_PUBLISH", "AUTO_PUBLISH"].includes(textValue(row.final_publish_mode)) ? textValue(row.final_publish_mode) as PublishJob["finalPublishMode"] : "CONFIRM_BEFORE_PUBLISH"; return { id: textValue(row.id), planId: typeof row.plan_id === "string" ? row.plan_id : null, accountId: textValue(row.account_id), platformAccountId: textValue(row.platform_account_id) || textValue(row.account_id), platformKey: textValue(row.platform_key), articleId: textValue(row.article_id), articleVariantId: typeof row.article_variant_id === "string" ? row.article_variant_id : null, scheduledAt: textValue(row.scheduled_at), status: row.status as PublishJob["status"], attemptCount: intValue(row.attempt_count), maxAttempts: intValue(row.max_attempts), nextRetryAt: typeof row.next_retry_at === "string" ? row.next_retry_at : null, lastErrorCode: typeof row.last_error_code === "string" ? row.last_error_code as PublishJob["lastErrorCode"] : null, lastErrorMessage: typeof row.last_error_message === "string" ? row.last_error_message : null, startedAt: typeof row.started_at === "string" ? row.started_at : null, finishedAt: typeof row.finished_at === "string" ? row.finished_at : null, createdAt: textValue(row.created_at), dryRun: boolValue(row.dry_run), manualConfirmationRequired: boolValue(row.manual_confirmation_required), finalPublishMode, confirmedAt: typeof row.confirmed_at === "string" ? row.confirmed_at : null, contentKind: row.content_kind === "video" ? "video" : "article", videoAssetId: typeof row.video_asset_id === "string" ? row.video_asset_id : null, selectedImageAssetId: typeof row.selected_image_asset_id === "string" ? row.selected_image_asset_id : null, imageSelectionMode }; }
+function toPlatformSelfTestRun(row: Row, steps: PlatformSelfTestStep[]): PlatformSelfTestRun { const platformAccountId = textValue(row.platform_account_id); return { id: textValue(row.id), testRunId: textValue(row.test_run_id), platformKey: textValue(row.platform_key), accountId: platformAccountId, platformAccountId, requestedLevel: selfTestLevel(row.requested_level), overallResult: selfTestResult(row.overall_result), startedAt: textValue(row.started_at), finishedAt: typeof row.finished_at === "string" ? row.finished_at : null, lastTestedAt: textValue(row.last_tested_at), publishConfirmedAt: typeof row.publish_confirmed_at === "string" ? row.publish_confirmed_at : null, deleteConfirmedAt: typeof row.delete_confirmed_at === "string" ? row.delete_confirmed_at : null, testArticleId: typeof row.test_article_id === "string" ? row.test_article_id : null, publishJobId: typeof row.publish_job_id === "string" ? row.publish_job_id : null, publishRecordId: typeof row.publish_record_id === "string" ? row.publish_record_id : null, contentBindingId: typeof row.content_binding_id === "string" ? row.content_binding_id : null, externalId: typeof row.external_id === "string" ? row.external_id : null, externalUrl: typeof row.external_url === "string" ? row.external_url : null, cleanupStatus: selfTestCleanupStatus(row.cleanup_status), cleanedAt: typeof row.cleaned_at === "string" ? row.cleaned_at : null, steps }; }
+function toJob(row: Row): PublishJob { const imageSelectionMode = ["random", "manual", "none"].includes(textValue(row.image_selection_mode)) ? textValue(row.image_selection_mode) as PublishJob["imageSelectionMode"] : "none"; const finalPublishMode = ["PREPARE_ONLY", "CONFIRM_BEFORE_PUBLISH", "AUTO_PUBLISH"].includes(textValue(row.final_publish_mode)) ? textValue(row.final_publish_mode) as PublishJob["finalPublishMode"] : "CONFIRM_BEFORE_PUBLISH"; return { id: textValue(row.id), planId: typeof row.plan_id === "string" ? row.plan_id : null, accountId: textValue(row.account_id), platformAccountId: textValue(row.platform_account_id) || textValue(row.account_id), platformKey: textValue(row.platform_key), articleId: textValue(row.article_id), articleVariantId: typeof row.article_variant_id === "string" ? row.article_variant_id : null, scheduledAt: textValue(row.scheduled_at), status: row.status as PublishJob["status"], attemptCount: intValue(row.attempt_count), maxAttempts: intValue(row.max_attempts), nextRetryAt: typeof row.next_retry_at === "string" ? row.next_retry_at : null, lastErrorCode: typeof row.last_error_code === "string" ? row.last_error_code as PublishJob["lastErrorCode"] : null, lastErrorMessage: typeof row.last_error_message === "string" ? row.last_error_message : null, startedAt: typeof row.started_at === "string" ? row.started_at : null, finishedAt: typeof row.finished_at === "string" ? row.finished_at : null, createdAt: textValue(row.created_at), dryRun: boolValue(row.dry_run), manualConfirmationRequired: boolValue(row.manual_confirmation_required), finalPublishMode, confirmedAt: typeof row.confirmed_at === "string" ? row.confirmed_at : null, contentKind: row.content_kind === "video" ? "video" : "article", videoAssetId: typeof row.video_asset_id === "string" ? row.video_asset_id : null, selectedImageAssetId: typeof row.selected_image_asset_id === "string" ? row.selected_image_asset_id : null, imageSelectionMode, contentBindingId: typeof row.content_binding_id === "string" ? row.content_binding_id : null }; }
 function toVideoAsset(row: Row): VideoAsset { return { id: textValue(row.id), localPath: textValue(row.local_path), fileName: textValue(row.file_name), mimeType: textValue(row.mime_type), size: intValue(row.size_bytes), ...(row.duration_ms === null || row.duration_ms === undefined ? {} : { durationMs: intValue(row.duration_ms) }), ...(row.width === null || row.width === undefined ? {} : { width: intValue(row.width) }), ...(row.height === null || row.height === undefined ? {} : { height: intValue(row.height) }), createdAt: textValue(row.created_at) }; }
 function toStoredVideoAsset(row: Row, db: Database.Database): StoredVideoAsset {
   const metadata = parseJson<Record<string, unknown>>(row.metadata_json, {});
@@ -3381,6 +3415,6 @@ function toStoredVideoAsset(row: Row, db: Database.Database): StoredVideoAsset {
   const status: StoredVideoAssetStatus = records.some((record) => boolValue(record.success) && !boolValue(record.dry_run) && textValue(record.status) === "Published") ? "Published" : records.some((record) => textValue(record.status) === "Failed" || (!boolValue(record.success) && !boolValue(record.dry_run))) || jobs.some((job) => textValue(job.status) === "Failed") ? "Failed" : records.some((record) => boolValue(record.success) && boolValue(record.dry_run)) ? "DryRun" : jobs.length > 0 ? "Ready" : ["Draft", "Ready", "DryRun", "Published", "Failed"].includes(storedStatus) ? storedStatus : "Draft";
   return { ...toVideoAsset(row), brandId: typeof row.brand_id === "string" ? row.brand_id : null, title: textValue(row.title) || textValue(row.file_name), description: textValue(metadata.description), tags: Array.isArray(metadata.tags) ? metadata.tags.filter((item): item is string => typeof item === "string") : [], coverPath: typeof metadata.coverPath === "string" ? metadata.coverPath : null, coverAssetId: typeof metadata.coverAssetId === "string" ? metadata.coverAssetId : null, platformFields: nestedStringRecord(metadata.platformFields), status };
 }
-function toRecord(row: Row): PublishRecord { const status = ["DryRun", "Prepared", "Submitted", "Publishing", "Published", "Failed"].includes(textValue(row.status)) ? textValue(row.status) as PublishRecord["status"] : "Published"; const publishMode = ["AUTO", "ASSISTED", "MANUAL"].includes(textValue(row.publish_mode)) ? textValue(row.publish_mode) as PublishRecord["publishMode"] : "MANUAL"; const verificationStatus = ["NotTested", "WaitingUser", "Verified", "Failed"].includes(textValue(row.verification_status)) ? textValue(row.verification_status) as PublishRecord["verificationStatus"] : "NotTested"; const imageSelectionMode = ["random", "manual", "none"].includes(textValue(row.image_selection_mode)) ? textValue(row.image_selection_mode) as PublishRecord["imageSelectionMode"] : "none"; return { id: textValue(row.id), jobId: textValue(row.job_id), accountId: textValue(row.account_id), platformAccountId: textValue(row.platform_account_id) || textValue(row.account_id), platformKey: textValue(row.platform_key), articleId: textValue(row.article_id), publishedUrl: typeof row.published_url === "string" ? row.published_url : null, publishedExternalId: typeof row.published_external_id === "string" ? row.published_external_id : null, success: boolValue(row.success), status, response: parseJson<Record<string, unknown>>(row.response_json, {}), publishedAt: textValue(row.published_at), dryRun: boolValue(row.dry_run), publishMode, automationType: isPlatformCapability(row.automation_type) ? row.automation_type : "Manual", browserSessionIdHash: typeof row.browser_session_id_hash === "string" ? row.browser_session_id_hash : null, operator: textValue(row.operator) || "desktop-user", verificationStatus, editorOpenedAt: typeof row.editor_opened_at === "string" ? row.editor_opened_at : null, titleFilled: row.title_filled === null || row.title_filled === undefined ? null : boolValue(row.title_filled), bodyFilled: row.body_filled === null || row.body_filled === undefined ? null : boolValue(row.body_filled), selectedImageAssetId: typeof row.selected_image_asset_id === "string" ? row.selected_image_asset_id : null, imageSelectionMode }; }
+function toRecord(row: Row): PublishRecord { const status = ["DryRun", "Prepared", "Submitted", "Publishing", "Published", "Failed"].includes(textValue(row.status)) ? textValue(row.status) as PublishRecord["status"] : "Published"; const publishMode = ["AUTO", "ASSISTED", "MANUAL"].includes(textValue(row.publish_mode)) ? textValue(row.publish_mode) as PublishRecord["publishMode"] : "MANUAL"; const verificationStatus = ["NotTested", "WaitingUser", "Verified", "Failed"].includes(textValue(row.verification_status)) ? textValue(row.verification_status) as PublishRecord["verificationStatus"] : "NotTested"; const imageSelectionMode = ["random", "manual", "none"].includes(textValue(row.image_selection_mode)) ? textValue(row.image_selection_mode) as PublishRecord["imageSelectionMode"] : "none"; return { id: textValue(row.id), jobId: textValue(row.job_id), accountId: textValue(row.account_id), platformAccountId: textValue(row.platform_account_id) || textValue(row.account_id), platformKey: textValue(row.platform_key), articleId: textValue(row.article_id), publishedUrl: typeof row.published_url === "string" ? row.published_url : null, publishedExternalId: typeof row.published_external_id === "string" ? row.published_external_id : null, success: boolValue(row.success), status, response: parseJson<Record<string, unknown>>(row.response_json, {}), publishedAt: textValue(row.published_at), dryRun: boolValue(row.dry_run), publishMode, automationType: isPlatformCapability(row.automation_type) ? row.automation_type : "Manual", browserSessionIdHash: typeof row.browser_session_id_hash === "string" ? row.browser_session_id_hash : null, operator: textValue(row.operator) || "desktop-user", verificationStatus, editorOpenedAt: typeof row.editor_opened_at === "string" ? row.editor_opened_at : null, titleFilled: row.title_filled === null || row.title_filled === undefined ? null : boolValue(row.title_filled), bodyFilled: row.body_filled === null || row.body_filled === undefined ? null : boolValue(row.body_filled), selectedImageAssetId: typeof row.selected_image_asset_id === "string" ? row.selected_image_asset_id : null, imageSelectionMode, contentBindingId: typeof row.content_binding_id === "string" ? row.content_binding_id : null }; }
 function toNotification(row: Row): Notification { return { id: textValue(row.id), level: row.level as Notification["level"], title: textValue(row.title), message: textValue(row.message), relatedId: typeof row.related_id === "string" ? row.related_id : null, read: boolValue(row.read), createdAt: textValue(row.created_at) }; }
 function toLog(row: Row): ActivityLog { return { id: textValue(row.id), timestamp: textValue(row.created_at), level: row.level as ActivityLog["level"], module: textValue(row.module), code: textValue(row.code), message: textValue(row.message), context: parseJson<Record<string, unknown>>(row.context_json, {}) }; }

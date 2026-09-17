@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -14,6 +14,12 @@ const platformCsv = join(process.cwd(), "PLATFORMS.csv");
 const tempDirs: string[] = [];
 const databases: Array<{ close: () => void }> = [];
 const logger: Logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
+const ACCEPTANCE_TITLE = "GMP发布验收2｜请忽略";
+const ACCEPTANCE_BODY = "GEO Media Publisher 小红书自动发布最终验收测试。本内容仅用于验证上传、正文回读、发布事务与平台确认流程，请忽略。";
+
+function explicitPayload(accountId: string, imageAssetId: string) {
+  return { platformKey: "xiaohongshu" as const, accountId, creatorId: "960803317", title: ACCEPTANCE_TITLE, body: ACCEPTANCE_BODY, imageAssetId };
+}
 
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), "task10s-self-test-"));
@@ -23,9 +29,13 @@ function fixture() {
   database.repository.seedDevelopment(platformCsv);
   const account = database.repository.createAccount({ platformKey: "xiaohongshu", name: "Task10S 指定账号" });
   database.repository.db.prepare("UPDATE accounts SET id=? WHERE id=?").run(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, account.id);
+  database.repository.syncBrowserPlatformAccount({ accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, platformKey: "xiaohongshu", externalAccountId: "960803317", browserSessionId: "fixture-session", lastVerifiedAt: new Date().toISOString() });
+  const imagePath = join(directory, "task10s-safe-test.png");
+  writeFileSync(imagePath, Buffer.from("fixture"));
+  const image = database.repository.createImageAsset({ brandId: database.repository.listBrands()[0]?.id ?? null, name: "Task10S SAFE_TEST_FIXTURE", filePath: imagePath, originalFileName: "task10s-safe-test.png", mimeType: "image/png", size: 7, tags: ["测试"], usage: ["测试"], platform: ["xiaohongshu"], universal: true });
   const publisher = new PublisherService(database.repository, new AdapterRegistry(), logger, { resolveSecrets: () => ({}) });
   const service = new PlatformSelfTestService({ repository: database.repository, registry: new AdapterRegistry(), publisher, resolveAccountSecrets: () => ({}), logger });
-  return { database, service };
+  return { database, service, image };
 }
 
 afterEach(() => {
@@ -45,7 +55,9 @@ describe("Task10S platform self-test entry", () => {
     database.repository.updateAccount(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, { enabled: true, loginStatus: "logged_in" });
     database.repository.syncBrowserPlatformAccount({ accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, platformKey: "xiaohongshu", externalAccountId: "960803317", browserSessionId: "session-hash", lastVerifiedAt: "2026-09-02T00:00:00.000Z" });
     database.repository.createImageAsset({ brandId: database.repository.listBrands()[0]?.id ?? null, name: "Task10R SAFE_TEST_FIXTURE", filePath: "C:/safe/task10r-safe-test.png", originalFileName: "task10r-safe-test.png", mimeType: "image/png", size: 70, tags: ["测试"], usage: ["测试"], platform: ["xiaohongshu"], universal: true });
-    const safeFixture = database.repository.createImageAsset({ brandId: database.repository.listBrands()[0]?.id ?? null, name: "Task10S SAFE_TEST_FIXTURE", filePath: "C:/safe/task10s-safe-test.png", originalFileName: "task10s-safe-test.png", mimeType: "image/png", size: 70, tags: ["测试"], usage: ["测试"], platform: ["xiaohongshu"], universal: true });
+    const safePath = join(directory, "task10s-safe-test.png");
+    writeFileSync(safePath, Buffer.from("fixture"));
+    const safeFixture = database.repository.createImageAsset({ brandId: database.repository.listBrands()[0]?.id ?? null, name: "Task10S SAFE_TEST_FIXTURE", filePath: safePath, originalFileName: "task10s-safe-test.png", mimeType: "image/png", size: 7, tags: ["测试"], usage: ["测试"], platform: ["xiaohongshu"], universal: true });
     let receivedInput: { images?: string[] } | null = null;
     const receivedContext: { runtimeIdentityProof?: Record<string, unknown> } = {};
     const adapter = {
@@ -104,8 +116,8 @@ describe("Task10S platform self-test entry", () => {
           browserExecutionMode: "VISIBLE",
           headless: false,
           stage: "xiaohongshu_gate_only",
-          titleReadbackValue: "自动化发布测试｜请忽略",
-          bodyReadbackValue: "这是一条 GEO Media Publisher 小红书自动发布链路测试内容，请忽略。",
+          titleReadbackValue: ACCEPTANCE_TITLE,
+          bodyReadbackValue: ACCEPTANCE_BODY,
           imageUploaded: true,
           imageUploadRequired: true,
           events: ["IMAGE_UPLOAD_STARTED", "IMAGE_UPLOAD_PASSED"],
@@ -127,8 +139,8 @@ describe("Task10S platform self-test entry", () => {
     const registry = { getForContent: () => adapter } as unknown as AdapterRegistry;
     const publisher = new PublisherService(database.repository, registry, logger, { resolveSecrets: () => ({}) });
     const service = new PlatformSelfTestService({ repository: database.repository, registry, publisher, resolveAccountSecrets: () => ({}), logger });
-    const requested = service.requestOneShotPublish(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
-    const authorization = createOwnerAuthorizedOneShotPublication({ platformKey: "xiaohongshu", accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, operationId: requested.testRunId, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE });
+    const requested = service.requestOneShotPublish(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, explicitPayload(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, safeFixture.id));
+    const authorization = { ...createOwnerAuthorizedOneShotPublication({ platformKey: "xiaohongshu", accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, operationId: requested.testRunId, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE }), contentBindingId: requested.contentBindingId };
     database.repository.confirmPlatformSelfTestOneShotAtomically(requested.testRunId, authorization);
     database.repository.recordPlatformSelfTestStep({ testRunId: requested.testRunId, testLevel: "L5_PUBLISH", stepKey: "PUBLISH_SUBMIT", startedAt: new Date().toISOString(), result: "FAILED", errorCode: "ONE_SHOT_PREPUBLISH_EVIDENCE_INCOMPLETE", message: "fixture blocker" });
 
@@ -142,7 +154,7 @@ describe("Task10S platform self-test entry", () => {
     expect(result.finalSubmit.clickCount).toBe(0);
     expect(result.readyToResumeExistingOneShot).toBe(true);
     expect((receivedInput as { images?: string[] } | null)?.images).toEqual([safeFixture.filePath]);
-    expect((receivedInput as { body?: string } | null)?.body).toBe("这是一条 GEO Media Publisher 小红书自动发布链路测试内容，请忽略。");
+    expect((receivedInput as { body?: string } | null)?.body).toBe(ACCEPTANCE_BODY);
     expect(receivedContext.runtimeIdentityProof).toMatchObject({
       accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID,
       platformKey: "xiaohongshu",
@@ -211,8 +223,8 @@ describe("Task10S platform self-test entry", () => {
   });
 
   it("does not create authorization or a publish job before owner confirmation", () => {
-    const { database, service } = fixture();
-    const requested = service.requestOneShotPublish(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
+    const { database, service, image } = fixture();
+    const requested = service.requestOneShotPublish(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, explicitPayload(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, image.id));
     expect(requested.overallResult).toBe("WAITING_FOR_USER");
     expect(requested.steps.find((item) => item.errorCode === "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED")?.message).toBe("本次会真实发布 1 条测试笔记，最多提交一次。");
     expect(database.repository.listJobs()).toHaveLength(0);
@@ -220,8 +232,8 @@ describe("Task10S platform self-test entry", () => {
   });
 
   it("cancels without granting authorization", () => {
-    const { database, service } = fixture();
-    const requested = service.requestOneShotPublish(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID);
+    const { database, service, image } = fixture();
+    const requested = service.requestOneShotPublish(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, explicitPayload(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, image.id));
     const cancelled = service.cancelOneShotPublish(requested.testRunId);
     expect(cancelled.overallResult).toBe("NOT_TESTED");
     expect(cancelled.steps.at(-1)?.errorCode).toBe("ONE_SHOT_PUBLISH_CANCELLED");

@@ -276,6 +276,7 @@ export interface Article {
   publishCount: number;
   createdAt: string;
   updatedAt: string;
+  contentBindingId?: string | null;
   source?: ContentSource;
   company?: string;
   business?: string;
@@ -540,6 +541,7 @@ export interface PlatformSelfTestRun {
   testArticleId: string | null;
   publishJobId: string | null;
   publishRecordId: string | null;
+  contentBindingId?: string | null;
   externalId: string | null;
   externalUrl: string | null;
   cleanupStatus: PlatformSelfTestCleanupStatus;
@@ -622,6 +624,7 @@ export interface PublishJob {
   videoAssetId?: string | null;
   selectedImageAssetId?: string | null;
   imageSelectionMode?: ImageSelectionMode;
+  contentBindingId?: string | null;
 }
 
 export interface PublishRecord {
@@ -641,6 +644,7 @@ export interface PublishRecord {
   dryRun?: boolean;
   publishMode?: PublishMode;
   automationType?: PlatformCapability;
+  contentBindingId?: string | null;
   browserSessionIdHash?: string | null;
   operator?: string;
   verificationStatus?: PublishRecordVerificationStatus;
@@ -787,6 +791,7 @@ export interface OneShotPublicationAuthorization {
   createdAt?: string;
   updatedAt?: string;
   consumedAt?: string | null;
+  contentBindingId?: string | null;
 }
 
 export interface OneShotAuthorizationConvergenceResult {
