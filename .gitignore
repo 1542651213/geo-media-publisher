@@ -1,0 +1,11 @@
+node_modules/
+dist/
+out/
+.vite/
+*.db
+*.db-shm
+*.db-wal
+coverage/
+.env
+.env.*
+!.env.example

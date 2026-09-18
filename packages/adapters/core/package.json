@@ -1,0 +1,8 @@
+{
+  "name": "@publisher/adapters-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@publisher/domain": "workspace:*", "@publisher/security": "workspace:*", "playwright-core": "^1.62.1" }
+}

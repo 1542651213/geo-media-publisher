@@ -1,0 +1,11 @@
+{
+  "name": "@publisher/adapters-cnblogs",
+  "version": "1.1.2",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@publisher/adapters-core": "workspace:*",
+    "@publisher/domain": "workspace:*"
+  }
+}

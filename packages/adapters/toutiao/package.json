@@ -1,0 +1,14 @@
+{
+  "name": "@publisher/adapters-toutiao",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts", "./browser": "./src/browser.ts" },
+  "scripts": { "test": "vitest run" },
+  "dependencies": {
+    "@publisher/adapters-core": "workspace:*",
+    "@publisher/adapters-browser": "workspace:*",
+    "@publisher/domain": "workspace:*",
+    "@publisher/security": "workspace:*"
+  }
+}
