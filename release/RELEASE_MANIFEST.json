@@ -1,0 +1,34 @@
+{
+  "release": "xhs-limited-production-ready-20260920",
+  "date": "2026-09-20",
+  "repository": "1542651213/geo-media-publisher",
+  "sourceCommit": "4ddc58e16e19f8e5617c3ec583ade497323532e1",
+  "branch": "codex/xhs-ordinary-live-pilot-20260920",
+  "tag": "xhs-limited-production-ready-20260920",
+  "packageVersion": "1.1.9",
+  "electronVersion": "37.10.3",
+  "electronAbi": 138,
+  "migrations": {
+    "count": 29,
+    "highest": "0028_production_pilot_slots.sql"
+  },
+  "package": {
+    "filename": "geo-media-publisher-1.1.9-xhs-limited-production-ready-20260920-win-x64.zip",
+    "sha256": "71D1698B16EB4C243BD054F6333D73B5B8E1BC2B5FB5AB5A3DFE65DB5DACC633",
+    "exeSha256": "8FC59F68799A0D658A0CC3D61704C644E661CA08DCA871EF52BF01A4842E5EDC",
+    "appAsarSha256": "DC09F0DECAE34A2B760A4443846D71C85BFFB16C321C22820C5169179AE644E6",
+    "betterSqlite3Sha256": "AFA1DCAEDFC94D399413F18662D5FDA9C7025A23BC8CEF064D2986A0CEF2F60E"
+  },
+  "capabilities": {
+    "xhsRealPublish": "VERIFIED_ONCE",
+    "xhsOwnerVerifiedReconciliation": "READY",
+    "xhsAutomaticManagerDelta": "NOT_VERIFIED"
+  },
+  "knownLimitations": [
+    "generic XHS receipt {code:0,success:true} is not an automatic Published proof",
+    "automatic manager-list delta remains NOT_VERIFIED",
+    "multi-image and video publishing are not production-verified",
+    "headless/background publishing and sustained multi-account production are not verified",
+    "website Publishing API is the next implementation track"
+  ]
+}
