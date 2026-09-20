@@ -37,7 +37,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["tests/**/*.test.ts", "packages/**/*.test.ts", "apps/desktop/src/main/one-shot-content-binding.test.ts"],
+    include: ["tests/**/*.test.ts", "packages/**/*.test.ts", "apps/desktop/src/main/**/*.test.ts"],
     reporters: ["default"]
   }
 });

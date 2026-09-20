@@ -18,6 +18,7 @@ import { ZhihuBrowserAdapter } from "@publisher/adapters-zhihu/browser";
 import { QqPublicBrowserAdapter } from "@publisher/adapters-qq-public/browser";
 import { LiejuBrowserAdapter } from "@publisher/adapters-lieju";
 import { CnblogsOfficialApiAdapter } from "@publisher/adapters-cnblogs";
+import { KangyiWebsiteAdapter } from "@publisher/adapters-kangyi-website";
 import type { CredentialStore } from "@publisher/security";
 import type { Logger } from "@publisher/logger";
 import type { BrowserConnectionDiagnostic } from "@publisher/adapters-browser";
@@ -95,6 +96,7 @@ export function createRuntimeAdapterRegistry(credentials: CredentialStore, inclu
   registry.register(new QqPublicBrowserAdapter({ credentialStore: credentials, sessionManager: browserSessionManager, onBrowserRuntimeEvent }));
   registry.register(new LiejuBrowserAdapter({ credentialStore: credentials, sessionManager: browserSessionManager, onBrowserRuntimeEvent }));
   registry.register(new CnblogsOfficialApiAdapter());
+  registry.register(new KangyiWebsiteAdapter({ credentialStore: credentials }));
   registry.register(new WechatChannelsSemiAutoAdapter());
   registry.register(new XiaohongshuBrowserAdapter({
     credentialStore: credentials,
