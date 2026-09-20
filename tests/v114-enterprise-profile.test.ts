@@ -27,13 +27,13 @@ describe("V1.1.4 enterprise profile editor restore", () => {
     const databasePath = join(dir, "publisher.db");
     const legacy = new Database(databasePath);
     runMigrations(legacy, oldMigrations);
-    legacy.prepare("INSERT INTO brands (id,name,company_name,description,main_business,service_regions_json,advantages_json,contact_json,established_at,address,service_process,after_sales,faq,certificates,patents,equipment,cases,ai_forbidden_claims_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run("existing-enterprise", "示例环保", "示例企业", "旧版企业介绍", "甲醛治理、定期消杀", JSON.stringify(["江苏", "苏州"]), JSON.stringify(["本地服务流程清晰"]), JSON.stringify({ phone: "0512-test" }), "", "苏州", "现场评估后确认方案", "以双方约定为准", "服务前先沟通需求", "已有资质资料", "已有专利资料", "已有设备资料", "已有案例资料", JSON.stringify(["禁止虚构客户名称"]), "2026-08-20T00:00:00.000Z", "2026-08-20T00:00:00.000Z");
+    legacy.prepare("INSERT INTO brands (id,name,company_name,description,main_business,service_regions_json,advantages_json,contact_json,established_at,address,service_process,after_sales,faq,certificates,patents,equipment,cases,ai_forbidden_claims_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run("existing-enterprise", "康一环保", "江苏康一环保科技有限公司", "旧版企业介绍", "甲醛治理、定期消杀", JSON.stringify(["江苏", "苏州"]), JSON.stringify(["本地服务流程清晰"]), JSON.stringify({ phone: "0512-test" }), "", "苏州", "现场评估后确认方案", "以双方约定为准", "服务前先沟通需求", "已有资质资料", "已有专利资料", "已有设备资料", "已有案例资料", JSON.stringify(["禁止虚构客户名称"]), "2026-08-20T00:00:00.000Z", "2026-08-20T00:00:00.000Z");
     legacy.close();
 
     const opened = openDatabase(databasePath, migrationsDir); databases.push(opened.db);
     const brands = opened.repository.listBrands();
     expect(brands).toHaveLength(1);
-    expect(brands[0]).toMatchObject({ id: "existing-enterprise", companyName: "示例企业", description: "旧版企业介绍", mainBusiness: "甲醛治理、定期消杀", serviceRegions: ["江苏", "苏州"] });
+    expect(brands[0]).toMatchObject({ id: "existing-enterprise", companyName: "江苏康一环保科技有限公司", description: "旧版企业介绍", mainBusiness: "甲醛治理、定期消杀", serviceRegions: ["江苏", "苏州"] });
     expect(brands[0]?.knowledgeEntries?.map((entry) => entry.title)).toEqual(expect.arrayContaining(["服务流程", "资质证书", "专利", "设备", "案例"]));
     expect(opened.db.prepare("SELECT COUNT(*) count FROM brands").get()).toEqual({ count: 1 });
     expect(opened.db.prepare("SELECT COUNT(*) count FROM migrations WHERE id='0019_v114_enterprise_profile_restore.sql'").get()).toEqual({ count: 1 });
@@ -42,7 +42,7 @@ describe("V1.1.4 enterprise profile editor restore", () => {
   it("persists profile fields, ordered businesses, service regions and retained AI rules", () => {
     const dir = temp("profile");
     const opened = openDatabase(join(dir, "publisher.db"), migrationsDir); databases.push(opened.db);
-    const brand = opened.repository.createBrand({ name: "示例环保", companyName: "示例企业", description: "旧介绍", mainBusiness: "甲醛治理", serviceRegions: ["江苏"], aiForbiddenClaims: ["第一"] });
+    const brand = opened.repository.createBrand({ name: "康一环保", companyName: "江苏康一环保科技有限公司", description: "旧介绍", mainBusiness: "甲醛治理", serviceRegions: ["江苏"], aiForbiddenClaims: ["第一"] });
     const updated = opened.repository.updateBrand(brand.id, { description: "最新企业介绍", industry: "环保治理", officialWebsite: "https://example.test", notes: "内部运营备注", mainBusiness: "甲醛治理、定期消杀、白蚁防治", serviceRegions: ["江苏", "苏州", "木渎", "吴中"], contact: { 电话: "0512-test" } });
     expect(updated).toMatchObject({ description: "最新企业介绍", industry: "环保治理", officialWebsite: "https://example.test", notes: "内部运营备注", mainBusiness: "甲醛治理、定期消杀、白蚁防治", serviceRegions: ["江苏", "苏州", "木渎", "吴中"], contact: { 电话: "0512-test" } });
     expect(updated.aiForbiddenClaims).toEqual(expect.arrayContaining([...CORE_AI_FABRICATION_RULES, "第一"]));
@@ -51,7 +51,7 @@ describe("V1.1.4 enterprise profile editor restore", () => {
   it("supports knowledge create, edit, disable and delete, and the next snapshot reads current data", () => {
     const dir = temp("knowledge");
     const opened = openDatabase(join(dir, "publisher.db"), migrationsDir); databases.push(opened.db);
-    const brand = opened.repository.createBrand({ name: "示例环保", companyName: "示例企业", description: "旧企业介绍", mainBusiness: "甲醛治理", serviceRegions: ["苏州"] });
+    const brand = opened.repository.createBrand({ name: "康一环保", companyName: "江苏康一环保科技有限公司", description: "旧企业介绍", mainBusiness: "甲醛治理", serviceRegions: ["苏州"] });
     const entry = opened.repository.createBrandKnowledgeEntry({ brandId: brand.id, category: "equipment", title: "治理设备", content: "设备型号 A，用于现场治理" });
     opened.repository.updateBrand(brand.id, { description: "本次保存后的最新企业介绍", mainBusiness: "甲醛治理、定期消杀", serviceRegions: ["苏州", "木渎"] });
     const current = opened.repository.getBrand(brand.id);
@@ -73,7 +73,7 @@ describe("V1.1.4 enterprise profile editor restore", () => {
     const dir = temp("session");
     const opened = openDatabase(join(dir, "publisher.db"), migrationsDir); databases.push(opened.db);
     opened.repository.seedPlatformCatalog(platformCsv);
-    const brand = opened.repository.createBrand({ name: "示例环保", companyName: "示例企业" });
+    const brand = opened.repository.createBrand({ name: "康一环保", companyName: "江苏康一环保科技有限公司" });
     const account = opened.repository.createAccount({ platformKey: "zhihu", name: "知乎现有账号" });
     opened.repository.syncBrowserPlatformAccount({ accountId: account.id, platformKey: "zhihu", browserSessionId: "zhihu-existing-session", externalAccountId: "zhihu-owner", lastVerifiedAt: "2026-08-24T00:00:00.000Z" });
     const before = opened.repository.listAccounts().find((item) => item.id === account.id);

@@ -17,7 +17,7 @@ function openTestRepository() {
 }
 
 function testBrand() {
-  return { id: "brand", name: "示例环保测试", companyName: "示例环保测试公司", description: "提供甲醛治理与消杀服务", mainBusiness: "甲醛治理、定期消杀、灭四害、白蚁防治、病媒生物防制", serviceRegions: ["江苏", "苏州", "木渎"], advantages: [], contact: {}, establishedAt: "", address: "", serviceProcess: "需求沟通、现场评估、方案确认、服务实施、结果复核", afterSales: "以双方确认内容为准", faq: "", certificates: "", patents: "", equipment: "", cases: "", aiForbiddenClaims: ["国家级认证", "行业第一", "100%清除甲醛", "永久", "保证"], createdAt: "", updatedAt: "" };
+  return { id: "brand", name: "康一环保测试", companyName: "康一环保测试公司", description: "提供甲醛治理与消杀服务", mainBusiness: "甲醛治理、定期消杀、灭四害、白蚁防治、病媒生物防制", serviceRegions: ["江苏", "苏州", "木渎"], advantages: [], contact: {}, establishedAt: "", address: "", serviceProcess: "需求沟通、现场评估、方案确认、服务实施、结果复核", afterSales: "以双方确认内容为准", faq: "", certificates: "", patents: "", equipment: "", cases: "", aiForbiddenClaims: ["国家级认证", "行业第一", "100%清除甲醛", "永久", "保证"], createdAt: "", updatedAt: "" };
 }
 
 describe("V0.9.2 DeepSeek quality benchmark", () => {
@@ -91,10 +91,10 @@ describe("V0.9.2 DeepSeek quality benchmark", () => {
     const malicious = evaluateContentQuality({ brand, city: "木渎", keyword: "木渎甲醛治理", content: { title: "木渎甲醛治理行业第一", body: "国家级认证，100%清除甲醛，永不反弹，一次治理永久有效；拥有不存在的专利。", summary: "木渎甲醛治理" }, knownCities: brand.serviceRegions, platformRules: conservativePlatformContentRules("wechat_official") });
     expect(malicious.status).toBe("Rejected");
     expect(malicious.issues.map((item) => item.code)).toEqual(expect.arrayContaining(["unsupported_credentials", "false_promises", "absolute_marketing"]));
-    const cityConflict = evaluateContentQuality({ brand, city: "木渎", keyword: "木渎白蚁防治", content: { title: "木渎白蚁防治服务", body: "示例环保在南京提供木渎白蚁防治服务，具体范围以双方确认资料为准，服务流程包括需求沟通、现场评估、方案确认和结果复核。" }, knownCities: brand.serviceRegions, platformRules: conservativePlatformContentRules("zhihu") });
+    const cityConflict = evaluateContentQuality({ brand, city: "木渎", keyword: "木渎白蚁防治", content: { title: "木渎白蚁防治服务", body: "康一环保在南京提供木渎白蚁防治服务，具体范围以双方确认资料为准，服务流程包括需求沟通、现场评估、方案确认和结果复核。" }, knownCities: brand.serviceRegions, platformRules: conservativePlatformContentRules("zhihu") });
     expect(cityConflict.status).toBe("Rejected");
     expect(cityConflict.issues.some((item) => item.code === "city_consistency")).toBe(true);
-    const cityReplacement = evaluateContentQuality({ brand, city: "江苏", keyword: "江苏甲醛治理", content: { title: "江苏甲醛治理服务判断", body: "示例环保在江苏提供甲醛治理服务，先确认现场情况、服务流程、交付边界和复核安排，具体以双方确认资料为准。" }, knownCities: brand.serviceRegions, similarTexts: ["示例环保在苏州提供甲醛治理服务，先确认现场情况、服务流程、交付边界和复核安排，具体以双方确认资料为准。"], platformRules: conservativePlatformContentRules("toutiao") });
+    const cityReplacement = evaluateContentQuality({ brand, city: "江苏", keyword: "江苏甲醛治理", content: { title: "江苏甲醛治理服务判断", body: "康一环保在江苏提供甲醛治理服务，先确认现场情况、服务流程、交付边界和复核安排，具体以双方确认资料为准。" }, knownCities: brand.serviceRegions, similarTexts: ["康一环保在苏州提供甲醛治理服务，先确认现场情况、服务流程、交付边界和复核安排，具体以双方确认资料为准。"], platformRules: conservativePlatformContentRules("toutiao") });
     expect(cityReplacement.status).toBe("Needs_Review");
     expect(cityReplacement.issues.some((item) => item.code === "content_duplicate")).toBe(true);
     expect(textSimilarity("江苏甲醛治理现场评估流程", "苏州甲醛治理现场评估流程")).toBeGreaterThan(0.5);

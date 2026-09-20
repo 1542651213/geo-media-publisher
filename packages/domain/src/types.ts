@@ -120,7 +120,7 @@ export const CONTENT_REVIEW_MODES = ["Off", "WarningOnly", "Strict"] as const;
 export type ContentReviewMode = (typeof CONTENT_REVIEW_MODES)[number];
 export const normalizeContentReviewMode = (value: unknown): ContentReviewMode =>
   CONTENT_REVIEW_MODES.includes(value as ContentReviewMode) ? value as ContentReviewMode : "WarningOnly";
-export type PublishRecordVerificationStatus = "NotTested" | "WaitingUser" | "Verified" | "Failed";
+export type PublishRecordVerificationStatus = "NotTested" | "WaitingUser" | "Verified" | "OwnerVerified" | "Failed";
 export const PLATFORM_SELF_TEST_LEVELS = ["L1_LOGIN", "L2_EDITOR", "L3_CONTENT_FILL", "L4_DRAFT", "L5_PUBLISH"] as const;
 export type PlatformSelfTestLevel = (typeof PLATFORM_SELF_TEST_LEVELS)[number];
 export const PLATFORM_SELF_TEST_RESULTS = ["NOT_TESTED", "TESTING", "PASSED", "PARTIAL_PASSED", "WAITING_FOR_USER", "FAILED", "NOT_SUPPORTED"] as const;

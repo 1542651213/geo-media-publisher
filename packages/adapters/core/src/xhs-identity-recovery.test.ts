@@ -25,7 +25,7 @@ const account = {
   connectionMode: "BrowserAutomation",
   authorizationStatus: "Authorized",
   browserSessionId: "session-hash",
-  externalAccountId: "123456789",
+  externalAccountId: "960803317",
   lastVerifiedAt: new Date().toISOString(),
   lastUsedAt: null,
   archivedAt: null
@@ -33,7 +33,7 @@ const account = {
 
 function binding(): PlatformAccountIdentityBinding {
   const timestamp = new Date().toISOString();
-  return { id: "binding-xhs-recovery", platformKey: "xiaohongshu", accountId: account.id, externalCreatorId: "123456789", displayName: "测试账号", profileUrl: null, bindingSource: "LEGACY_ACCOUNT_EXTERNAL_ID_MATCH", boundAt: timestamp, createdAt: timestamp, updatedAt: timestamp };
+  return { id: "binding-xhs-recovery", platformKey: "xiaohongshu", accountId: account.id, externalCreatorId: "960803317", displayName: "测试账号", profileUrl: null, bindingSource: "LEGACY_ACCOUNT_EXTERNAL_ID_MATCH", boundAt: timestamp, createdAt: timestamp, updatedAt: timestamp };
 }
 
 function identityProof(): NonNullable<XiaohongshuPageScopedIdentityVerification["proof"]> {
@@ -43,7 +43,7 @@ function identityProof(): NonNullable<XiaohongshuPageScopedIdentityVerification[
     pageId: "identity-page-a",
     pageOrigin: "https://creator.xiaohongshu.com",
     pagePathname: "/new/home",
-    creatorId: "123456789",
+    creatorId: "960803317",
     verifiedAt: "2026-09-14T08:00:00.000Z",
     expiresAt: "2026-09-14T08:05:00.000Z"
   };
@@ -119,7 +119,7 @@ describe("Task10S completion identity recovery", () => {
 
     await expect(service.ensureCurrentContextIdentityPage(account.id)).resolves.toMatchObject({
       status: "PASS",
-      attestation: { browserSessionIdentity: "session-a", browserContextIdentity: "context-a", sourcePageIdentity: "identity-page-a", observedExternalCreatorId: "123456789" }
+      attestation: { browserSessionIdentity: "session-a", browserContextIdentity: "context-a", sourcePageIdentity: "identity-page-a", observedExternalCreatorId: "960803317" }
     });
     expect(reader.ensureXhsIdentityPage).toHaveBeenCalledTimes(1);
     expect(reader.verifyIdentityOnContextPage).toHaveBeenCalledTimes(2);

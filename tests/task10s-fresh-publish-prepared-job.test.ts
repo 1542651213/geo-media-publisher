@@ -76,8 +76,8 @@ function setup(config: { withAuthorization?: boolean; requestedRunId?: string } 
   const account = repo.createAccount({ platformKey: "xiaohongshu", name: "offline test" });
   repo.db.prepare("UPDATE accounts SET id=? WHERE id=?").run(accountId, account.id);
   repo.updateAccount(accountId, { enabled: true, loginStatus: "logged_in" });
-  repo.db.prepare("UPDATE accounts SET external_account_id=? WHERE id=?").run("123456789", accountId);
-  repo.bindPlatformAccountIdentity({ platformKey: "xiaohongshu", accountId, externalCreatorId: "123456789", bindingSource: "OWNER_APPROVED_CREATOR_IDENTITY_BINDING" });
+  repo.db.prepare("UPDATE accounts SET external_account_id=? WHERE id=?").run("960803317", accountId);
+  repo.bindPlatformAccountIdentity({ platformKey: "xiaohongshu", accountId, externalCreatorId: "960803317", bindingSource: "OWNER_APPROVED_CREATOR_IDENTITY_BINDING" });
   const proof = exploration();
   const runtime = { platformKey: "xiaohongshu", accountId, sessionExists: true, browserConnected: true, contextExists: true, canonicalPageExists: true, canonicalPageClosed: false, runtimeAuthState: "AUTHENTICATED", browserSessionIdentity: "session", contextDebugId: "context", canonicalPageDebugId: "page" };
   const forbidden = vi.fn(() => { throw new Error("OFFLINE_PUBLICATION_BOUNDARY"); });
@@ -97,7 +97,7 @@ function setup(config: { withAuthorization?: boolean; requestedRunId?: string } 
   const serviceOptions = { repository: repo, registry, publisher, resolveAccountSecrets: () => ({}) };
   const service = new PlatformSelfTestService(serviceOptions);
   const image = repo.createImageAsset({ brandId: null, name: "explicit ARM image", filePath: fixturePath, originalFileName: "explicit.png", mimeType: "image/png", size: fixtureBytes.length });
-  const request = service.requestOneShotPublish(accountId, { platformKey: "xiaohongshu", accountId, creatorId: "123456789", title: "Explicit ARM title", body: "Explicit ARM body", imageAssetId: image.id, imageSha256: fixtureSha });
+  const request = service.requestOneShotPublish(accountId, { platformKey: "xiaohongshu", accountId, creatorId: "960803317", title: "Explicit ARM title", body: "Explicit ARM body", imageAssetId: image.id, imageSha256: fixtureSha });
   requestedRunId = request.testRunId;
   runId = requestedRunId;
   if (config.withAuthorization === true) repo.confirmPlatformSelfTestOneShotAtomically(requestedRunId, { ...createOwnerAuthorizedOneShotPublication({ accountId, platformKey: "xiaohongshu", operationId: requestedRunId, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE }), contentBindingId: request.contentBindingId });
@@ -114,11 +114,11 @@ function setup(config: { withAuthorization?: boolean; requestedRunId?: string } 
     valid: true,
     failureCode: null,
   } as ReturnType<typeof attempt.validateTask10sSafeFixture>);
-  vi.spyOn(XhsIdentityService.prototype, "establishContextIdentityAttestation").mockResolvedValue({ status: "PASS", attestation: { observedExternalCreatorId: "123456789", browserContextIdentity: "context" } } as Awaited<ReturnType<XhsIdentityService["establishContextIdentityAttestation"]>>);
-  vi.spyOn(XhsIdentityService.prototype, "ensureCurrentContextIdentityPage").mockResolvedValue({ status: "PASS", attestation: { observedExternalCreatorId: "123456789", browserContextIdentity: "context", sourcePageIdentity: "page" } } as Awaited<ReturnType<XhsIdentityService["ensureCurrentContextIdentityPage"]>>);
+  vi.spyOn(XhsIdentityService.prototype, "establishContextIdentityAttestation").mockResolvedValue({ status: "PASS", attestation: { observedExternalCreatorId: "960803317", browserContextIdentity: "context" } } as Awaited<ReturnType<XhsIdentityService["establishContextIdentityAttestation"]>>);
+  vi.spyOn(XhsIdentityService.prototype, "ensureCurrentContextIdentityPage").mockResolvedValue({ status: "PASS", attestation: { observedExternalCreatorId: "960803317", browserContextIdentity: "context", sourcePageIdentity: "page" } } as Awaited<ReturnType<XhsIdentityService["ensureCurrentContextIdentityPage"]>>);
   vi.spyOn(XhsIdentityService.prototype, "validateContextIdentityAttestation").mockResolvedValue({ valid: true } as Awaited<ReturnType<XhsIdentityService["validateContextIdentityAttestation"]>>);
-  vi.spyOn(XhsIdentityService.prototype, "getContextIdentityAttestation").mockReturnValue({ observedExternalCreatorId: "123456789", browserContextIdentity: "context", sourcePageIdentity: "page" } as ReturnType<XhsIdentityService["getContextIdentityAttestation"]>);
-  vi.spyOn(XhsIdentityService.prototype, "verifyCreatorIdentity").mockResolvedValue({ expectedExternalCreatorId: "123456789", observed: { externalCreatorId: "123456789", displayName: null, profileUrl: null, source: "CREATOR_ACCOUNT_SURFACE", stable: true }, verified: true, mismatch: false, canonicalContextId: "context", canonicalPageId: "page", canonicalPageUrl: "https://creator.xiaohongshu.com/new/home", domLocationHref: "https://creator.xiaohongshu.com/new/home", pageUrlConsistency: "PASS", routeClass: "CREATOR_HOME" } as Awaited<ReturnType<XhsIdentityService["verifyCreatorIdentity"]>>);
+  vi.spyOn(XhsIdentityService.prototype, "getContextIdentityAttestation").mockReturnValue({ observedExternalCreatorId: "960803317", browserContextIdentity: "context", sourcePageIdentity: "page" } as ReturnType<XhsIdentityService["getContextIdentityAttestation"]>);
+  vi.spyOn(XhsIdentityService.prototype, "verifyCreatorIdentity").mockResolvedValue({ expectedExternalCreatorId: "960803317", observed: { externalCreatorId: "960803317", displayName: null, profileUrl: null, source: "CREATOR_ACCOUNT_SURFACE", stable: true }, verified: true, mismatch: false, canonicalContextId: "context", canonicalPageId: "page", canonicalPageUrl: "https://creator.xiaohongshu.com/new/home", domLocationHref: "https://creator.xiaohongshu.com/new/home", pageUrlConsistency: "PASS", routeClass: "CREATOR_HOME" } as Awaited<ReturnType<XhsIdentityService["verifyCreatorIdentity"]>>);
   // Check the missing API with an assertion in RED, rather than a TypeError.
   const arm = async () => {
     await service.inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId);
@@ -602,7 +602,7 @@ describe("ARM review boundaries", () => {
     f.repo.db.prepare("UPDATE articles SET "+field+"=? WHERE id=?").run("Changed explicit content",job.articleId);
     expect(await f.service.runTask10sCompleteRetainedEditor(runId)).toMatchObject({status:"BLOCKED"});
     expect(f.forbidden).not.toHaveBeenCalled();
-    const next=f.service.requestOneShotPublish(accountId,{platformKey:"xiaohongshu",accountId,creatorId:"123456789",title:field==="title"?"Changed explicit content":"Explicit ARM title",body:field==="body"?"Changed explicit content":"Explicit ARM body",imageAssetId:job.selectedImageAssetId!,imageSha256:f.fixtureSha});
+    const next=f.service.requestOneShotPublish(accountId,{platformKey:"xiaohongshu",accountId,creatorId:"960803317",title:field==="title"?"Changed explicit content":"Explicit ARM title",body:field==="body"?"Changed explicit content":"Explicit ARM body",imageAssetId:job.selectedImageAssetId!,imageSha256:f.fixtureSha});
     expect(next.contentBindingId).not.toBe(f.request.contentBindingId);
     await f.service.runTask10sFreshPublishFlow(accountId,next.testRunId);await f.service.inspectCurrentXiaohongshuClosedShadowFinalSubmit(accountId);
     expect(await f.service.armTask10sRun(next.testRunId)).toMatchObject({status:"PASS"});
@@ -637,7 +637,7 @@ it.each(["accepted", "lost-receipt"] as const)("real request IPC, ARM and retain
  await new Promise<void>((resolve)=>server.listen(0,"127.0.0.1",resolve));
  const address=server.address();if(!address || typeof address==="string")throw new Error("loopback unavailable");
  try {
- const subject:XhsContextIdentityAttestation={accountId,platformKey:"xiaohongshu",expectedExternalCreatorId:"123456789",observedExternalCreatorId:"123456789",externalAccountId:"123456789",browserSessionIdentity:"session",browserContextIdentity:"context",sourcePageIdentity:"page",sourceOrigin:"https://creator.xiaohongshu.com",sourcePathname:"/publish/publish",issuedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString(),verified:true};
+ const subject:XhsContextIdentityAttestation={accountId,platformKey:"xiaohongshu",expectedExternalCreatorId:"960803317",observedExternalCreatorId:"960803317",externalAccountId:"960803317",browserSessionIdentity:"session",browserContextIdentity:"context",sourcePageIdentity:"page",sourceOrigin:"https://creator.xiaohongshu.com",sourcePathname:"/publish/publish",issuedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString(),verified:true};
  vi.spyOn(XhsIdentityService.prototype,"getContextIdentityAttestation").mockReturnValue(subject);
  const uploaded:string[]=[];
  const observe=async(input:PublishFlowExplorationInput)=>{
@@ -669,7 +669,7 @@ it.each(["accepted", "lost-receipt"] as const)("real request IPC, ARM and retain
  const credentials={get:()=>null,has:()=>false,set:()=>{throw new Error("NO_CREDENTIAL_WRITES");},delete:()=>{throw new Error("NO_CREDENTIAL_WRITES");}};
  const service=registerIpc({repository:f.repo,publisher,scheduler:new PersistentScheduler(f.repo,publisher,logger),registry,resolveAccountSecrets:()=>({}),dataDirectory:f.dir,coverDir:f.dir,logger,credentials,aiCredentials:credentials,appLogPath:join(f.dir,"mock.log"),databasePath:join(f.dir,"test.db")});
  const image=f.repo.getOneShotContentBinding(f.request.contentBindingId!)!;
- const run=await ipc.handlers.get("platform-self-test:request-one-shot-publish")!({},{platformAccountId:accountId,payload:{platformKey:"xiaohongshu",accountId,creatorId:"123456789",title:"IPC explicit title",body:"IPC explicit body",imageAssetId:image.imageAssetId,imageSha256:f.fixtureSha}}) as PlatformSelfTestRun;
+ const run=await ipc.handlers.get("platform-self-test:request-one-shot-publish")!({},{platformAccountId:accountId,payload:{platformKey:"xiaohongshu",accountId,creatorId:"960803317",title:"IPC explicit title",body:"IPC explicit body",imageAssetId:image.imageAssetId,imageSha256:f.fixtureSha}}) as PlatformSelfTestRun;
  expect(receipts).toHaveLength(0);expect(sends).toBe(0);expect(mouse).toBe(0);expect(uploaded).toHaveLength(0);
  expect(await service.runTask10sFreshPublishFlow(accountId,run.testRunId)).toMatchObject({status:"PASS_READY_FOR_FINAL_SUBMIT"});
  expect(uploaded).toEqual([f.fixtureSha.toLowerCase()]);
@@ -684,7 +684,7 @@ it.each(["accepted", "lost-receipt"] as const)("real request IPC, ARM and retain
    expect(f.repo.getJob(armed.jobId!)?.status).toBe("NeedsReconciliation");
    expect(f.repo.getSubmissionBarrier(armed.jobId!)).not.toBeNull();
    const oldClaim=f.repo.db.prepare("SELECT * FROM submission_dispatch_claims").all();
-   const next=await ipc.handlers.get("platform-self-test:request-one-shot-publish")!({},{platformAccountId:accountId,payload:{platformKey:"xiaohongshu",accountId,creatorId:"123456789",title:"New explicit request",body:"Cannot bypass old unknown",imageAssetId:image.imageAssetId,imageSha256:f.fixtureSha}}) as PlatformSelfTestRun;
+   const next=await ipc.handlers.get("platform-self-test:request-one-shot-publish")!({},{platformAccountId:accountId,payload:{platformKey:"xiaohongshu",accountId,creatorId:"960803317",title:"New explicit request",body:"Cannot bypass old unknown",imageAssetId:image.imageAssetId,imageSha256:f.fixtureSha}}) as PlatformSelfTestRun;
    expect(await service.runTask10sFreshPublishFlow(accountId,next.testRunId)).toMatchObject({status:"BLOCKED",failureCode:"SUBMISSION_RECONCILIATION_REQUIRED"});
    expect(await service.armTask10sRun(next.testRunId)).toMatchObject({status:"BLOCKED"});
    expect(f.repo.db.prepare("SELECT * FROM submission_dispatch_claims").all()).toEqual(oldClaim);

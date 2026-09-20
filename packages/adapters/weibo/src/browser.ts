@@ -17,3 +17,4 @@ const definition: BrowserPlatformDefinition = {
 export class WeiboBrowserAdapter extends BrowserAutomationAdapter {
   constructor(options: BrowserAutomationAdapterOptions = {}) { super(definition, options); }
 }
+

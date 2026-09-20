@@ -32,7 +32,6 @@
       "@publisher/adapters-youtube": ["packages/adapters/youtube/src/index.ts"],
       "@publisher/adapters-tiktok": ["packages/adapters/tiktok/src/index.ts"],
       "@publisher/adapters-toutiao": ["packages/adapters/toutiao/src/index.ts"],
-      "@publisher/adapters-toutiao/*": ["packages/adapters/toutiao/src/*"],
       "@publisher/adapters-facebook": ["packages/adapters/facebook/src/index.ts"],
       "@publisher/adapters-weibo": ["packages/adapters/weibo/src/index.ts"],
       "@publisher/adapters-baijiahao": ["packages/adapters/baijiahao/src/index.ts"],

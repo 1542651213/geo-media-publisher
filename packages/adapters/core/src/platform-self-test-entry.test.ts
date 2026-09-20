@@ -153,8 +153,8 @@ describe("Task10O controlled self-test dispatch", () => {
     const testRunId = "task10u-exact-orphan";
     const reconcile = vi.fn(() => ({ status: "RECONCILED_RETRYABLE", testRunId, mutationCount: 1, retryEligible: true }));
     const snapshot = {
-      identity: { testRunId, platformKey: "xiaohongshu", accountId: "11111111-1111-4111-8111-111111111111" },
-      run: { testRunId, platformKey: "xiaohongshu", accountId: "11111111-1111-4111-8111-111111111111", platformAccountId: "11111111-1111-4111-8111-111111111111", requestedLevel: "L5_PUBLISH", overallResult: "WAITING_FOR_USER", publishConfirmedAt: "2026-09-01T04:00:10.700Z", publishJobId: null, publishRecordId: null, testArticleId: null, externalId: null, externalUrl: null, steps: [{ stepKey: "PUBLISH_CONFIRMATION", result: "WAITING_FOR_USER", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] },
+      identity: { testRunId, platformKey: "xiaohongshu", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3" },
+      run: { testRunId, platformKey: "xiaohongshu", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", requestedLevel: "L5_PUBLISH", overallResult: "WAITING_FOR_USER", publishConfirmedAt: "2026-09-01T04:00:10.700Z", publishJobId: null, publishRecordId: null, testArticleId: null, externalId: null, externalUrl: null, steps: [{ stepKey: "PUBLISH_CONFIRMATION", result: "WAITING_FOR_USER", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] },
       authorizationCount: 0,
       operationCount: 0,
       publicationTransactionCount: 0,
@@ -198,12 +198,12 @@ describe("Task10O controlled self-test dispatch", () => {
     ["external evidence exists", { externalPublicationEvidence: true }, "ONE_SHOT_RECONCILIATION_EXTERNAL_EVIDENCE_EXISTS"],
     ["needs reconciliation", { needsReconciliation: true }, "ONE_SHOT_RECONCILIATION_NEEDS_RECONCILIATION"],
     ["published or verified", { publishedOrVerified: true }, "ONE_SHOT_RECONCILIATION_ALREADY_PUBLISHED"],
-    ["wrong platform", { identity: { testRunId: "x", platformKey: "weibo", accountId: "11111111-1111-4111-8111-111111111111" } }, "ONE_SHOT_RECONCILIATION_PLATFORM_MISMATCH"],
+    ["wrong platform", { identity: { testRunId: "x", platformKey: "weibo", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3" } }, "ONE_SHOT_RECONCILIATION_PLATFORM_MISMATCH"],
     ["wrong account", { identity: { testRunId: "x", platformKey: "xiaohongshu", accountId: "wrong" } }, "ONE_SHOT_RECONCILIATION_ACCOUNT_MISMATCH"]
   ])("fail-closes %s", (_label, override, reason) => {
     const base = {
-      identity: { testRunId: "x", platformKey: "xiaohongshu", accountId: "11111111-1111-4111-8111-111111111111" },
-      run: { platformKey: "xiaohongshu", accountId: "11111111-1111-4111-8111-111111111111", platformAccountId: "11111111-1111-4111-8111-111111111111", requestedLevel: "L5_PUBLISH", overallResult: "WAITING_FOR_USER", publishConfirmedAt: "2026-09-01T04:00:10.700Z", steps: [{ stepKey: "PUBLISH_CONFIRMATION", result: "WAITING_FOR_USER", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] },
+      identity: { testRunId: "x", platformKey: "xiaohongshu", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3" },
+      run: { platformKey: "xiaohongshu", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", requestedLevel: "L5_PUBLISH", overallResult: "WAITING_FOR_USER", publishConfirmedAt: "2026-09-01T04:00:10.700Z", steps: [{ stepKey: "PUBLISH_CONFIRMATION", result: "WAITING_FOR_USER", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] },
       authorizationCount: 0,
       operationCount: 0,
       publicationTransactionCount: 0,
@@ -219,8 +219,8 @@ describe("Task10O controlled self-test dispatch", () => {
 
   it("accepts only a confirmed orphan and treats the canonical pre-confirm state as already reconciled", () => {
     const base = {
-      identity: { testRunId: "x", platformKey: "xiaohongshu", accountId: "11111111-1111-4111-8111-111111111111" },
-      run: { platformKey: "xiaohongshu", accountId: "11111111-1111-4111-8111-111111111111", platformAccountId: "11111111-1111-4111-8111-111111111111", requestedLevel: "L5_PUBLISH", overallResult: "WAITING_FOR_USER", publishConfirmedAt: "2026-09-01T04:00:10.700Z", steps: [{ stepKey: "PUBLISH_CONFIRMATION", result: "WAITING_FOR_USER", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] },
+      identity: { testRunId: "x", platformKey: "xiaohongshu", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3" },
+      run: { platformKey: "xiaohongshu", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", platformAccountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", requestedLevel: "L5_PUBLISH", overallResult: "WAITING_FOR_USER", publishConfirmedAt: "2026-09-01T04:00:10.700Z", steps: [{ stepKey: "PUBLISH_CONFIRMATION", result: "WAITING_FOR_USER", errorCode: "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED" }] },
       authorizationCount: 0, operationCount: 0, publicationTransactionCount: 0, finalSubmitAttemptCount: 0, externalPublicationEvidence: false, needsReconciliation: false, publishedOrVerified: false
     };
     expect(evaluateStrictFailedOneShotConfirmation(base as never)).toEqual({ allowed: true, alreadyReconciled: false, reason: null });

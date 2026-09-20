@@ -262,8 +262,8 @@ describe("Task 10A evidence analyzer", () => {
       logText: logText([
         event("2026-08-30T08:00:00.000Z", "XHS_CREATOR_IDENTITY_PROOF", {
           ...shared,
-          EXPECTED_CREATOR_IDENTITY: "123456789",
-          OBSERVED_CREATOR_IDENTITY: { externalCreatorId: "123456789", stable: true },
+          EXPECTED_CREATOR_IDENTITY: "960803317",
+          OBSERVED_CREATOR_IDENTITY: { externalCreatorId: "960803317", stable: true },
           ACCOUNT_IDENTITY_VERIFIED: true,
           ACCOUNT_IDENTITY_MISMATCH: false
         }),
@@ -282,8 +282,8 @@ describe("Task 10A evidence analyzer", () => {
     });
 
     expect(result).toMatchObject({
-      expectedCreatorIdentity: "123456789",
-      observedCreatorIdentity: { externalCreatorId: "123456789", stable: true },
+      expectedCreatorIdentity: "960803317",
+      observedCreatorIdentity: { externalCreatorId: "960803317", stable: true },
       accountIdentityVerified: true,
       accountIdentityMismatch: false,
       activeUnusedAuthorizationCount: 1,

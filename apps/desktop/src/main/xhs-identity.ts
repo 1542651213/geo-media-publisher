@@ -503,7 +503,7 @@ export class XhsIdentityService {
    * page-scoped verifier. This path is used only by complete-login; later
    * read-only verification continues through verifyCreatorIdentity.
    */
-  async bootstrapCreatorIdentity(accountId: string): Promise<CreatorIdentityVerificationResult> {
+  async observeCreatorIdentityForLogin(accountId: string): Promise<CreatorIdentityVerificationResult> {
     const account = this.requireAccount(accountId);
     if (typeof this.options.repository.bootstrapXhsCreatorIdentity !== "function") throw Object.assign(new Error("当前数据库未提供 XHS Creator identity bootstrap"), { code: "XHS_IDENTITY_BOOTSTRAP_UNAVAILABLE" });
     const adapter = this.options.registry.getForContent("xiaohongshu", "article") as IdentityReader;
@@ -513,7 +513,12 @@ export class XhsIdentityService {
     if (!runtime.sessionExists || runtime.browserConnected !== true || !runtime.contextExists || !runtime.canonicalPageExists || runtime.canonicalPageClosed === true || runtime.canonicalPageContextMatchesSession !== true) {
       throw Object.assign(new Error("小红书 BrowserSession/Context 不满足可信身份绑定前置条件"), { code: "XHS_IDENTITY_RUNTIME_UNAVAILABLE" });
     }
-    if (runtime.runtimeAuthState !== "AUTHENTICATED") throw Object.assign(new Error("小红书运行时尚未处于 AUTHENTICATED 状态"), { code: "XHS_IDENTITY_RUNTIME_UNAUTHENTICATED" });
+    // A restored persistent profile can retain a live, exact Creator /new/home
+    // Page before the generic runtime classifier has re-run in this process.
+    // In that narrow UNVERIFIED state, the page-scoped proof below remains the
+    // authority. LOGIN/SECURITY/CHECKING and disconnected states stay blocked.
+    const runtimeStateAllowsFreshIdentityProof = runtime.runtimeAuthState === "AUTHENTICATED" || runtime.runtimeAuthState === "UNVERIFIED";
+    if (!runtimeStateAllowsFreshIdentityProof) throw Object.assign(new Error("小红书运行时尚未处于可验证登录状态"), { code: "XHS_IDENTITY_RUNTIME_UNAUTHENTICATED" });
     if (typeof adapter.verifyIdentityOnContextPage !== "function") throw Object.assign(new Error("当前小红书运行时未提供 Page-scoped identity verifier"), { code: "XHS_PAGE_SCOPED_IDENTITY_VERIFIER_UNAVAILABLE" });
     const identity = await adapter.verifyIdentityOnContextPage(this.context(account));
     if (identity.status !== "PASS" || !identity.proof) throw Object.assign(new Error("小红书 Page-scoped Creator identity proof 未通过"), { code: identity.failureCode ?? "XHS_IDENTITY_UNVERIFIED" });
@@ -524,13 +529,7 @@ export class XhsIdentityService {
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/.test(observedCreatorId)) throw Object.assign(new Error("小红书 Creator 稳定外部 ID 不可读，拒绝绑定"), { code: "XHS_IDENTITY_UNVERIFIED" });
     const existingBinding = this.options.repository.getPlatformAccountIdentityBinding("xiaohongshu", account.id);
     const expectedBefore = existingBinding?.externalCreatorId ?? account.externalAccountId ?? null;
-    if (expectedBefore && expectedBefore !== observedCreatorId) throw Object.assign(new Error("当前登录的小红书 Creator 身份与已绑定账号不一致"), { code: "XHS_CREATOR_IDENTITY_MISMATCH" });
-    const persisted = this.options.repository.bootstrapXhsCreatorIdentity({ accountId: account.id, observedCreatorId, displayName: null, profileUrl: null });
-    const reloadedAccount = this.options.repository.getAccountById(account.id, "xiaohongshu");
-    const reloadedBinding = this.options.repository.getPlatformAccountIdentityBinding("xiaohongshu", account.id);
-    if (!reloadedAccount || !reloadedBinding || reloadedAccount.externalAccountId !== observedCreatorId || reloadedBinding.accountId !== account.id || reloadedBinding.externalCreatorId !== observedCreatorId || persisted.account.externalAccountId !== observedCreatorId || persisted.binding.externalCreatorId !== observedCreatorId) {
-      throw Object.assign(new Error("小红书 Creator identity bootstrap 提交后一致性复核失败"), { code: "XHS_IDENTITY_BOOTSTRAP_REVALIDATION_FAILED" });
-    }
+    const mismatch = Boolean(expectedBefore && expectedBefore !== observedCreatorId);
     const observed = {
       platformKey: "xiaohongshu" as const,
       externalCreatorId: observedCreatorId,
@@ -540,10 +539,10 @@ export class XhsIdentityService {
       stable: true
     };
     return {
-      expectedExternalCreatorId: observedCreatorId,
+      expectedExternalCreatorId: expectedBefore,
       observed,
-      verified: true,
-      mismatch: false,
+      verified: !mismatch,
+      mismatch,
       canonicalContextId: proof.contextId,
       canonicalPageId: proof.pageId,
       canonicalPageUrl: `https://creator.xiaohongshu.com${proof.pagePathname}`,
@@ -551,6 +550,23 @@ export class XhsIdentityService {
       pageUrlConsistency: "PASS",
       routeClass: "CREATOR_HOME"
     };
+  }
+
+  async bootstrapCreatorIdentity(accountId: string): Promise<CreatorIdentityVerificationResult> {
+    const observed = await this.observeCreatorIdentityForLogin(accountId);
+    if (observed.mismatch) throw Object.assign(new Error("当前登录的小红书 Creator 身份与已绑定账号不一致"), { code: "XHS_CREATOR_IDENTITY_MISMATCH" });
+    if (!observed.verified || !observed.observed.externalCreatorId) throw Object.assign(new Error("小红书 Page-scoped Creator identity proof 未通过"), { code: "XHS_IDENTITY_UNVERIFIED" });
+    const account = this.requireAccount(accountId);
+    const observedCreatorId = observed.observed.externalCreatorId;
+    const bootstrap = this.options.repository.bootstrapXhsCreatorIdentity;
+    if (typeof bootstrap !== "function") throw Object.assign(new Error("当前数据库未提供 XHS Creator identity bootstrap"), { code: "XHS_IDENTITY_BOOTSTRAP_UNAVAILABLE" });
+    const persisted = bootstrap.call(this.options.repository, { accountId: account.id, observedCreatorId, displayName: null, profileUrl: null });
+    const reloadedAccount = this.options.repository.getAccountById(account.id, "xiaohongshu");
+    const reloadedBinding = this.options.repository.getPlatformAccountIdentityBinding("xiaohongshu", account.id);
+    if (!reloadedAccount || !reloadedBinding || reloadedAccount.externalAccountId !== observedCreatorId || reloadedBinding.accountId !== account.id || reloadedBinding.externalCreatorId !== observedCreatorId || persisted.account.externalAccountId !== observedCreatorId || persisted.binding.externalCreatorId !== observedCreatorId) {
+      throw Object.assign(new Error("小红书 Creator identity bootstrap 提交后一致性复核失败"), { code: "XHS_IDENTITY_BOOTSTRAP_REVALIDATION_FAILED" });
+    }
+    return { ...observed, expectedExternalCreatorId: observedCreatorId, verified: true, mismatch: false };
   }
 
   async verifyCreatorIdentity(accountId: string): Promise<CreatorIdentityVerificationResult> {

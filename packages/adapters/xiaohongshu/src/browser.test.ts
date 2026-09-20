@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { AccountContext, PublishArticleInput } from "@publisher/domain";
 import type { BrowserSession, BrowserSessionManager } from "@publisher/adapters-core";
@@ -832,7 +833,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   it("evaluates the existing creator home without navigating away and emits raw login evidence", async () => {
     const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
     installSharedConnectionLifecycle(fixture);
-    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "数据看板", "创作服务平台", "账号状态正常"], displayName: "测试账号", externalAccountId: "123456789" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "数据看板", "创作服务平台", "账号状态正常"], displayName: "苏州别墅光伏", externalAccountId: "960803317" });
     const evaluations: Array<Record<string, unknown>> = [];
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager, onLoginEvaluation: (evaluation: Record<string, unknown>) => evaluations.push(evaluation) } as never);
 
@@ -865,7 +866,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   });
 
   it("marks the deferred completed-login runtime authenticated before identity proof", async () => {
-    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", accountLabelText: "小红书账号：123456789" });
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", accountLabelText: "小红书账号：960803317" });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager, loginStabilityWindowMs: 0 });
     const ctx = context("account-a");
 
@@ -938,6 +939,181 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     expect(fixture.open).toHaveBeenCalledWith({ platformKey: "xiaohongshu", accountId: "account-a" }, expect.anything(), "VISIBLE");
   });
 
+  it("checks an ordinary-production login on the authenticated canonical Page before creating any operation Page", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: "https://creator.xiaohongshu.com/user/profile/960803317" });
+    (fixture.session as unknown as { runtimeSessionIdentity: string }).runtimeSessionIdentity = "runtime-session-a";
+    installSharedConnectionLifecycle(fixture);
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "数据看板"], externalAccountId: "960803317" });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager, loginStabilityWindowMs: 0 });
+    const ctx = {
+      ...context("account-a"),
+      settings: {
+        ...context("account-a").settings,
+        ordinaryProduction: true,
+        publishJobId: "ordinary-job-a",
+        expectedExternalCreatorId: "960803317"
+      }
+    };
+
+    await adapter.connectAccount(ctx);
+    await expect(adapter.checkLogin(ctx)).resolves.toBe("logged_in");
+
+    expect(fixture.manager.openOperationPage).not.toHaveBeenCalled();
+    expect(fixture.manager.closeOperationPage).not.toHaveBeenCalled();
+  });
+
+  it("records a Creator proof on the authenticated canonical Page for ordinary production", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: "https://creator.xiaohongshu.com/user/profile/960803317" });
+    installSharedConnectionLifecycle(fixture);
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "数据看板"], externalAccountId: "960803317" });
+    (fixture.session as unknown as { runtimeSessionIdentity: string }).runtimeSessionIdentity = "runtime-session-a";
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager, loginStabilityWindowMs: 0 });
+    const ctx = {
+      ...context("account-a"),
+      settings: { ...context("account-a").settings, ordinaryProduction: true, publishJobId: "ordinary-job-a", expectedExternalCreatorId: "960803317" }
+    };
+
+    await adapter.connectAccount(ctx);
+    await expect(adapter.checkLogin(ctx)).resolves.toBe("logged_in");
+
+    const proofs = (adapter as unknown as { productionIdentityProofs: Map<string, unknown> }).productionIdentityProofs;
+    expect(proofs.get("xiaohongshu:account-a")).toMatchObject({
+      creatorId: "960803317",
+      browserSessionId: "runtime-session-a",
+      contextId: "context-debug-id",
+      pageId: "canonical-page-debug-id",
+      pagePathname: "/new/home"
+    });
+  });
+
+  it("uses the verified same-page Creator proof after editor navigation instead of opening a second identity Page", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: "https://creator.xiaohongshu.com/user/profile/960803317" });
+    installSharedConnectionLifecycle(fixture);
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "数据看板"], externalAccountId: "960803317" });
+    (fixture.session as unknown as { runtimeSessionIdentity: string }).runtimeSessionIdentity = "runtime-session-a";
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager, loginStabilityWindowMs: 0 });
+    const ctx = {
+      ...context("account-a"),
+      settings: { ...context("account-a").settings, ordinaryProduction: true, publishJobId: "ordinary-job-a", expectedExternalCreatorId: "960803317" }
+    };
+    const imageBytes = new Uint8Array(19226);
+    const productionArticle: PublishArticleInput = {
+      ...article,
+      images: ["C:/fixtures/task10s-safe-test.png"],
+      contentSnapshotId: "snapshot-a",
+      boundImages: [{ assetId: "image-a", name: "task10s-safe-test.png", mimeType: "image/png", sha256: createHash("sha256").update(imageBytes).digest("hex"), buffer: imageBytes }]
+    };
+
+    await adapter.connectAccount(ctx);
+    await adapter.checkLogin(ctx);
+    const proof = (adapter as unknown as { productionIdentityProofs: Map<string, unknown> }).productionIdentityProofs.get("xiaohongshu:account-a");
+    vi.mocked(fixture.page.url).mockReturnValue("https://creator.xiaohongshu.com/publish/publish");
+    (adapter as unknown as { productionPages: Map<string, unknown> }).productionPages.set("ordinary-job-a", {
+      accountId: "account-a", snapshotId: "snapshot-a", creatorId: "960803317", page: fixture.page, session: fixture.session,
+      pageDebugId: "canonical-page-debug-id", identityProof: proof,
+      imageSha256: createHash("sha256").update(imageBytes).digest("hex"), imageSurfaceHash: createHash("sha256").update("[]").digest("hex"), title: productionArticle.title, body: productionArticle.body, submitted: false
+    });
+
+    await expect((adapter as unknown as { productionSubjectAndReadback: (value: typeof ctx, value2: PublishArticleInput) => Promise<unknown> }).productionSubjectAndReadback(ctx, productionArticle)).rejects.toBeDefined();
+    expect(fixture.manager.openOperationPage).not.toHaveBeenCalled();
+  });
+
+  it("prepares ordinary production on that same authenticated canonical Page", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: "https://creator.xiaohongshu.com/user/profile/960803317", settings: [{ label: "公开范围", required: false, value: "公开" }] });
+    (fixture.session as unknown as { runtimeSessionIdentity: string }).runtimeSessionIdentity = "runtime-session-a";
+    installSharedConnectionLifecycle(fixture);
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "数据看板"], externalAccountId: "960803317" });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager, loginStabilityWindowMs: 0 });
+    const ctx = {
+      ...context("account-a"),
+      settings: {
+        ...context("account-a").settings,
+        ordinaryProduction: true,
+        publishJobId: "ordinary-job-a",
+        expectedExternalCreatorId: "960803317"
+      }
+    };
+    const imageBytes = new Uint8Array(19226);
+    const productionArticle: PublishArticleInput = {
+      ...article,
+      images: ["C:/fixtures/task10s-safe-test.png"],
+      contentSnapshotId: "snapshot-a",
+      boundImages: [{ assetId: "image-a", name: "task10s-safe-test.png", mimeType: "image/png", sha256: createHash("sha256").update(imageBytes).digest("hex"), buffer: imageBytes }]
+    };
+
+    await adapter.connectAccount(ctx);
+    await expect(adapter.checkLogin(ctx)).resolves.toBe("logged_in");
+    // The fixture intentionally lacks the real editor's post-upload surface,
+    // but the route must already have selected the canonical Page before that
+    // unrelated upload gate fails.
+    await expect(adapter.preparePublish(ctx, productionArticle)).rejects.toMatchObject({ code: "UPLOAD_FAILED" });
+
+    expect(fixture.manager.openOperationPage).not.toHaveBeenCalled();
+  });
+
+  it("keeps ordinary preparation valid when platform preview image URLs rotate after the same single-image upload", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: "https://creator.xiaohongshu.com/user/profile/960803317", settings: [{ label: "公开范围", required: false, value: "公开" }] });
+    (fixture.session as unknown as { runtimeSessionIdentity: string }).runtimeSessionIdentity = "runtime-session-a";
+    installSharedConnectionLifecycle(fixture);
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "数据看板"], externalAccountId: "960803317" });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager, loginStabilityWindowMs: 0 });
+    const ctx = { ...context("account-a"), settings: { ...context("account-a").settings, ordinaryProduction: true, publishJobId: "ordinary-job-a", expectedExternalCreatorId: "960803317" } };
+    const imageBytes = new Uint8Array(19226);
+    const productionArticle: PublishArticleInput = { ...article, images: ["C:/fixtures/task10s-safe-test.png"], contentSnapshotId: "snapshot-a", boundImages: [{ assetId: "image-a", name: "task10s-safe-test.png", mimeType: "image/png", sha256: createHash("sha256").update(imageBytes).digest("hex"), buffer: imageBytes }] };
+
+    await adapter.connectAccount(ctx);
+    await expect(adapter.checkLogin(ctx)).resolves.toBe("logged_in");
+    const proof = (adapter as unknown as { productionIdentityProofs: Map<string, unknown> }).productionIdentityProofs.get("xiaohongshu:account-a");
+    await fixture.page.locator("/publish/publish").click();
+    await fixture.inputSetFiles();
+    await fixture.page.locator("[placeholder*=标题]").fill(productionArticle.title);
+    await fixture.page.locator("textarea").fill(productionArticle.body);
+    (adapter as unknown as { productionPages: Map<string, unknown> }).productionPages.set("ordinary-job-a", {
+      accountId: "account-a", snapshotId: "snapshot-a", creatorId: "960803317", page: fixture.page, session: fixture.session,
+      pageDebugId: "canonical-page-debug-id", identityProof: proof,
+      imageSha256: createHash("sha256").update(imageBytes).digest("hex"), imageSurfaceHash: "preview-url-before-async-refresh", title: productionArticle.title, body: productionArticle.body, submitted: false
+    });
+    await expect((adapter as unknown as { productionSubjectAndReadback: (value: typeof ctx, value2: PublishArticleInput) => Promise<unknown> }).productionSubjectAndReadback(ctx, productionArticle)).resolves.toMatchObject({ verified: true, observedExternalCreatorId: "960803317" });
+    expect(fixture.submitClick).not.toHaveBeenCalled();
+  });
+
+  it("keeps ordinary preparation valid when one selected image has multiple editor preview representations", async () => {
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: "https://creator.xiaohongshu.com/user/profile/960803317", settings: [{ label: "公开范围", required: false, value: "公开" }] });
+    (fixture.session as unknown as { runtimeSessionIdentity: string }).runtimeSessionIdentity = "runtime-session-a";
+    installSharedConnectionLifecycle(fixture);
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "数据看板"], externalAccountId: "960803317" });
+    const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager, loginStabilityWindowMs: 0 });
+    const ctx = { ...context("account-a"), settings: { ...context("account-a").settings, ordinaryProduction: true, publishJobId: "ordinary-job-a", expectedExternalCreatorId: "960803317" } };
+    const imageBytes = new Uint8Array(19226);
+    const productionArticle: PublishArticleInput = { ...article, images: ["C:/fixtures/task10s-safe-test.png"], contentSnapshotId: "snapshot-a", boundImages: [{ assetId: "image-a", name: "task10s-safe-test.png", mimeType: "image/png", sha256: createHash("sha256").update(imageBytes).digest("hex"), buffer: imageBytes }] };
+
+    await adapter.connectAccount(ctx);
+    await expect(adapter.checkLogin(ctx)).resolves.toBe("logged_in");
+    const proof = (adapter as unknown as { productionIdentityProofs: Map<string, unknown> }).productionIdentityProofs.get("xiaohongshu:account-a");
+    await fixture.page.locator("/publish/publish").click();
+    await fixture.inputSetFiles();
+    await fixture.page.locator("[placeholder*=标题]").fill(productionArticle.title);
+    await fixture.page.locator("textarea").fill(productionArticle.body);
+    const originalEvaluate = (fixture.page as unknown as { evaluate: (fn: () => unknown) => Promise<unknown> }).evaluate;
+    (fixture.page as unknown as { evaluate: (fn: () => unknown) => Promise<unknown> }).evaluate = vi.fn(async (fn: () => unknown) => {
+      if (String(fn).includes("imageCandidateElements")) {
+        const oneImage = {
+          tagName: "IMG", classNameSafe: "editor-preview", boundingRect: { x: 20, y: 80, width: 160, height: 160 }, display: "block", visibility: "visible", pointerEvents: "auto", imgPresent: true, imgNaturalWidth: 1080, imgNaturalHeight: 1440, complete: true, blobUrlPresent: false, dataUrlPresent: false, backgroundImagePresent: false, connected: true, visible: true
+        };
+        return { ...fixture.postUploadSnapshot(), imageItems: [oneImage, oneImage, oneImage, oneImage], visibleImageItemCount: 4, imageCounterTextSafe: "1/18" };
+      }
+      return originalEvaluate(fn);
+    });
+    (adapter as unknown as { productionPages: Map<string, unknown> }).productionPages.set("ordinary-job-a", {
+      accountId: "account-a", snapshotId: "snapshot-a", creatorId: "960803317", page: fixture.page, session: fixture.session,
+      pageDebugId: "canonical-page-debug-id", identityProof: proof,
+      imageSha256: createHash("sha256").update(imageBytes).digest("hex"), title: productionArticle.title, body: productionArticle.body, submitted: false
+    });
+
+    await expect((adapter as unknown as { productionSubjectAndReadback: (value: typeof ctx, value2: PublishArticleInput) => Promise<unknown> }).productionSubjectAndReadback(ctx, productionArticle)).resolves.toMatchObject({ verified: true, observedExternalCreatorId: "960803317" });
+    expect(fixture.submitClick).not.toHaveBeenCalled();
+  });
+
   it("accepts a creator home with multiple creator signals despite ordinary login text", async () => {
     const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", securityText: "登录 验证码登录 安全验证帮助文案" });
     installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "数据看板", "创作服务平台"] });
@@ -985,36 +1161,36 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   });
 
   it("reads the stable Xiaohongshu account field instead of guessing an external ID", async () => {
-    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountName: "测试账号", accountLabelText: "小红书账号：123456789" });
-    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "账号状态正常"], displayName: "测试账号", externalAccountId: "123456789" });
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountName: "苏州别墅光伏", accountLabelText: "小红书账号：960803317" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理", "账号状态正常"], displayName: "苏州别墅光伏", externalAccountId: "960803317" });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
 
     await adapter.connectAccount(context("account-a"));
-    await expect(adapter.getAccountProfile(context("account-a"))).resolves.toMatchObject({ accountName: "测试账号", accountId: "123456789" });
+    await expect(adapter.getAccountProfile(context("account-a"))).resolves.toMatchObject({ accountName: "苏州别墅光伏", accountId: "960803317" });
   });
 
   it("reads the Creator ID from the bounded 小红书账号 label on the existing canonical Page", async () => {
-    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountName: "测试账号", accountLabelText: "小红书账号：123456789" });
-    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], displayName: "测试账号" });
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountName: "苏州别墅光伏", accountLabelText: "小红书账号：960803317" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], displayName: "苏州别墅光伏" });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
 
     await adapter.connectAccount(context("account-a"));
     const result = await adapter.inspectCanonicalPageRuntime(context("account-a"));
 
     expect(result).toMatchObject({
-      observedCreatorIdRaw: "123456789",
-      observedCreatorIdNormalized: "123456789",
+      observedCreatorIdRaw: "960803317",
+      observedCreatorIdNormalized: "960803317",
       identityObservationStatus: "PASS",
       identityDomDiagnosticMatchCount: 1
     });
     expect(result.identitySourceCandidates).toEqual(expect.arrayContaining([
-      expect.objectContaining({ source: "CREATOR_HOME_ACCOUNT_LABEL", rawValue: "123456789", normalizedCreatorId: "123456789", semanticAnchor: "xiaohongshu-account-id-label" })
+      expect.objectContaining({ source: "CREATOR_HOME_ACCOUNT_LABEL", rawValue: "960803317", normalizedCreatorId: "960803317", semanticAnchor: "xiaohongshu-account-id-label" })
     ]));
     expect(fixture.page.goto).toHaveBeenCalledTimes(1);
   });
 
   it("verifies identity on Page A and leaves a different publish-editor Page B usable in the same Context", async () => {
-    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountLabelText: "小红书账号：123456789" });
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountLabelText: "小红书账号：960803317" });
     const identityPage = fixture.page;
     const draftPage = {
       url: vi.fn(() => "https://creator.xiaohongshu.com/publish/publish"),
@@ -1031,7 +1207,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
 
     const result = await adapter.verifyIdentityOnContextPage(context("account-a"));
 
-    expect(result).toMatchObject({ status: "PASS", proof: { browserSessionId: "runtime-session-a", contextId: "context-debug-id", pageId: "identity-page-a", pagePathname: "/new/home", creatorId: "123456789" } });
+    expect(result).toMatchObject({ status: "PASS", proof: { browserSessionId: "runtime-session-a", contextId: "context-debug-id", pageId: "identity-page-a", pagePathname: "/new/home", creatorId: "960803317" } });
     expect(identityPage.isClosed).toHaveBeenCalled();
     expect(draftPage.url).toHaveBeenCalled();
     expect(fixture.entryClick).not.toHaveBeenCalled();
@@ -1040,7 +1216,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   });
 
   it("rejects an ambiguous set of identity-capable Pages", async () => {
-    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountLabelText: "小红书账号：123456789" });
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountLabelText: "小红书账号：960803317" });
     (fixture.session as unknown as { runtimeSessionIdentity: string }).runtimeSessionIdentity = "runtime-session-a";
     const secondIdentityPage = {
       url: vi.fn(() => "https://creator.xiaohongshu.com/new/home"),
@@ -1060,7 +1236,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   });
 
   it("consumes a same-runtime identity proof when the home page has only one generic login signal", async () => {
-    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountLabelText: "小红书账号: 123456789" });
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountLabelText: "小红书账号: 960803317" });
     installPageEvidence(fixture, { positiveSignals: ["发布笔记"] });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
     const ctx = {
@@ -1068,8 +1244,8 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
       runtimeIdentityProof: {
         accountId: "account-a",
         platformKey: "xiaohongshu" as const,
-        expectedExternalCreatorId: "123456789",
-        observedExternalCreatorId: "123456789",
+        expectedExternalCreatorId: "960803317",
+        observedExternalCreatorId: "960803317",
         canonicalContextId: "context-debug-id",
         canonicalPageId: "canonical-page-debug-id",
         verified: true as const
@@ -1086,7 +1262,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   });
 
   it("rejects a same-runtime proof bound to a foreign Page before editor entry", async () => {
-    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountLabelText: "小红书账号: 123456789" });
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountLabelText: "小红书账号: 960803317" });
     installPageEvidence(fixture, { positiveSignals: ["发布笔记"] });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
     const ctx = {
@@ -1094,8 +1270,8 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
       runtimeIdentityProof: {
         accountId: "account-a",
         platformKey: "xiaohongshu" as const,
-        expectedExternalCreatorId: "123456789",
-        observedExternalCreatorId: "123456789",
+        expectedExternalCreatorId: "960803317",
+        observedExternalCreatorId: "960803317",
         canonicalContextId: "context-debug-id",
         canonicalPageId: "foreign-page",
         verified: true as const
@@ -1109,12 +1285,12 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   });
 
   it("uses the same bounded Creator ID reader for getAccountProfile", async () => {
-    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountName: "测试账号", accountLabelText: "小红书账号: 123456789" });
-    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], displayName: "测试账号" });
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: null, accountName: "苏州别墅光伏", accountLabelText: "小红书账号: 960803317" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], displayName: "苏州别墅光伏" });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
 
     await adapter.connectAccount(context("account-a"));
-    await expect(adapter.getAccountProfile(context("account-a"))).resolves.toMatchObject({ accountId: "123456789", accountName: "测试账号" });
+    await expect(adapter.getAccountProfile(context("account-a"))).resolves.toMatchObject({ accountId: "960803317", accountName: "苏州别墅光伏" });
   });
 
   it("keeps the owner visible Page through login completion and identity readback", async () => {
@@ -1504,8 +1680,8 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
   });
 
   it("reads canonical URL and stable Creator identity from the existing Page", async () => {
-    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: "https://creator.xiaohongshu.com/user/profile/123456789" });
-    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], externalAccountId: "123456789", displayName: "测试账号", profileUrl: "https://creator.xiaohongshu.com/user/profile/123456789" });
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: "https://creator.xiaohongshu.com/user/profile/960803317" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], externalAccountId: "960803317", displayName: "测试账号", profileUrl: "https://creator.xiaohongshu.com/user/profile/960803317" });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
     const ctx = context("account-a");
 
@@ -1519,14 +1695,14 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
       domLocationHref: "https://creator.xiaohongshu.com/new/home",
       pageUrlConsistency: "PASS",
       routeClass: "CREATOR_HOME",
-      proof: { externalCreatorId: "123456789", stable: true }
+      proof: { externalCreatorId: "960803317", stable: true }
     });
     expect(fixture.manager.openOperationPage).not.toHaveBeenCalled();
   });
 
   it("reports canonical URL disagreement without navigating or opening a replacement Page", async () => {
-    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: "https://creator.xiaohongshu.com/user/profile/123456789" });
-    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], externalAccountId: "123456789", domLocationHref: "https://creator.xiaohongshu.com/publish/publish" });
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: "https://creator.xiaohongshu.com/user/profile/960803317" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], externalAccountId: "960803317", domLocationHref: "https://creator.xiaohongshu.com/publish/publish" });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
     const ctx = context("account-a");
 
@@ -1534,14 +1710,14 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
     (fixture.page.goto as unknown as { mockClear: () => void }).mockClear();
     const result = await (adapter as unknown as { readCanonicalCreatorIdentity: (value: AccountContext, operationId?: string) => Promise<Record<string, unknown>> }).readCanonicalCreatorIdentity(ctx, "task10v-url-mismatch");
 
-    expect(result).toMatchObject({ pageUrlConsistency: "FAIL", proof: { externalCreatorId: "123456789" } });
+    expect(result).toMatchObject({ pageUrlConsistency: "FAIL", proof: { externalCreatorId: "960803317" } });
     expect(fixture.page.goto).not.toHaveBeenCalled();
     expect(fixture.manager.openOperationPage).not.toHaveBeenCalled();
   });
 
   it("probes the existing canonical Page runtime with bounded identity evidence", async () => {
-    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: "https://creator.xiaohongshu.com/user/profile/123456789" });
-    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], externalAccountId: "123456789", displayName: "测试账号", profileUrl: "https://creator.xiaohongshu.com/user/profile/123456789" });
+    const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home", profileHref: "https://creator.xiaohongshu.com/user/profile/960803317" });
+    installPageEvidence(fixture, { positiveSignals: ["发布笔记", "笔记管理"], externalAccountId: "960803317", displayName: "测试账号", profileUrl: "https://creator.xiaohongshu.com/user/profile/960803317" });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
     const ctx = context("account-a");
     await adapter.connectAccount(ctx);
@@ -1562,8 +1738,8 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
       domLocationHref: "https://creator.xiaohongshu.com/new/home",
       pageUrlConsistency: "PASS",
       domLocationEvaluateStatus: "PASS",
-      observedCreatorIdRaw: "123456789",
-      observedCreatorIdNormalized: "123456789",
+      observedCreatorIdRaw: "960803317",
+      observedCreatorIdNormalized: "960803317",
       identityObservationStatus: "PASS"
     });
     expect(result.identitySourceCandidates).toEqual(expect.arrayContaining([
@@ -1575,7 +1751,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
 
   it("ignores query and hash differences when canonical URL origin and pathname match", async () => {
     const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home?tab=notes#top" });
-    installPageEvidence(fixture, { externalAccountId: "123456789", profileUrl: "https://creator.xiaohongshu.com/user/profile/123456789" });
+    installPageEvidence(fixture, { externalAccountId: "960803317", profileUrl: "https://creator.xiaohongshu.com/user/profile/960803317" });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
     await adapter.connectAccount(context("account-a"));
 
@@ -1588,7 +1764,7 @@ describe("Xiaohongshu BrowserAutomation article gate", () => {
 
   it("returns a structured URL consistency failure without navigating", async () => {
     const fixture = setupPage({ pageUrl: "https://creator.xiaohongshu.com/new/home" });
-    installPageEvidence(fixture, { domLocationHref: "https://creator.xiaohongshu.com/publish/publish", externalAccountId: "123456789" });
+    installPageEvidence(fixture, { domLocationHref: "https://creator.xiaohongshu.com/publish/publish", externalAccountId: "960803317" });
     const adapter = new XiaohongshuBrowserAdapter({ sessionManager: fixture.manager });
     await adapter.connectAccount(context("account-a"));
     (fixture.page.goto as unknown as { mockClear: () => void }).mockClear();

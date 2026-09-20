@@ -22,3 +22,4 @@ describe("Toutiao gate-only preflight", () => {
     expect(isToutiaoReadyForFinalSubmit({ ...passingGates, finalSubmitControl: false })).toBe(false);
   });
 });
+

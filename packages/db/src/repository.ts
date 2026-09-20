@@ -58,6 +58,18 @@ export interface ProductionPilotPreparedBinding {
   registeredAt: string;
 }
 
+export interface ProductionPilotOwnerVerification {
+  source: "OWNER_MANAGER_LIST";
+  managerPage: string;
+  observedAt: string;
+  accountId: string;
+  creatorId: string;
+  title: string;
+  snapshotId: string;
+  candidateCount: number;
+  conflictingSameTitleCount: number;
+}
+
 const ONE_SHOT_CONFIRMATION_ERROR = "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED";
 const ONE_SHOT_CONFIRMATION_STEP = "PUBLISH_CONFIRMATION";
 
@@ -2516,7 +2528,7 @@ export class AppRepository {
     return this.getJob(id) as PublishJob;
   }
 
-  createArticlePublishJob(input: { articleId: string; platformKey: string; platformAccountId: string; publishMode?: "ASSISTED" | "MANUAL"; finalPublishMode?: FinalPublishMode; selectedImageAssetId?: string | null; imageSelectionMode?: ImageSelectionMode }): PublishJob {
+  createArticlePublishJob(input: { articleId: string; platformKey: string; platformAccountId: string; publishMode?: "ASSISTED" | "MANUAL"; finalPublishMode?: FinalPublishMode; selectedImageAssetId?: string | null; imageSelectionMode?: ImageSelectionMode; crossBrandImageBindingPermit?: { articleId: string; imageAssetId: string } | null; formalPilotId?: string }): PublishJob {
     return this.db.transaction(() => {
     const article = this.getArticle(input.articleId);
     if (!article) throw new Error("文章不存在");
@@ -2530,15 +2542,17 @@ export class AppRepository {
     let selectedImageAssetId = input.selectedImageAssetId ?? null;
     if (selectedImageAssetId) {
       const image = this.getImageAsset(selectedImageAssetId);
-      if (!image || !image.enabled || (image.brandId && image.brandId !== article.brandId)) throw new Error("所选配图不可用或与文章品牌不匹配");
+      const permittedCrossBrandBinding = input.crossBrandImageBindingPermit?.articleId === article.id && input.crossBrandImageBindingPermit.imageAssetId === selectedImageAssetId;
+      if (!image || !image.enabled || (image.brandId && image.brandId !== article.brandId && !permittedCrossBrandBinding)) throw new Error("所选配图不可用或与文章品牌不匹配");
     }
     const existing = this.db.prepare("SELECT id FROM publish_jobs WHERE platform_account_id=? AND platform_key=? AND article_id=? AND status NOT IN ('Failed','Cancelled','ReconciledNotPublished') ORDER BY created_at DESC LIMIT 1").get(account.platformAccountId, input.platformKey, input.articleId) as Row | undefined;
     if (existing) {
       const prior = this.getJob(textValue(existing.id)) as PublishJob;
       if (!prior.contentBindingId || ["Submitted", "Publishing", "Published", "Success", "Running", "Submitting"].includes(prior.status)) return prior;
+      const formalPilotReprepare = input.formalPilotId ? this.canRefreshFormalPilotPreSubmitJob(prior, input.formalPilotId) : false;
       let current = true;
       try { this.contentSnapshots.assertCurrent(prior.id); } catch { current = false; }
-      if (current && (prior.selectedImageAssetId ?? null) === selectedImageAssetId) return prior;
+      if (current && (prior.selectedImageAssetId ?? null) === selectedImageAssetId && !formalPilotReprepare) return prior;
       this.contentSnapshots.invalidate(prior.id, "EXPLICIT_REPREPARE");
       this.db.prepare("UPDATE publish_jobs SET status='Cancelled',manual_confirmation_required=1 WHERE id=?").run(prior.id);
     }
@@ -2552,6 +2566,21 @@ export class AppRepository {
     this.db.prepare("INSERT INTO publish_jobs (id,plan_id,account_id,platform_account_id,platform_key,article_id,article_variant_id,scheduled_at,status,max_attempts,created_at,dry_run,manual_confirmation_required,selected_image_asset_id,image_selection_mode,final_publish_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(id, null, account.id, account.platformAccountId, input.platformKey, input.articleId, null, timestamp, apiAutoPublish ? "Scheduled" : "AwaitingConfirmation", 3, timestamp, 0, apiAutoPublish ? 0 : 1, selectedImageAssetId, requestedImageMode, finalPublishMode);
     return this.getJob(id) as PublishJob;
     }).immediate();
+  }
+
+  /**
+   * A formal pilot may outlive a local pre-submit editor attempt.  Only a job
+   * that predates that pilot and has no intent, dispatch claim, or pilot slot
+   * may be retired into a fresh prepare job.  The old job and snapshot remain
+   * durable evidence; this helper never mutates a submission boundary.
+   */
+  private canRefreshFormalPilotPreSubmitJob(job: PublishJob, pilotId: string): boolean {
+    const authorization = this.getProductionPilotAuthorization(pilotId);
+    if (!authorization || job.createdAt >= authorization.createdAt || !job.contentBindingId || !["AwaitingConfirmation", "Scheduled", "NeedsUserAction", "Retry", "DryRunPassed"].includes(job.status)) return false;
+    if (this.db.prepare("SELECT 1 FROM submission_intents WHERE job_id=? LIMIT 1").get(job.id)) return false;
+    if (this.db.prepare("SELECT 1 FROM submission_dispatch_claims WHERE job_id=? LIMIT 1").get(job.id)) return false;
+    if (this.db.prepare("SELECT 1 FROM production_pilot_slots WHERE pilot_id=? AND job_id=? LIMIT 1").get(pilotId, job.id)) return false;
+    return true;
   }
 
   previewExcelArticleImport(input: {
@@ -3228,31 +3257,34 @@ export class AppRepository {
    * IPC and rejects hand-entered IDs, noncanonical URLs, and unverifiable
    * receipt evidence.
    */
-  recordProductionPilotAccepted(input: { pilotId: string; intentId: string; externalId: string; publishedUrl: string; receiptSha256: string }): ProductionPilotSlot {
+  recordProductionPilotAccepted(input: { pilotId: string; intentId: string; externalId: string; publishedUrl?: string | null; receiptSha256: string }): ProductionPilotSlot {
     const externalId = input.externalId.trim();
     const receiptSha256 = input.receiptSha256.trim().toLowerCase();
-    let canonicalUrl: string;
-    try {
+    let canonicalUrl: string | null = null;
+    if (input.publishedUrl) try {
       const parsed = new URL(input.publishedUrl);
-      if (parsed.protocol !== "https:" || !(parsed.hostname === "www.xiaohongshu.com" || parsed.hostname.endsWith(".xiaohongshu.com")) || !parsed.pathname.startsWith("/explore/")) throw new Error("not canonical");
+      if (parsed.protocol !== "https:" || !(parsed.hostname === "www.xiaohongshu.com" || parsed.hostname.endsWith(".xiaohongshu.com"))) throw new Error("not canonical");
       canonicalUrl = `${parsed.origin}${parsed.pathname}`;
-    } catch {
-      throw Object.assign(new Error("PRODUCTION_PILOT_ACCEPTANCE_URL_INVALID"), { code: "USER_ACTION_REQUIRED" });
-    }
+    } catch { throw Object.assign(new Error("PRODUCTION_PILOT_ACCEPTANCE_URL_INVALID"), { code: "USER_ACTION_REQUIRED" }); }
     if (!/^[A-Za-z0-9_-]{1,200}$/u.test(externalId) || !/^[0-9a-f]{64}$/u.test(receiptSha256)) throw Object.assign(new Error("PRODUCTION_PILOT_ACCEPTANCE_EVIDENCE_INVALID"), { code: "USER_ACTION_REQUIRED" });
     return this.db.transaction(() => {
-      const row = this.db.prepare("SELECT * FROM production_pilot_slots WHERE pilot_id=? AND intent_id=? AND state='Claimed'").get(input.pilotId, input.intentId) as Row | undefined;
+      const row = this.db.prepare("SELECT * FROM production_pilot_slots WHERE pilot_id=? AND intent_id=?").get(input.pilotId, input.intentId) as Row | undefined;
       if (!row) throw Object.assign(new Error("PRODUCTION_PILOT_ACCEPTANCE_TRANSITION_REJECTED"), { code: "USER_ACTION_REQUIRED" });
+      if (textValue(row.state) === "Accepted") {
+        if (textValue(row.accepted_external_id) !== externalId || textValue(row.accepted_url) !== (canonicalUrl ?? "") || textValue(row.receipt_sha256) !== receiptSha256) throw Object.assign(new Error("PRODUCTION_PILOT_ACCEPTANCE_REPLAY_CONFLICT"), { code: "USER_ACTION_REQUIRED" });
+        return this.listProductionPilotSlots(input.pilotId).find((candidate) => candidate.intentId === input.intentId) as ProductionPilotSlot;
+      }
+      if (!["Claimed", "Unknown"].includes(textValue(row.state))) throw Object.assign(new Error("PRODUCTION_PILOT_ACCEPTANCE_TRANSITION_REJECTED"), { code: "USER_ACTION_REQUIRED" });
       const job = this.getJob(textValue(row.job_id));
       const record = this.getPublishRecordByJob(textValue(row.job_id));
       const intent = this.getSubmissionIntentByJob(textValue(row.job_id));
-      if (!job || !record || !intent || record.id !== textValue(row.publish_record_id) || intent.id !== input.intentId || intent.finalSubmitCount !== 1 || intent.state !== "Submitting") {
+      if (!job || !record || !intent || record.id !== textValue(row.publish_record_id) || intent.id !== input.intentId || intent.finalSubmitCount !== 1 || !["Submitting", "Unknown"].includes(intent.state)) {
         throw Object.assign(new Error("PRODUCTION_PILOT_ACCEPTANCE_BINDING_MISMATCH"), { code: "USER_ACTION_REQUIRED" });
       }
       const timestamp = now();
-      this.db.prepare("UPDATE production_pilot_slots SET state='Accepted',accepted_external_id=?,accepted_url=?,receipt_sha256=?,updated_at=? WHERE pilot_id=? AND intent_id=? AND state='Claimed'")
+      this.db.prepare("UPDATE production_pilot_slots SET state='Accepted',accepted_external_id=?,accepted_url=?,receipt_sha256=?,updated_at=? WHERE pilot_id=? AND intent_id=? AND state IN ('Claimed','Unknown')")
         .run(externalId, canonicalUrl, receiptSha256, timestamp, input.pilotId, input.intentId);
-      this.db.prepare("UPDATE submission_intents SET state='Submitted',external_id=?,error_code=NULL,updated_at=? WHERE id=? AND state='Submitting' AND final_submit_count=1")
+      this.db.prepare("UPDATE submission_intents SET state='Submitted',external_id=?,error_code=NULL,updated_at=? WHERE id=? AND state IN ('Submitting','Unknown') AND final_submit_count=1")
         .run(externalId, timestamp, input.intentId);
       this.db.prepare("UPDATE submission_dispatch_claims SET state='Accepted' WHERE intent_id=? AND state='Claimed'").run(input.intentId);
       this.updatePublishRecord(record.id, {
@@ -3319,6 +3351,59 @@ export class AppRepository {
         .run(input.errorCode.slice(0, 200), now(), input.pilotId, input.intentId);
       if (result.changes !== 1) throw Object.assign(new Error("PRODUCTION_PILOT_SLOT_UNKNOWN_TRANSITION_REJECTED"), { code: "USER_ACTION_REQUIRED" });
       return job;
+    }).immediate();
+  }
+
+  /**
+   * Main-side Owner reconciliation for a platform result verified in the
+   * Creator manager.  This is deliberately separate from receipt acceptance:
+   * it records Published with verificationStatus=OwnerVerified and leaves
+   * external id/url null when the manager exposes neither.
+   */
+  recordProductionPilotOwnerVerifiedPublished(input: { pilotId: string; jobId: string; intentId: string; ownerConfirmation: ProductionPilotOwnerVerification }): ProductionPilotSlot {
+    const confirmation = input.ownerConfirmation;
+    let managerPage: URL;
+    try {
+      managerPage = new URL(confirmation.managerPage);
+    } catch { throw Object.assign(new Error("OWNER_RECONCILIATION_EVIDENCE_INVALID"), { code: "USER_ACTION_REQUIRED" }); }
+    if (confirmation.source !== "OWNER_MANAGER_LIST" || managerPage.protocol !== "https:" || managerPage.hostname !== "creator.xiaohongshu.com" || managerPage.pathname !== "/new/note-manager" || !Number.isFinite(Date.parse(confirmation.observedAt)) || confirmation.candidateCount !== 1 || confirmation.conflictingSameTitleCount !== 0 || !confirmation.accountId.trim() || !confirmation.creatorId.trim() || !confirmation.title.trim() || !confirmation.snapshotId.trim()) {
+      throw Object.assign(new Error("OWNER_RECONCILIATION_EVIDENCE_INVALID"), { code: "USER_ACTION_REQUIRED" });
+    }
+    return this.db.transaction(() => {
+      const authorization = this.getProductionPilotAuthorization(input.pilotId);
+      if (!authorization) throw Object.assign(new Error("OWNER_RECONCILIATION_PILOT_EXPIRED_OR_MISSING"), { code: "USER_ACTION_REQUIRED" });
+      const slotRow = this.db.prepare("SELECT * FROM production_pilot_slots WHERE pilot_id=? AND intent_id=?").get(input.pilotId, input.intentId) as Row | undefined;
+      if (!slotRow) throw Object.assign(new Error("OWNER_RECONCILIATION_SLOT_NOT_FOUND"), { code: "USER_ACTION_REQUIRED" });
+      const job = this.getJob(textValue(slotRow.job_id));
+      const intent = this.db.prepare("SELECT * FROM submission_intents WHERE id=?").get(input.intentId) as Row | undefined;
+      const claim = this.db.prepare("SELECT * FROM submission_dispatch_claims WHERE intent_id=?").get(input.intentId) as Row | undefined;
+      const binding = this.getProductionPilotPreparedBinding(input.pilotId, textValue(slotRow.job_id));
+      const record = this.getPublishRecordByJob(textValue(slotRow.job_id));
+      const snapshot = job?.contentBindingId ? this.contentSnapshots.get(job.contentBindingId) : null;
+      const article = job ? this.getArticle(job.articleId) : null;
+      if (!job || !intent || !claim || !binding || !record || !snapshot || !article || input.jobId !== textValue(slotRow.job_id) || input.jobId !== textValue(intent.job_id) || binding.jobId !== input.jobId || record.jobId !== input.jobId || textValue(slotRow.snapshot_id) !== confirmation.snapshotId || binding.snapshotId !== confirmation.snapshotId || job.contentBindingId !== confirmation.snapshotId || snapshot.accountId !== confirmation.accountId || snapshot.creatorId !== confirmation.creatorId || snapshot.sourceArticleId !== job.articleId || job.accountId !== confirmation.accountId || record.accountId !== confirmation.accountId || record.articleId !== job.articleId || record.contentBindingId !== confirmation.snapshotId || snapshot.rawTitle !== confirmation.title || textValue(slotRow.account_id) !== confirmation.accountId || textValue(slotRow.creator_id) !== confirmation.creatorId) {
+        throw Object.assign(new Error("OWNER_RECONCILIATION_BINDING_MISMATCH"), { code: "USER_ACTION_REQUIRED" });
+      }
+      if (textValue(slotRow.state) === "Published") {
+        if (record.verificationStatus !== "OwnerVerified" || intent.state !== "Submitted" || textValue(claim.state) !== "Accepted") throw Object.assign(new Error("OWNER_RECONCILIATION_STATE_MISMATCH"), { code: "USER_ACTION_REQUIRED" });
+        return this.listProductionPilotSlots(input.pilotId).find((candidate) => candidate.intentId === input.intentId) as ProductionPilotSlot;
+      }
+      if (textValue(slotRow.state) !== "Unknown" || textValue(intent.state) !== "Unknown" || intValue(intent.final_submit_count) !== 1 || textValue(claim.state) !== "Claimed" || textValue(job.status) !== "NeedsReconciliation" || textValue(record.status) !== "Prepared") {
+        throw Object.assign(new Error("OWNER_RECONCILIATION_TRANSITION_REJECTED"), { code: "USER_ACTION_REQUIRED" });
+      }
+      const timestamp = now();
+      const evidence = { reconciliationStatus: "PUBLISHED_VERIFIED_BY_OWNER", verificationSource: confirmation.source, managerPage: managerPage.origin + managerPage.pathname, observedAt: confirmation.observedAt, ownerConfirmation: true, jobId: job.id, intentId: input.intentId, snapshotId: snapshot.id, accountId: confirmation.accountId, creatorId: confirmation.creatorId, title: snapshot.rawTitle, externalId: null, publishedUrl: null, productionPilotReceiptSha256: typeof slotRow.receipt_sha256 === "string" ? slotRow.receipt_sha256 : null };
+      this.db.prepare("UPDATE production_pilot_slots SET state='Published',unknown_error_code=NULL,updated_at=? WHERE pilot_id=? AND intent_id=? AND state='Unknown'").run(timestamp, input.pilotId, input.intentId);
+      this.db.prepare("UPDATE submission_intents SET state='Submitted',external_id=NULL,error_code=NULL,updated_at=? WHERE id=? AND state='Unknown' AND final_submit_count=1").run(timestamp, input.intentId);
+      this.db.prepare("UPDATE submission_dispatch_claims SET state='Accepted',resolution_json=?,resolved_at=? WHERE intent_id=? AND state='Claimed'").run(json(evidence), timestamp, input.intentId);
+      this.updatePublishRecord(record.id, { status: "Published", success: true, publishedUrl: null, publishedExternalId: null, response: { ...record.response, ...evidence }, verificationStatus: "OwnerVerified" });
+      this.db.prepare("UPDATE publish_jobs SET status='Success',external_id=NULL,publish_record_id=?,last_error_code=NULL,last_error_message=NULL,next_retry_at=NULL,finished_at=? WHERE id=? AND status='NeedsReconciliation'").run(record.id, timestamp, job.id);
+      this.markArticlePublished(job.articleId);
+      this.markAccountPublished(job.accountId);
+      this.insertLog({ level: "info", module: "PUBLISHER", code: "OWNER_VERIFIED_PUBLISHED", message: "小红书笔记由Owner在创作服务平台已发布列表中确认并收口", context: evidence });
+      const slot = this.listProductionPilotSlots(input.pilotId).find((candidate) => candidate.intentId === input.intentId);
+      if (!slot || slot.state !== "Published") throw new Error("OWNER_RECONCILIATION_TRANSITION_MISSING");
+      return slot;
     }).immediate();
   }
 
@@ -3559,7 +3644,7 @@ export class AppRepository {
       this.seedPlatforms(csvPath, true);
       this.seedPlatformProfiles();
       if (this.listBrands().length === 0) {
-        const brand = this.createBrand({ name: "示例环保", companyName: "示例企业", description: "提供本地化环保治理服务的示例品牌，内容生成仅使用已录入资料。", mainBusiness: "甲醛检测与治理、室内空气质量服务", serviceRegions: ["江苏"], advantages: ["本地服务流程清晰", "支持现场评估"], contact: { phone: "待填写", email: "待填写" }, serviceProcess: "需求沟通 → 现场评估 → 方案确认 → 服务实施 → 售后反馈", afterSales: "以双方确认的服务约定为准", faq: "服务前需要准备哪些信息？可先提供房屋类型、面积和问题描述。", aiForbiddenClaims: ["禁止虚构不存在的资质证书", "禁止写行业第一或绝对化排名", "禁止虚构客户名称、检测数据和专利"] });
+        const brand = this.createBrand({ name: "康一环保", companyName: "江苏康一环保科技有限公司", description: "提供本地化环保治理服务的示例品牌，内容生成仅使用已录入资料。", mainBusiness: "甲醛检测与治理、室内空气质量服务", serviceRegions: ["江苏"], advantages: ["本地服务流程清晰", "支持现场评估"], contact: { phone: "待填写", email: "待填写" }, serviceProcess: "需求沟通 → 现场评估 → 方案确认 → 服务实施 → 售后反馈", afterSales: "以双方确认的服务约定为准", faq: "服务前需要准备哪些信息？可先提供房屋类型、面积和问题描述。", aiForbiddenClaims: ["禁止虚构不存在的资质证书", "禁止写行业第一或绝对化排名", "禁止虚构客户名称、检测数据和专利"] });
         const templates = ["{城市}甲醛治理哪家好", "{城市}除甲醛公司推荐", "{城市}专业除甲醛公司", "{城市}新房除甲醛多少钱", "{城市}办公室甲醛治理", "{城市}甲醛检测机构", "{城市}甲醛治理公司怎么选", "{城市}新房甲醛治理流程"];
         for (const template of templates) this.createKeywordTemplate({ brandId: brand.id, template, category: "本地服务" });
       }
@@ -3877,6 +3962,7 @@ function toStoredVideoAsset(row: Row, db: Database.Database): StoredVideoAsset {
   const status: StoredVideoAssetStatus = records.some((record) => boolValue(record.success) && !boolValue(record.dry_run) && textValue(record.status) === "Published") ? "Published" : records.some((record) => textValue(record.status) === "Failed" || (!boolValue(record.success) && !boolValue(record.dry_run))) || jobs.some((job) => textValue(job.status) === "Failed") ? "Failed" : records.some((record) => boolValue(record.success) && boolValue(record.dry_run)) ? "DryRun" : jobs.length > 0 ? "Ready" : ["Draft", "Ready", "DryRun", "Published", "Failed"].includes(storedStatus) ? storedStatus : "Draft";
   return { ...toVideoAsset(row), brandId: typeof row.brand_id === "string" ? row.brand_id : null, title: textValue(row.title) || textValue(row.file_name), description: textValue(metadata.description), tags: Array.isArray(metadata.tags) ? metadata.tags.filter((item): item is string => typeof item === "string") : [], coverPath: typeof metadata.coverPath === "string" ? metadata.coverPath : null, coverAssetId: typeof metadata.coverAssetId === "string" ? metadata.coverAssetId : null, platformFields: nestedStringRecord(metadata.platformFields), status };
 }
-function toRecord(row: Row): PublishRecord { const status = ["DryRun", "Prepared", "Submitted", "Publishing", "Published", "Failed"].includes(textValue(row.status)) ? textValue(row.status) as PublishRecord["status"] : "Published"; const publishMode = ["AUTO", "ASSISTED", "MANUAL"].includes(textValue(row.publish_mode)) ? textValue(row.publish_mode) as PublishRecord["publishMode"] : "MANUAL"; const verificationStatus = ["NotTested", "WaitingUser", "Verified", "Failed"].includes(textValue(row.verification_status)) ? textValue(row.verification_status) as PublishRecord["verificationStatus"] : "NotTested"; const imageSelectionMode = ["random", "manual", "none"].includes(textValue(row.image_selection_mode)) ? textValue(row.image_selection_mode) as PublishRecord["imageSelectionMode"] : "none"; return { id: textValue(row.id), jobId: textValue(row.job_id), accountId: textValue(row.account_id), platformAccountId: textValue(row.platform_account_id) || textValue(row.account_id), platformKey: textValue(row.platform_key), articleId: textValue(row.article_id), publishedUrl: typeof row.published_url === "string" ? row.published_url : null, publishedExternalId: typeof row.published_external_id === "string" ? row.published_external_id : null, success: boolValue(row.success), status, response: parseJson<Record<string, unknown>>(row.response_json, {}), publishedAt: textValue(row.published_at), dryRun: boolValue(row.dry_run), publishMode, automationType: isPlatformCapability(row.automation_type) ? row.automation_type : "Manual", browserSessionIdHash: typeof row.browser_session_id_hash === "string" ? row.browser_session_id_hash : null, operator: textValue(row.operator) || "desktop-user", verificationStatus, editorOpenedAt: typeof row.editor_opened_at === "string" ? row.editor_opened_at : null, titleFilled: row.title_filled === null || row.title_filled === undefined ? null : boolValue(row.title_filled), bodyFilled: row.body_filled === null || row.body_filled === undefined ? null : boolValue(row.body_filled), selectedImageAssetId: typeof row.selected_image_asset_id === "string" ? row.selected_image_asset_id : null, imageSelectionMode, contentBindingId: typeof row.content_binding_id === "string" ? row.content_binding_id : null }; }
+function toRecord(row: Row): PublishRecord { const status = ["DryRun", "Prepared", "Submitted", "Publishing", "Published", "Failed"].includes(textValue(row.status)) ? textValue(row.status) as PublishRecord["status"] : "Published"; const publishMode = ["AUTO", "ASSISTED", "MANUAL"].includes(textValue(row.publish_mode)) ? textValue(row.publish_mode) as PublishRecord["publishMode"] : "MANUAL"; const verificationStatus = ["NotTested", "WaitingUser", "Verified", "OwnerVerified", "Failed"].includes(textValue(row.verification_status)) ? textValue(row.verification_status) as PublishRecord["verificationStatus"] : "NotTested"; const imageSelectionMode = ["random", "manual", "none"].includes(textValue(row.image_selection_mode)) ? textValue(row.image_selection_mode) as PublishRecord["imageSelectionMode"] : "none"; return { id: textValue(row.id), jobId: textValue(row.job_id), accountId: textValue(row.account_id), platformAccountId: textValue(row.platform_account_id) || textValue(row.account_id), platformKey: textValue(row.platform_key), articleId: textValue(row.article_id), publishedUrl: typeof row.published_url === "string" ? row.published_url : null, publishedExternalId: typeof row.published_external_id === "string" ? row.published_external_id : null, success: boolValue(row.success), status, response: parseJson<Record<string, unknown>>(row.response_json, {}), publishedAt: textValue(row.published_at), dryRun: boolValue(row.dry_run), publishMode, automationType: isPlatformCapability(row.automation_type) ? row.automation_type : "Manual", browserSessionIdHash: typeof row.browser_session_id_hash === "string" ? row.browser_session_id_hash : null, operator: textValue(row.operator) || "desktop-user", verificationStatus, editorOpenedAt: typeof row.editor_opened_at === "string" ? row.editor_opened_at : null, titleFilled: row.title_filled === null || row.title_filled === undefined ? null : boolValue(row.title_filled), bodyFilled: row.body_filled === null || row.body_filled === undefined ? null : boolValue(row.body_filled), selectedImageAssetId: typeof row.selected_image_asset_id === "string" ? row.selected_image_asset_id : null, imageSelectionMode, contentBindingId: typeof row.content_binding_id === "string" ? row.content_binding_id : null }; }
 function toNotification(row: Row): Notification { return { id: textValue(row.id), level: row.level as Notification["level"], title: textValue(row.title), message: textValue(row.message), relatedId: typeof row.related_id === "string" ? row.related_id : null, read: boolValue(row.read), createdAt: textValue(row.created_at) }; }
 function toLog(row: Row): ActivityLog { return { id: textValue(row.id), timestamp: textValue(row.created_at), level: row.level as ActivityLog["level"], module: textValue(row.module), code: textValue(row.code), message: textValue(row.message), context: parseJson<Record<string, unknown>>(row.context_json, {}) }; }
+

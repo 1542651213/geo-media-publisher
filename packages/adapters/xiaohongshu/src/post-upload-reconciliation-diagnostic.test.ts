@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Page } from "playwright-core";
 import {
   inspectXiaohongshuPostUploadReconciliationDom,
+  hasExactlyOneXiaohongshuSelectedImage,
   parseXiaohongshuImageCounterText,
   reconcileXiaohongshuPostUploadSnapshot,
   type XiaohongshuPostUploadReconciliationDomSnapshot
@@ -79,6 +80,18 @@ describe("Xiaohongshu post-upload reconciliation diagnostic", () => {
       bodyControlPresent: true,
       finalSubmitProof: "NOT_PROVEN"
     });
+  });
+
+  it("uses the bounded editor counter to distinguish one selected image from repeated previews", () => {
+    const repeatedPreview = reconcileXiaohongshuPostUploadSnapshot(snapshot({
+      imageItems: [visibleImageItem, visibleImageItem, visibleImageItem, visibleImageItem],
+      visibleImageItemCount: 4,
+      imageCounterTextSafe: "1/18"
+    }));
+    expect(repeatedPreview.imageAssetRenderedCount).toBe(4);
+    expect(hasExactlyOneXiaohongshuSelectedImage(repeatedPreview)).toBe(true);
+    expect(hasExactlyOneXiaohongshuSelectedImage({ ...repeatedPreview, imageCounterTextSafe: "2/18" })).toBe(false);
+    expect(hasExactlyOneXiaohongshuSelectedImage({ ...repeatedPreview, imageAssetRenderedCount: 0 })).toBe(false);
   });
 
   it("does not treat add-image alone or title/body alone as upload proof", () => {

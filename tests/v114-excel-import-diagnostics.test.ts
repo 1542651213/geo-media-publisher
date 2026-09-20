@@ -35,7 +35,7 @@ function openFiveBrandFixture(): ReturnType<typeof openDatabase> & { defaultBran
   databases.push(opened.db);
   opened.repository.seedDevelopment(platformCsv);
   for (let index = 2; index <= 5; index += 1) opened.repository.createBrand({ name: `隔离品牌${index}`, companyName: `隔离企业${index}` });
-  const target = opened.repository.listBrands().find((brand) => brand.companyName === "示例企业");
+  const target = opened.repository.listBrands().find((brand) => brand.companyName === "江苏康一环保科技有限公司");
   if (!target) throw new Error("default test brand missing");
   expect(opened.repository.listBrands()).toHaveLength(5);
   return { ...opened, defaultBrandId: target.id };
@@ -127,8 +127,8 @@ describe("V1.1.4 Excel import diagnostics", () => {
   });
 
   const realWorkbookCases = [
-    { path: "D:\\Downloads\\示例企业_木渎推广文章100篇.xlsx", expectedSheet: "Sheet1" },
-    { path: "D:\\Downloads\\示例环保_木渎推广文章100篇_兼容导入版.xlsx", expectedSheet: "文章导入" }
+    { path: "D:\\Downloads\\江苏康一环保科技有限公司_木渎推广文章100篇.xlsx", expectedSheet: "Sheet1" },
+    { path: "D:\\Downloads\\康一环保_木渎推广文章100篇_兼容导入版.xlsx", expectedSheet: "文章导入" }
   ];
 
   it.skipIf(realWorkbookCases.some((item) => !existsSync(item.path)))("imports both real 100-article workbooks into an isolated Production library without creating jobs", () => {

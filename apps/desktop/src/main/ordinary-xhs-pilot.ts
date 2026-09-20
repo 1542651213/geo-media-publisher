@@ -14,12 +14,9 @@ import { parseOrdinaryPilotConfiguration, readOrdinaryPilotGate, type OrdinaryPi
 import { SyntheticXhsAdapter } from "./ordinary-pilot/synthetic-adapter";
 import { startPilotPlatform, type PilotReceipt } from "./ordinary-pilot/loopback-platform";
 
+const isolationRoot = resolve("D:/GEO/repairs/batch1-v0-f01-20260917/runtime/ordinary-xhs-pilot");
 const hash = (path: string): string => createHash("sha256").update(readPhysicalFileSync(path)).digest("hex");
 const samePath = (left: string, right: string): boolean => resolve(left).toLowerCase() === resolve(right).toLowerCase();
-const overlaps = (left: string, right: string): boolean => {
-  const a = resolve(left).toLowerCase(); const b = resolve(right).toLowerCase();
-  return a === b || a.startsWith(`${b}\\`) || b.startsWith(`${a}\\`);
-};
 function assertOwnedTree(directory: string): void {
   for (const name of readdirSync(directory)) {
     const path = join(directory, name); const stat = lstatSync(path);
@@ -46,9 +43,7 @@ export interface OrdinaryPilotContext {
 export function initializeOrdinaryPilot(): OrdinaryPilotContext | null {
   const configurationPath = readOrdinaryPilotGate(process.env);
   if (!configurationPath) return null;
-  const config = parseOrdinaryPilotConfiguration(JSON.parse(readFileSync(configurationPath, "utf8")), configurationPath);
-  const isolationRoot = dirname(config.runDirectory);
-  if (overlaps(config.runDirectory, app.getPath("userData")) || overlaps(config.runDirectory, app.getAppPath()) || overlaps(config.runDirectory, dirname(process.execPath))) throw new Error("ORDINARY_PILOT_PRODUCTION_PATH_DENIED");
+  const config = parseOrdinaryPilotConfiguration(JSON.parse(readFileSync(configurationPath, "utf8")));
   if (!app.isPackaged || !samePath(process.execPath, config.executablePath) || !samePath(app.getAppPath(), config.appAsarPath)) throw new Error("ORDINARY_PILOT_CANDIDATE_IDENTITY_MISMATCH");
   if (hash(process.execPath) !== config.executableSha256 || hash(app.getAppPath()) !== config.appAsarSha256) throw new Error("ORDINARY_PILOT_CANDIDATE_HASH_MISMATCH");
   // Pilot-only process boundary: standard IPC must not reach remote AI, API or browser launches.

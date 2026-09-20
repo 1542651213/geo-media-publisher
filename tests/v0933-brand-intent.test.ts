@@ -12,7 +12,7 @@ const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 function brand(): Brand {
-  return { id: "brand-933", name: "示例环保", companyName: "示例企业", description: "提供室内环境治理服务，服务范围和交付边界以双方确认资料为准。", mainBusiness: "甲醛治理、定期消杀、白蚁防治、病媒生物防制", serviceRegions: ["江苏", "苏州", "木渎"], advantages: ["按现场情况沟通服务边界"], contact: { 电话: "0512-123456" }, establishedAt: "", address: "苏州", serviceProcess: "需求沟通、现场情况评估、方案与报价确认、服务实施、结果复核与售后沟通", afterSales: "复检或整改以合同和现场情况为准", faq: "服务前先提供现场需求", certificates: "", patents: "", equipment: "现场评估设备以实际配置为准", cases: "", aiForbiddenClaims: ["第一", "最好", "唯一", "国家级", "100%", "永久"], createdAt: "", updatedAt: "" };
+  return { id: "brand-933", name: "康一环保", companyName: "江苏康一环保科技有限公司", description: "提供室内环境治理服务，服务范围和交付边界以双方确认资料为准。", mainBusiness: "甲醛治理、定期消杀、白蚁防治、病媒生物防制", serviceRegions: ["江苏", "苏州", "木渎"], advantages: ["按现场情况沟通服务边界"], contact: { 电话: "0512-123456" }, establishedAt: "", address: "苏州", serviceProcess: "需求沟通、现场情况评估、方案与报价确认、服务实施、结果复核与售后沟通", afterSales: "复检或整改以合同和现场情况为准", faq: "服务前先提供现场需求", certificates: "", patents: "", equipment: "现场评估设备以实际配置为准", cases: "", aiForbiddenClaims: ["第一", "最好", "唯一", "国家级", "100%", "永久"], createdAt: "", updatedAt: "" };
 }
 
 function openTestRepository() {
@@ -69,10 +69,10 @@ describe("V0.9.3.3 brand content intent calibration", () => {
   it("flags generic brand content without treating the brand name itself as a violation", () => {
     const currentBrand = brand();
     const snapshot = selectRelevantBrandFacts(currentBrand, { business: "甲醛治理", city: "苏州", keyword: "苏州甲醛治理", topic: "" });
-    const generic = evaluateBrandDifferentiation({ brand: currentBrand, content: { title: "苏州甲醛治理服务", body: "示例企业可以为用户提供服务。" }, knowledgeSnapshot: snapshot, contentGoal: "BrandPromotion", contentIntent: "BrandAnswer" });
+    const generic = evaluateBrandDifferentiation({ brand: currentBrand, content: { title: "苏州甲醛治理服务", body: "江苏康一环保科技有限公司可以为用户提供服务。" }, knowledgeSnapshot: snapshot, contentGoal: "BrandPromotion", contentIntent: "BrandAnswer" });
     expect(generic.score).toBeLessThan(35);
     expect(generic.genericBrandContent).toBe(true);
-    const quality = evaluateContentQuality({ brand: currentBrand, city: "苏州", keyword: "苏州甲醛治理", contentGoal: "BrandPromotion", contentIntent: "BrandAnswer", knowledgeSnapshot: snapshot, content: { title: "苏州甲醛治理服务", body: "示例企业可以为用户提供服务。", summary: "苏州甲醛治理" } });
+    const quality = evaluateContentQuality({ brand: currentBrand, city: "苏州", keyword: "苏州甲醛治理", contentGoal: "BrandPromotion", contentIntent: "BrandAnswer", knowledgeSnapshot: snapshot, content: { title: "苏州甲醛治理服务", body: "江苏康一环保科技有限公司可以为用户提供服务。", summary: "苏州甲醛治理" } });
     expect(quality.issues.some((item) => item.code === "brand_differentiation" && item.message.includes("GENERIC_BRAND_CONTENT"))).toBe(true);
     expect(quality.issues.some((item) => item.code === "absolute_marketing" || item.code === "unsupported_credentials")).toBe(false);
   });
@@ -80,13 +80,13 @@ describe("V0.9.3.3 brand content intent calibration", () => {
   it("accepts evidence-backed differentiation, keeps educational branding optional, and blocks fake ranking claims", () => {
     const currentBrand = brand();
     const snapshot = selectRelevantBrandFacts(currentBrand, { business: "甲醛治理", city: "苏州", keyword: "苏州甲醛治理", topic: "" });
-    const grounded = evaluateBrandDifferentiation({ brand: currentBrand, content: { title: "苏州甲醛治理怎么选？先看服务环节", body: `示例企业提供甲醛治理，流程包括${currentBrand.serviceProcess}。` }, knowledgeSnapshot: snapshot, contentGoal: "BrandPromotion", contentIntent: "BrandAnswer" });
+    const grounded = evaluateBrandDifferentiation({ brand: currentBrand, content: { title: "苏州甲醛治理怎么选？先看服务环节", body: `江苏康一环保科技有限公司提供甲醛治理，流程包括${currentBrand.serviceProcess}。` }, knowledgeSnapshot: snapshot, contentGoal: "BrandPromotion", contentIntent: "BrandAnswer" });
     expect(grounded.brandFactUsageCount).toBeGreaterThan(0);
     expect(grounded.score).toBeGreaterThanOrEqual(35);
     expect(grounded.genericBrandContent).toBe(false);
     const educational = evaluateContentQuality({ brand: currentBrand, city: "苏州", keyword: "苏州甲醛治理原理", contentGoal: "Educational", contentIntent: "Educational", content: { title: "苏州甲醛治理原理", body: "本文解释室内环境治理的基本原理和判断边界。", summary: "苏州甲醛治理原理" } });
     expect(educational.issues.some((item) => item.code === "brand_missing")).toBe(false);
-    const unsafe = evaluateContentQuality({ brand: currentBrand, city: "苏州", keyword: "苏州甲醛治理", contentGoal: "BrandPromotion", content: { title: "苏州甲醛治理第一品牌", body: "示例企业是行业第一，保证永久有效。", summary: "苏州甲醛治理" } });
+    const unsafe = evaluateContentQuality({ brand: currentBrand, city: "苏州", keyword: "苏州甲醛治理", contentGoal: "BrandPromotion", content: { title: "苏州甲醛治理第一品牌", body: "江苏康一环保科技有限公司是行业第一，保证永久有效。", summary: "苏州甲醛治理" } });
     expect(unsafe.issues.some((item) => item.code === "absolute_marketing" || item.code === "false_promises")).toBe(true);
   });
 

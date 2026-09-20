@@ -14,17 +14,17 @@ describe("runtime observability", () => {
     recordAppStartup(logger, {
       pid: 9348,
       packaged: true,
-      userDataPath: "C:\\public-export-fixtures\\userData",
-      productionDataPath: "C:\\public-export-fixtures\\userData\\production-data",
-      appLogPath: "C:\\public-export-fixtures\\userData\\production-data\\logs\\app.log"
+      userDataPath: "C:\\Users\\Administrator\\AppData\\Roaming\\codex-media-publisher",
+      productionDataPath: "C:\\Users\\Administrator\\AppData\\Roaming\\codex-media-publisher\\production-data",
+      appLogPath: "C:\\Users\\Administrator\\AppData\\Roaming\\codex-media-publisher\\production-data\\logs\\app.log"
     });
 
     expect(logger.info).toHaveBeenCalledWith("APP", "APP_STARTUP", expect.any(String), {
       pid: 9348,
       packaged: true,
-      userDataPath: "C:\\public-export-fixtures\\userData",
-      productionDataPath: "C:\\public-export-fixtures\\userData\\production-data",
-      appLogPath: "C:\\public-export-fixtures\\userData\\production-data\\logs\\app.log"
+      userDataPath: "C:\\Users\\Administrator\\AppData\\Roaming\\codex-media-publisher",
+      productionDataPath: "C:\\Users\\Administrator\\AppData\\Roaming\\codex-media-publisher\\production-data",
+      appLogPath: "C:\\Users\\Administrator\\AppData\\Roaming\\codex-media-publisher\\production-data\\logs\\app.log"
     });
   });
 

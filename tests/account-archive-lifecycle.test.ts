@@ -156,7 +156,7 @@ describe("account disconnect archive lifecycle", () => {
     const { db, repository } = openFixture();
     const createdA = repository.createAccount({ platformKey: "xiaohongshu", name: "小红书账号 1" });
     const createdB = repository.createAccount({ platformKey: "xiaohongshu", name: "小红书账号 2" });
-    const accountA = "11111111-1111-4111-8111-111111111111";
+    const accountA = "54b390ac-d81e-440a-baeb-d00f9f346cc3";
     const accountB = "88c590d9-4c4f-46c9-b1c5-61e2eac43b2d";
     db.prepare("UPDATE accounts SET id=? WHERE id=?").run(accountA, createdA.id);
     db.prepare("UPDATE accounts SET id=? WHERE id=?").run(accountB, createdB.id);

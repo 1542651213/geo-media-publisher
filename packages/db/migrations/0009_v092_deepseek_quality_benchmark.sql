@@ -55,3 +55,4 @@ CREATE INDEX IF NOT EXISTS idx_quality_benchmark_contents_content ON quality_ben
 
 ALTER TABLE content_quality_reviews ADD COLUMN benchmark_run_id TEXT;
 ALTER TABLE content_quality_audits ADD COLUMN benchmark_run_id TEXT;
+

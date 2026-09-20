@@ -34,6 +34,15 @@ describe("XHS production receipt observer",()=>{
     expect(observer.result()).toMatchObject({status:"UNKNOWN_SCHEMA",accepted:false,published:false});
     observer.stop();
   });
+  it("accepts only an explicit Main-owned reviewed classifier result",async()=>{
+    const page=new FakePage();
+    const observer=new XhsProductionReceiptObserver(page as unknown as Page,meta,()=>{},event=>event.phase==="RESPONSE"&&event.httpStatus===200?{externalId:"reviewed-receipt-1"}:null);
+    observer.start();observer.arm();const request=makeRequest("https://creator.xiaohongshu.com/reviewed/receipt");
+    page.emit("request",request);page.emit("response",makeResponse(request,'{"ignored":"untrusted payload"}'));
+    await observer.flush();
+    expect(observer.result()).toMatchObject({status:"ACCEPTED_PENDING",accepted:true,acceptance:{externalId:"reviewed-receipt-1"}});
+    observer.stop();
+  });
 
   it("starts before action, excludes old and unrelated requests, and persists a redacted same-page response",async()=>{
     const page=new FakePage(); const records: unknown[]=[];
@@ -70,9 +79,20 @@ describe("XHS production receipt observer",()=>{
       observer.arm();page.emit("request",request);
       setTimeout(()=>page.emit("response",makeResponse(request,'{"data":{"note_id":"n-delayed"}}')),5);
       throw new Error("click result uncertain");
-    },()=>true,25)).rejects.toThrow("click result uncertain");
+    },()=>true,25,100)).rejects.toThrow("click result uncertain");
     expect(records.some(x=>JSON.stringify(x).includes("n-delayed"))).toBe(true);
     expect(page.listenerCount("request")).toBe(0);
+  });
+  it("keeps observing an already-armed request lifecycle past a short quiet interval until its bounded deadline",async()=>{
+    const page=new FakePage(); const records: unknown[]=[];
+    const observer=new XhsProductionReceiptObserver(page as unknown as Page,meta,(event)=>{records.push(event)});
+    const request=makeRequest("https://creator.xiaohongshu.com/api/submit");
+    await settleReceiptCapture(observer,async()=>{
+      observer.arm();
+      setTimeout(()=>page.emit("request",request),15);
+      setTimeout(()=>page.emit("response",makeResponse(request,'{"data":{"note_id":"late-start"}}')),25);
+    },()=>true,10,60);
+    expect(records.some(x=>JSON.stringify(x).includes("late-start"))).toBe(true);
   });
 });
 

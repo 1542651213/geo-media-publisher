@@ -27,7 +27,7 @@ const account: Account = {
   connectionMode: "BrowserAutomation",
   authorizationStatus: "Authorized",
   browserSessionId: "session-hash",
-  externalAccountId: "123456789",
+  externalAccountId: "960803317",
   lastVerifiedAt: new Date().toISOString(),
   lastUsedAt: null,
   archivedAt: null
@@ -64,21 +64,21 @@ function probe(overrides: Partial<XiaohongshuCanonicalPageRuntimeProbe> = {}): X
       confidence: "HIGH",
       tagName: "A",
       text: "测试账号",
-      href: "https://creator.xiaohongshu.com/user/profile/123456789",
+      href: "https://creator.xiaohongshu.com/user/profile/960803317",
       role: null,
       dataIdentifierField: null,
       visible: true,
       source: "CREATOR_PROFILE_LINK",
-      rawValue: "123456789",
-      normalizedCreatorId: "123456789",
+      rawValue: "960803317",
+      normalizedCreatorId: "960803317",
       semanticAnchor: "xiaohongshu-profile-link"
     }],
     identityDomDiagnosticMatchCount: 0,
     identityDomDiagnosticMatches: [],
-    observedCreatorIdRaw: "123456789",
-    observedCreatorIdNormalized: "123456789",
+    observedCreatorIdRaw: "960803317",
+    observedCreatorIdNormalized: "960803317",
     observedDisplayName: "测试账号",
-    observedProfileUrl: "https://creator.xiaohongshu.com/user/profile/123456789",
+    observedProfileUrl: "https://creator.xiaohongshu.com/user/profile/960803317",
     ...overrides
   };
 }
@@ -139,11 +139,14 @@ describe("Task10W canonical Page runtime probe wiring", () => {
     expect(ipc).not.toContain("payload.url");
   });
 
-  it("gates XHS complete-login with the same Task10W identity service before profile persistence", () => {
+  it("recovers a uniquely archived XHS Creator only after a non-persistent identity observation", () => {
     const ipc = readFileSync("apps/desktop/src/main/ipc.ts", "utf8");
     const completeLogin = ipc.slice(ipc.indexOf('register("accounts:complete-login"'), ipc.indexOf('register("accounts:refresh-login"'));
-    expect(completeLogin).toContain("platformSelfTests.bootstrapXhsCreatorIdentity(input.accountId)");
-    expect(completeLogin.indexOf("platformSelfTests.bootstrapXhsCreatorIdentity(input.accountId)")).toBeLessThan(completeLogin.indexOf("adapter.getAccountProfile"));
+    expect(completeLogin).toContain("platformSelfTests.observeXhsCreatorIdentityForLogin(input.accountId)");
+    expect(completeLogin.indexOf("platformSelfTests.observeXhsCreatorIdentityForLogin(input.accountId)")).toBeLessThan(completeLogin.indexOf("adapter.getAccountProfile"));
+    expect(completeLogin.indexOf("repository.findArchivedAccountByExternalIdForConnection")).toBeGreaterThan(completeLogin.indexOf("platformSelfTests.observeXhsCreatorIdentityForLogin(input.accountId)"));
+    expect(completeLogin.indexOf("repository.restoreArchivedAccountByExternalId")).toBeLessThan(completeLogin.indexOf("platformSelfTests.bootstrapXhsCreatorIdentity(effectiveAccountId)"));
+    expect(completeLogin).toContain("platformSelfTests.bootstrapXhsCreatorIdentity(effectiveAccountId)");
     expect(completeLogin).not.toContain("verifyAndConvergeXhsIdentity");
   });
 });

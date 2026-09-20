@@ -26,7 +26,7 @@ const account: Account = {
   connectionMode: "BrowserAutomation",
   authorizationStatus: "Authorized",
   browserSessionId: "session-a",
-  externalAccountId: "123456789",
+  externalAccountId: "960803317",
   lastVerifiedAt: new Date().toISOString(),
   lastUsedAt: null,
   archivedAt: null
@@ -34,7 +34,7 @@ const account: Account = {
 
 function binding(): PlatformAccountIdentityBinding {
   const timestamp = new Date().toISOString();
-  return { id: "binding-a", platformKey: "xiaohongshu", accountId: account.id, externalCreatorId: "123456789", displayName: "测试账号", profileUrl: null, bindingSource: "LEGACY_ACCOUNT_EXTERNAL_ID_MATCH", boundAt: timestamp, createdAt: timestamp, updatedAt: timestamp };
+  return { id: "binding-a", platformKey: "xiaohongshu", accountId: account.id, externalCreatorId: "960803317", displayName: "测试账号", profileUrl: null, bindingSource: "LEGACY_ACCOUNT_EXTERNAL_ID_MATCH", boundAt: timestamp, createdAt: timestamp, updatedAt: timestamp };
 }
 
 function runtime(session = "session-a", context = "context-a", page = "home-page") {
@@ -70,14 +70,14 @@ function scopedIdentityProof(overrides: Partial<NonNullable<XiaohongshuPageScope
     pageId: "home-page",
     pageOrigin: "https://creator.xiaohongshu.com",
     pagePathname: "/new/home",
-    creatorId: "123456789",
+    creatorId: "960803317",
     verifiedAt: "2026-09-07T08:00:00.000Z",
     expiresAt: "2026-09-07T08:05:00.000Z",
     ...overrides
   };
 }
 
-function setup(observedCreatorId: string | null = "123456789") {
+function setup(observedCreatorId: string | null = "960803317") {
   const reader = {
     verifyIdentityOnContextPage: vi.fn(async () => observedCreatorId === null
       ? { status: "FAIL", failureCode: "CREATOR_ID_NOT_FOUND", proof: null }

@@ -14,8 +14,6 @@ export default defineConfig({
         "@publisher/image": resolve(__dirname, "packages/image/src"),
         "@publisher/logger": resolve(__dirname, "packages/logger/src"),
         "@publisher/adapters-core": resolve(__dirname, "packages/adapters/core/src"),
-        "@publisher/adapters-browser": resolve(__dirname, "packages/adapters/browser/src"),
-        "@publisher/adapters-semi-auto": resolve(__dirname, "packages/adapters/semi-auto/src"),
         "@publisher/adapters-test": resolve(__dirname, "packages/adapters/test/src"),
         "@publisher/publisher": resolve(__dirname, "packages/publisher/src"),
         "@publisher/security": resolve(__dirname, "packages/security/src"),

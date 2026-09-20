@@ -214,7 +214,7 @@ describe("Task10S closed-shadow CDP click", () => {
   });
 });
 
-const ACCOUNT_ID = "11111111-1111-4111-8111-111111111111";
+const ACCOUNT_ID = "54b390ac-d81e-440a-baeb-d00f9f346cc3";
 const OPERATION_ID = "task10s-r58-boundary";
 
 function authorization(overrides: Partial<OneShotPublicationAuthorization> = {}): OneShotPublicationAuthorization {

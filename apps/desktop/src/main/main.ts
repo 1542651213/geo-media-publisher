@@ -13,6 +13,7 @@ import { createRuntimeAdapterRegistry } from "./adapter-registry";
 import { initializeOrdinaryPilot } from "./ordinary-xhs-pilot";
 import { initializeXhsMax3Live } from "./xhs-max3-live";
 import { initializeFormalXhsProductionPilot } from "./formal-xhs-production-pilot";
+import { createXhsReceiptCaptureFactory } from "./xhs-receipt-capture-service";
 import { runDeepSeekBenchmarkMode } from "./deepseek-benchmark-mode";
 import { createProcessDiagnostics } from "./process-diagnostics";
 import { recordAppStartup } from "./runtime-observability";
@@ -332,7 +333,9 @@ async function createWindow(): Promise<void> {
   } : new SafeStorageCredentialStore(join(dataDirectory, "credentials.enc"), safeStorage);
   const pilotServices = ordinaryPilot ? await ordinaryPilot.createServices(database.repository, logger) : null;
   if (pilotServices) ownedBrowserSessionClosers.add(() => pilotServices.close());
-  const registry = pilotServices?.registry ?? createRuntimeAdapterRegistry(credentials, isDevelopment, logger, join(app.getPath("userData"), "browser-profiles"), join(dataDirectory, "credentials.enc"), scopedLive?.productionReceiptFactory ?? formalPilot?.productionReceiptFactory);
+  const ordinaryBuildSha256 = !pilotServices && !scopedLive && !formalPilot && app.isPackaged ? hashFile(app.getAppPath()) : null;
+  const ordinaryReceiptFactory = ordinaryBuildSha256 ? createXhsReceiptCaptureFactory(dataDirectory, ordinaryBuildSha256) : undefined;
+  const registry = pilotServices?.registry ?? createRuntimeAdapterRegistry(credentials, isDevelopment, logger, join(app.getPath("userData"), "browser-profiles"), join(dataDirectory, "credentials.enc"), scopedLive?.productionReceiptFactory ?? formalPilot?.productionReceiptFactory ?? ordinaryReceiptFactory);
   ownedBrowserSessionClosers.add(async () => {
     const closableAdapters = registry.listAll().filter((adapter): adapter is typeof adapter & { closeOwnedSessions(): Promise<void> } => typeof (adapter as { closeOwnedSessions?: unknown }).closeOwnedSessions === "function");
     await Promise.allSettled(closableAdapters.map((adapter) => adapter.closeOwnedSessions()));
@@ -349,13 +352,13 @@ async function createWindow(): Promise<void> {
   const publisher = new PublisherService(database.repository, registry, logger, {
     resolveSecrets: resolveAccountSecrets,
     resolveRuntimeIdentityAttestation: (accountId) => pilotServices ? pilotServices.resolveRuntimeIdentityAttestation(accountId) : platformSelfTestsRef.current?.getXhsContextIdentityAttestation(accountId) ?? null,
-    scopedCampaignBuildSha256: scopedLive?.buildSha256 ?? formalPilot?.buildSha256,
+    scopedCampaignBuildSha256: scopedLive?.buildSha256 ?? formalPilot?.buildSha256 ?? ordinaryBuildSha256 ?? undefined,
     productionPilotGuard: formalPilot ? formalPilot.createGuard(database.repository) : undefined,
     onScopedProductionBoundary: scopedLive?.onBoundary,
     onScopedProductionUnknown: scopedLive?.onUnknown
   });
   scheduler = new PersistentScheduler(database.repository, publisher, logger);
-  const platformSelfTests = registerIpc({ resumeBackgroundTasks: scopedLive || formalPilot ? false : ordinaryPilot?.resumeBackgroundTasks, scopedLiveGuard: scopedLive ? (channel, payload) => scopedLive.assertIpc(channel, payload, database.repository) : formalPilot ? (channel, payload) => formalPilot.assertIpc(channel, payload, database.repository) : undefined, repository: database.repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir: join(dataDirectory, "covers"), logger, credentials, aiCredentials: credentials, appLogPath, databasePath, processDiagnostics, restoreDatabase: (backupPath) => { if (ordinaryPilot || scopedLive || formalPilot) throw new Error("SCOPED_DATABASE_RESTORE_DENIED"); scheduler?.stop(); restoreDatabaseSafely(database.db, databasePath, backupPath); app.relaunch(); app.exit(0); } });
+  const platformSelfTests = registerIpc({ resumeBackgroundTasks: scopedLive || formalPilot ? false : ordinaryPilot?.resumeBackgroundTasks, scopedLiveGuard: scopedLive ? (channel, payload) => scopedLive.assertIpc(channel, payload, database.repository) : formalPilot ? (channel, payload) => formalPilot.assertIpc(channel, payload, database.repository) : undefined, formalPilotId: formalPilot?.config.pilotId, ownerVerifiedPublished: formalPilot ? (input) => formalPilot.reconcileOwnerVerifiedPublished(database.repository, input) : undefined, crossBrandImageBindingPermit: formalPilot ? (articleId, imageAssetId) => formalPilot.crossBrandImageBindingPermit(articleId, imageAssetId, database.repository) : undefined, crossBrandImageAssetsForArticle: formalPilot ? (articleId, brandId) => formalPilot.crossBrandImageAssetsForArticle(articleId, brandId, database.repository) : undefined, repository: database.repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir: join(dataDirectory, "covers"), logger, credentials, aiCredentials: credentials, appLogPath, databasePath, processDiagnostics, restoreDatabase: (backupPath) => { if (ordinaryPilot || scopedLive || formalPilot) throw new Error("SCOPED_DATABASE_RESTORE_DENIED"); scheduler?.stop(); restoreDatabaseSafely(database.db, databasePath, backupPath); app.relaunch(); app.exit(0); } });
   platformSelfTestsRef.current = platformSelfTests;
   const resolveXhsAccountId = (): string => {
     const accounts = database.repository.listAccounts().filter((item) => item.platformKey === "xiaohongshu" && item.enabled && !item.archivedAt);
@@ -927,3 +930,4 @@ app.on("before-quit", (event) => shutdownCoordinator.handleBeforeQuit(event, () 
 
 app.on("window-all-closed", () => { shutdownCoordinator.record("WINDOW_DESTROYED"); if (process.platform !== "darwin") app.quit(); });
 app.on("will-quit", () => shutdownCoordinator.markMainExit());
+

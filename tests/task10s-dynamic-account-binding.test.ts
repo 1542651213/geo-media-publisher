@@ -106,8 +106,8 @@ describe("r47 dynamic XHS account binding", () => {
       "packages/adapters/core/src/one-shot-publication.ts"
     ];
     const source = productionFiles.map((file) => readFileSync(file, "utf8")).join("\n");
-    expect(source).not.toContain("11111111-1111-4111-8111-111111111111");
-    expect(source).not.toContain("123456789");
+    expect(source).not.toContain("54b390ac-d81e-440a-baeb-d00f9f346cc3");
+    expect(source).not.toContain("960803317");
     expect(source).not.toContain("小红书身份证明只允许指定测试账号");
   });
 });

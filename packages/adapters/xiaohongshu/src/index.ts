@@ -23,6 +23,7 @@ export * from "./native-file-picker-recovery";
 export * from "./picker-cancel-stabilization";
 export * from "./publish-flow-exploration";
 export * from "./identity";
+export * from "./manager-list-reconciliation";
 
 export function mapXiaohongshuError(message: string, httpStatus?: number): ErrorCode { return mapManualError(message, httpStatus); }
 

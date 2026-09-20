@@ -78,7 +78,7 @@ import {
   selectSafeIntermediateAction,
   type XhsIntermediateActionCandidate
 } from "./publish-flow-exploration";
-import { isXiaohongshuIdentitySourcePath, readXiaohongshuCreatorIdentity, verifyIdentityOnPage, type XiaohongshuIdentityDomDiagnosticMatch, type XiaohongshuCreatorIdentityCandidate, type XiaohongshuPageScopedIdentityVerification } from "./identity";
+import { isXiaohongshuIdentitySourcePath, readXiaohongshuCreatorIdentity, verifyIdentityOnPage, type XiaohongshuIdentityDomDiagnosticMatch, type XiaohongshuCreatorIdentityCandidate, type XiaohongshuPageScopedIdentityProof, type XiaohongshuPageScopedIdentityVerification } from "./identity";
 import { isExactXhsPublishEditorRoute, runXhsEditorLoadDiagnostic, type XhsEditorLoadDiagnosticResult } from "./editor-load-diagnostic";
 import { runXhsEditorNetworkFailureDiagnostic, type XhsEditorNetworkDiagnosticResult } from "./editor-network-diagnostic";
 import { emptyXiaohongshuContextPageInventory, inspectXiaohongshuContextPage, type XiaohongshuContextPageInventory } from "./context-page-inventory";
@@ -87,7 +87,7 @@ import { emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, inspe
 import { emptyXiaohongshuGlobalExactPublishDomRuntimeDiagnostic, inspectXiaohongshuGlobalExactPublishDom, type XiaohongshuGlobalExactPublishDomRuntimeDiagnostic } from "./global-exact-publish-diagnostic";
 import { clickTask10sClosedShadowPublishSurface, inspectTask10sClosedShadowPublishSurface, runTask10sClosedShadowFinalSubmit } from "./task10s-closed-shadow-final-submit";
 import { evaluateTask10sRetainedEditorGate } from "./task10s-retained-editor-completion";
-import { emptyXiaohongshuPostUploadReconciliationDomSnapshot, inspectXiaohongshuPostUploadReconciliationDom, reconcileXiaohongshuPostUploadSnapshot, type XiaohongshuPostUploadReconciliationResult } from "./post-upload-reconciliation-diagnostic";
+import { emptyXiaohongshuPostUploadReconciliationDomSnapshot, hasExactlyOneXiaohongshuSelectedImage, inspectXiaohongshuPostUploadReconciliationDom, reconcileXiaohongshuPostUploadSnapshot, type XiaohongshuPostUploadReconciliationResult } from "./post-upload-reconciliation-diagnostic";
 import { classifyXiaohongshuPostUploadTerminalReadiness, type XiaohongshuPostUploadTerminalReadiness } from "./post-upload-terminal-readiness";
 import { containsExpectedXiaohongshuSafeFixture, inspectXiaohongshuFileInputState, type XiaohongshuFileInputFixtureMatch, type XiaohongshuFileInputSafeNode } from "./file-input-diagnostic";
 import { readXiaohongshuUploadInputImmediately, type XiaohongshuUploadFileExpectation, type XiaohongshuUploadInputImmediateReadback } from "./upload-delivery-diagnostic";
@@ -1779,7 +1779,14 @@ export class AccountOperationMutex {
 export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
   readonly supportsBoundImageBuffers = true;
   private readonly productionLoginPages = new Map<string, { accountId: string; page: Page; session: BrowserSession; pageDebugId: string }>();
-  private readonly productionPages = new Map<string, { accountId: string; snapshotId: string; creatorId: string; page: Page; session: BrowserSession; pageDebugId: string; identityPage?: { page: Page; pageDebugId: string }; imageSha256: string; title: string; body: string; imageSurfaceHash: string; submitted: boolean }>();
+  private readonly productionPages = new Map<string, { accountId: string; snapshotId: string; creatorId: string; page: Page; session: BrowserSession; pageDebugId: string; identityProof: XiaohongshuPageScopedIdentityProof; imageSha256: string; title: string; body: string; submitted: boolean }>();
+  /**
+   * A Creator proof is read from the existing, account-owned Creator home Page
+   * before that exact Page navigates to the publish editor. It is never a
+   * stored-login substitute and is valid only for the same runtime Session,
+   * BrowserContext, Page and short identity-proof TTL.
+   */
+  private readonly productionIdentityProofs = new Map<string, XiaohongshuPageScopedIdentityProof>();
   private readonly onLoginEvaluation?: (evaluation: XiaohongshuLoginEvaluation) => void;
   private readonly onAuthStateDiagnostic?: (diagnostic: XiaohongshuAuthStateDiagnostic) => void;
   private readonly onCanonicalPageOperation?: (evidence: XiaohongshuCanonicalPageOperationEvidence) => void;
@@ -1831,19 +1838,38 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         const retained = this.productionLoginPages.get(jobId);
         if (retained && retained.accountId !== ctx.accountId) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "验证页面不属于所选账号");
         if (retained && retained.session !== this.activeSession(identity)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "验证页面 Session 已替换，请先取消旧任务");
-        const owned = retained && !this.isCanonicalPageClosed(retained.page) ? retained : await this.sessionManager.openOperationPage(identity, userInitiatedActionFromSettings(ctx.settings), "VISIBLE");
+        // The Creator session can be valid on its account-owned canonical Page
+        // while a newly-created Page is redirected to /login.  Prefer that
+        // already-authenticated creator-home Page for the ordinary preflight;
+        // it is still the same account-owned Context and is never supplied by
+        // the Renderer.  Other routes retain the isolated operation-Page path
+        // so an existing editor is not navigated away from its task.
+        const canonical = !retained ? await this.activeCanonicalPage(ctx) : null;
+        const reusesCanonicalCreatorHome = Boolean(canonical && this.isCreatorHomeRoute(canonical.page.url()));
+        const owned = retained && !this.isCanonicalPageClosed(retained.page)
+          ? retained
+          : reusesCanonicalCreatorHome && canonical
+            ? { session: canonical.session, page: canonical.page, pageDebugId: canonical.pageDebugId }
+            : await this.sessionManager.openOperationPage(identity, userInitiatedActionFromSettings(ctx.settings), "VISIBLE");
         this.rememberActiveSession(identity, owned.session);
         let awaitingVerification = false;
         try {
           if (!this.pageContextMatchesSession(owned.session, owned.page)) return "needs_user_action";
-          if (!retained || this.isCanonicalPageClosed(retained.page)) await this.navigate(owned.page, XIAOHONGSHU_CREATOR_HOME);
+          if (!reusesCanonicalCreatorHome && (!retained || this.isCanonicalPageClosed(retained.page))) await this.navigate(owned.page, XIAOHONGSHU_CREATOR_HOME);
           const status = await this.loginStatusForPage(ctx, owned.page, "CHECK_LOGIN", randomUUID());
-          if (status !== "logged_in") { awaitingVerification = true; this.productionLoginPages.set(jobId, { ...owned, accountId: ctx.accountId }); return status; }
+          if (status !== "logged_in") { this.productionIdentityProofs.delete(this.productionIdentityProofKey(ctx)); awaitingVerification = true; this.productionLoginPages.set(jobId, { ...owned, accountId: ctx.accountId }); return status; }
           const current = await this.inspectAccountIdentity(owned.page);
-          if (!ctx.settings.expectedExternalCreatorId || current.externalAccountId !== ctx.settings.expectedExternalCreatorId) return "needs_user_action";
+          if (!ctx.settings.expectedExternalCreatorId || current.externalAccountId !== ctx.settings.expectedExternalCreatorId) { this.productionIdentityProofs.delete(this.productionIdentityProofKey(ctx)); return "needs_user_action"; }
+          const proof = await this.captureProductionIdentityProof(ctx, owned);
+          if (!proof) return "needs_user_action";
           this.sessionManager.setRuntimeAuthState(identity, "AUTHENTICATED", null);
           return "logged_in";
-        } finally { if (!awaitingVerification) { await this.sessionManager.closeOperationPage(identity, owned.page); this.productionLoginPages.delete(jobId); } }
+        } finally {
+          if (!awaitingVerification) {
+            if (!reusesCanonicalCreatorHome) await this.sessionManager.closeOperationPage(identity, owned.page);
+            this.productionLoginPages.delete(jobId);
+          }
+        }
       }
       const canonical = await this.activeCanonicalPage(ctx);
       if (!canonical) {
@@ -4299,6 +4325,9 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         titleReadbackValue: titleReadback,
         bodyEditor: "verified",
         bodyReadback: true,
+        // Keep the literal editor value for the Publisher's immutable-snapshot
+        // comparison.  bodyReadbackValue remains the normalized diagnostic.
+        bodyReadbackRawValue: bodyReadbackRaw,
         bodyReadbackValue: bodyReadback,
         bodyReadbackStatus: bodyReadbackVerification.status,
         bodyReadbackTelemetry: bodyReadbackVerification,
@@ -4324,19 +4353,56 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     return id;
   }
 
+  private productionIdentityProofKey(ctx: AccountContext): string {
+    return `${this.platformKey}:${ctx.accountId}`;
+  }
+
+  private async captureProductionIdentityProof(ctx: AccountContext, owned: { session: BrowserSession; page: Page; pageDebugId: string }): Promise<XiaohongshuPageScopedIdentityProof | null> {
+    const expectedCreatorId = ctx.settings.expectedExternalCreatorId;
+    const browserSessionId = owned.session.runtimeSessionIdentity;
+    const contextId = owned.session.contextDebugId;
+    if (typeof expectedCreatorId !== "string" || !expectedCreatorId || !browserSessionId || !contextId || !this.pageContextMatchesSession(owned.session, owned.page)) {
+      this.productionIdentityProofs.delete(this.productionIdentityProofKey(ctx));
+      return null;
+    }
+    const verification = await verifyIdentityOnPage(owned.page, { browserSessionId, contextId, pageId: owned.pageDebugId });
+    if (verification.status !== "PASS" || verification.proof.creatorId !== expectedCreatorId) {
+      this.productionIdentityProofs.delete(this.productionIdentityProofKey(ctx));
+      return null;
+    }
+    this.productionIdentityProofs.set(this.productionIdentityProofKey(ctx), verification.proof);
+    return verification.proof;
+  }
+
+  private requireProductionIdentityProof(ctx: AccountContext, session: BrowserSession, pageDebugId: string, creatorId: string): XiaohongshuPageScopedIdentityProof {
+    const key = this.productionIdentityProofKey(ctx);
+    const proof = this.productionIdentityProofs.get(key);
+    const expiresAt = proof ? Date.parse(proof.expiresAt) : Number.NaN;
+    const valid = Boolean(
+      proof
+      && proof.creatorId === creatorId
+      && proof.browserSessionId === session.runtimeSessionIdentity
+      && proof.contextId === session.contextDebugId
+      && proof.pageId === pageDebugId
+      && proof.pageOrigin === "https://creator.xiaohongshu.com"
+      && isXiaohongshuIdentitySourcePath(proof.pagePathname)
+      && Number.isFinite(expiresAt)
+      && expiresAt > Date.now()
+      && this.getBrowserRuntimeState(ctx).state === "AUTHENTICATED"
+    );
+    if (!valid || !proof) {
+      this.productionIdentityProofs.delete(key);
+      throw new XiaohongshuGateError("ACCOUNT_IDENTITY_UNVERIFIED", "USER_ACTION_REQUIRED", "小红书 Creator 证明未与当前 Session、Context、页面和有效期同时匹配；未猜测账号身份");
+    }
+    return proof;
+  }
+
   private productionImageHash(article: PublishArticleInput): string {
     const image = article.boundImages?.[0];
     if (!article.contentSnapshotId || !image || article.boundImages?.length !== 1 || article.images?.length !== 1) throw new BrowserAutomationError("CONTENT_REJECTED", "普通小红书发布需要确切快照和单张绑定图片");
     const hash = createHash("sha256").update(image.buffer).digest("hex");
     if (hash !== image.sha256.toLowerCase()) throw new BrowserAutomationError("CONTENT_REJECTED", "绑定图片字节已变化");
     return hash;
-  }
-
-  private async productionImageSurfaceHash(page: Page): Promise<string> {
-    // This supplements the byte-level upload proof: replacing/deleting an editor
-    // image while awaiting confirmation invalidates the retained preparation.
-    const sources = await page.locator("img").evaluateAll((images) => images.map((image) => ({ src: (image as HTMLImageElement).currentSrc || image.getAttribute("src"), parent: image.parentElement?.className ?? "" })));
-    return createHash("sha256").update(JSON.stringify(sources)).digest("hex");
   }
 
   private async prepareProductionArticle(ctx: AccountContext, article: PublishArticleInput): Promise<AutomationPrepareResult> {
@@ -4347,24 +4413,32 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const prior = this.productionPages.get(jobId);
     if (prior?.submitted) throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "已有提交占用的任务不得重新准备");
     if (prior?.accountId && prior.accountId !== ctx.accountId) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "任务页面不属于所选账号");
-    if (prior) { await this.sessionManager.closeOperationPage(this.identity(ctx), prior.page); if (prior.identityPage) await this.sessionManager.closeOperationPage(this.identity(ctx), prior.identityPage.page); this.productionPages.delete(jobId); }
+    if (prior) { await this.sessionManager.closeOperationPage(this.identity(ctx), prior.page); this.productionPages.delete(jobId); }
     const active = this.activeSession(this.identity(ctx));
     if (!active || !this.isBrowserConnected(active)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "所选账号没有活跃且归属明确的 Session");
-    const owned = await this.sessionManager.openOperationPage(this.identity(ctx), userInitiatedActionFromSettings(ctx.settings), "VISIBLE");
+    // See ordinary checkLogin: the app-owned authenticated creator-home Page
+    // is the only Page with proven usable session state in this scenario.
+    // Reuse it for the task instead of opening a sibling Page that may be
+    // redirected to /login by the platform despite sharing its Context.
+    const canonical = await this.activeCanonicalPage(ctx);
+    const reusesCanonicalCreatorHome = Boolean(canonical && canonical.session === active && this.isCreatorHomeRoute(canonical.page.url()));
+    if (!reusesCanonicalCreatorHome || !canonical) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "普通发布必须从刚刚核验过的 Creator 首页开始；当前编辑器不会被改写或另开登录页");
+    const owned = { session: canonical.session, page: canonical.page, pageDebugId: canonical.pageDebugId };
+    const identityProof = this.requireProductionIdentityProof(ctx, owned.session, owned.pageDebugId, creatorId);
     try {
       if (owned.session !== active || !this.pageContextMatchesSession(owned.session, owned.page)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "任务 Page 跨 Context，已阻断");
-      await this.navigate(owned.page, XIAOHONGSHU_CREATOR_HOME);
       const prepared = await this.preparePublishOnCanonicalPage(ctx, article, { ...owned, backendUrl: owned.page.url() });
       const uploadedHash = prepared.response.uploadedImageSha256;
       if (!prepared.prepared || typeof uploadedHash !== "string" || uploadedHash.toLowerCase() !== imageSha256) throw new BrowserAutomationError("UPLOAD_FAILED", "实际上传字节与所选图片快照不一致");
-      this.productionPages.set(jobId, { ...owned, accountId: ctx.accountId, snapshotId: article.contentSnapshotId!, creatorId, title: article.title, body: article.body, imageSha256, imageSurfaceHash: await this.productionImageSurfaceHash(owned.page), submitted: false });
+      this.productionPages.set(jobId, { ...owned, accountId: ctx.accountId, snapshotId: article.contentSnapshotId!, creatorId, identityProof, title: article.title, body: article.body, imageSha256, submitted: false });
       await this.productionSubjectAndReadback(ctx, article);
       return { ...prepared, requiresUserAction: false, message: "所选账号的单图内容已准备；页面保留，等待本次明确确认", response: { ...prepared.response, stage: "PRODUCTION_PREPARED", ordinaryProduction: true, publishJobId: jobId, contentSnapshotId: article.contentSnapshotId, contextDebugId: owned.session.contextDebugId, operationPageDebugId: owned.pageDebugId, expectedExternalCreatorId: creatorId } };
     } catch (error) {
-      const failed = this.productionPages.get(jobId);
-      if (failed?.identityPage) await this.sessionManager.closeOperationPage(this.identity(ctx), failed.identityPage.page).catch(() => undefined);
       this.productionPages.delete(jobId);
-      await this.sessionManager.closeOperationPage(this.identity(ctx), owned.page).catch(() => undefined);
+      // The canonical Page is owned by the account session. Preserve it on a
+      // prepare failure so cleanup never turns a visible XHS editor into
+      // about:blank; a later fresh prepare must start from Creator home.
+      if (!reusesCanonicalCreatorHome) await this.sessionManager.closeOperationPage(this.identity(ctx), owned.page).catch(() => undefined);
       throw error;
     }
   }
@@ -4376,31 +4450,20 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     if (lease.imageSha256 !== this.productionImageHash(article) || lease.title !== article.title || lease.body !== article.body) throw new BrowserAutomationError("CONTENT_REJECTED", "确认后的图片或文本发生变化");
     const editorEvidence = await readXiaohongshuPageEvidence(lease.page);
     if (!editorEvidence.available || this.isLoginPage(lease.page.url()) || this.isVerificationUrl(lease.page.url()) || editorEvidence.login.blockingSignals.length > 0 || editorEvidence.login.visibleLoginForm || editorEvidence.login.visibleCaptcha || editorEvidence.login.visibleSecurityModal) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "请先完成平台正常登录或安全验证");
-    let identityPage = lease.page; let identityPageId = lease.pageDebugId;
-    let currentIdentity: XiaohongshuAccountIdentityEvidence;
-    if (editorEvidence.identity.externalAccountIdCandidates.length > 0) currentIdentity = await this.inspectAccountIdentity(lease.page, editorEvidence);
-    else {
-      if (!lease.identityPage || this.isCanonicalPageClosed(lease.identityPage.page)) {
-        const probe = await this.sessionManager.openOperationPage(this.identity(ctx), userInitiatedActionFromSettings(ctx.settings), "VISIBLE");
-        if (probe.session !== lease.session) { await this.sessionManager.closeOperationPage(this.identity(ctx), probe.page); throw new BrowserAutomationError("USER_ACTION_REQUIRED", "身份验证页面跨 Context"); }
-        lease.identityPage = { page: probe.page, pageDebugId: probe.pageDebugId };
-      }
-      identityPage = lease.identityPage.page; identityPageId = lease.identityPage.pageDebugId;
-      if (!this.pageContextMatchesSession(lease.session, identityPage)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "身份验证页面不属于任务 Context");
-      await this.navigate(identityPage, XIAOHONGSHU_CREATOR_HOME);
-      const evidence = await readXiaohongshuPageEvidence(identityPage);
-      this.assertProfilePageCanBeRead(evidence);
-      currentIdentity = await this.inspectAccountIdentity(identityPage, evidence);
+    const identityProof = this.requireProductionIdentityProof(ctx, lease.session, lease.pageDebugId, lease.creatorId);
+    if (lease.identityProof !== identityProof) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "任务身份绑定已变化，请重新核验");
+    if (editorEvidence.identity.externalAccountIdCandidates.length > 0) {
+      const currentIdentity = await this.inspectAccountIdentity(lease.page, editorEvidence);
+      if (currentIdentity.externalAccountId !== lease.creatorId) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "当前任务 Session 的 Creator 已变化");
     }
-    if (currentIdentity.externalAccountId !== lease.creatorId) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "当前任务 Session 的 Creator 已变化");
     const title = await readEditor(await this.discoverUniqueEditor(lease.page, "title"), "title");
     const body = await readEditorRaw(await this.discoverUniqueEditor(lease.page, "body"), "body");
     if (title !== normalizeXiaohongshuEditorText(article.title) || classifyXiaohongshuEditorReadback(article.body, body).status === "FAIL") throw new BrowserAutomationError("CONTENT_REJECTED", "提交前标题或正文回读与确认快照不一致");
     const images = reconcileXiaohongshuPostUploadSnapshot(await inspectXiaohongshuPostUploadReconciliationDom(lease.page));
-    if (images.imageAssetRenderedCount !== 1 || !images.noExplicitUploadError || images.processingSignalPresent || await this.productionImageSurfaceHash(lease.page) !== lease.imageSurfaceHash || (await this.inspectRequiredFields(lease.page)).some((field) => field.empty)) throw new BrowserAutomationError("CONTENT_REJECTED", "提交前图片或必填设置已变化");
+    if (!hasExactlyOneXiaohongshuSelectedImage(images) || !images.noExplicitUploadError || images.processingSignalPresent || (await this.inspectRequiredFields(lease.page)).some((field) => field.empty)) throw new BrowserAutomationError("CONTENT_REJECTED", "提交前图片或必填设置已变化");
     if (!lease.session.runtimeSessionIdentity || !lease.session.contextDebugId) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "活跃 Session 缺少可审计身份");
     ctx.assertContentSnapshotCurrent?.();
-    return { platformKey: "xiaohongshu", accountId: ctx.accountId, expectedExternalCreatorId: lease.creatorId, observedExternalCreatorId: lease.creatorId, externalAccountId: lease.creatorId, browserSessionIdentity: lease.session.runtimeSessionIdentity, browserContextIdentity: lease.session.contextDebugId, sourcePageIdentity: identityPageId, sourceOrigin: "https://creator.xiaohongshu.com", sourcePathname: new URL(identityPage.url()).pathname, issuedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 30000).toISOString(), verified: true };
+    return { platformKey: "xiaohongshu", accountId: ctx.accountId, expectedExternalCreatorId: lease.creatorId, observedExternalCreatorId: lease.creatorId, externalAccountId: lease.creatorId, browserSessionIdentity: lease.session.runtimeSessionIdentity, browserContextIdentity: lease.session.contextDebugId, sourcePageIdentity: identityProof.pageId, sourceOrigin: identityProof.pageOrigin, sourcePathname: identityProof.pagePathname, issuedAt: identityProof.verifiedAt, expiresAt: identityProof.expiresAt, verified: true };
   }
 
   async validatePreparedSession(ctx: AccountContext, article: PublishArticleInput): Promise<void> {
@@ -4414,8 +4477,8 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       if (login?.accountId === ctx.accountId) { if (!this.isCanonicalPageClosed(login.page)) await this.sessionManager.closeOperationPage(this.identity(ctx), login.page); this.productionLoginPages.delete(jobId); }
       if (!lease || lease.accountId !== ctx.accountId) return;
       if (!this.isCanonicalPageClosed(lease.page)) await this.sessionManager.closeOperationPage(this.identity(ctx), lease.page);
-      if (lease.identityPage && !this.isCanonicalPageClosed(lease.identityPage.page)) await this.sessionManager.closeOperationPage(this.identity(ctx), lease.identityPage.page);
       this.productionPages.delete(jobId);
+      this.productionIdentityProofs.delete(this.productionIdentityProofKey(ctx));
     }, "releaseProductionPreparedSession");
   }
 
@@ -4439,9 +4502,13 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         attempt.markSubmissionSideEffect?.();
       } }), () => lease.submitted);
     if (!lease.submitted) throw new BrowserAutomationError("USER_ACTION_REQUIRED", `未占用最终提交：${click.failureCode ?? click.status}`);
+    const receipt = observer.result();
+    // The default observer has no classifier.  This branch can only be reached
+    // through a Main-owned reviewed receipt contract, never through Renderer.
+    if (receipt.accepted) return { success: true, status: "publishing", externalId: receipt.acceptance.externalId, ...(receipt.acceptance.publishedUrl ? { publishedUrl: receipt.acceptance.publishedUrl } : {}), response: { imageUploaded: true, submissionAccepted: true, trustedReceipt: true, receiptSha256: receipt.acceptance.receiptSha256 } };
     // The first real response may establish a future schema, but an unreviewed
     // response, mouse action or matching historical note never proves acceptance.
-    throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", `本次最终提交已占用；安全回执已记录但真实受理合同仍为 ${observer.result().status}，禁止重发（${click.status}）`);
+    throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", `本次最终提交已占用；安全回执已记录但真实受理合同仍为 ${receipt.status}，禁止重发（${click.status}）`);
   }
 
   async finalSubmit(ctx: AccountContext, article: PublishArticleInput, attempt: BrowserPublishAttemptContext): Promise<PublishResult> {

@@ -15,7 +15,7 @@ function candidate(rawValue: string): XiaohongshuCreatorIdentityCandidate {
 function identityPage(url: string, closed = false): Page {
   const leaf = {
     isVisible: async () => true,
-    getAttribute: async (name: string) => name === "href" ? "https://creator.xiaohongshu.com/user/profile/123456789" : null,
+    getAttribute: async (name: string) => name === "href" ? "https://creator.xiaohongshu.com/user/profile/960803317" : null,
     innerText: async () => "测试账号",
     evaluate: async () => "A",
     nth: () => leaf
@@ -33,19 +33,19 @@ function identityPage(url: string, closed = false): Page {
 
 describe("Xiaohongshu bounded Creator ID identity reader", () => {
   it.each([
-    ["小红书账号：123456789", "123456789"],
-    ["小红书账号: 123456789", "123456789"],
-    ["小红书账号  ：\u00a0123456789", "123456789"]
+    ["小红书账号：960803317", "960803317"],
+    ["小红书账号: 960803317", "960803317"],
+    ["小红书账号  ：\u00a0960803317", "960803317"]
   ])("extracts a numeric ID only from the semantic account label: %s", (text, expected) => {
     expect(extractCreatorIdFromAccountLabel(text)).toBe(expected);
   });
 
   it.each([
-    "粉丝：123456789",
-    "点赞 123456789",
-    "收藏：123456789",
-    "账号昵称：123456789",
-    "小红书账号：abc123456789",
+    "粉丝：960803317",
+    "点赞 960803317",
+    "收藏：960803317",
+    "账号昵称：960803317",
+    "小红书账号：abc960803317",
     "小红书账号：96",
     "小红书账号"
   ])("rejects unanchored or malformed identity text: %s", (text) => {
@@ -53,16 +53,16 @@ describe("Xiaohongshu bounded Creator ID identity reader", () => {
   });
 
   it("deduplicates equal semantic candidates", () => {
-    expect(resolveCreatorIdentityCandidates([candidate("123456789"), candidate("123456789")])).toEqual({
+    expect(resolveCreatorIdentityCandidates([candidate("960803317"), candidate("960803317")])).toEqual({
       status: "PASS",
-      normalizedCreatorId: "123456789",
-      candidates: [candidate("123456789")],
+      normalizedCreatorId: "960803317",
+      candidates: [candidate("960803317")],
       failureCode: null
     });
   });
 
   it("fails closed when semantic candidates disagree", () => {
-    expect(resolveCreatorIdentityCandidates([candidate("123456789"), candidate("123456789")])).toMatchObject({
+    expect(resolveCreatorIdentityCandidates([candidate("960803317"), candidate("123456789")])).toMatchObject({
       status: "AMBIGUOUS",
       normalizedCreatorId: null,
       failureCode: "AMBIGUOUS_IDENTITY"
@@ -93,7 +93,7 @@ describe("Xiaohongshu bounded Creator ID identity reader", () => {
         pageId: "page-a",
         pageOrigin: "https://creator.xiaohongshu.com",
         pagePathname: "/new/home",
-        creatorId: "123456789"
+        creatorId: "960803317"
       });
       expect(new Date(result.proof.expiresAt).getTime() - new Date(result.proof.verifiedAt).getTime()).toBe(300_000);
     }

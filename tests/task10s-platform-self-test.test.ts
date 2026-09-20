@@ -18,7 +18,7 @@ const ACCEPTANCE_TITLE = "GMP发布验收2｜请忽略";
 const ACCEPTANCE_BODY = "GEO Media Publisher 小红书自动发布最终验收测试。本内容仅用于验证上传、正文回读、发布事务与平台确认流程，请忽略。";
 
 function explicitPayload(accountId: string, imageAssetId: string) {
-  return { platformKey: "xiaohongshu" as const, accountId, creatorId: "123456789", title: ACCEPTANCE_TITLE, body: ACCEPTANCE_BODY, imageAssetId };
+  return { platformKey: "xiaohongshu" as const, accountId, creatorId: "960803317", title: ACCEPTANCE_TITLE, body: ACCEPTANCE_BODY, imageAssetId };
 }
 
 function fixture() {
@@ -29,7 +29,7 @@ function fixture() {
   database.repository.seedDevelopment(platformCsv);
   const account = database.repository.createAccount({ platformKey: "xiaohongshu", name: "Task10S 指定账号" });
   database.repository.db.prepare("UPDATE accounts SET id=? WHERE id=?").run(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, account.id);
-  database.repository.syncBrowserPlatformAccount({ accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, platformKey: "xiaohongshu", externalAccountId: "123456789", browserSessionId: "fixture-session", lastVerifiedAt: new Date().toISOString() });
+  database.repository.syncBrowserPlatformAccount({ accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, platformKey: "xiaohongshu", externalAccountId: "960803317", browserSessionId: "fixture-session", lastVerifiedAt: new Date().toISOString() });
   const imagePath = join(directory, "task10s-safe-test.png");
   writeFileSync(imagePath, Buffer.from("fixture"));
   const image = database.repository.createImageAsset({ brandId: database.repository.listBrands()[0]?.id ?? null, name: "Task10S SAFE_TEST_FIXTURE", filePath: imagePath, originalFileName: "task10s-safe-test.png", mimeType: "image/png", size: 7, tags: ["测试"], usage: ["测试"], platform: ["xiaohongshu"], universal: true });
@@ -53,7 +53,7 @@ describe("Task10S platform self-test entry", () => {
     const account = database.repository.createAccount({ platformKey: "xiaohongshu", name: "Task10S prepublish-only" });
     database.repository.db.prepare("UPDATE accounts SET id=? WHERE id=?").run(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, account.id);
     database.repository.updateAccount(XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, { enabled: true, loginStatus: "logged_in" });
-    database.repository.syncBrowserPlatformAccount({ accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, platformKey: "xiaohongshu", externalAccountId: "123456789", browserSessionId: "session-hash", lastVerifiedAt: "2026-09-02T00:00:00.000Z" });
+    database.repository.syncBrowserPlatformAccount({ accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID, platformKey: "xiaohongshu", externalAccountId: "960803317", browserSessionId: "session-hash", lastVerifiedAt: "2026-09-02T00:00:00.000Z" });
     database.repository.createImageAsset({ brandId: database.repository.listBrands()[0]?.id ?? null, name: "Task10R SAFE_TEST_FIXTURE", filePath: "C:/safe/task10r-safe-test.png", originalFileName: "task10r-safe-test.png", mimeType: "image/png", size: 70, tags: ["测试"], usage: ["测试"], platform: ["xiaohongshu"], universal: true });
     const safePath = join(directory, "task10s-safe-test.png");
     writeFileSync(safePath, Buffer.from("fixture"));
@@ -92,11 +92,11 @@ describe("Task10S platform self-test entry", () => {
         pageUrlConsistency: "PASS",
         routeClass: "CREATOR_HOME",
         identityObservationStatus: "PASS",
-        identitySourceCandidates: [{ sourceType: "VISIBLE_ACCOUNT_TEXT", stableIdentifierPresent: true, identifierFieldName: "externalCreatorId", sensitiveDataRequired: false, readOnlySafe: true, confidence: "HIGH", tagName: "SPAN", text: "123456789", href: null, role: null, dataIdentifierField: null, visible: true, source: "CREATOR_HOME_ACCOUNT_LABEL", rawValue: "123456789", normalizedCreatorId: "123456789", semanticAnchor: "xiaohongshu-account-id-label" }],
+        identitySourceCandidates: [{ sourceType: "VISIBLE_ACCOUNT_TEXT", stableIdentifierPresent: true, identifierFieldName: "externalCreatorId", sensitiveDataRequired: false, readOnlySafe: true, confidence: "HIGH", tagName: "SPAN", text: "960803317", href: null, role: null, dataIdentifierField: null, visible: true, source: "CREATOR_HOME_ACCOUNT_LABEL", rawValue: "960803317", normalizedCreatorId: "960803317", semanticAnchor: "xiaohongshu-account-id-label" }],
         identityDomDiagnosticMatchCount: 1,
         identityDomDiagnosticMatches: [],
-        observedCreatorIdRaw: "123456789",
-        observedCreatorIdNormalized: "123456789",
+        observedCreatorIdRaw: "960803317",
+        observedCreatorIdNormalized: "960803317",
         observedDisplayName: null,
         observedProfileUrl: null
       }),
@@ -158,8 +158,8 @@ describe("Task10S platform self-test entry", () => {
     expect(receivedContext.runtimeIdentityProof).toMatchObject({
       accountId: XIAOHONGSHU_ONE_SHOT_ACCOUNT_ID,
       platformKey: "xiaohongshu",
-      expectedExternalCreatorId: "123456789",
-      observedExternalCreatorId: "123456789",
+      expectedExternalCreatorId: "960803317",
+      observedExternalCreatorId: "960803317",
       canonicalContextId: "context",
       canonicalPageId: "page",
       verified: true

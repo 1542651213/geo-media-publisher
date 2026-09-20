@@ -10,7 +10,7 @@ import {
   type OneShotPublicationAuthorization
 } from "./one-shot-publication";
 
-const ACCOUNT_ID = "11111111-1111-4111-8111-111111111111";
+const ACCOUNT_ID = "54b390ac-d81e-440a-baeb-d00f9f346cc3";
 const OPERATION_ID = "operation-task10s-1";
 
 function authorization(overrides: Partial<OneShotPublicationAuthorization> = {}): OneShotPublicationAuthorization {

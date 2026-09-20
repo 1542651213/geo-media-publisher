@@ -44,23 +44,23 @@ describe("Task10V platform account identity binding schema", () => {
 
     const result = database.repository.bootstrapXhsCreatorIdentity({
       accountId: account.id,
-      observedCreatorId: "123456789",
+      observedCreatorId: "960803317",
       displayName: "测试账号",
-      profileUrl: "https://creator.xiaohongshu.com/user/profile/123456789"
+      profileUrl: "https://creator.xiaohongshu.com/user/profile/960803317"
     });
 
-    expect(result.account.externalAccountId).toBe("123456789");
+    expect(result.account.externalAccountId).toBe("960803317");
     expect(result.binding.accountId).toBe(account.id);
-    expect(result.binding.externalCreatorId).toBe("123456789");
-    expect(database.repository.getAccountById(account.id, "xiaohongshu")?.externalAccountId).toBe("123456789");
-    expect(database.repository.getPlatformAccountIdentityBinding("xiaohongshu", account.id)?.externalCreatorId).toBe("123456789");
+    expect(result.binding.externalCreatorId).toBe("960803317");
+    expect(database.repository.getAccountById(account.id, "xiaohongshu")?.externalAccountId).toBe("960803317");
+    expect(database.repository.getPlatformAccountIdentityBinding("xiaohongshu", account.id)?.externalCreatorId).toBe("960803317");
   });
 
   it("allows only safe partial legacy backfills and rejects conflicting state", () => {
     const database = fixture();
     const accountFieldOnly = database.repository.createAccount({ platformKey: "xiaohongshu", name: "Task10V account field" });
-    database.db.prepare("UPDATE accounts SET external_account_id=? WHERE id=?").run("123456789", accountFieldOnly.id);
-    expect(database.repository.bootstrapXhsCreatorIdentity({ accountId: accountFieldOnly.id, observedCreatorId: "123456789" }).binding.externalCreatorId).toBe("123456789");
+    database.db.prepare("UPDATE accounts SET external_account_id=? WHERE id=?").run("960803317", accountFieldOnly.id);
+    expect(database.repository.bootstrapXhsCreatorIdentity({ accountId: accountFieldOnly.id, observedCreatorId: "960803317" }).binding.externalCreatorId).toBe("960803317");
 
     const bindingOnly = database.repository.createAccount({ platformKey: "xiaohongshu", name: "Task10V binding field" });
     database.repository.bindPlatformAccountIdentity({ platformKey: "xiaohongshu", accountId: bindingOnly.id, externalCreatorId: "123456789", bindingSource: "OWNER_APPROVED_CREATOR_IDENTITY_BINDING" });
@@ -76,8 +76,8 @@ describe("Task10V platform account identity binding schema", () => {
     const database = fixture();
     const first = database.repository.createAccount({ platformKey: "xiaohongshu", name: "Task10V first owner" });
     const second = database.repository.createAccount({ platformKey: "xiaohongshu", name: "Task10V second owner" });
-    expect(database.repository.bootstrapXhsCreatorIdentity({ accountId: first.id, observedCreatorId: "123456789" }).account.externalAccountId).toBe("123456789");
-    expect(() => database.repository.bootstrapXhsCreatorIdentity({ accountId: second.id, observedCreatorId: "123456789" })).toThrow(/ACTIVE|活动内部账号|already bound/iu);
+    expect(database.repository.bootstrapXhsCreatorIdentity({ accountId: first.id, observedCreatorId: "960803317" }).account.externalAccountId).toBe("960803317");
+    expect(() => database.repository.bootstrapXhsCreatorIdentity({ accountId: second.id, observedCreatorId: "960803317" })).toThrow(/ACTIVE|活动内部账号|already bound/iu);
 
     const archived = database.repository.createAccount({ platformKey: "xiaohongshu", name: "Task10V archived owner" });
     database.db.prepare("UPDATE accounts SET external_account_id=?, archived_at=? WHERE id=?").run("archived-creator", "2026-09-14T00:00:00.000Z", archived.id);
@@ -108,14 +108,14 @@ describe("Task10V platform account identity binding schema", () => {
     const binding = {
       platformKey: "xiaohongshu" as const,
       accountId: account.id,
-      externalCreatorId: "123456789",
+      externalCreatorId: "960803317",
       displayName: "测试账号",
-      profileUrl: "https://creator.xiaohongshu.com/user/profile/123456789",
+      profileUrl: "https://creator.xiaohongshu.com/user/profile/960803317",
       bindingSource: "LEGACY_ACCOUNT_EXTERNAL_ID_MATCH" as const
     };
 
     const first = database.repository.bindPlatformAccountIdentity(binding);
-    expect(first.externalCreatorId).toBe("123456789");
+    expect(first.externalCreatorId).toBe("960803317");
     expect(database.repository.bindPlatformAccountIdentity(binding).id).toBe(first.id);
     expect(() => database.repository.bindPlatformAccountIdentity({ ...binding, externalCreatorId: "other-creator" })).toThrow(/绑定|conflict|mismatch/iu);
   });

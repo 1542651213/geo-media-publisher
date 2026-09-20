@@ -15,6 +15,7 @@ export interface ProductionPilotGuard {
   readonly buildSha256: string;
   registerPrepared(input: { job: PublishJob; snapshot: ContentSnapshot; recordId: string }): void;
   claimFinalSubmit(input: { job: PublishJob; intentId: string; snapshot: ContentSnapshot; subject: XhsContextIdentityAttestation }): { slotNumber: number };
+  recordAccepted(input: { job: PublishJob; intentId: string; externalId: string; publishedUrl?: string; receiptSha256: string }): PublishJob;
   markUnknown(input: { intentId: string; errorCode: string }): PublishJob;
 }
 
@@ -322,7 +323,18 @@ export class PublisherService {
     if (this.repository.getJob(job.id)?.status !== "AwaitingConfirmation") { await adapter.releasePreparedSession?.(ctx); throw new Error("PREPARATION_CANCELLED_OR_CHANGED"); }
     this.repository.contentSnapshots.assertCurrent(job.id);
     if (job.platformKey === "xiaohongshu" && !prepared.prepared) throw Object.assign(new Error(prepared.message || "平台尚未完成准备，需要正常验证"), { code: "USER_ACTION_REQUIRED" });
-    if (job.platformKey === "xiaohongshu" && (!prepared.prepared || prepared.response.uploadedImageSha256 !== snapshot.images[0]?.sha256 || String(prepared.response.titleReadbackValue ?? "").replace(/\r\n?/g, "\n") !== snapshot.canonicalTitle || String(prepared.response.bodyReadbackValue ?? "").replace(/\r\n?/g, "\n") !== snapshot.canonicalBody)) throw new Error("CONTENT_EDITOR_READBACK_MISMATCH");
+    // The adapter keeps its normalized diagnostic separate from the text read
+    // from the editor.  A normalizer may fold spaces, NBSP, full-width marks,
+    // or a terminal newline; using it here would silently approve changed
+    // content or reject an unchanged immutable snapshot.
+    const rawBodyReadback = prepared.response.bodyReadbackRawValue ?? prepared.response.bodyReadbackValue;
+    const bodyReadbackStatus = prepared.response.bodyReadbackStatus;
+    const canonicalBodyReadback = String(prepared.response.bodyReadbackValue ?? "").replace(/\r\n?/g, "\n");
+    const bodyReadbackMatches =
+      bodyReadbackStatus === "PASS" || bodyReadbackStatus === "PASS_WITH_NORMALIZATION"
+        ? canonicalBodyReadback === snapshot.canonicalBody
+        : String(rawBodyReadback ?? "").replace(/\r\n?/g, "\n") === snapshot.canonicalBody;
+    if (job.platformKey === "xiaohongshu" && (!prepared.prepared || prepared.response.uploadedImageSha256 !== snapshot.images[0]?.sha256 || String(prepared.response.titleReadbackValue ?? "").replace(/\r\n?/g, "\n") !== snapshot.canonicalTitle || !bodyReadbackMatches)) throw new Error("CONTENT_EDITOR_READBACK_MISMATCH");
     if (selectedImage && prepared.response.imageUploaded !== true) {
       this.logger.error("PUBLISHER", "IMAGE_UPLOAD_FAILED", "平台编辑器未返回图片 DOM 上传证据", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
       throw Object.assign(new Error("平台编辑器未返回图片上传完成证据，不能声明图片已插入"), { code: "UPLOAD_FAILED" });
@@ -443,6 +455,10 @@ export class PublisherService {
       if (ordinaryXhs) {
         if (!usePlatformFinalSubmit || job.finalPublishMode !== "CONFIRM_BEFORE_PUBLISH" || job.contentKind === "video") throw Object.assign(new Error("PRODUCTION_PREPARATION_REQUIRED"), { code: "USER_ACTION_REQUIRED" });
         await this.assertPreparedJob(job.id);
+        // Receipt capture is a normal runtime service, but it is never a
+        // publishing authorization.  A normal startup without an owner scope
+        // must fail before an intent or mouse boundary is created.
+        if (!this.options.productionPilotGuard && !this.options.onScopedProductionBoundary) throw Object.assign(new Error("XHS_FINAL_SUBMIT_AUTHORIZATION_REQUIRED"), { code: "USER_ACTION_REQUIRED" });
       }
       const executeOrdinaryOperation = async (): Promise<PublishResult> => {
           const login = await withTimeout(adapter.checkLogin(ctx), this.options.loginCheckTimeoutMs ?? 30_000, "Platform login check");
@@ -580,6 +596,11 @@ export class PublisherService {
             result = await withTimeout(adapter.finalSubmit!(ctx, input, attempt), this.options.operationTimeoutMs ?? 120_000, "Platform final submit");
             if (ordinaryXhs) {
               if (!this.repository.getSubmissionBarrier(job.id)) throw new Error("CONTENT_FINAL_BOUNDARY_NOT_OCCUPIED");
+              if (result.response.trustedReceipt === true) {
+                if (!this.options.productionPilotGuard || !result.externalId || typeof result.response.receiptSha256 !== "string") throw Object.assign(new Error("TRUSTED_RECEIPT_SCOPE_REQUIRED"), { code: "USER_ACTION_REQUIRED" });
+                const accepted = this.options.productionPilotGuard.recordAccepted({ job, intentId: intent.id, externalId: result.externalId, ...(result.publishedUrl ? { publishedUrl: result.publishedUrl } : {}), receiptSha256: result.response.receiptSha256 });
+                return { job: accepted, message: "Submission accepted; waiting for platform status" };
+              }
               if (result.externalId && result.publishedUrl) this.repository.updatePublishRecord(preparedRecord!.id, { status: "Prepared", success: false, publishedExternalId: result.externalId, publishedUrl: result.publishedUrl, response: { ...preparedRecord!.response, ...result.response, receiptIntentId: intent.id, receiptSnapshotId: job.contentBindingId, receiptAccountId: job.accountId } });
             }
             if (oneShotGuard) {

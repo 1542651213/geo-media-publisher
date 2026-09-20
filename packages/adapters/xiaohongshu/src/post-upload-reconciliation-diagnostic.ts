@@ -73,6 +73,15 @@ export function parseXiaohongshuImageCounterText(value: string | null): { curren
   return { current, total };
 }
 
+/** The editor can render the one selected asset in the thumbnail strip, its
+ * canvas, and the phone preview at the same time. Those representations must
+ * not be mistaken for multiple selected files. The bounded editor counter is
+ * authoritative for the selected-file count, but a visible editor-scoped
+ * image is still required so a counter alone can never prove an upload. */
+export function hasExactlyOneXiaohongshuSelectedImage(result: Pick<XiaohongshuPostUploadReconciliationResult, "imageAssetRenderedCount" | "imageCounterTextSafe">): boolean {
+  return result.imageAssetRenderedCount >= 1 && parseXiaohongshuImageCounterText(result.imageCounterTextSafe)?.current === 1;
+}
+
 const EMPTY_SNAPSHOT: XiaohongshuPostUploadReconciliationDomSnapshot = {
   origin: "",
   pathname: "",

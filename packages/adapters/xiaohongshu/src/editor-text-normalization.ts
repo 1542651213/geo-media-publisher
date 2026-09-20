@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 /** The three outcomes used by a content readback gate. */
 export type XiaohongshuEditorReadbackStatus = "PASS" | "PASS_WITH_NORMALIZATION" | "FAIL";
 
+export const XIAOHONGSHU_EDITOR_CANONICALIZATION_VERSION = "xhs-editor-canonical-v1" as const;
+
 /**
  * Only transformations known to be introduced by the XHS editor serializer
  * are reported here.  Semantic joiner characters (ZWJ/ZWNJ) are deliberately
@@ -18,11 +20,13 @@ export type XiaohongshuEditorNormalizationReason =
   | "BOM_REMOVED"
   | "TAB_TO_SPACE"
   | "SPACE_RUN_NORMALIZED"
+  | "BLANK_LINE_RUN_NORMALIZED"
   | "LEADING_WHITESPACE_TRIMMED"
   | "TRAILING_WHITESPACE_TRIMMED";
 
 export interface XiaohongshuEditorReadbackVerification {
   status: XiaohongshuEditorReadbackStatus;
+  canonicalizationVersion: typeof XIAOHONGSHU_EDITOR_CANONICALIZATION_VERSION;
   expectedLength: number;
   actualLength: number;
   expectedHash: string;
@@ -110,6 +114,13 @@ function normalizeWithReasons(value: string): { value: string; reasons: Xiaohong
     })
     .join("\n");
 
+  // The rich-text editor can serialize one logical paragraph separator as
+  // several empty block boundaries in innerText. Keep a single blank line so
+  // paragraph structure remains visible, but do not treat redundant empty
+  // blocks as a content mutation.
+  if (/\n{3,}/gu.test(normalized)) reasons.add("BLANK_LINE_RUN_NORMALIZED");
+  normalized = normalized.replace(/\n{3,}/gu, "\n\n");
+
   const trimmed = normalized.replace(/^[ \t\n]+/gu, "").replace(/[ \t\n]+$/gu, "");
   if (trimmed.length !== normalized.length) {
     const leadingRemoved = normalized.length - normalized.replace(/^[ \t\n]+/gu, "").length;
@@ -143,6 +154,7 @@ export function classifyXiaohongshuEditorReadback(expected: string, actual: stri
   const normalizationReasons = [...new Set([...normalizedExpectedResult.reasons, ...normalizedActualResult.reasons])];
   return {
     status: actual === expected ? "PASS" : normalizedActual === normalizedExpected ? "PASS_WITH_NORMALIZATION" : "FAIL",
+    canonicalizationVersion: XIAOHONGSHU_EDITOR_CANONICALIZATION_VERSION,
     expectedLength: codePointLength(expected),
     actualLength: codePointLength(actual),
     expectedHash: sha256(expected),

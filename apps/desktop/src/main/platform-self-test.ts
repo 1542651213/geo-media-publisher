@@ -1319,6 +1319,10 @@ export class PlatformSelfTestService {
     return this.xhsIdentity.bootstrapCreatorIdentity(accountId);
   }
 
+  observeXhsCreatorIdentityForLogin(accountId: string): Promise<CreatorIdentityVerificationResult> {
+    return this.xhsIdentity.observeCreatorIdentityForLogin(accountId);
+  }
+
   establishXhsContextIdentityAttestation(accountId?: string) {
     return this.xhsIdentity.establishContextIdentityAttestation(this.selectedXhsAccount(accountId).id);
   }

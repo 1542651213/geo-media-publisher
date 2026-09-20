@@ -14,7 +14,7 @@ const account = {
   id: "account-xhs",
   platformKey: "xiaohongshu",
   platformAccountId: "account-xhs",
-  externalAccountId: "123456789",
+  externalAccountId: "960803317",
   enabled: true,
   archivedAt: null
 } as const;
@@ -26,7 +26,7 @@ function trusted(overrides: Partial<PreparedEditorRecoveryTrustedState> = {}): P
     expectedPlatformKey: "xiaohongshu",
     expectedAccountId: account.id,
     expectedRunId: "run-1",
-    expectedCreatorId: "123456789",
+    expectedCreatorId: "960803317",
     account,
     run: { testRunId: "run-1", platformKey: "xiaohongshu", platformAccountId: account.platformAccountId, publishJobId: "job-1" },
     job: { id: "job-1", accountId: account.id, platformAccountId: account.platformAccountId, platformKey: "xiaohongshu", articleId: article.id },
@@ -36,7 +36,7 @@ function trusted(overrides: Partial<PreparedEditorRecoveryTrustedState> = {}): P
     publishJobCountForRun: 1,
     preparedRecordCountForJob: 1,
     identityVerified: true,
-    actualCreatorId: "123456789",
+    actualCreatorId: "960803317",
     ...overrides
   };
 }

@@ -28,6 +28,18 @@ describe("Xiaohongshu editor body readback", () => {
     expect(classifyXiaohongshuEditorReadback(expected, innerText).status).toBe("PASS_WITH_NORMALIZATION");
   });
 
+  it("accepts only redundant empty rich-text blocks between existing paragraphs", () => {
+    const expected = "第一段。\n\n第二段。";
+    const actual = "第一段。\n\n\n\n\n第二段。";
+
+    const result = classifyXiaohongshuEditorReadback(expected, actual);
+
+    expect(result.status).toBe("PASS_WITH_NORMALIZATION");
+    expect(result.canonicalizationVersion).toBe("xhs-editor-canonical-v1");
+    expect(result.normalizationReasons).toContain("BLANK_LINE_RUN_NORMALIZED");
+    expect(classifyXiaohongshuEditorReadback("第一行\n第二行", "第一行\n\n第二行").status).toBe("FAIL");
+  });
+
   it("normalizes CR-only lines, narrow no-break spaces, tabs, and editor edge whitespace", () => {
     const expected = "首行\n次行 内容";
     const actual = "\t首行\r次行\u202f  内容\t\r\n";

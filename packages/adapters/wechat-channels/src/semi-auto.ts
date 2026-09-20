@@ -13,3 +13,4 @@ const definition: SemiAutoAdapterDefinition = {
 export class WechatChannelsSemiAutoAdapter extends SemiAutoAdapter {
   constructor() { super(definition); }
 }
+

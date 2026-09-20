@@ -27,7 +27,7 @@ const account: Account = {
   connectionMode: "BrowserAutomation",
   authorizationStatus: "Authorized",
   browserSessionId: "session-hash",
-  externalAccountId: "123456789",
+  externalAccountId: "960803317",
   lastVerifiedAt: new Date().toISOString(),
   lastUsedAt: null,
   archivedAt: null

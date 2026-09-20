@@ -12,8 +12,8 @@ const issuedAt = new Date("2026-09-07T08:00:00.000Z");
 function source(overrides: Partial<XhsContextIdentityAttestationSource> = {}): XhsContextIdentityAttestationSource {
   return {
     accountId: "xhs-account",
-    expectedExternalCreatorId: "123456789",
-    observedExternalCreatorId: "123456789",
+    expectedExternalCreatorId: "960803317",
+    observedExternalCreatorId: "960803317",
     identityObservationStatus: "PASS",
     browserSessionIdentity: "session-a",
     browserContextIdentity: "context-a",
@@ -23,7 +23,7 @@ function source(overrides: Partial<XhsContextIdentityAttestationSource> = {}): X
     browserConnected: true,
     pageClosed: false,
     runtimeAuthState: "AUTHENTICATED",
-    externalAccountId: "123456789",
+    externalAccountId: "960803317",
     ...overrides
   };
 }
@@ -37,7 +37,7 @@ function runtime(overrides: Partial<XhsContextIdentityRuntime> = {}): XhsContext
     currentPageClosed: false,
     browserConnected: true,
     runtimeAuthState: "AUTHENTICATED",
-    observedExternalCreatorId: "123456789",
+    observedExternalCreatorId: "960803317",
     ...overrides
   };
 }
@@ -50,8 +50,8 @@ describe("XHS Context-bound identity attestation", () => {
     if (result.status === "PASS") {
       expect(result.attestation).toMatchObject({
         accountId: "xhs-account",
-        expectedExternalCreatorId: "123456789",
-        observedExternalCreatorId: "123456789",
+        expectedExternalCreatorId: "960803317",
+        observedExternalCreatorId: "960803317",
         browserSessionIdentity: "session-a",
         browserContextIdentity: "context-a",
         sourcePageIdentity: "home-page",

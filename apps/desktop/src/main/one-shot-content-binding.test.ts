@@ -4,7 +4,7 @@ import { buildOneShotContentBinding, validateOneShotContentPayload, verifyOneSho
 const payload: OneShotContentPayload = {
   platformKey: "xiaohongshu",
   accountId: "account-1",
-  creatorId: "123456789",
+  creatorId: "960803317",
   title: "GMP发布验收2｜请忽略",
   body: "GEO Media Publisher 小红书自动发布最终验收测试。本内容仅用于验证上传、正文回读、发布事务与平台确认流程，请忽略。",
   imageAssetId: "image-1",

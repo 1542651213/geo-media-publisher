@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { ScopedXhsCampaignLedger } from "../apps/desktop/src/main/xhs-max3-ledger";
 
 const content = ["XHS-01", "XHS-02", "XHS-03"].map((slot, index) => ({ slot, titleSha256: `title${index}`, bodySha256: `body${index}`, imageSha256: `image${index}` }));
-const cfg = { campaignId: "GEO_XHS_SOL_MAX3_20260917", accountId: "11111111-1111-4111-8111-111111111111", creatorId: "123456789", expiresAtUtc: "2026-09-17T14:59:59Z", content };
+const cfg = { campaignId: "GEO_XHS_SOL_MAX3_20260917", accountId: "54b390ac-d81e-440a-baeb-d00f9f346cc3", creatorId: "960803317", expiresAtUtc: "2026-09-17T14:59:59Z", content };
 const binding = (n: number) => ({ slot: `XHS-0${n}`, accountId: cfg.accountId, creatorId: cfg.creatorId, jobId: `job-${n}`, intentId: `intent-${n}`, snapshotId: `snapshot-${n}`, titleSha256: `title${n-1}`, bodySha256: `body${n-1}`, imageSha256: `image${n-1}`, buildSha256: "build" });
 const now = () => Date.parse("2026-09-17T10:00:00Z");
 

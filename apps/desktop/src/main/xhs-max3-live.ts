@@ -7,7 +7,7 @@ import type {AppRepository} from "@publisher/db";
 import type {ContentSnapshot,PublishJob,XhsContextIdentityAttestation} from "@publisher/domain";
 import {XhsProductionReceiptObserver,type XhsReceiptEvent,type XhsReceiptMeta} from "@publisher/adapters-xiaohongshu/browser";
 import type {Page} from "playwright-core";
-import {authorizeXhsMax3Config,parseXhsMax3Config,readXhsMax3Gate,type XhsMax3Config} from "./xhs-max3-config";
+import {parseXhsMax3Config,readXhsMax3Gate,type XhsMax3Config} from "./xhs-max3-config";
 import {ScopedXhsCampaignLedger,type ScopedCampaignConfig} from "./xhs-max3-ledger";
 const hash=(bytes:Uint8Array|string):string=>createHash("sha256").update(bytes).digest("hex");
 const same=(a:string,b:string):boolean=>win32.resolve(a).toLowerCase()===win32.resolve(b).toLowerCase();
@@ -28,8 +28,7 @@ export interface XhsMax3LiveContext {
 export function initializeXhsMax3Live():XhsMax3LiveContext|null{
   const configPath=readXhsMax3Gate(process.env);if(!configPath)return null;
   if(process.env.ORDINARY_XHS_PILOT || process.env.ORDINARY_XHS_PILOT_CONFIG)throw new Error("XHS_MAX3_SYNTHETIC_MODE_CONFLICT");
-  const config=parseXhsMax3Config(JSON.parse(readFileSync(configPath,"utf8")) as unknown,configPath);
-  authorizeXhsMax3Config(config,process.env.GEO_XHS_MAX3);
+  const config=parseXhsMax3Config(JSON.parse(readFileSync(configPath,"utf8")) as unknown);
   if(!app.isPackaged||!same(process.execPath,config.executablePath)||!same(app.getAppPath(),config.appAsarPath))throw new Error("XHS_MAX3_PACKAGE_PATH_MISMATCH");
   if(hash(readPhysicalFileSync(process.execPath))!==config.executableSha256||hash(readPhysicalFileSync(app.getAppPath()))!==config.appAsarSha256)throw new Error("XHS_MAX3_PACKAGE_HASH_MISMATCH");
   if(hash(readFileSync(config.manifestPath))!==config.manifestSha256)throw new Error("XHS_MAX3_MANIFEST_HASH_MISMATCH");

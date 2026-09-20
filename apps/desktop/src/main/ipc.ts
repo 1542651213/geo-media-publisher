@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { basename, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
-import { backupDatabase, validateDatabaseBackup, type AIBatchTarget, type AppRepository, type ContentStudioTaskPayload, type HumanReviewSubmitInput } from "@publisher/db";
+import { backupDatabase, validateDatabaseBackup, type AIBatchTarget, type AppRepository, type ContentStudioTaskPayload, type HumanReviewSubmitInput, type ProductionPilotOwnerVerification } from "@publisher/db";
 import type { AccountDisconnectResult, BatchGenerationInput, ContentStudioGenerationInput } from "../shared/api";
 import { AIProviderError, DeepSeekErrorMapper, DeepSeekProvider, FallbackAIProvider, MockAIProvider, OpenAICompatibleProvider, contentHash, type AIConnectionDiagnostic, type AIConnectionResult, type AIProvider } from "@publisher/ai";
 import { MockImageProvider, OpenAICompatibleImageProvider, persistGeneratedImage, type ImageProvider } from "@publisher/image";
@@ -66,6 +66,10 @@ const humanReviewSubmitSchema = z.object({
 export interface IpcDependencies {
   resumeBackgroundTasks?: boolean;
   scopedLiveGuard?: (channel: string, payload: unknown) => void;
+  formalPilotId?: string;
+  ownerVerifiedPublished?: (input: { jobId: string; intentId: string; ownerConfirmation: ProductionPilotOwnerVerification }) => unknown;
+  crossBrandImageBindingPermit?: (articleId: string, imageAssetId: string) => { articleId: string; imageAssetId: string } | null;
+  crossBrandImageAssetsForArticle?: (articleId: string, brandId: string | undefined) => ImageAsset[];
   repository: AppRepository;
   publisher: PublisherService;
   scheduler: PersistentScheduler;
@@ -102,7 +106,7 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
 export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
   processDiagnostics = deps.processDiagnostics ?? null;
   scopedLiveGuard = deps.scopedLiveGuard;
-  const { repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir, logger, credentials, aiCredentials } = deps;
+  const { repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir, logger, credentials, aiCredentials, formalPilotId, ownerVerifiedPublished } = deps;
   const listPlatformViews = (): ReturnType<AppRepository["listPlatforms"]> => addAccountConnectionModes(repository.listPlatforms(), registry);
   const createUserAction = (triggerSource: Exclude<ExternalLaunchTriggerSource, "APP_STARTUP">): UserInitiatedAction => {
     const action = { userActionId: randomUUID(), triggerSource } satisfies UserInitiatedAction;
@@ -412,7 +416,8 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
     if (input.platformKey === "xiaohongshu" && (input.imageSelectionMode !== "manual" || !input.selectedImageAssetId || input.finalPublishMode !== "CONFIRM_BEFORE_PUBLISH")) throw new Error("XHS_PILOT_SINGLE_EXPLICIT_IMAGE_AND_CONFIRMATION_REQUIRED");
     const configuredMode = repository.getSettings().finalPublishMode;
     const finalPublishMode = input.finalPublishMode ?? (configuredMode === "prepare_only" ? "PREPARE_ONLY" : configuredMode === "auto_publish" ? "AUTO_PUBLISH" : "CONFIRM_BEFORE_PUBLISH");
-    const job = repository.createArticlePublishJob({ ...input, finalPublishMode });
+    const crossBrandImageBindingPermit = input.selectedImageAssetId ? deps.crossBrandImageBindingPermit?.(input.articleId, input.selectedImageAssetId) ?? null : null;
+    const job = repository.createArticlePublishJob({ ...input, finalPublishMode, crossBrandImageBindingPermit, ...(formalPilotId ? { formalPilotId } : {}) });
     logger.info("QUALITY_GATE", "CONTENT_REVIEW_MODE_APPLIED", "文章按当前内容审核模式进入发布流程", { articleId: input.articleId, platformKey: input.platformKey, contentReviewMode: repository.getContentReviewMode() });
     const platform = repository.listPlatforms().find((item) => item.platformKey === input.platformKey);
     const isApiPlatform = platform?.integrationMode === "API";
@@ -450,7 +455,12 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
     return imageAssetView(image);
   });
   const imageInputSchema = z.object({ brandId: idSchema, sourcePaths: z.array(z.string().min(1).max(8192)).min(1).max(100), name: z.string().trim().max(200).optional(), tags: z.array(z.string().trim().min(1).max(80)).max(30), business: z.array(z.string().trim().min(1).max(80)).max(20), city: z.array(z.string().trim().min(1).max(80)).max(20), usage: z.array(z.string().trim().min(1).max(80)).max(30), platform: z.array(z.string().trim().min(1).max(80)).max(20), universal: z.boolean() });
-  register("image-assets:list", (_event, payload) => { const input = z.object({ brandId: idSchema.optional(), enabledOnly: z.boolean().optional() }).optional().parse(payload); return repository.listImageAssets(input?.brandId, input?.enabledOnly ?? false).map(imageAssetView); });
+  register("image-assets:list", (_event, payload) => {
+    const input = z.object({ articleId: idSchema.optional(), brandId: idSchema.optional(), enabledOnly: z.boolean().optional() }).optional().parse(payload);
+    const primary = repository.listImageAssets(input?.brandId, input?.enabledOnly ?? false);
+    const permitted = input?.articleId ? deps.crossBrandImageAssetsForArticle?.(input.articleId, input.brandId) ?? [] : [];
+    return [...new Map([...primary, ...permitted].map((asset) => [asset.id, asset])).values()].map(imageAssetView);
+  });
   register("image-assets:pick-files", async () => { const result = await dialog.showOpenDialog({ properties: ["openFile", "multiSelections"], filters: [{ name: "图片", extensions: ["jpg", "jpeg", "png", "webp", "gif", "bmp"] }] }); return result.canceled ? [] : result.filePaths; });
   register("image-assets:import", (_event, payload) => {
     const input = imageInputSchema.parse(payload);
@@ -669,8 +679,8 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
       }
       let identityProof: CreatorIdentityVerificationResult | null = null;
       if (input.platformKey === "xiaohongshu") {
-        identityProof = await platformSelfTests.bootstrapXhsCreatorIdentity(input.accountId);
-        logger.info("ACCOUNT", "COMPLETE_LOGIN_IDENTITY_PROOF", "complete-login 已复用 Task10W canonical Creator 身份证明", {
+        identityProof = await platformSelfTests.observeXhsCreatorIdentityForLogin(input.accountId);
+        logger.info("ACCOUNT", "COMPLETE_LOGIN_IDENTITY_PROOF", "complete-login 已读取未持久化的 Task10W canonical Creator 身份证明", {
           accountId: input.accountId,
           platformKey: input.platformKey,
           userActionId: action.userActionId,
@@ -689,14 +699,19 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
       if (input.platformKey === "xiaohongshu" && identityProof && profile?.accountId && profile.accountId !== identityProof.observed.externalCreatorId) {
         throw Object.assign(new Error("小红书 Adapter profile Creator ID 与已证明身份不一致，拒绝回写"), { code: "XHS_CREATOR_IDENTITY_MISMATCH" });
       }
-      const archivedAccount = profile?.accountId ? repository.findArchivedAccountByExternalIdForConnection(input.accountId, input.platformKey, profile.accountId) : null;
+      const verifiedExternalAccountId = input.platformKey === "xiaohongshu" ? identityProof?.observed.externalCreatorId ?? null : profile?.accountId ?? null;
+      const archivedAccount = verifiedExternalAccountId ? repository.findArchivedAccountByExternalIdForConnection(input.accountId, input.platformKey, verifiedExternalAccountId) : null;
       const effectiveAccountId = archivedAccount?.id ?? input.accountId;
       const effectiveContext = effectiveAccountId === input.accountId ? completedContext : accountContext(effectiveAccountId, input.platformKey, action, true);
       if (archivedAccount) {
         if (!adapter.rebindAccountSession) throw new Error("无法安全恢复归档账号：Adapter 不支持 Session 重绑定");
-        repository.restoreArchivedAccountByExternalId(input.platformKey, profile?.accountId ?? "");
+        repository.restoreArchivedAccountByExternalId(input.platformKey, verifiedExternalAccountId ?? "");
         if (input.platformKey === "xiaohongshu") platformSelfTests.invalidateXhsContextIdentityAttestation(effectiveAccountId);
         adapter.rebindAccountSession(completedContext, effectiveContext);
+      }
+      if (input.platformKey === "xiaohongshu") {
+        identityProof = await platformSelfTests.bootstrapXhsCreatorIdentity(effectiveAccountId);
+        if (!identityProof.verified || identityProof.observed.externalCreatorId !== verifiedExternalAccountId) throw Object.assign(new Error("ACCOUNT_IDENTITY_UNVERIFIED: 恢复后的 Creator 身份证明未通过"), { code: "ACCOUNT_IDENTITY_UNVERIFIED" });
       }
       await adapter.persistConnectionSession?.(effectiveContext);
       const account = await syncBrowserAccount(adapter, effectiveAccountId, input.platformKey, action, profile);
@@ -916,6 +931,11 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
   register("jobs:reconcile", async (_event, payload) => publisher.reconcileJob(z.object({ id: idSchema }).parse(payload).id, createUserAction("CONTINUE_PENDING_ACTION")));
   register("jobs:reconcile-browser", async (_event, payload) => publisher.reconcileBrowserJob(z.object({ id: idSchema }).parse(payload).id, createUserAction("CONTINUE_PENDING_ACTION")));
   register("jobs:reconcile-not-submitted", (_event, payload) => publisher.resolveNotSubmitted(z.object({ id: idSchema }).strict().parse(payload).id));
+  register("jobs:owner-verify-published", (_event, payload) => {
+    if (!ownerVerifiedPublished) throw new Error("OWNER_RECONCILIATION_ENTRY_UNAVAILABLE");
+    const input = z.object({ id: idSchema, intentId: idSchema, ownerConfirmation: z.object({ source: z.literal("OWNER_MANAGER_LIST"), managerPage: z.string().url(), observedAt: z.string(), accountId: idSchema, creatorId: z.string().min(1), title: z.string().min(1), snapshotId: idSchema, candidateCount: z.number().int(), conflictingSameTitleCount: z.number().int() }).strict() }).strict().parse(payload);
+    return ownerVerifiedPublished({ jobId: input.id, intentId: input.intentId, ownerConfirmation: input.ownerConfirmation });
+  });
   register("jobs:retry", (_event, payload) => repository.requestJobRetry(z.object({ id: idSchema }).strict().parse(payload).id));
   register("jobs:recover", () => repository.recoverRunningJobs());
   register("logs:list", (_event, payload) => { const input = z.object({ limit: z.number().int().min(1).max(500).optional(), level: z.string().optional(), module: z.string().optional(), search: z.string().optional() }).optional().parse(payload); return repository.listLogs(input?.limit, input); });

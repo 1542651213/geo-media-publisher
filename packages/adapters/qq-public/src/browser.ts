@@ -16,3 +16,4 @@ const definition: BrowserPlatformDefinition = {
 export class QqPublicBrowserAdapter extends BrowserAutomationAdapter {
   constructor(options: BrowserAutomationAdapterOptions = {}) { super(definition, options); }
 }
+

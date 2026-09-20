@@ -12,7 +12,7 @@ const OTHER_RUN_ID = "4ce1c979-ebab-45fb-8726-786b972d815b";
 const JOB_ID = "5ddce845-4342-4b6d-aeb3-074b521feebf";
 const RECORD_ID = "45eb7e79-d132-4729-b7c8-69657345cfd6";
 const AUTH_ID = "5164becc-05ad-422d-a920-f5fd01e051d3";
-const ACCOUNT_ID = "11111111-1111-4111-8111-111111111111";
+const ACCOUNT_ID = "54b390ac-d81e-440a-baeb-d00f9f346cc3";
 
 function fixture(overrides: Record<string, unknown> = {}) {
   const run = { testRunId: RUN_ID, platformKey: "xiaohongshu", accountId: ACCOUNT_ID, platformAccountId: ACCOUNT_ID, requestedLevel: "L5_PUBLISH", publishJobId: JOB_ID, ...overrides };

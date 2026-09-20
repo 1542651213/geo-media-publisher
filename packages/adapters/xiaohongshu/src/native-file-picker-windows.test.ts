@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { classifyNativeCancelFailure, NativePowerShellExecError, NATIVE_FILE_PICKER_HELPER_TIMEOUT_MS, windowsPickerCancelScript, windowsPickerScanScript } from "./native-file-picker-windows";
 
-const profilePath = "C:\\public-export-fixtures\\userData\\browser-profiles\\xiaohongshu\\11111111-1111-4111-8111-111111111111";
+const profilePath = "C:\\Users\\Administrator\\AppData\\Roaming\\codex-media-publisher\\browser-profiles\\xiaohongshu\\54b390ac-d81e-440a-baeb-d00f9f346cc3";
 
 describe("R62 Windows native picker bridge", () => {
   it("uses a bounded helper timeout that covers verified Win32 cancellation", () => {
