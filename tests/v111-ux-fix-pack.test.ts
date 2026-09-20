@@ -118,14 +118,14 @@ describe("V1.1.1 UX Fix Pack", () => {
     expect(repository.getImageAsset(exact.id)?.useCount).toBe(1);
   });
 
-  it("returns all 41 platforms; favorites do not hide Manual or Blocked platforms", () => {
+  it("returns all 42 platforms; favorites do not hide Manual or Blocked platforms", () => {
     const dir = mkdtempSync(join(tmpdir(), "publisher-v111-platforms-")); tempDirs.push(dir);
     const opened = openDatabase(join(dir, "publisher.db"), migrationDir); databases.push(opened.db);
     opened.repository.seedPlatformCatalog(platformCsv);
     const platforms = opened.repository.listPlatforms();
-    expect(platforms).toHaveLength(41);
+    expect(platforms).toHaveLength(42);
     const ordered = orderPlatformCatalog(platforms, ["zhihu", "baijiahao"]);
-    expect(ordered).toHaveLength(41);
+    expect(ordered).toHaveLength(42);
     expect(new Set(ordered.slice(0, 2).map((platform) => platform.platformKey))).toEqual(new Set(["zhihu", "baijiahao"]));
     expect(platforms.some((platform) => platformAvailability(platform) === "manual")).toBe(true);
     expect(platforms.some((platform) => platformAvailability(platform) === "blocked")).toBe(true);

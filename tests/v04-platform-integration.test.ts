@@ -84,14 +84,14 @@ describe("V0.4 platform integration", () => {
     try {
       repository.seedPlatformCatalog(join(process.cwd(), "PLATFORMS.csv"));
       const platforms = repository.listPlatforms();
-      expect(platforms).toHaveLength(41);
+      expect(platforms).toHaveLength(42);
       expect(platforms.some((platform) => platform.platformKey === "test")).toBe(false);
       const lifecycleCounts = platforms.reduce<Record<string, number>>((counts, platform) => {
         counts[platform.verificationStatus] = (counts[platform.verificationStatus] ?? 0) + 1;
         return counts;
       }, {});
       expect(lifecycleCounts).toEqual({
-        WaitingForUser: 14,
+        WaitingForUser: 15,
         Developing: 2,
         ManualOnly: 21,
         Blocked: 1,

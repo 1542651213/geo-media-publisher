@@ -19,7 +19,7 @@ const configuredSecrets = { origin: "https://staging.kangyihb.com", siteId: "kan
 describe("Kangyi Website Official API adapter", () => {
   it("declares the website manifest and credential schema without a secret-file path", () => {
     const adapter = new KangyiWebsiteAdapter();
-    expect(adapter.manifest).toMatchObject({ platformKey: "kangyi_website", integrationMode: "API", transport: "official_api", supportsArticle: true, supportsVideo: false });
+    expect(adapter.manifest).toMatchObject({ platformKey: "kangyi_website", integrationMode: "API", transport: "official_api", status: "WaitingForUser", supportsArticle: true, supportsVideo: false });
     expect(adapter.getCredentialSchema().map((field) => [field.key, field.type])).toEqual([["origin", "text"], ["siteId", "text"], ["environment", "text"], ["keyId", "text"], ["secret", "secret"]]);
     expect(adapter.getCapabilities()).toMatchObject({ article: true, video: false, draft: true });
   });

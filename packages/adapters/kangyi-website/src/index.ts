@@ -37,7 +37,7 @@ export class KangyiWebsiteAdapter implements PlatformAdapter {
     adapterStatus: "ready",
     authStrategy: "AppCredential",
     callbackStrategy: "ManualCodeCallback",
-    status: "Stable",
+    status: "WaitingForUser",
     researchStatus: "verified",
     transport: "official_api",
     integrationMode: "API",

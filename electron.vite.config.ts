@@ -17,6 +17,8 @@ export default defineConfig({
         "@publisher/adapters-test": resolve(__dirname, "packages/adapters/test/src"),
         "@publisher/publisher": resolve(__dirname, "packages/publisher/src"),
         "@publisher/security": resolve(__dirname, "packages/security/src"),
+        "@publisher/cms-v2-client": resolve(__dirname, "packages/cms-v2-client/src"),
+        "@publisher/adapters-kangyi-website": resolve(__dirname, "packages/adapters/kangyi-website/src"),
         "@publisher/adapters-wechat": resolve(__dirname, "packages/adapters/wechat/src"),
         "@publisher/adapters-douyin": resolve(__dirname, "packages/adapters/douyin/src"),
         "@publisher/adapters-kuaishou": resolve(__dirname, "packages/adapters/kuaishou/src"),

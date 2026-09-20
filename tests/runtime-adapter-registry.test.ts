@@ -19,7 +19,7 @@ describe("runtime AdapterRegistry", () => {
     const csvRows = readFileSync(join(process.cwd(), "PLATFORMS.csv"), "utf8").split(/\r?\n/u).slice(1).filter(Boolean).map((line) => line.split(","));
     const csvKeys = new Set(csvRows.map((row) => row[0]?.replace(/^\uFEFF/u, "")));
     const csvLifecycle = new Map(csvRows.map((row) => [row[0]?.replace(/^\uFEFF/u, ""), row[6]]));
-    expect(keys).toEqual(["wechat_official", "douyin", "kuaishou", "bilibili", "youtube", "tiktok", "toutiao", "facebook", "weibo", "baijiahao", "zhihu", "sohu_media", "qq_public", "lieju", "cnblogs", "wechat_channels", "xiaohongshu"]);
+    expect(keys).toEqual(["wechat_official", "douyin", "kuaishou", "bilibili", "youtube", "tiktok", "toutiao", "facebook", "weibo", "baijiahao", "zhihu", "sohu_media", "qq_public", "lieju", "cnblogs", "kangyi_website", "wechat_channels", "xiaohongshu"]);
     expect(keys.every((key) => csvKeys.has(key))).toBe(true);
     expect(registry.manifests().every((manifest) => csvLifecycle.get(manifest.platformKey) === manifest.status)).toBe(true);
     expect(registry.manifests().some((manifest) => manifest.platformKey === "test" || manifest.status === "Stable")).toBe(false);
@@ -27,7 +27,7 @@ describe("runtime AdapterRegistry", () => {
 
   it("adds TestPlatform only for development", () => {
     const registry = createRuntimeAdapterRegistry(new MemoryCredentialStore(), true);
-    expect(registry.list()).toHaveLength(18);
+    expect(registry.list()).toHaveLength(19);
     expect(registry.get("test").manifest.status).toBe("Stable");
   });
 

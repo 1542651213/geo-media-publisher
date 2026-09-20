@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@publisher/adapters-kangyi-website": "workspace:*",
     "@publisher/adapters-core": "workspace:*",
     "@publisher/adapters-manual": "workspace:*",
     "@publisher/adapters-weibo": "workspace:*",
@@ -25,6 +26,7 @@
     "@publisher/adapters-wechat": "workspace:*",
     "@publisher/adapters-youtube": "workspace:*",
     "@publisher/ai": "workspace:*",
+    "@publisher/cms-v2-client": "workspace:*",
     "@publisher/db": "workspace:*",
     "@publisher/domain": "workspace:*",
     "@publisher/image": "workspace:*",

@@ -105,6 +105,9 @@ importers:
       '@publisher/adapters-facebook':
         specifier: workspace:*
         version: link:../../packages/adapters/facebook
+      '@publisher/adapters-kangyi-website':
+        specifier: workspace:*
+        version: link:../../packages/adapters/kangyi-website
       '@publisher/adapters-kuaishou':
         specifier: workspace:*
         version: link:../../packages/adapters/kuaishou
@@ -150,6 +153,9 @@ importers:
       '@publisher/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@publisher/cms-v2-client':
+        specifier: workspace:*
+        version: link:../../packages/cms-v2-client
       '@publisher/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -1371,6 +1377,7 @@ packages:
   '@xmldom/xmldom@0.8.14':
     resolution: {integrity: sha512-T4EDRUBVZYRldYApjEJiU0e1stYWaRAX7CuSnKzrpwdZKo53zGV8/pqfzV6FfwNl9YThD2OumQYvqtvjvgG7aQ==}
     engines: {node: '>=10.0.0'}
+    deprecated: this version has critical issues, please update to the latest version
 
   abbrev@4.0.0:
     resolution: {integrity: sha512-a1wflyaL0tHtJSmLSOVybYhy22vRih4eduhhrkcjgrWGnRfrZtovJ2FRjxuTtkkj47O/baf0R86QU5OuYpz8fA==}

@@ -35,7 +35,7 @@ function openProductionCatalog() {
 
 afterEach(() => { for (const db of openDatabases.splice(0)) if (db.open !== false) db.close(); for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-describe("V1.1.2 account priority and 41-platform catalog", () => {
+describe("V1.1.2 account priority and 42-platform catalog", () => {
   it("orders connected first, connectable before manual, then favorite/recent/name without changing search", () => {
     const { repository } = openProductionCatalog();
     const zhihu = repository.createAccount({ platformKey: "zhihu", name: "知乎主账号" });
@@ -52,11 +52,11 @@ describe("V1.1.2 account priority and 41-platform catalog", () => {
     expect(searchOrderedPlatforms(ordered, "列举").map((platform) => platform.platformKey)).toEqual(["lieju"]);
   });
 
-  it("keeps all original platforms and exposes exactly 41 production platforms", () => {
+  it("keeps all original platforms and exposes exactly 42 production platforms", () => {
     const { repository, registry } = openProductionCatalog();
     const platforms = repository.listPlatforms();
-    expect(platforms).toHaveLength(41);
-    expect(new Set(platforms.map((platform) => platform.platformKey)).size).toBe(41);
+    expect(platforms).toHaveLength(42);
+    expect(new Set(platforms.map((platform) => platform.platformKey)).size).toBe(42);
     expect(registry.get("lieju").manifest).toMatchObject({ integrationMode: "BrowserAutomation", transport: "browser" });
     expect(registry.get("cnblogs").manifest).toMatchObject({ integrationMode: "API", transport: "official_api", authStrategy: "AppCredential" });
     expect(registry.get("zhihu").manifest.version).toBe("1.1.6");
