@@ -19,7 +19,7 @@ Geo Media Publisher（矩阵发布工作台）是一个 Windows Electron 应用�
 | 字段 | 值 |
 | --- | --- |
 | Repository | `1542651213/geo-media-publisher` |
-| Branch | `codex/xhs-ordinary-live-pilot-20260920` |
+| Branch | `codex/xhs-limited-production-ready-20260920` |
 | Source commit | `4ddc58e16e19f8e5617c3ec583ade497323532e1` |
 | Tag | `xhs-limited-production-ready-20260920` |
 | Package version | `1.1.9` |
