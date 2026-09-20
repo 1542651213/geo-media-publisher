@@ -24,7 +24,7 @@ Geo Media Publisher（矩阵发布工作台）是一个 Windows Electron 应用�
 | Tag | `xhs-limited-production-ready-20260920-r3` |
 | Package version | `1.1.9` |
 | Electron | `37.10.3` |
-| Electron ABI | `138` |
+| Electron ABI | `136` |
 | Migration count | `29` |
 | Highest migration | `0028_production_pilot_slots.sql` |
 

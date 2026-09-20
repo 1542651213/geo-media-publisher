@@ -7,7 +7,7 @@
   "tag": "xhs-limited-production-ready-20260920-r3",
   "packageVersion": "1.1.9",
   "electronVersion": "37.10.3",
-  "electronAbi": 138,
+  "electronAbi": 136,
   "migrations": {
     "count": 29,
     "highest": "0028_production_pilot_slots.sql"
