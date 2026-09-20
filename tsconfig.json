@@ -26,6 +26,7 @@
       "@publisher/publisher": ["packages/publisher/src/index.ts"],
       "@publisher/security": ["packages/security/src/index.ts"],
       "@publisher/cms-v2-client": ["packages/cms-v2-client/src/index.ts"],
+      "@publisher/adapters-kangyi-website": ["packages/adapters/kangyi-website/src/index.ts"],
       "@publisher/adapters-wechat": ["packages/adapters/wechat/src/index.ts"],
       "@publisher/adapters-douyin": ["packages/adapters/douyin/src/index.ts"],
       "@publisher/adapters-kuaishou": ["packages/adapters/kuaishou/src/index.ts"],

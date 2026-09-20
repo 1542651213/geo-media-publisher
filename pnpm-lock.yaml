@@ -250,6 +250,21 @@ importers:
         specifier: workspace:*
         version: link:../../security
 
+  packages/adapters/kangyi-website:
+    dependencies:
+      '@publisher/adapters-core':
+        specifier: workspace:*
+        version: link:../core
+      '@publisher/cms-v2-client':
+        specifier: workspace:*
+        version: link:../../cms-v2-client
+      '@publisher/domain':
+        specifier: workspace:*
+        version: link:../../domain
+      '@publisher/security':
+        specifier: workspace:*
+        version: link:../../security
+
   packages/adapters/kuaishou:
     dependencies:
       '@publisher/adapters-core':

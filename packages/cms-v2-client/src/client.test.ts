@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { once } from "node:events";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it } from "vitest";
 import { ClientError, CmsV2Client, signRequest } from "./client";
 
@@ -7,7 +8,7 @@ const secret = "0123456789abcdef0123456789abcdef";
 const scope = { siteId: "kangyi", environment: "local" as const, keyId: "test-key", secret };
 const envelope = (data: unknown): string => JSON.stringify({ ok: true, data, requestId: "test-request" });
 
-async function server(handler: (request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse) => void | Promise<void>): Promise<{ origin: string; close: () => Promise<void> }> {
+async function server(handler: (request: IncomingMessage, response: ServerResponse) => void | Promise<void>): Promise<{ origin: string; close: () => Promise<void> }> {
   const instance = createServer((request, response) => { void handler(request, response); });
   instance.listen(0, "127.0.0.1");
   await once(instance, "listening");
