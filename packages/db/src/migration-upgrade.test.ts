@@ -133,5 +133,14 @@ it("backfills legacy unknown and manually reset intents without granting a new s
   expect(repository.requestJobRetry("task10t-job").ok).toBe(false);
   expect(() => repository.claimJob("task10t-job")).toThrow();
   expect(readMigrationInventory(migrationDir).ids).toContain("0028_production_pilot_slots.sql");
+  expect(readMigrationInventory(migrationDir).ids).toContain("0029_kangyi_durable_operation_metadata.sql");
   expect(database.prepare("SELECT id FROM migrations ORDER BY id").all()).toEqual(readMigrationInventory(migrationDir).ids.map((id) => ({ id })));
+});
+
+it("adds nullable Kangyi metadata without altering legacy intents", () => {
+  const fixture = createMigrationFixtureThrough("0028_production_pilot_slots.sql");
+  const database = new Database(fixture.databasePath); databases.push(database);
+  runMigrations(database, migrationDir);
+  const columns = database.prepare("PRAGMA table_info(submission_intents)").all() as Array<{ name: string; notnull: number }>;
+  expect(columns.find((column) => column.name === "operation_metadata_json")?.notnull).toBe(0);
 });

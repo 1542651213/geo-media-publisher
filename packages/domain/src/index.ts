@@ -16,5 +16,6 @@ export type * from "./quality-types";
 export type * from "./submission-barrier";
 
 export * from "./content-snapshot";
+export * from "./kangyi-operation";
 
 export * from "./ordinary-xhs";

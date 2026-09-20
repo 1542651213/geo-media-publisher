@@ -1,0 +1,158 @@
+import { createHash, randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, afterEach } from "vitest";
+import { openDatabase } from "@publisher/db";
+import { kangyiSha256Utf8 } from "@publisher/domain";
+import { KangyiDurableOperationRunner, type KangyiDurableOperationInput, type KangyiDurableOperationTransport } from "./kangyi-durable-operation";
+
+const migrationDir = join(process.cwd(), "packages", "db", "migrations");
+const directories: string[] = [];
+const databases: Array<{ close: () => void }> = [];
+
+afterEach(() => {
+  for (const database of databases.splice(0)) database.close();
+  for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
+
+function fixture(withMedia = false): { repository: ReturnType<typeof openDatabase>["repository"]; intentId: string; input: KangyiDurableOperationInput } {
+  const directory = mkdtempSync(join(tmpdir(), "kangyi-durable-"));
+  directories.push(directory);
+  const database = openDatabase(join(directory, "publisher.db"), migrationDir);
+  databases.push(database.db);
+  database.repository.seedDevelopment(join(process.cwd(), "PLATFORMS.csv"));
+  const brand = database.repository.createBrand({ name: "康一 fixture", companyName: "康一 fixture" });
+  const account = database.repository.createAccount({ platformKey: "kangyi_website", name: "康一 staging" });
+  database.db.prepare("UPDATE accounts SET login_status='logged_in',connection_mode='API',authorization_status='Authorized' WHERE id=?").run(account.id);
+  const article = database.repository.createArticle({ brandId: brand.id, topic: "fixture", keyword: "fixture", city: "", title: "Durable title", body: "Durable body", summary: "Durable summary", tags: ["fixture"], seoKeywords: ["fixture"], articleType: "科普", aiProvider: "test", aiModel: "test", generatedAt: "2026-09-20T00:00:00.000Z", contentHash: "fixture-content-hash", reusePolicy: "once", qualityStatus: "passed", qualityWarnings: [], source: "production" });
+  if (!article) throw new Error("fixture article missing");
+  database.db.prepare("UPDATE articles SET source='production' WHERE id=?").run(article.id);
+  const imagePath = join(directory, "image.png");
+  if (withMedia) writeFileSync(imagePath, Buffer.from([1, 2, 3]));
+  const image = withMedia ? database.repository.createImageAsset({ brandId: brand.id, name: "fixture.png", filePath: imagePath, originalFileName: "fixture.png", mimeType: "image/png", size: 3 }) : null;
+  const jobId = randomUUID();
+  const timestamp = "2026-09-20T00:00:00.000Z";
+  database.db.prepare("INSERT INTO publish_jobs (id,plan_id,account_id,platform_account_id,platform_key,article_id,article_variant_id,scheduled_at,status,max_attempts,created_at,dry_run,manual_confirmation_required,selected_image_asset_id,image_selection_mode,final_publish_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(jobId, null, account.id, account.id, "kangyi_website", article.id, null, timestamp, "Scheduled", 3, timestamp, 0, 1, image?.id ?? null, image ? "manual" : "none", "AUTO_PUBLISH");
+  const job = database.repository.getJob(jobId);
+  if (!job) throw new Error("fixture job missing");
+  database.repository.confirmJob(job.id);
+  database.repository.claimJob(job.id);
+  const intent = database.repository.prepareSubmissionIntent(job.id);
+  const contentBindingId = database.repository.getJob(job.id)?.contentBindingId;
+  if (!contentBindingId) throw new Error("fixture content binding missing");
+  const jsonBody = (value: unknown): { exactRequestBody: string; requestBodySha256: string } => { const exactRequestBody = JSON.stringify(value); return { exactRequestBody, requestBodySha256: kangyiSha256Utf8(exactRequestBody) }; };
+  const input: KangyiDurableOperationInput = {
+    binding: { intentId: intent.id, siteId: "kangyi", environment: "staging", snapshotId: contentBindingId, contentBindingId },
+    ...(image ? { media: [{ assetId: image.id, idempotencyKey: "kangyi_media_fixture" }] } : {}),
+    create: { ...jsonBody({ draft: { kind: "article", slug: "durable-title", title: "Durable title", blocks: [{ type: "paragraph", text: "Durable body" }] } }), idempotencyKey: "kangyi_create_fixture" },
+    validate: { ...jsonBody({ revisionId: "revision-1" }), idempotencyKey: "kangyi_validate_fixture" },
+    publish: { ...jsonBody({ revisionId: "revision-1", contentHash: "cms-content-hash", rowVersion: 1 }), idempotencyKey: "kangyi_publish_fixture" }
+  };
+  return { repository: database.repository, intentId: intent.id, input };
+}
+
+class FakeTransport implements KangyiDurableOperationTransport {
+  readonly calls: Array<{ operation: string; key: string; body?: string }> = [];
+  readonly uploadedBytes: Uint8Array[] = [];
+  readonly storedContent = { contentId: "content-1", revisionId: "revision-1", rowVersion: 1, contentHash: "cms-content-hash" };
+  readonly storedJob = { jobId: "cms-job-1", contentId: "content-1", revisionId: "revision-1", rowVersion: 1, contentHash: "cms-content-hash" };
+  failOnce: "media" | "create" | "draft" | "validate" | "publish" | null = null;
+  sideEffectBeforeFailure = false;
+  jobStatuses: Array<"queued" | "processing" | "verifying" | "succeeded" | "failed" | "needs_attention"> = ["processing", "succeeded"];
+
+  private maybeFail(operation: "media" | "create" | "draft" | "validate" | "publish"): void {
+    if (this.failOnce !== operation) return;
+    this.failOnce = null;
+    throw new Error(`simulated-${operation}-transport-uncertain`);
+  }
+  async uploadMedia(input: Parameters<KangyiDurableOperationTransport["uploadMedia"]>[0]): Promise<Awaited<ReturnType<KangyiDurableOperationTransport["uploadMedia"]>>> {
+    this.calls.push({ operation: "media", key: input.idempotencyKey });
+    this.uploadedBytes.push(new Uint8Array(input.bytes));
+    this.maybeFail("media");
+    return { mediaId: "media-1", sha256: createHash("sha256").update(Buffer.from(input.bytes)).digest("hex"), width: 3, height: 1, bytes: input.bytes.byteLength };
+  }
+  async createContent(input: Parameters<KangyiDurableOperationTransport["createContent"]>[0]): Promise<Awaited<ReturnType<KangyiDurableOperationTransport["createContent"]>>> { this.calls.push({ operation: "create", key: input.idempotencyKey, body: input.exactRequestBody }); this.maybeFail("create"); return this.storedContent; }
+  async saveDraft(input: Parameters<KangyiDurableOperationTransport["saveDraft"]>[0]): Promise<Awaited<ReturnType<KangyiDurableOperationTransport["saveDraft"]>>> { this.calls.push({ operation: "draft", key: input.idempotencyKey, body: input.exactRequestBody }); this.maybeFail("draft"); return this.storedContent; }
+  async validate(input: Parameters<KangyiDurableOperationTransport["validate"]>[0]): Promise<Awaited<ReturnType<KangyiDurableOperationTransport["validate"]>>> { this.calls.push({ operation: "validate", key: input.idempotencyKey, body: input.exactRequestBody }); this.maybeFail("validate"); return { valid: true, revisionId: "revision-1", contentHash: "cms-content-hash" }; }
+  async publish(input: Parameters<KangyiDurableOperationTransport["publish"]>[0]): Promise<Awaited<ReturnType<KangyiDurableOperationTransport["publish"]>>> { this.calls.push({ operation: "publish", key: input.idempotencyKey, body: input.exactRequestBody }); this.maybeFail("publish"); return this.storedJob; }
+  async getJob(jobId: string): Promise<Awaited<ReturnType<KangyiDurableOperationTransport["getJob"]>>> { const status = this.jobStatuses.shift() ?? "succeeded"; return { jobId, status, publicUrl: status === "succeeded" ? "https://www.kangyihb.com/articles/content-1" : null, verification: { fake: true } }; }
+  async verifyPublic(): Promise<{ ok: boolean; response: Record<string, unknown> }> { return { ok: true, response: { exactContent: true } }; }
+}
+
+describe("Kangyi durable operation recovery", () => {
+  it("uses immutable snapshot bytes, not a later source-path mutation, for media replay", async () => {
+    const { repository, input } = fixture(true);
+    const transport = new FakeTransport();
+    transport.failOnce = "media";
+    const runner = new KangyiDurableOperationRunner(repository, transport);
+    const image = repository.contentSnapshots.get(input.binding.snapshotId).images[0];
+    await expect(runner.run(input)).rejects.toThrow("simulated-media-transport-uncertain");
+    writeFileSync(image.sourcePath, Buffer.from([9, 9, 9]));
+    await expect(runner.run(input)).rejects.toThrow("CONTENT_SOURCE_BYTES_CHANGED");
+    expect(Buffer.from(transport.uploadedBytes[0])).toEqual(Buffer.from([1, 2, 3]));
+    expect(Buffer.from(transport.uploadedBytes[1])).toEqual(Buffer.from([1, 2, 3]));
+    expect(transport.calls.filter((call) => call.operation === "media")).toHaveLength(2);
+  });
+
+  it("replays media/create with the same key and exact body after a response loss", async () => {
+    const { repository, intentId, input } = fixture();
+    const transport = new FakeTransport();
+    transport.failOnce = "create";
+    const runner = new KangyiDurableOperationRunner(repository, transport);
+    await expect(runner.run(input)).rejects.toThrow("simulated-create-transport-uncertain");
+    const beforeRestart = repository.getKangyiOperationMetadata(intentId);
+    expect(beforeRestart?.create?.state).toBe("OUTCOME_UNKNOWN");
+    const restartedRunner = new KangyiDurableOperationRunner(repository, transport);
+    await expect(restartedRunner.resume(intentId, input)).resolves.toMatchObject({ status: "polling" });
+    const createCalls = transport.calls.filter((call) => call.operation === "create");
+    expect(createCalls).toHaveLength(2);
+    expect(createCalls[0]).toEqual(createCalls[1]);
+    expect(repository.getKangyiOperationMetadata(intentId)?.create?.exactRequestBody).toBe(input.create.exactRequestBody);
+  });
+
+  it("persists and replays the optional draft and validate payloads independently", async () => {
+    const { repository, intentId, input } = fixture();
+    const draftBody = JSON.stringify({ rowVersion: 1, draft: { kind: "article", slug: "durable-title", title: "Durable title", blocks: [{ type: "paragraph", text: "Durable body" }] } });
+    const withDraft: KangyiDurableOperationInput = { ...input, draft: { idempotencyKey: "kangyi_draft_fixture", exactRequestBody: draftBody, requestBodySha256: kangyiSha256Utf8(draftBody) } };
+    const transport = new FakeTransport();
+    transport.failOnce = "validate";
+    const runner = new KangyiDurableOperationRunner(repository, transport);
+    await expect(runner.run(withDraft)).rejects.toThrow("simulated-validate-transport-uncertain");
+    expect(repository.getKangyiOperationMetadata(intentId)?.validate?.state).toBe("OUTCOME_UNKNOWN");
+    const restartedRunner = new KangyiDurableOperationRunner(repository, transport);
+    await expect(restartedRunner.resume(intentId, withDraft)).resolves.toMatchObject({ status: "polling" });
+    expect(transport.calls.filter((call) => call.operation === "draft")).toHaveLength(1);
+    expect(transport.calls.filter((call) => call.operation === "validate")).toHaveLength(2);
+    expect(transport.calls.filter((call) => call.operation === "validate")[0]).toEqual(transport.calls.filter((call) => call.operation === "validate")[1]);
+    expect(repository.getKangyiOperationMetadata(intentId)?.draft?.exactRequestBody).toBe(draftBody);
+  });
+
+  it("claims only at publish, reuses the claim and key after publish transport uncertainty, and closes once", async () => {
+    const { repository, intentId, input } = fixture();
+    const transport = new FakeTransport();
+    transport.failOnce = "publish";
+    const runner = new KangyiDurableOperationRunner(repository, transport);
+    await expect(runner.run(input)).rejects.toThrow("simulated-publish-transport-uncertain");
+    const jobId = repository.getKangyiOperationMetadata(intentId)!.jobId;
+    expect(repository.getSubmissionBarrier(jobId)?.intentId).toBe(intentId);
+    const firstPublish = transport.calls.find((call) => call.operation === "publish");
+    const restartedRunner = new KangyiDurableOperationRunner(repository, transport);
+    await expect(restartedRunner.resume(intentId)).resolves.toMatchObject({ status: "polling" });
+    const publishCalls = transport.calls.filter((call) => call.operation === "publish");
+    expect(publishCalls).toHaveLength(2);
+    expect(publishCalls[0]).toEqual(publishCalls[1]);
+    expect(firstPublish).toBeDefined();
+    await expect(restartedRunner.resume(intentId)).resolves.toMatchObject({ status: "complete" });
+    expect(repository.getPublishRecordByJob(jobId)).toMatchObject({ status: "Published", publishedUrl: "https://www.kangyihb.com/articles/content-1" });
+    expect(repository.db.prepare("SELECT COUNT(*) AS count FROM publish_records WHERE job_id=?").get(jobId)).toEqual({ count: 1 });
+  });
+
+  it("rejects replacing a persisted exact payload after the source article changes", async () => {
+    const { repository, intentId, input } = fixture();
+    repository.initializeKangyiOperation(input.binding);
+    repository.prepareKangyiJsonOperation(intentId, "create", input.create);
+    const changed = { ...input.create, exactRequestBody: JSON.stringify({ changed: true }), requestBodySha256: kangyiSha256Utf8(JSON.stringify({ changed: true })) };
+    expect(() => repository.prepareKangyiJsonOperation(intentId, "create", changed)).toThrow("KANGYI_OPERATION_PAYLOAD_IMMUTABLE");
+  });
+});

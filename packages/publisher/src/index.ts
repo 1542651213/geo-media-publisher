@@ -4,8 +4,10 @@ import { isAutomationAdapter, OneShotPublicationGuard, withUserInitiatedActionSe
 import type { AppRepository } from "@publisher/db";
 import { canReuseArticle, decideFailure, ERROR_CODES, evaluateContentQualityGate, validatePlatformArticle, type Account, type AccountContext, type AdapterManifest, type ContentSnapshot, type ErrorCode, type PlatformCapability, type PublishArticleInput, type PublishJob, type PublishMode, type PublishResult, type PublishVideoInput, type XhsContextIdentityAttestation } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
+import { KangyiDurableOperationRunner, type KangyiDurableContinuationInput, type KangyiDurableOperationInput, type KangyiDurableOperationTransport, type KangyiDurableRunResult } from "./kangyi-durable-operation";
 
 export { preparedPublishMessage } from "./publish-capability";
+export * from "./kangyi-durable-operation";
 
 export interface PublishExecutionResult { job: PublishJob; message: string; code?: string; }
 export interface AssistedPrepareResult { job: PublishJob; record: ReturnType<AppRepository["getPublishRecordByJob"]>; message: string; }
@@ -106,6 +108,16 @@ function publishRecordMetadata(manifest: AdapterManifest, job: PublishJob, accou
 
 export class PublisherService {
   constructor(private readonly repository: AppRepository, private readonly adapters: AdapterRegistry, private readonly logger: Logger, private readonly options: PublisherOptions = {}) {}
+
+  /** Explicit Phase 2 seam: the durable website runner owns preparatory CMS writes and claims F01 only at publish. */
+  async executeKangyiDurableOperation(input: KangyiDurableOperationInput, transport: KangyiDurableOperationTransport): Promise<KangyiDurableRunResult> {
+    return new KangyiDurableOperationRunner(this.repository, transport).run(input);
+  }
+
+  /** Recovery path for a retained Kangyi intent; persisted payloads take precedence over continuation input. */
+  async resumeKangyiDurableOperation(intentId: string, transport: KangyiDurableOperationTransport, continuation?: KangyiDurableContinuationInput): Promise<KangyiDurableRunResult> {
+    return new KangyiDurableOperationRunner(this.repository, transport).resume(intentId, continuation);
+  }
 
   isPlatformRegistered(platformKey: string): boolean {
     return this.adapters.tryGet(platformKey) !== null;

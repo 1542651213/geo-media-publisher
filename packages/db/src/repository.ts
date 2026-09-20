@@ -1,4 +1,4 @@
-import type { XhsContextIdentityAttestation } from "@publisher/domain";
+import { assertKangyiExactJsonBody, assertKangyiIdempotencyKey, parseKangyiOperationMetadata, serializeKangyiOperationMetadata, type KangyiJsonOperationMetadata, type KangyiMediaOperationMetadata, type KangyiOperationName, type KangyiOperationPhase, type KangyiPollMetadata, type KangyiPublishOperationMetadata, type KangyiWebsiteOperationMetadataV1, type XhsContextIdentityAttestation } from "@publisher/domain";
 import { ContentSnapshots } from "./content-snapshots";
 import type { SubmissionActionResult, SubmissionReconciliationRequest, SubmissionNegativeEvidence } from "@publisher/domain";
 import { createHash, randomUUID } from "node:crypto";
@@ -56,6 +56,45 @@ export interface ProductionPilotPreparedBinding {
   platformKey: "xiaohongshu";
   creatorId: string;
   registeredAt: string;
+}
+
+export interface KangyiOperationBindingInput {
+  intentId: string;
+  siteId: string;
+  environment: "local" | "staging" | "production";
+  snapshotId: string;
+  contentBindingId: string;
+}
+
+export interface KangyiJsonOperationPreparation {
+  idempotencyKey: string;
+  exactRequestBody: string;
+  requestBodySha256: string;
+}
+
+export type KangyiMediaOperationPreparation = Omit<KangyiMediaOperationMetadata, "mediaId" | "serverSha256" | "width" | "height" | "state">;
+
+export interface KangyiMediaOperationResult {
+  mediaId: string;
+  sha256: string;
+  width: number;
+  height: number;
+  bytes: number;
+}
+
+export interface KangyiPublishAcceptedInput {
+  cmsJobId: string;
+  contentId: string;
+  revisionId: string;
+  contentHash: string;
+  rowVersion: number;
+}
+
+export interface KangyiCmsJobStatusInput {
+  cmsJobId: string;
+  status: KangyiPollMetadata["lastKnownStatus"];
+  publicUrl: string | null;
+  verification: Record<string, unknown> | null;
 }
 
 export interface ProductionPilotOwnerVerification {
@@ -2917,6 +2956,209 @@ export class AppRepository {
     const row = this.db.prepare("SELECT id,job_id,state,external_id,attempt,final_submit_count,error_code,updated_at FROM submission_intents WHERE job_id=? ORDER BY rowid DESC LIMIT 1").get(jobId) as Row | undefined;
     if (!row) return null;
     return { id: textValue(row.id), jobId: textValue(row.job_id), state: textValue(row.state), externalId: typeof row.external_id === "string" ? row.external_id : null, attempt: intValue(row.attempt), finalSubmitCount: intValue(row.final_submit_count), errorCode: typeof row.error_code === "string" ? row.error_code : null, updatedAt: textValue(row.updated_at) };
+  }
+
+  getKangyiOperationMetadata(intentId: string): KangyiWebsiteOperationMetadataV1 | null {
+    const row = this.db.prepare("SELECT operation_metadata_json FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
+    if (!row) throw new Error("Submission intent not found");
+    return parseKangyiOperationMetadata(typeof row.operation_metadata_json === "string" ? row.operation_metadata_json : null);
+  }
+
+  getKangyiOperationMetadataByJob(jobId: string): KangyiWebsiteOperationMetadataV1 | null {
+    const row = this.db.prepare("SELECT operation_metadata_json FROM submission_intents WHERE job_id=? AND operation_metadata_json IS NOT NULL ORDER BY rowid DESC LIMIT 1").get(jobId) as Row | undefined;
+    return row ? parseKangyiOperationMetadata(textValue(row.operation_metadata_json)) : null;
+  }
+
+  initializeKangyiOperation(input: KangyiOperationBindingInput): KangyiWebsiteOperationMetadataV1 {
+    return this.db.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM submission_intents WHERE id=?").get(input.intentId) as Row | undefined;
+      if (!row) throw new Error("Submission intent not found");
+      const job = this.getJob(textValue(row.job_id));
+      if (!job || job.platformKey !== "kangyi_website") throw new Error("KANGYI_OPERATION_PLATFORM_MISMATCH");
+      if (textValue(row.content_binding_id) !== input.contentBindingId || input.snapshotId !== input.contentBindingId) throw new Error("KANGYI_OPERATION_BINDING_MISMATCH");
+      const existing = parseKangyiOperationMetadata(typeof row.operation_metadata_json === "string" ? row.operation_metadata_json : null);
+      if (existing) {
+        if (existing.siteId !== input.siteId || existing.environment !== input.environment || existing.accountId !== job.accountId || existing.jobId !== job.id || existing.intentId !== input.intentId || existing.contentBindingId !== input.contentBindingId || existing.snapshotId !== input.snapshotId) throw new Error("KANGYI_OPERATION_BINDING_IMMUTABLE");
+        return existing;
+      }
+      const metadata: KangyiWebsiteOperationMetadataV1 = {
+        version: 1,
+        siteId: input.siteId,
+        environment: input.environment,
+        accountId: job.accountId,
+        jobId: job.id,
+        intentId: input.intentId,
+        contentBindingId: input.contentBindingId,
+        snapshotId: input.snapshotId,
+        phase: "PREPARING",
+        lastErrorCode: null,
+        media: [],
+        create: null,
+        draft: null,
+        validate: null,
+        publish: null,
+        poll: null,
+        publishRecordId: null
+      };
+      this.db.prepare("UPDATE submission_intents SET operation_metadata_json=?,updated_at=? WHERE id=? AND operation_metadata_json IS NULL").run(serializeKangyiOperationMetadata(metadata), now(), input.intentId);
+      return metadata;
+    }).immediate();
+  }
+
+  prepareKangyiJsonOperation(intentId: string, operation: Exclude<KangyiOperationName, "media">, input: KangyiJsonOperationPreparation): KangyiWebsiteOperationMetadataV1 {
+    assertKangyiIdempotencyKey(input.idempotencyKey);
+    assertKangyiExactJsonBody(input.exactRequestBody, input.requestBodySha256);
+    return this.db.transaction(() => {
+      const metadata = this.getKangyiOperationMetadata(intentId);
+      if (!metadata) throw new Error("KANGYI_OPERATION_NOT_INITIALIZED");
+      const current = operation === "create" ? metadata.create : operation === "draft" ? metadata.draft : operation === "validate" ? metadata.validate : metadata.publish;
+      if (current) {
+        if (current.idempotencyKey !== input.idempotencyKey || current.exactRequestBody !== input.exactRequestBody || current.requestBodySha256 !== input.requestBodySha256) throw new Error("KANGYI_OPERATION_PAYLOAD_IMMUTABLE");
+        return metadata;
+      }
+      const phase: KangyiOperationPhase = operation === "create" ? "CREATE" : operation === "draft" ? "DRAFT" : operation === "validate" ? "VALIDATE" : "PUBLISH";
+      const next = { ...metadata, phase, lastErrorCode: null };
+      const prepared: KangyiJsonOperationMetadata = { ...input, state: "PREPARED" };
+      if (operation === "create") next.create = prepared;
+      else if (operation === "draft") next.draft = prepared;
+      else if (operation === "validate") next.validate = prepared;
+      else next.publish = { ...prepared, cmsJobId: null } satisfies KangyiPublishOperationMetadata;
+      this.db.prepare("UPDATE submission_intents SET operation_metadata_json=?,updated_at=? WHERE id=?").run(serializeKangyiOperationMetadata(next), now(), intentId);
+      return next;
+    }).immediate();
+  }
+
+  prepareKangyiMediaOperation(intentId: string, input: KangyiMediaOperationPreparation): KangyiWebsiteOperationMetadataV1 {
+    assertKangyiIdempotencyKey(input.idempotencyKey);
+    return this.db.transaction(() => {
+      const metadata = this.getKangyiOperationMetadata(intentId);
+      if (!metadata) throw new Error("KANGYI_OPERATION_NOT_INITIALIZED");
+      const existing = metadata.media.find((item) => item.assetId === input.assetId);
+      if (existing) {
+        if (existing.snapshotSha256 !== input.snapshotSha256 || existing.mime !== input.mime || existing.bytes !== input.bytes || existing.idempotencyKey !== input.idempotencyKey) throw new Error("KANGYI_MEDIA_BINDING_IMMUTABLE");
+        return metadata;
+      }
+      const next: KangyiWebsiteOperationMetadataV1 = { ...metadata, phase: "MEDIA", lastErrorCode: null, media: [...metadata.media, { ...input, mediaId: null, serverSha256: null, width: null, height: null, state: "PREPARED" }] };
+      this.db.prepare("UPDATE submission_intents SET operation_metadata_json=?,updated_at=? WHERE id=?").run(serializeKangyiOperationMetadata(next), now(), intentId);
+      return next;
+    }).immediate();
+  }
+
+  recordKangyiMediaResult(intentId: string, input: { assetId: string } & KangyiMediaOperationResult): KangyiWebsiteOperationMetadataV1 {
+    return this.db.transaction(() => {
+      const metadata = this.getKangyiOperationMetadata(intentId);
+      if (!metadata) throw new Error("KANGYI_OPERATION_NOT_INITIALIZED");
+      const index = metadata.media.findIndex((item) => item.assetId === input.assetId);
+      if (index < 0) throw new Error("KANGYI_MEDIA_OPERATION_NOT_PREPARED");
+      const current = metadata.media[index];
+      if (input.sha256 !== current.snapshotSha256 || input.bytes !== current.bytes) throw new Error("KANGYI_MEDIA_HASH_MISMATCH");
+      if (!input.mediaId || !Number.isSafeInteger(input.width) || !Number.isSafeInteger(input.height)) throw new Error("KANGYI_MEDIA_RESPONSE_INVALID");
+      const media: KangyiMediaOperationMetadata[] = metadata.media.map((item, itemIndex) => itemIndex === index ? { ...item, mediaId: input.mediaId, serverSha256: input.sha256, width: input.width, height: input.height, state: "SUCCEEDED" } : item);
+      const next = { ...metadata, phase: "CREATE" as const, lastErrorCode: null, media };
+      this.db.prepare("UPDATE submission_intents SET operation_metadata_json=?,updated_at=? WHERE id=?").run(serializeKangyiOperationMetadata(next), now(), intentId);
+      return next;
+    }).immediate();
+  }
+
+  recordKangyiJsonOperationResult(intentId: string, operation: Exclude<KangyiOperationName, "media" | "publish">, responseIdentity: Record<string, string | number | boolean | null>): KangyiWebsiteOperationMetadataV1 {
+    return this.db.transaction(() => {
+      const metadata = this.getKangyiOperationMetadata(intentId);
+      if (!metadata) throw new Error("KANGYI_OPERATION_NOT_INITIALIZED");
+      const current = operation === "create" ? metadata.create : operation === "draft" ? metadata.draft : metadata.validate;
+      if (!current) throw new Error("KANGYI_OPERATION_NOT_PREPARED");
+      const next = { ...metadata, lastErrorCode: null };
+      const completed = { ...current, responseIdentity, state: "SUCCEEDED" as const };
+      if (operation === "create") { next.create = completed; next.phase = "VALIDATE"; }
+      else if (operation === "draft") { next.draft = completed; next.phase = "VALIDATE"; }
+      else { next.validate = completed; next.phase = "PUBLISH"; }
+      this.db.prepare("UPDATE submission_intents SET operation_metadata_json=?,updated_at=? WHERE id=?").run(serializeKangyiOperationMetadata(next), now(), intentId);
+      return next;
+    }).immediate();
+  }
+
+  markKangyiOperationOutcomeUnknown(intentId: string, operation: KangyiOperationName, errorCode: string): KangyiWebsiteOperationMetadataV1 {
+    return this.db.transaction(() => {
+      const metadata = this.getKangyiOperationMetadata(intentId);
+      if (!metadata) throw new Error("KANGYI_OPERATION_NOT_INITIALIZED");
+      const next = { ...metadata, phase: operation === "publish" ? "NEEDS_RECONCILIATION" as const : metadata.phase, lastErrorCode: errorCode };
+      if (operation === "media") {
+        const last = next.media.at(-1);
+        if (!last) throw new Error("KANGYI_OPERATION_NOT_PREPARED");
+        next.media = next.media.map((item, index) => index === next.media.length - 1 ? { ...item, state: "OUTCOME_UNKNOWN" as const } : item);
+      } else if (operation === "create") next.create = next.create ? { ...next.create, state: "OUTCOME_UNKNOWN" } : null;
+      else if (operation === "draft") next.draft = next.draft ? { ...next.draft, state: "OUTCOME_UNKNOWN" } : null;
+      else if (operation === "validate") next.validate = next.validate ? { ...next.validate, state: "OUTCOME_UNKNOWN" } : null;
+      else next.publish = next.publish ? { ...next.publish, state: "OUTCOME_UNKNOWN" } : null;
+      this.db.prepare("UPDATE submission_intents SET operation_metadata_json=?,updated_at=? WHERE id=?").run(serializeKangyiOperationMetadata(next), now(), intentId);
+      return next;
+    }).immediate();
+  }
+
+  claimKangyiPublishDispatch(intentId: string, subject?: XhsContextIdentityAttestation): { id: string; jobId: string; attempt: number; reused: boolean } {
+    return this.db.transaction(() => {
+      const metadata = this.getKangyiOperationMetadata(intentId);
+      if (!metadata?.publish) throw new Error("KANGYI_PUBLISH_OPERATION_NOT_PREPARED");
+      const existing = this.db.prepare("SELECT intent_id,job_id,state FROM submission_dispatch_claims WHERE intent_id=?").get(intentId) as Row | undefined;
+      const intent = this.db.prepare("SELECT job_id,attempt FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
+      if (!intent) throw new Error("Submission intent not found");
+      if (existing && ["Claimed", "Accepted"].includes(textValue(existing.state))) return { id: intentId, jobId: textValue(intent.job_id), attempt: intValue(intent.attempt), reused: true };
+      const claim = this.claimSubmissionDispatch(intentId, subject);
+      const next = this.getKangyiOperationMetadata(intentId);
+      if (!next?.publish) throw new Error("KANGYI_PUBLISH_OPERATION_NOT_PREPARED");
+      this.db.prepare("UPDATE submission_intents SET operation_metadata_json=?,updated_at=? WHERE id=?").run(serializeKangyiOperationMetadata({ ...next, phase: "PUBLISH", publish: { ...next.publish, state: "IN_FLIGHT" } }), now(), intentId);
+      return { ...claim, reused: false };
+    }).immediate();
+  }
+
+  recordKangyiPublishAccepted(intentId: string, input: KangyiPublishAcceptedInput): KangyiWebsiteOperationMetadataV1 {
+    return this.db.transaction(() => {
+      const metadata = this.getKangyiOperationMetadata(intentId);
+      if (!metadata?.publish) throw new Error("KANGYI_PUBLISH_OPERATION_NOT_PREPARED");
+      const claim = this.db.prepare("SELECT state FROM submission_dispatch_claims WHERE intent_id=?").get(intentId) as Row | undefined;
+      if (!claim || !["Claimed", "Accepted"].includes(textValue(claim.state))) throw new Error("KANGYI_PUBLISH_DISPATCH_CLAIM_MISSING");
+      const next: KangyiWebsiteOperationMetadataV1 = { ...metadata, phase: "POLL", lastErrorCode: null, publish: { ...metadata.publish, state: "SUCCEEDED", cmsJobId: input.cmsJobId, responseIdentity: { ...(metadata.publish.responseIdentity ?? {}), contentId: input.contentId, revisionId: input.revisionId, contentHash: input.contentHash, rowVersion: input.rowVersion } }, poll: { cmsJobId: input.cmsJobId, lastKnownStatus: "queued", lastPolledAt: null, publicUrl: null, verification: null, terminalState: "NON_TERMINAL" } };
+      const timestamp = now();
+      this.db.prepare("UPDATE submission_intents SET operation_metadata_json=?,state='Submitted',external_id=?,error_code=NULL,updated_at=? WHERE id=?").run(serializeKangyiOperationMetadata(next), input.contentId, timestamp, intentId);
+      this.db.prepare("UPDATE submission_dispatch_claims SET state='Accepted' WHERE intent_id=?").run(intentId);
+      this.db.prepare("UPDATE publish_jobs SET status='Submitted',external_id=?,next_retry_at=NULL,last_error_code=NULL,last_error_message=NULL,last_polled_at=? WHERE id=(SELECT job_id FROM submission_intents WHERE id=?)").run(input.contentId, timestamp, intentId);
+      return next;
+    }).immediate();
+  }
+
+  recordKangyiCmsJobStatus(intentId: string, input: KangyiCmsJobStatusInput): KangyiWebsiteOperationMetadataV1 {
+    return this.db.transaction(() => {
+      const metadata = this.getKangyiOperationMetadata(intentId);
+      if (!metadata?.publish?.cmsJobId || metadata.publish.cmsJobId !== input.cmsJobId) throw new Error("KANGYI_CMS_JOB_ID_MISMATCH");
+      const terminalState: KangyiPollMetadata["terminalState"] = input.status === "succeeded" ? "SUCCEEDED" : input.status === "failed" ? "FAILED" : input.status === "needs_attention" ? "NEEDS_RECONCILIATION" : "NON_TERMINAL";
+      const next: KangyiWebsiteOperationMetadataV1 = { ...metadata, phase: terminalState === "NEEDS_RECONCILIATION" ? "NEEDS_RECONCILIATION" : terminalState === "FAILED" ? "FAILED" : "POLL", lastErrorCode: null, poll: { cmsJobId: input.cmsJobId, lastKnownStatus: input.status, lastPolledAt: now(), publicUrl: input.publicUrl, verification: input.verification, terminalState } };
+      this.db.prepare("UPDATE submission_intents SET operation_metadata_json=?,updated_at=? WHERE id=?").run(serializeKangyiOperationMetadata(next), now(), intentId);
+      const jobId = metadata.jobId;
+      if (input.status === "failed") this.db.prepare("UPDATE publish_jobs SET status='Failed',last_error_code='CMS_JOB_FAILED',last_error_message='Kangyi CMS job failed',finished_at=? WHERE id=?").run(now(), jobId);
+      else if (input.status === "needs_attention") this.db.prepare("UPDATE publish_jobs SET status='NeedsReconciliation',last_error_code='CMS_JOB_NEEDS_ATTENTION',last_error_message='Kangyi CMS job needs attention',next_retry_at=NULL WHERE id=?").run(jobId);
+      else this.db.prepare("UPDATE publish_jobs SET status='Publishing',last_polled_at=? WHERE id=? AND status IN ('Submitted','Publishing')").run(now(), jobId);
+      return next;
+    }).immediate();
+  }
+
+  closeKangyiPublished(intentId: string, input: { contentId: string; publicUrl: string; response: Record<string, unknown> }): { job: PublishJob; record: PublishRecord } {
+    if (!input.publicUrl.trim()) throw new Error("KANGYI_PUBLIC_URL_REQUIRED");
+    return this.db.transaction(() => {
+      const metadata = this.getKangyiOperationMetadata(intentId);
+      if (!metadata?.publish?.cmsJobId || metadata.poll?.terminalState !== "SUCCEEDED" || metadata.poll.publicUrl !== input.publicUrl) throw new Error("KANGYI_PUBLISHED_GATE_NOT_MET");
+      const job = this.getJob(metadata.jobId);
+      if (!job) throw new Error("Publish job not found");
+      const existing = this.getPublishRecordByJob(job.id);
+      const record = existing
+        ? this.updatePublishRecord(existing.id, { status: "Published", success: true, publishedExternalId: input.contentId, publishedUrl: input.publicUrl, response: input.response, verificationStatus: "Verified" })
+        : this.insertPublishRecord({ jobId: job.id, accountId: job.accountId, platformAccountId: job.platformAccountId, platformKey: job.platformKey, articleId: job.articleId, publishedUrl: input.publicUrl, publishedExternalId: input.contentId, success: true, response: input.response, dryRun: false, status: "Published", publishMode: "AUTO", automationType: "API", operator: "desktop-user", verificationStatus: "Verified", contentBindingId: metadata.contentBindingId });
+      const next = { ...metadata, phase: "COMPLETE" as const, lastErrorCode: null, publishRecordId: record.id };
+      const timestamp = now();
+      this.db.prepare("UPDATE submission_intents SET operation_metadata_json=?,state='Submitted',external_id=?,error_code=NULL,updated_at=? WHERE id=?").run(serializeKangyiOperationMetadata(next), input.contentId, timestamp, intentId);
+      this.db.prepare("UPDATE submission_dispatch_claims SET state='Accepted' WHERE intent_id=?").run(intentId);
+      this.db.prepare("UPDATE publish_jobs SET status='Success',external_id=?,last_error_code=NULL,last_error_message=NULL,next_retry_at=NULL,finished_at=? WHERE id=?").run(input.contentId, timestamp, job.id);
+      if (!existing?.success) { this.markArticlePublished(job.articleId); this.markAccountPublished(job.accountId); }
+      return { job: this.getJob(job.id) as PublishJob, record };
+    }).immediate();
   }
 
   listReusableOneShotPublicationAuthorizations(input: { platformKey: "xiaohongshu"; accountId: string; mode: "ONE_SHOT_REAL_PUBLISH_ACCEPTANCE" }): OneShotPublicationAuthorization[] {
