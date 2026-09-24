@@ -55,4 +55,25 @@ describe("Toutiao prepared payload binding", () => {
     expect(prepared.payloadHash).toBe(prepared.payloadHash);
     expect(() => prepareToutiaoArticlePayload({ ...input, html: '<img src="https://external.example/image.png">' })).toThrowError(expect.objectContaining({ code: "UNRESOLVED_EXTERNAL_IMAGE" }));
   });
+
+  it("excludes preparation time, asset resolution time and source path from semantic binding", () => {
+    const { input, filePath } = fixture();
+    const first = prepareToutiaoArticlePayload(input);
+    const later = prepareToutiaoArticlePayload({ ...input, now: new Date("2026-09-25T00:00:00.000Z") });
+    expect(later.payload.preparedAt).not.toBe(first.payload.preparedAt);
+    expect(later.payload.assetSnapshots[0]?.resolvedAt).not.toBe(first.payload.assetSnapshots[0]?.resolvedAt);
+    expect(later.payloadHash).not.toBe(first.payloadHash);
+    expect(later.contentBindingHash).toBe(first.contentBindingHash);
+    expect(later.payload.sourceContentHash).toBe(first.payload.sourceContentHash);
+    expect(prepareToutiaoArticlePayload({ ...input, jobId: "other-job", articleId: "other-article" }).contentBindingHash).toBe(first.contentBindingHash);
+    const otherPath = join(filePath, "..", "same-bytes.png");
+    writeFileSync(otherPath, "image bytes");
+    const source = input.resolveAsset("image-a")!;
+    expect(prepareToutiaoArticlePayload({ ...input, resolveAsset: () => ({ ...source, assetId: "other-asset-id", filePath: otherPath }) }).contentBindingHash).toBe(first.contentBindingHash);
+    expect(prepareToutiaoArticlePayload({ ...input, title: "标题 B" }).contentBindingHash).not.toBe(first.contentBindingHash);
+    writeFileSync(input.resolveAsset("image-a")!.filePath, "new image bytes");
+    const changedBytes = prepareToutiaoArticlePayload(input);
+    expect(changedBytes.contentBindingHash).not.toBe(first.contentBindingHash);
+    expect(changedBytes.payload.sourceContentHash).not.toBe(first.payload.sourceContentHash);
+  });
 });

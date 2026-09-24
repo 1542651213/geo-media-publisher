@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { canonicalSerialize, deepFreeze, normalizeToutiaoSettings, ToutiaoPreparationError, validateRemoteSchedule, validateTitle, type RemoteScheduleConstraint, type TitleConstraint, type ToutiaoArticleSettingsSnapshot } from "@publisher/domain";
+import { canonicalSerialize, deepFreeze, hashToutiaoContentBinding, normalizeToutiaoSettings, ToutiaoPreparationError, validateRemoteSchedule, validateTitle, type RemoteScheduleConstraint, type TitleConstraint, type ToutiaoArticleSettingsSnapshot } from "@publisher/domain";
 import { assertAssetSnapshotCurrent, makeAssetUploadKey, snapshotLocalAsset, type LocalAssetSource, type ToutiaoAssetSnapshot } from "./assets";
 import { normalizeToutiaoArticleContent, replaceImageSources } from "./content";
 
@@ -41,7 +41,7 @@ export interface ToutiaoArticlePreparationInput {
 
 function hash(value: string): string { return createHash("sha256").update(value).digest("hex"); }
 
-export function prepareToutiaoArticlePayload(input: ToutiaoArticlePreparationInput): { readonly payload: Readonly<ToutiaoArticlePreparedPayload>; readonly canonicalJson: string; readonly payloadHash: string } {
+export function prepareToutiaoArticlePayload(input: ToutiaoArticlePreparationInput): { readonly payload: Readonly<ToutiaoArticlePreparedPayload>; readonly canonicalJson: string; readonly payloadHash: string; readonly contentBindingHash: string } {
   const settings = normalizeToutiaoSettings(input.settings);
   const title = input.title.trim().normalize("NFC");
   const titleErrors = validateTitle(title, input.titleConstraint ?? { minimum: 1, measurement: "js_length", provenance: "UNVERIFIED_PLATFORM_RULE" });
@@ -82,15 +82,20 @@ export function prepareToutiaoArticlePayload(input: ToutiaoArticlePreparationInp
     coverMode: settings.coverMode, coverUploadKeys, bodyImageUploadKeys, articleAdType: settings.articleAdType,
     remoteScheduledAt: settings.remoteScheduledAt, settingsSnapshotVersion: settings.version,
     assetSnapshots: [...snapshotsById.values()].sort((left, right) => left.assetId < right.assetId ? -1 : left.assetId > right.assetId ? 1 : 0),
-    sourceContentHash: hash(canonicalSerialize({ title: input.title, html: input.html })), preparedAt: input.now.toISOString()
+    sourceContentHash: hash(canonicalSerialize({ title: input.title, html: input.html, settings,
+      assetByteHashes: [...new Set([...snapshotsById.values()].map((snapshot) => snapshot.byteSha256))].sort() })), preparedAt: input.now.toISOString()
   };
   const frozen = deepFreeze(payload);
   const canonicalJson = canonicalSerialize(frozen);
-  return { payload: frozen, canonicalJson, payloadHash: hash(canonicalJson) };
+  return { payload: frozen, canonicalJson, payloadHash: hash(canonicalJson), contentBindingHash: hashToutiaoContentBinding(frozen) };
 }
 
 export function assertPreparedPayloadBinding(payload: ToutiaoArticlePreparedPayload, expectedHash: string): void {
   if (hash(canonicalSerialize(payload)) !== expectedHash) throw new ToutiaoPreparationError("PAYLOAD_BINDING_MISMATCH");
+}
+
+export function assertContentBinding(payload: ToutiaoArticlePreparedPayload, expectedHash: string): void {
+  if (hashToutiaoContentBinding(payload) !== expectedHash) throw new ToutiaoPreparationError("PAYLOAD_BINDING_MISMATCH");
 }
 
 export function assertPreparedAssetsCurrent(payload: ToutiaoArticlePreparedPayload): void {

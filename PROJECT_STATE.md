@@ -1,5 +1,14 @@
 # Project State
 
+## Toutiao R1-C auth and final binding foundation — 2026-09-24
+
+- 基线：R1-B commit `4fad1d54db0dcb8889ae837238a12a9c0b1a0e5a`；继续仅在隔离 worktree 实施，原始脏工作区未修改。
+- 0024 的 `payload_hash` 保留为历史完整快照校验；新增不含 `preparedAt`、`resolvedAt`、本地路径或 Job/Article ID 的语义 `content_binding_hash`。远端素材确定后才产生独立 `final_payload_hash`。
+- 0025 仅持久化凭据版本、登录代际、指纹及最终绑定的非敏感元数据；Cookie、CSRF、anti-token、msToken 作为一份 Bundle 存入 Main SafeStorage。SQLite 与 SafeStorage 不一致时 fail closed。
+- Auth 模块仅接受注入式 Mock transport；`REAL_TOUTIAO_HTTP_ENABLED=false`。无已验证的 `a_bogus` 离线 fixture，生产 signer 明确拒绝签名；确定性 fixture signer 只用于离线测试。
+- 图文 API Adapter 仍在 Intent/Final Submit 之前 fail closed；没有 article/new、article/publish、真实图片上传、头条真实网络或正式发布。下一阶段需验证实际认证协议与签名算法，并在 R1-D 继续审查最终 payload 与安全确认。
+- 离线完整测试：105 files / 747 tests PASS；typecheck、lint PASS。登录态响应形状、远端素材 URL 接受规则、mssdk 协议与 `a_bogus` 算法均未经过真实平台验证。
+
 ## Toutiao R1-B Article API offline preparation — 2026-09-24
 
 - 基线：R1-A commit `dbdc7c30132d9245bc781260844e641204db522d`；仅在独立 worktree 实施，原始脏工作区未修改。

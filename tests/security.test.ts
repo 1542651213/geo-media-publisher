@@ -31,4 +31,17 @@ describe("SafeStorageCredentialStore", () => {
     expect(broken.getStatus?.("account:a:token")).toBe("DecryptFailed");
     expect(() => broken.get("account:a:token")).toThrow(CredentialDecryptError);
   });
+
+  it("does not replace a stored value when encryption fails before an atomic bundle write", () => {
+    const dir = mkdtempSync(join(tmpdir(), "publisher-security-atomic-")); dirs.push(dir);
+    let fail = false;
+    const port = { isEncryptionAvailable: () => true, encryptString: (value: string) => { if (fail) throw new Error("fixture encryption failure"); return Buffer.from(value); }, decryptString: (value: Buffer) => value.toString() };
+    const path = join(dir, "credentials.enc");
+    const store = new SafeStorageCredentialStore(path, port);
+    store.set("toutiao:bundle", "version-1");
+    fail = true;
+    expect(() => store.set("toutiao:bundle", "version-2")).toThrow("fixture encryption failure");
+    expect(store.get("toutiao:bundle")).toBe("version-1");
+    expect(new SafeStorageCredentialStore(path, port).get("toutiao:bundle")).toBe("version-1");
+  });
 });

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDatabase, runMigrations } from "@publisher/db";
+import { prepareToutiaoArticlePayload } from "@publisher/adapters-toutiao/article-api";
 import type { ToutiaoArticleSettingsSnapshot } from "@publisher/domain";
 
 const migrations = join(process.cwd(), "packages", "db", "migrations");
@@ -25,7 +26,9 @@ describe("Toutiao article settings and payload persistence", () => {
     expect(repo.getToutiaoArticleSettingsSnapshot(job.id)?.remoteScheduledAt).toBe("2026-09-25T07:30:00.000Z");
     expect(repo.getJob(job.id)?.scheduledAt).not.toBe("2026-09-25T07:30:00.000Z");
     expect(() => repo.freezeToutiaoArticleSettings(job.id, { ...settings, coverMode: "auto" })).toThrow();
-    const canonicalJson = JSON.stringify({ accountId: account.id, articleId: article.id, jobId: job.id });
+    const prepared = prepareToutiaoArticlePayload({ jobId: job.id, articleId: article.id, accountId: account.id, brandId: brand.id,
+      title: article.title, html: article.body, settings, resolveAsset: () => null, now: new Date("2026-09-24T00:00:00.000Z") });
+    const canonicalJson = prepared.canonicalJson;
     const payloadHash = "c".repeat(64);
     expect(() => repo.saveToutiaoArticlePreparedPayload(job.id, canonicalJson, payloadHash)).toThrow();
     const validHash = createHash("sha256").update(canonicalJson).digest("hex");
@@ -33,7 +36,8 @@ describe("Toutiao article settings and payload persistence", () => {
     expect(() => repo.saveToutiaoArticlePreparedPayload(job.id, canonicalJson.replace(account.id, "different-account"), validHash)).toThrow();
     const intent = repo.prepareSubmissionIntent(job.id);
     repo.bindToutiaoArticlePreparationToIntent(job.id, intent.id);
-    expect(repo.getToutiaoArticlePreparation(job.id)).toMatchObject({ intentId: intent.id, payloadHash: validHash, settingsVersion: 1 });
+    expect(repo.getToutiaoArticlePreparation(job.id)).toMatchObject({ intentId: intent.id, payloadHash: validHash, contentBindingHash: prepared.contentBindingHash, settingsVersion: 1 });
+    expect(repo.getSubmissionIntentByJob(job.id)?.payloadHash).toBe(prepared.contentBindingHash);
     runMigrations(opened.db, migrations);
     expect((opened.db.prepare("SELECT COUNT(*) AS count FROM migrations WHERE id='0024_toutiao_article_preparation.sql'").get() as { count: number }).count).toBe(1);
   });

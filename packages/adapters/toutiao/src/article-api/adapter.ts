@@ -2,15 +2,15 @@ import type { PlatformAdapter } from "@publisher/adapters-core";
 import { ToutiaoPreparationError, validateTitle, type AccountContext, type AdapterManifest, type LoginSession, type LoginStatus, type PlatformCapabilities, type PublishArticleInput, type PublishResult, type ValidationResult } from "@publisher/domain";
 import { prepareToutiaoArticlePayload, type ToutiaoArticlePreparationInput } from "./payload";
 
-/** Offline-only article adapter. No credential, request, upload or submit implementation exists in R1-B. */
+/** Offline-only article adapter. R1-C auth/signing contracts do not enable live submit. */
 export class ToutiaoArticleApiAdapter implements PlatformAdapter {
   readonly platformKey = "toutiao";
   readonly manifest: AdapterManifest = {
-    platformKey: "toutiao", displayName: "Toutiao article Web API preparation", category: "图文", version: "0.1.0-r1b",
+    platformKey: "toutiao", displayName: "Toutiao article Web API preparation", category: "图文", version: "0.1.0-r1c",
     adapterStatus: "not_implemented", authStrategy: "Unsupported", callbackStrategy: "ManualCodeCallback",
     status: "WaitingForUser", researchStatus: "partial", transport: "web_api", integrationMode: "API",
     supportsArticle: true, supportsVideo: false, officialWebsite: "https://mp.toutiao.com/", credentialSchema: [],
-    officialSources: ["https://mp.toutiao.com/"], blockingReason: "R1-B prepares content offline; authentication and submit are not implemented"
+    officialSources: ["https://mp.toutiao.com/"], blockingReason: "R1-C auth and signing foundations are offline only; live authentication and submit are not implemented"
   };
 
   getCapabilities(): PlatformCapabilities {

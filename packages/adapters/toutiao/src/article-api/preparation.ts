@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { extname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { deepFreeze, normalizeToutiaoSettings, ToutiaoPreparationError, validateRemoteSchedule, validateTitle, type Article, type PublishJob, type ToutiaoArticleSettingsSnapshot } from "@publisher/domain";
+import { deepFreeze, hashToutiaoContentBinding, normalizeToutiaoSettings, ToutiaoPreparationError, validateRemoteSchedule, validateTitle, type Article, type PublishJob, type ToutiaoArticleSettingsSnapshot } from "@publisher/domain";
 import type { AppRepository } from "@publisher/db";
 import { assertPreparedAssetsCurrent, assertPreparedPayloadBinding, prepareToutiaoArticlePayload, type ToutiaoArticlePreparedPayload } from "./payload";
 import type { LocalAssetSource } from "./assets";
@@ -52,13 +52,15 @@ export function preflightToutiaoArticleJob(repository: AppRepository, jobId: str
   return { job, article, settings, title, html };
 }
 
-export function prepareToutiaoArticleJob(repository: AppRepository, jobId: string, now = new Date()): { payload: Readonly<ToutiaoArticlePreparedPayload>; canonicalJson: string; payloadHash: string } {
+export function prepareToutiaoArticleJob(repository: AppRepository, jobId: string, now = new Date()): { payload: Readonly<ToutiaoArticlePreparedPayload>; canonicalJson: string; payloadHash: string; contentBindingHash: string } {
   const persisted = repository.getToutiaoArticlePreparation(jobId);
   if (persisted?.canonicalPayloadJson && persisted.payloadHash) {
     const payload = deepFreeze(JSON.parse(persisted.canonicalPayloadJson) as ToutiaoArticlePreparedPayload);
     assertPreparedPayloadBinding(payload, persisted.payloadHash);
     assertPreparedAssetsCurrent(payload);
-    return { payload, canonicalJson: persisted.canonicalPayloadJson, payloadHash: persisted.payloadHash };
+    const contentBindingHash = hashToutiaoContentBinding(payload);
+    if (persisted.contentBindingHash && persisted.contentBindingHash !== contentBindingHash) throw new ToutiaoPreparationError("PAYLOAD_BINDING_MISMATCH");
+    return { payload, canonicalJson: persisted.canonicalPayloadJson, payloadHash: persisted.payloadHash, contentBindingHash };
   }
   const { job, article, settings, title, html } = preflightToutiaoArticleJob(repository, jobId, now);
   const prepared = prepareToutiaoArticlePayload({ jobId: job.id, articleId: article.id, accountId: job.accountId, brandId: article.brandId, title, html, settings, now, resolveAsset: (id) => resolveAsset(repository, article.brandId, id) });

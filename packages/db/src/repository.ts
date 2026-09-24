@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type Database from "better-sqlite3";
-import { CONTENT_STUDIO_PLATFORM_KEYS, CORE_AI_FABRICATION_RULES, canonicalSerialize, conservativePlatformContentRules, expandKeywords, normalizeContentReviewMode, normalizeToutiaoSettings } from "@publisher/domain";
+import { CONTENT_STUDIO_PLATFORM_KEYS, CORE_AI_FABRICATION_RULES, canonicalSerialize, conservativePlatformContentRules, expandKeywords, hashToutiaoContentBinding, normalizeContentReviewMode, normalizeToutiaoSettings, redactSecretText, redactSecretValue } from "@publisher/domain";
 import type { Account, ActivityLog, AdapterManifest, AIProviderProfile, AIUsage, Article, ArticleVariant, BackgroundAutomationStatus, Brand, BrandAsset, BrandDifferentiationMetrics, BrandKnowledgeCategory, BrandKnowledgeEntry, CityRegion, ContentGoal, ContentIntent, ContentQualityCheckResult, ContentQualityContentType, ContentQualityIssue, ContentQualityStatus, ContentQualityTrigger, ContentReviewMode, ContentSource, ContentStudioContent, ContentStudioPlatformKey, ContentStudioTopicPlan, DashboardStats, ExcelArticleRowInput, ExcelImportDiagnostic, ExcelImportDiagnosticCode, ExcelImportPreview, ExcelImportPreviewRow, ExcelImportResult, ExcelImportSheetCandidate, FinalPublishMode, ImageAsset, ImageSelectionMode, KnowledgeSnapshot, KeywordItem, KeywordTemplate, LoginStatus, Notification, Platform, PlatformCapability, PlatformCapabilities, PlatformContentRules, PlatformProfile, PlatformSelfTestCleanupStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PlatformSelfTestStep, PromotionStrength, PublishJob, PublishPlan, PublishRecord, SearchIntent, VideoAsset } from "@publisher/domain";
-import type { PublishRemoteStatus, ToutiaoArticleSettingsSnapshot } from "@publisher/domain";
+import type { PublishRemoteStatus, ToutiaoArticleSettingsSnapshot, ToutiaoContentBindingInput } from "@publisher/domain";
 
 type SqlValue = string | number | null;
 type Row = Record<string, unknown>;
@@ -84,19 +84,12 @@ function inferIntegrationMode(transport: string, authStrategy?: string): Platfor
   if (transport === "official_api" || transport === "official_sdk" || transport === "hybrid") return "API";
   return "Blocked";
 }
-const sensitiveLogKey = /^(authorization|bearer|api[_-]?key|apikey|appsecret|secret|cookie|set-cookie|access_token|refresh_token|password|storagestate|token)$/iu;
 function sanitizeLogValue(value: unknown): unknown {
-  if (typeof value === "string") return value.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer [REDACTED]");
-  if (Array.isArray(value)) return value.map(sanitizeLogValue);
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => sensitiveLogKey.test(key) ? [key, "[REDACTED]"] : [key, sanitizeLogValue(item)]));
-  return value;
+  return redactSecretValue(value);
 }
 function sanitizeSelfTestEvidence(value: string | null | undefined): string | null {
   if (!value) return null;
-  return value
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer [REDACTED]")
-    .replace(/(authorization|cookie|storageState|api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\s*[=:]\s*[^\s,;]+/giu, "$1=[REDACTED]")
-    .slice(0, 2_000);
+  return redactSecretText(value).slice(0, 2_000);
 }
 
 export interface BrandInput {
@@ -2455,24 +2448,84 @@ export class AppRepository {
     if (!row) throw new Error("Toutiao article settings snapshot is missing");
     const parsed = JSON.parse(canonicalJson) as Record<string, unknown>;
     if (parsed.jobId !== jobId || parsed.accountId !== row.account_id || parsed.articleId !== row.article_id || canonicalSerialize(parsed) !== canonicalJson || createHash("sha256").update(canonicalJson).digest("hex") !== payloadHash) throw new Error("Prepared payload binding does not match the frozen Job identity and hash");
-    if (typeof row.payload_hash === "string") { if (row.payload_hash !== payloadHash || row.canonical_payload_json !== canonicalJson) throw new Error("Toutiao prepared payload is already frozen"); return; }
-    this.db.prepare("UPDATE toutiao_article_job_preparations SET canonical_payload_json=?,payload_hash=?,prepared_at=? WHERE job_id=? AND payload_hash IS NULL").run(canonicalJson, payloadHash, now(), jobId);
+    const contentBindingHash = hashToutiaoContentBinding(parsed as unknown as ToutiaoContentBindingInput);
+    if (typeof row.payload_hash === "string") { if (row.payload_hash !== payloadHash || row.canonical_payload_json !== canonicalJson) throw new Error("Toutiao prepared payload is already frozen");
+      this.db.prepare("UPDATE toutiao_article_job_preparations SET content_binding_hash=COALESCE(content_binding_hash,?) WHERE job_id=?").run(contentBindingHash, jobId); return; }
+    this.db.prepare("UPDATE toutiao_article_job_preparations SET canonical_payload_json=?,payload_hash=?,content_binding_hash=?,prepared_at=? WHERE job_id=? AND payload_hash IS NULL").run(canonicalJson, payloadHash, contentBindingHash, now(), jobId);
   }
 
   bindToutiaoArticlePreparationToIntent(jobId: string, intentId: string): void {
     this.db.transaction(() => {
-      const preparation = this.db.prepare("SELECT payload_hash,intent_id FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
+      const preparation = this.db.prepare("SELECT payload_hash,content_binding_hash,canonical_payload_json,intent_id FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
       const intent = this.db.prepare("SELECT job_id,final_submit_count FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
       if (!preparation || typeof preparation.payload_hash !== "string" || !intent || intent.job_id !== jobId || intValue(intent.final_submit_count) !== 0 || (preparation.intent_id && preparation.intent_id !== intentId)) throw new Error("Prepared payload cannot be bound to this submission intent");
+      const contentBindingHash = typeof preparation.content_binding_hash === "string" ? preparation.content_binding_hash : hashToutiaoContentBinding(JSON.parse(textValue(preparation.canonical_payload_json)) as ToutiaoContentBindingInput);
       this.db.prepare("UPDATE toutiao_article_job_preparations SET intent_id=? WHERE job_id=?").run(intentId, jobId);
-      this.db.prepare("UPDATE submission_intents SET payload_hash=? WHERE id=?").run(preparation.payload_hash, intentId);
+      this.db.prepare("UPDATE toutiao_article_job_preparations SET content_binding_hash=? WHERE job_id=?").run(contentBindingHash, jobId);
+      this.db.prepare("UPDATE submission_intents SET payload_hash=? WHERE id=?").run(contentBindingHash, intentId);
     })();
   }
 
-  getToutiaoArticlePreparation(jobId: string): { settingsVersion: number; settings: ToutiaoArticleSettingsSnapshot; canonicalPayloadJson: string | null; payloadHash: string | null; preparedAt: string | null; intentId: string | null } | null {
-    const row = this.db.prepare("SELECT settings_version,settings_json,canonical_payload_json,payload_hash,prepared_at,intent_id FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
+  getToutiaoArticlePreparation(jobId: string): { settingsVersion: number; settings: ToutiaoArticleSettingsSnapshot; canonicalPayloadJson: string | null; payloadHash: string | null; contentBindingHash: string | null; preparedAt: string | null; intentId: string | null } | null {
+    const row = this.db.prepare("SELECT settings_version,settings_json,canonical_payload_json,payload_hash,content_binding_hash,prepared_at,intent_id FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
     if (!row) return null;
-    return { settingsVersion: intValue(row.settings_version), settings: parseJson<ToutiaoArticleSettingsSnapshot>(row.settings_json, { version: 1, coverMode: "none", coverImages: [], articleAdType: "none", remoteScheduledAt: null }), canonicalPayloadJson: typeof row.canonical_payload_json === "string" ? row.canonical_payload_json : null, payloadHash: typeof row.payload_hash === "string" ? row.payload_hash : null, preparedAt: typeof row.prepared_at === "string" ? row.prepared_at : null, intentId: typeof row.intent_id === "string" ? row.intent_id : null };
+    return { settingsVersion: intValue(row.settings_version), settings: parseJson<ToutiaoArticleSettingsSnapshot>(row.settings_json, { version: 1, coverMode: "none", coverImages: [], articleAdType: "none", remoteScheduledAt: null }), canonicalPayloadJson: typeof row.canonical_payload_json === "string" ? row.canonical_payload_json : null, payloadHash: typeof row.payload_hash === "string" ? row.payload_hash : null, contentBindingHash: typeof row.content_binding_hash === "string" ? row.content_binding_hash : null, preparedAt: typeof row.prepared_at === "string" ? row.prepared_at : null, intentId: typeof row.intent_id === "string" ? row.intent_id : null };
+  }
+
+  getToutiaoCredentialMetadata(accountId: string): { accountId: string; bundleVersion: number; loginGeneration: number; credentialState: "VALID" | "INVALID" | "UNKNOWN"; credentialFingerprint: string; validatedAt: string | null } | null {
+    const row = this.db.prepare("SELECT * FROM toutiao_article_credential_metadata WHERE account_id=?").get(accountId) as Row | undefined;
+    if (!row) return null;
+    return { accountId: textValue(row.account_id), bundleVersion: intValue(row.bundle_version), loginGeneration: intValue(row.login_generation), credentialState: textValue(row.credential_state) as "VALID" | "INVALID" | "UNKNOWN", credentialFingerprint: textValue(row.credential_fingerprint), validatedAt: typeof row.validated_at === "string" ? row.validated_at : null };
+  }
+
+  updateToutiaoCredentialMetadata(input: { accountId: string; bundleVersion: number; loginGeneration: number; credentialState: "VALID" | "INVALID" | "UNKNOWN"; credentialFingerprint: string; validatedAt: string | null }, expectedVersion: number | null): void {
+    this.db.transaction(() => {
+      const account = this.listAccounts().find((item) => item.id === input.accountId && item.platformKey === "toutiao");
+      if (!account) throw new Error("Credential account is not a Toutiao account");
+      const current = this.getToutiaoCredentialMetadata(input.accountId);
+      if ((current?.bundleVersion ?? null) !== expectedVersion || input.bundleVersion !== (expectedVersion ?? 0) + 1
+        || input.loginGeneration < (current?.loginGeneration ?? 0) || !/^[a-f0-9]{64}$/u.test(input.credentialFingerprint)) throw new Error("Credential metadata version mismatch");
+      this.db.prepare("INSERT INTO toutiao_article_credential_metadata (account_id,bundle_version,login_generation,credential_state,credential_fingerprint,validated_at,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET bundle_version=excluded.bundle_version,login_generation=excluded.login_generation,credential_state=excluded.credential_state,credential_fingerprint=excluded.credential_fingerprint,validated_at=excluded.validated_at,updated_at=excluded.updated_at")
+        .run(input.accountId, input.bundleVersion, input.loginGeneration, input.credentialState, input.credentialFingerprint, input.validatedAt, now());
+    })();
+  }
+
+  bindToutiaoFinalPayloadForFutureSubmit(input: { jobId: string; intentId: string; accountId: string; contentBindingHash: string; finalPayloadHash: string; credentialBundleVersion: number; loginGeneration: number; signerVersion: string; signerInputHash: string; signatureGeneratedAt: string; authValidatedAt: string }, credentialVerifier: { assertBound(accountId: string, version: number, loginGeneration: number, stage: "signed_or_submitting"): unknown }): void {
+    this.db.transaction(() => {
+      const preparation = this.db.prepare("SELECT account_id,content_binding_hash,intent_id FROM toutiao_article_job_preparations WHERE job_id=?").get(input.jobId) as Row | undefined;
+      const intent = this.db.prepare("SELECT job_id,state,final_submit_count,submit_boundary_entered_at,payload_hash FROM submission_intents WHERE id=?").get(input.intentId) as Row | undefined;
+      const metadata = this.getToutiaoCredentialMetadata(input.accountId);
+      if (!preparation || preparation.account_id !== input.accountId || preparation.intent_id !== input.intentId || preparation.content_binding_hash !== input.contentBindingHash
+        || !intent || intent.job_id !== input.jobId || intent.state !== "Prepared" || intValue(intent.final_submit_count) !== 0 || intent.submit_boundary_entered_at || intent.payload_hash !== input.contentBindingHash
+        || !metadata || metadata.credentialState !== "VALID" || !metadata.validatedAt || metadata.bundleVersion !== input.credentialBundleVersion || metadata.loginGeneration !== input.loginGeneration
+        || !/^[a-f0-9]{64}$/u.test(input.finalPayloadHash) || !/^[a-f0-9]{64}$/u.test(input.signerInputHash) || !input.signerVersion || !Number.isFinite(Date.parse(input.signatureGeneratedAt))
+        || input.authValidatedAt !== metadata.validatedAt) throw Object.assign(new Error("Toutiao final submission preconditions are not met"), { code: "PAYLOAD_BINDING_MISMATCH" });
+      credentialVerifier.assertBound(input.accountId, input.credentialBundleVersion, input.loginGeneration, "signed_or_submitting");
+      const existing = this.db.prepare("SELECT * FROM toutiao_article_final_bindings WHERE job_id=?").get(input.jobId) as Row | undefined;
+      if (existing) {
+        if (existing.account_id !== input.accountId || existing.content_binding_hash !== input.contentBindingHash || existing.final_payload_hash !== input.finalPayloadHash
+          || existing.credential_bundle_version !== input.credentialBundleVersion || existing.login_generation !== input.loginGeneration
+          || existing.signer_version !== input.signerVersion || existing.signer_input_hash !== input.signerInputHash
+          || existing.signature_generated_at !== input.signatureGeneratedAt || existing.auth_validated_at !== input.authValidatedAt) throw Object.assign(new Error("Toutiao final binding is immutable"), { code: "PAYLOAD_BINDING_MISMATCH" });
+        return;
+      }
+      this.db.prepare("INSERT INTO toutiao_article_final_bindings (job_id,account_id,content_binding_hash,final_payload_hash,credential_bundle_version,login_generation,signer_version,signer_input_hash,signature_generated_at,auth_validated_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+        .run(input.jobId, input.accountId, input.contentBindingHash, input.finalPayloadHash, input.credentialBundleVersion, input.loginGeneration, input.signerVersion, input.signerInputHash, input.signatureGeneratedAt, input.authValidatedAt, now());
+    })();
+  }
+
+  assertToutiaoFutureSubmitReady(jobId: string, credentialVerifier: { assertBound(accountId: string, version: number, loginGeneration: number, stage: "signed_or_submitting"): unknown }): "SUBMIT_READY" {
+    const binding = this.db.prepare("SELECT * FROM toutiao_article_final_bindings WHERE job_id=?").get(jobId) as Row | undefined;
+    const preparation = this.db.prepare("SELECT account_id,content_binding_hash,intent_id FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
+    const intent = preparation?.intent_id ? this.db.prepare("SELECT state,final_submit_count,submit_boundary_entered_at,payload_hash FROM submission_intents WHERE id=?").get(preparation.intent_id) as Row | undefined : undefined;
+    const metadata = binding ? this.getToutiaoCredentialMetadata(textValue(binding.account_id)) : null;
+    if (!binding || !preparation || !intent || !metadata || this.getFrozenContentTransport(jobId) !== "ARTICLE_WEB_API"
+      || preparation.content_binding_hash !== binding.content_binding_hash || intent.payload_hash !== binding.content_binding_hash
+      || intent.state !== "Prepared" || intValue(intent.final_submit_count) !== 0 || intent.submit_boundary_entered_at
+      || metadata.credentialState !== "VALID" || metadata.bundleVersion !== intValue(binding.credential_bundle_version)
+      || metadata.loginGeneration !== intValue(binding.login_generation) || metadata.validatedAt !== binding.auth_validated_at) throw Object.assign(new Error("Toutiao submit readiness requires new preflight and binding"), { code: "PAYLOAD_BINDING_MISMATCH" });
+    credentialVerifier.assertBound(textValue(binding.account_id), intValue(binding.credential_bundle_version), intValue(binding.login_generation), "signed_or_submitting");
+    return "SUBMIT_READY";
   }
 
   reserveSubmissionAttempt(intentId: string): string {
@@ -2501,7 +2554,7 @@ export class AppRepository {
     const timestamp = now();
     const response = { ...existing.response, reconciliation: input.response, reconciliationStatus: "PENDING_REVIEW" };
     const transaction = this.db.transaction(() => {
-      this.db.prepare("UPDATE publish_records SET status='Submitted', success=0, response_json=?, verification_status='WaitingUser' WHERE id=?").run(json(response), existing.id);
+      this.db.prepare("UPDATE publish_records SET status='Submitted', success=0, response_json=?, verification_status='WaitingUser' WHERE id=?").run(json(redactSecretValue(response)), existing.id);
       this.db.prepare("UPDATE submission_intents SET state='Submitted', error_code=NULL, updated_at=? WHERE id=?").run(timestamp, intent.id);
       this.db.prepare("UPDATE publish_jobs SET status='Submitted', external_id=NULL, publish_record_id=?, last_error_code=NULL, last_error_message=NULL, next_retry_at=NULL, finished_at=NULL WHERE id=? AND status='NeedsReconciliation'").run(existing.id, jobId);
     });
@@ -2562,7 +2615,7 @@ export class AppRepository {
   insertPublishRecord(input: Omit<PublishRecord, "id" | "publishedAt" | "dryRun" | "status"> & { dryRun?: boolean; status?: PublishRecord["status"] }): PublishRecord {
     const dryRun = input.dryRun ?? false;
     const intent = this.getSubmissionIntentByJob(input.jobId);
-    const record: PublishRecord = { ...input, platformAccountId: input.platformAccountId ?? input.accountId, status: input.status ?? (dryRun ? "DryRun" : input.success ? "Published" : "Failed"), dryRun, id: randomUUID(), publishedAt: now(), publishMode: input.publishMode ?? (dryRun ? "ASSISTED" : "MANUAL"), automationType: input.automationType ?? "Manual", browserSessionIdHash: input.browserSessionIdHash ?? null, operator: input.operator ?? "desktop-user", verificationStatus: input.verificationStatus ?? (dryRun ? "WaitingUser" : input.success ? "Verified" : "Failed"), editorOpenedAt: input.editorOpenedAt ?? null, titleFilled: input.titleFilled ?? null, bodyFilled: input.bodyFilled ?? null, selectedImageAssetId: input.selectedImageAssetId ?? null, imageSelectionMode: input.imageSelectionMode ?? "none", submissionAttemptId: input.submissionAttemptId ?? intent?.submissionAttemptId ?? null, remoteStatus: input.remoteStatus ?? intent?.remoteStatus ?? null };
+    const record: PublishRecord = { ...input, response: redactSecretValue(input.response) as Record<string, unknown>, platformAccountId: input.platformAccountId ?? input.accountId, status: input.status ?? (dryRun ? "DryRun" : input.success ? "Published" : "Failed"), dryRun, id: randomUUID(), publishedAt: now(), publishMode: input.publishMode ?? (dryRun ? "ASSISTED" : "MANUAL"), automationType: input.automationType ?? "Manual", browserSessionIdHash: input.browserSessionIdHash ?? null, operator: input.operator ?? "desktop-user", verificationStatus: input.verificationStatus ?? (dryRun ? "WaitingUser" : input.success ? "Verified" : "Failed"), editorOpenedAt: input.editorOpenedAt ?? null, titleFilled: input.titleFilled ?? null, bodyFilled: input.bodyFilled ?? null, selectedImageAssetId: input.selectedImageAssetId ?? null, imageSelectionMode: input.imageSelectionMode ?? "none", submissionAttemptId: input.submissionAttemptId ?? intent?.submissionAttemptId ?? null, remoteStatus: input.remoteStatus ?? intent?.remoteStatus ?? null };
     this.db.prepare("INSERT INTO publish_records (id,job_id,account_id,platform_account_id,platform_key,article_id,published_url,published_external_id,success,response_json,published_at,dry_run,status,publish_mode,automation_type,browser_session_id_hash,operator,verification_status,editor_opened_at,title_filled,body_filled,selected_image_asset_id,image_selection_mode,submission_attempt_id,remote_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(record.id, record.jobId, record.accountId, record.platformAccountId, record.platformKey, record.articleId, record.publishedUrl, record.publishedExternalId, record.success ? 1 : 0, json(record.response), record.publishedAt, record.dryRun ? 1 : 0, record.status, record.publishMode, record.automationType, record.browserSessionIdHash, record.operator, record.verificationStatus, record.editorOpenedAt, record.titleFilled === null || record.titleFilled === undefined ? null : record.titleFilled ? 1 : 0, record.bodyFilled === null || record.bodyFilled === undefined ? null : record.bodyFilled ? 1 : 0, record.selectedImageAssetId, record.imageSelectionMode, record.submissionAttemptId, record.remoteStatus);
     return record;
   }
@@ -2573,7 +2626,7 @@ export class AppRepository {
   }
 
   updatePublishRecord(id: string, input: { status: PublishRecord["status"]; success: boolean; publishedUrl?: string | null; publishedExternalId?: string | null; response?: Record<string, unknown>; verificationStatus?: PublishRecord["verificationStatus"] }): PublishRecord {
-    this.db.prepare("UPDATE publish_records SET status=?,success=?,published_url=COALESCE(?,published_url),published_external_id=COALESCE(?,published_external_id),response_json=?,verification_status=COALESCE(?,verification_status),submission_attempt_id=COALESCE(submission_attempt_id,(SELECT submission_attempt_id FROM submission_intents WHERE job_id=publish_records.job_id ORDER BY created_at DESC LIMIT 1)),remote_status=(SELECT remote_status FROM submission_intents WHERE job_id=publish_records.job_id ORDER BY created_at DESC LIMIT 1) WHERE id=?").run(input.status, input.success ? 1 : 0, input.publishedUrl ?? null, input.publishedExternalId ?? null, json(input.response ?? {}), input.verificationStatus ?? null, id);
+    this.db.prepare("UPDATE publish_records SET status=?,success=?,published_url=COALESCE(?,published_url),published_external_id=COALESCE(?,published_external_id),response_json=?,verification_status=COALESCE(?,verification_status),submission_attempt_id=COALESCE(submission_attempt_id,(SELECT submission_attempt_id FROM submission_intents WHERE job_id=publish_records.job_id ORDER BY created_at DESC LIMIT 1)),remote_status=(SELECT remote_status FROM submission_intents WHERE job_id=publish_records.job_id ORDER BY created_at DESC LIMIT 1) WHERE id=?").run(input.status, input.success ? 1 : 0, input.publishedUrl ?? null, input.publishedExternalId ?? null, json(redactSecretValue(input.response ?? {})), input.verificationStatus ?? null, id);
     const row = this.db.prepare("SELECT * FROM publish_records WHERE id=?").get(id) as Row;
     return toRecord(row);
   }
