@@ -264,6 +264,8 @@ export interface BrowserSessionManagerOptions {
   persistentProfilePlatforms?: readonly string[];
   /** Explicit opt-in for legacy snapshot seeding. Persistent profiles are canonical by default. */
   persistentProfileCredentialSnapshotPlatforms?: readonly string[];
+  /** Diagnostic-only opt-in: routing cannot guard pre-existing Service Worker traffic. */
+  blockServiceWorkersForPlatforms?: readonly string[];
   launchPersistentContext?: (userDataDir: string, options: { channel: SystemBrowserChannel; headless: boolean; storageState?: StorageState }) => Promise<BrowserContext>;
   writeProfileInitializedMarker?: (markerPath: string) => Promise<void>;
   onSessionLifecycle?: (event: BrowserSessionLifecycleEvent) => void;
@@ -388,7 +390,8 @@ export class PlaywrightSessionManager {
     const browser = browserLaunch.browser;
     let context: BrowserContext;
     try {
-      context = await browser.newContext(storageState ? { storageState } : {});
+      context = await browser.newContext({ ...(storageState ? { storageState } : {}),
+        ...(this.options.blockServiceWorkersForPlatforms?.includes(identity.platformKey) ? { serviceWorkers: "block" as const } : {}) });
     } catch {
       await this.closeUnregisteredResources(identity, null, browser, {
         storageMode: "EPHEMERAL_STORAGE_STATE",

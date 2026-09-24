@@ -11,6 +11,9 @@ export async function resolveAntiToken(bundle: ToutiaoCredentialBundle, transpor
   catch { throw new ToutiaoAuthResolutionError("AUTH_TRANSPORT_UNKNOWN"); }
   if (response.status === 401 || response.status === 403) throw new ToutiaoAuthResolutionError("AUTH_EXPLICITLY_INVALID");
   const body = response.body && typeof response.body === "object" ? response.body as Record<string, unknown> : null;
-  if (response.status < 200 || response.status >= 300 || !body || typeof body.antiToken !== "string" || !body.antiToken) throw new ToutiaoAuthResolutionError("AUTH_RESPONSE_UNKNOWN");
-  return { value: body.antiToken, observedAt: new Date().toISOString() };
+  const actualEndpoint = new URL(endpoint).hostname === "mp.toutiao.com" && new URL(endpoint).pathname === "/tt-anti-token";
+  const nested = body?.data && typeof body.data === "object" ? body.data as Record<string, unknown> : null;
+  const value = actualEndpoint ? nested?.token : body?.antiToken;
+  if (response.status < 200 || response.status >= 300 || typeof value !== "string" || !value) throw new ToutiaoAuthResolutionError("AUTH_RESPONSE_UNKNOWN");
+  return { value, observedAt: new Date().toISOString() };
 }

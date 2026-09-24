@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { captureSafeProtocolObservation, describeShadowReadiness, UNVERIFIED_TOUTIAO_PROTOCOL_PROFILE } from "./protocol-shadow";
+import { AUTHORIZED_TOUTIAO_PROTOCOL_PROFILE_20260924, captureSafeProtocolObservation, describeShadowReadiness, UNVERIFIED_TOUTIAO_PROTOCOL_PROFILE } from "./protocol-shadow";
 
 describe("Toutiao protocol shadow diagnostics", () => {
   it("keeps all unobserved token and signer requirements unknown", () => {
@@ -9,6 +9,13 @@ describe("Toutiao protocol shadow diagnostics", () => {
     expect(Object.values(UNVERIFIED_TOUTIAO_PROTOCOL_PROFILE.tokens).every((token) => token.requirement === "UNKNOWN" && token.lifetime === "UNKNOWN")).toBe(true);
     expect(describeShadowReadiness(false, "VALID")).toBe("SHADOW_DISABLED");
     expect(describeShadowReadiness(true, "EXPIRED")).toBe("BLOCKED_NO_AUTHORIZED_SESSION");
+  });
+
+  it("versions observed read-only auth evidence without claiming publish token or signer requirements", () => {
+    expect(AUTHORIZED_TOUTIAO_PROTOCOL_PROFILE_20260924).toMatchObject({
+      provenance: "AUTHORIZED_SHADOW_CAPTURE", authResponseShapeVersion: "creator-login-status-data-is_login-v1", signerStrategy: "BLOCKED"
+    });
+    expect(Object.values(AUTHORIZED_TOUTIAO_PROTOCOL_PROFILE_20260924.tokens).every((token) => token.requirement === "UNKNOWN")).toBe(true);
   });
 
   it("keeps only structural observations and irreversible token fingerprints", () => {
@@ -42,5 +49,18 @@ describe("Toutiao protocol shadow diagnostics", () => {
       path: "/private/1234567890", secure: true, httpOnly: true, sameSite: "cookie-secret" }] });
     expect(JSON.stringify(malformedCookie)).not.toContain("cookie-secret");
     expect(JSON.stringify(malformedCookie)).not.toContain("1234567890");
+  });
+
+  it("records only shape and byte hash for exact mssdk token bootstrap POST", () => {
+    const body = new TextEncoder().encode("opaque=body-secret&version=1");
+    const observed = captureSafeProtocolObservation({ source: "MOCK_FIXTURE", capturedAt: "2026-09-24T03:00:00.000Z",
+      url: "https://mssdk.bytedance.com/web/r/token?msToken=query-secret", method: "POST", status: 200,
+      requestHeaders: { "content-type": "application/x-www-form-urlencoded", Cookie: "cookie-secret" },
+      responseHeaders: {}, responseBody: { data: { msToken: "ms-secret" } }, cookies: [], requestBody: body,
+      tokenCandidates: { msToken: "ms-secret" } });
+    expect(observed).toMatchObject({ host: "mssdk.bytedance.com", endpointPath: "/web/r/token", method: "POST",
+      requestBodyKeyNames: ["opaque", "version"], requestBodySha256: createHash("sha256").update(body).digest("hex"),
+      tokens: { msToken: { present: true, length: 9 } } });
+    expect(JSON.stringify(observed)).not.toMatch(/body-secret|query-secret|cookie-secret|ms-secret/u);
   });
 });

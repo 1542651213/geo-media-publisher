@@ -1,0 +1,77 @@
+{
+  "source": "AUTHORIZED_SHADOW_CAPTURE",
+  "secretsRedacted": true,
+  "capturedAt": "2026-09-24T07:02:12.290Z",
+  "platform": "toutiao",
+  "host": "mssdk.bytedance.com",
+  "endpointPath": "/web/r/token",
+  "method": "POST",
+  "status": 200,
+  "responseShapeVersion": "UNKNOWN",
+  "queryParameterNames": [
+    "msToken"
+  ],
+  "requestHeaderNames": [
+    "accept",
+    "content-type",
+    "origin",
+    "referer",
+    "sec-ch-ua",
+    "sec-ch-ua-mobile",
+    "sec-ch-ua-platform",
+    "user-agent"
+  ],
+  "responseHeaderNames": [
+    "access-control-allow-credentials",
+    "access-control-allow-headers",
+    "access-control-allow-methods",
+    "access-control-allow-origin",
+    "access-control-expose-headers",
+    "content-length",
+    "content-type",
+    "date",
+    "eagleid",
+    "server",
+    "server-timing",
+    "set-cookie",
+    "timing-allow-origin",
+    "upstream-caught",
+    "via",
+    "x-ms-token",
+    "x-tt-logid",
+    "x-tt-timestamp",
+    "x-tt-trace-host",
+    "x-tt-trace-id",
+    "x-tt-trace-tag"
+  ],
+  "responseKeyShape": [
+    "maigc",
+    "version",
+    "dataType"
+  ],
+  "cookies": [],
+  "tokens": {
+    "csrf": {
+      "present": false,
+      "length": 0,
+      "sha256": null
+    },
+    "antiToken": {
+      "present": false,
+      "length": 0,
+      "sha256": null
+    },
+    "msToken": {
+      "present": true,
+      "length": 184,
+      "sha256": "8f947b8d90698e43b541b81358a6d67f1b08f60bf7d67066dc2ec78c9e641823"
+    },
+    "aBogus": {
+      "present": false,
+      "length": 0,
+      "sha256": null
+    }
+  },
+  "requestBodyKeyNames": [],
+  "requestBodySha256": "4c695b47f432b82164a1390ff588895d7f1b3cf9d1118696d19d3b7ff6fed9f9"
+}

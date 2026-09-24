@@ -1,5 +1,13 @@
 # Project State
 
+## Toutiao R1-E authorized read-only protocol Shadow — 2026-09-24
+
+- 在隔离 worktree 的打包应用中，使用 Owner 已保存授权的 Toutiao BrowserSession 恢复 Canonical Page；采集前检查账号归属与 ACTIVE 状态。诊断开关仅在该进程设置，生产默认仍为关闭。Context 在诊断进程中阻止 Service Worker，Network Guard 在重新加载 Creator 首页前安装；未知业务 POST 默认拦截。
+- 真实只读响应证明 `GET /mp/agw/media/user_login_status_api` 的成功形状为 `code=0` 且 `data.is_login=true`；未主动退出账号，失效形状仍未现场捕获。`GET /tt-anti-token` 返回 `data.token`。一个只读请求携带 `x-secsdk-csrf-token` 请求头；该值的生成来源与有效期未知。
+- Creator 首页正常加载期间，mssdk 的 `/web/r/token`、`/web/common` 是 POST token bootstrap；在精确路径例外下观察到其查询参数名包含 `msToken`。这不证明图文发布必须使用 msToken。已观察到同名 Cookie 跨 Creator、www Toutiao、Douyin 等域，现有 domain-aware resolver 的 Creator host 优先规则与元数据一致。
+- 本轮未观察到 `a_bogus` 或其他签名参数；仅检查的少量页面全局 signer 入口未暴露，Browser Native 和 Local Signer 均未验证，生产路径保持 `BLOCKED`。没有 article/new、draft、upload、article/publish 或 Final Submit。Guard 覆盖的最终采集窗口中，3 次精确 token bootstrap 放行，29 次未知 POST 被阻断，内容写操作放行数为 0；这些计数不覆盖激活会话时允许的普通 Creator 首页加载。
+- 四份 `AUTHORIZED_SHADOW_CAPTURE` fixture 与原有 `MOCK_FIXTURE` 分开，另有只含策略与未知项的版本化 profile；严格结构校验和 secret scan 通过。Auth contract 仅对已验证的登录形状与 anti-token 形状作兼容修正。远端签名、Token 来源/生命周期、发布 API 和素材上传仍待后续独立任务验证。
+
 ## Toutiao R1-E0 BrowserSession activation — 2026-09-24
 
 - 基线：R1-D commit `f50883155a6792f5ae67a4b6c8a60691d8bd361e`；所有源码修改仅在隔离 worktree。原始脏工作区未修改。

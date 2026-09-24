@@ -104,6 +104,10 @@ describe("Toutiao offline authentication transport", () => {
     expect(resolveCreatorCookies([parent, cookie], ["session"]).header).toBe("session=secret-value");
     expect(() => resolveCreatorCookies([parent], ["session", "missing"])).toThrowError(expect.objectContaining({ code: "TOUTIAO_COOKIE_UNAVAILABLE" }));
     expect(credentialFingerprint({ ...bundle(), cookieMaterial: [cookie, parent] })).toBe(credentialFingerprint({ ...bundle(), cookieMaterial: [parent, cookie] }));
+    const creator = { ...cookie, name: "x-web-secsdk-uid", value: "synthetic-mp", domain: "mp.toutiao.com" };
+    const website = { ...creator, value: "synthetic-www", domain: "www.toutiao.com" };
+    const douyin = { ...creator, value: "synthetic-douyin", domain: "open.douyin.com" };
+    expect(resolveCreatorCookies([website, douyin, creator], [creator.name]).selected[0]?.domain).toBe("mp.toutiao.com");
   });
 
   it("maps explicit auth evidence to INVALID and transport/server/malformed failures to UNKNOWN", async () => {
@@ -119,6 +123,15 @@ describe("Toutiao offline authentication transport", () => {
     expect(blocked).not.toHaveBeenCalled();
     expect(await checkCreatorSession(bundle(), { mode: "REAL", request: blocked }, "https://mp.toutiao.com/offline-fixture", ["session"])).toMatchObject({ state: "UNKNOWN", reasonCode: "NETWORK_UNKNOWN" });
     expect(blocked).not.toHaveBeenCalled();
+  });
+
+  it("recognizes the authorized-shadow Creator login and anti-token response shapes", async () => {
+    const mock = (body: unknown): ToutiaoHttpTransport => ({ mode: "MOCK", request: vi.fn(async () => ({ status: 200, headers: {}, body })) });
+    const endpoint = "https://mp.toutiao.com/mp/agw/media/user_login_status_api";
+    expect(await checkCreatorSession(bundle(), mock({ code: 0, data: { is_login: true } }), endpoint, ["session"])).toMatchObject({ state: "VALID" });
+    expect(await checkCreatorSession(bundle(), mock({ code: 0, data: { is_login: false } }), endpoint, ["session"])).toMatchObject({ state: "INVALID" });
+    expect(await checkCreatorSession(bundle(), mock({ code: 1, data: { is_login: true } }), endpoint, ["session"])).toMatchObject({ state: "UNKNOWN" });
+    expect((await resolveAntiToken(bundle(), mock({ code: 0, data: { token: "synthetic-secret" } }), "https://mp.toutiao.com/tt-anti-token", ["session"])).value).toBe("synthetic-secret");
   });
 
   it("resolves CSRF, anti-token and msToken through only injected mock transport without DB effects", async () => {

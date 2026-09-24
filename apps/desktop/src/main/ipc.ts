@@ -5,6 +5,8 @@ import { basename, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { prepareToutiaoArticleJob } from "@publisher/adapters-toutiao/article-api";
+import { protocolShadowEnabled } from "@publisher/adapters-toutiao/article-api";
+import { ToutiaoArticleBrowserAdapter } from "@publisher/adapters-toutiao/browser";
 import { backupDatabase, validateDatabaseBackup, type AIBatchTarget, type AppRepository, type ContentStudioTaskPayload, type HumanReviewSubmitInput } from "@publisher/db";
 import type { AccountDisconnectResult, BatchGenerationInput, ContentStudioGenerationInput } from "../shared/api";
 import { AIProviderError, DeepSeekErrorMapper, DeepSeekProvider, FallbackAIProvider, MockAIProvider, OpenAICompatibleProvider, contentHash, type AIConnectionDiagnostic, type AIConnectionResult, type AIProvider } from "@publisher/ai";
@@ -549,6 +551,15 @@ export function registerIpc(deps: IpcDependencies): void {
   register("accounts:close-runtime-session", async (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: z.literal("toutiao") }).parse(payload);
     return toutiaoSessionActivation.close(input.accountId);
+  });
+  register("toutiao:protocol-shadow", async (_event, payload) => {
+    if (!protocolShadowEnabled(process.env)) throw new Error("TOUTIAO_PROTOCOL_SHADOW_DISABLED");
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    const status = toutiaoSessionActivation.status(input.accountId);
+    if (status.storedAuthorization !== "AUTHORIZED_SAVED" || status.runtimeState !== "ACTIVE") throw new Error("TOUTIAO_SHADOW_SESSION_UNAVAILABLE");
+    const adapter = registry.getForConnection("toutiao");
+    if (!(adapter instanceof ToutiaoArticleBrowserAdapter)) throw new Error("TOUTIAO_SHADOW_BROWSER_ADAPTER_REQUIRED");
+    return adapter.runReadOnlyProtocolShadow(accountContext(input.accountId, "toutiao"));
   });
   register("accounts:pre-submit-gate", async (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);

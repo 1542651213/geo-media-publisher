@@ -1,0 +1,99 @@
+{
+  "source": "AUTHORIZED_SHADOW_CAPTURE",
+  "secretsRedacted": true,
+  "capturedAt": "2026-09-24T07:02:13.854Z",
+  "platform": "toutiao",
+  "host": "mp.toutiao.com",
+  "endpointPath": "/mp/agw/creator_college/class/outside/",
+  "method": "GET",
+  "status": 200,
+  "responseShapeVersion": "UNKNOWN",
+  "queryParameterNames": [
+    "app_id",
+    "size"
+  ],
+  "requestHeaderNames": [
+    "accept",
+    "cookie",
+    "referer",
+    "sec-ch-ua",
+    "sec-ch-ua-mobile",
+    "sec-ch-ua-platform",
+    "user-agent",
+    "x-secsdk-csrf-token"
+  ],
+  "responseHeaderNames": [
+    "content-encoding",
+    "content-type",
+    "date",
+    "eagleid",
+    "reporting-endpoints",
+    "server",
+    "server-timing",
+    "strict-transport-security",
+    "timing-allow-origin",
+    "vary",
+    "via",
+    "x-agw-info",
+    "x-frame-options",
+    "x-tt-agw-login",
+    "x-tt-logid",
+    "x-tt-trace-host",
+    "x-tt-trace-id",
+    "x-tt-trace-tag"
+  ],
+  "responseKeyShape": [
+    "class_list",
+    "class_list[].ClassID",
+    "class_list[].category",
+    "class_list[].category.current_sort",
+    "class_list[].category.current_sort.id",
+    "class_list[].category.current_sort.level_num",
+    "class_list[].category.current_sort.name",
+    "class_list[].category.current_sort.user_type",
+    "class_list[].category.desc",
+    "class_list[].category.sub_nodes",
+    "class_list[].category.sub_nodes[].current_sort",
+    "class_list[].category.sub_nodes[].desc",
+    "class_list[].category.sub_nodes[].sub_nodes",
+    "class_list[].display_time",
+    "class_list[].genre_type",
+    "class_list[].img_url",
+    "class_list[].item_id",
+    "class_list[].label",
+    "class_list[].schema",
+    "class_list[].statistic",
+    "class_list[].statistic.play_count",
+    "class_list[].tag",
+    "class_list[].title",
+    "class_list[].video_play_url",
+    "code",
+    "has_more",
+    "message",
+    "offset",
+    "total_count"
+  ],
+  "cookies": [],
+  "tokens": {
+    "csrf": {
+      "present": true,
+      "length": 92,
+      "sha256": "a4fc3587b4a786c9f0470adaa8b4a5bee879d5160136eaab2f998f0794846586"
+    },
+    "antiToken": {
+      "present": false,
+      "length": 0,
+      "sha256": null
+    },
+    "msToken": {
+      "present": false,
+      "length": 0,
+      "sha256": null
+    },
+    "aBogus": {
+      "present": false,
+      "length": 0,
+      "sha256": null
+    }
+  }
+}

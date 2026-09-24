@@ -18,6 +18,19 @@ class MemoryCredentialStore implements CredentialStore {
 const userAction: UserInitiatedAction = { userActionId: "11111111-1111-4111-8111-111111111111", triggerSource: "CONNECT_ACCOUNT" };
 
 describe("BrowserSessionManager credential boundary", () => {
+  it("blocks Service Workers only for an explicitly configured diagnostic platform", async () => {
+    const context = { setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => page), pages: vi.fn(() => [page]), close: vi.fn(async () => undefined) } as unknown as BrowserContext;
+    const page = { isClosed: () => false, url: () => "about:blank", context: () => context };
+    const browser = { newContext: vi.fn(async () => context), close: vi.fn(async () => undefined), isConnected: () => true } as unknown as Browser;
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), {
+      launchBrowser: vi.fn(async () => browser), blockServiceWorkersForPlatforms: ["toutiao"]
+    });
+    await manager.open({ platformKey: "toutiao", accountId: "shadow-owner" }, userAction);
+    expect(browser.newContext).toHaveBeenCalledWith({ serviceWorkers: "block" });
+    await manager.open({ platformKey: "sohu-media", accountId: "other" }, userAction);
+    expect(browser.newContext).toHaveBeenLastCalledWith({});
+  });
+
   it("restores a Toutiao ephemeral Context from the saved credential store after manager restart", async () => {
     const store = new MemoryCredentialStore();
     const identity = { platformKey: "toutiao", accountId: "restart-owner" };

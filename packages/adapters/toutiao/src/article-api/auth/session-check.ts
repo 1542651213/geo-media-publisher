@@ -19,6 +19,13 @@ export async function checkCreatorSession(bundle: ToutiaoCredentialBundle, trans
     if (response.status === 401 || response.status === 403) return { state: "INVALID", reasonCode: "AUTH_REJECTED", httpStatus: response.status };
     if (response.status >= 500) return { state: "UNKNOWN", reasonCode: "SERVER_UNKNOWN", httpStatus: response.status };
     if (response.status < 200 || response.status >= 300 || !response.body || typeof response.body !== "object") return { state: "UNKNOWN", reasonCode: "MALFORMED_RESPONSE", httpStatus: response.status };
+    if (new URL(endpoint).hostname === "mp.toutiao.com" && new URL(endpoint).pathname === "/mp/agw/media/user_login_status_api") {
+      const body = response.body as Record<string, unknown>;
+      const data = body.data && typeof body.data === "object" ? body.data as Record<string, unknown> : null;
+      if (body.code === 0 && data?.is_login === true) return { state: "VALID", reasonCode: "AUTHENTICATED", httpStatus: response.status };
+      if (body.code === 0 && data?.is_login === false) return { state: "INVALID", reasonCode: "AUTH_REJECTED", httpStatus: response.status };
+      return { state: "UNKNOWN", reasonCode: "MALFORMED_RESPONSE", httpStatus: response.status };
+    }
     const authenticated = (response.body as Record<string, unknown>).authenticated;
     if (authenticated === true) return { state: "VALID", reasonCode: "AUTHENTICATED", httpStatus: response.status };
     if (authenticated === false) return { state: "INVALID", reasonCode: "AUTH_REJECTED", httpStatus: response.status };

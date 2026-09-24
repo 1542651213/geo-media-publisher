@@ -4,6 +4,7 @@ import type { AIConnectionResult } from "@publisher/ai";
 import type { ContentQualityAuditView, ContentQualityItemView, ContentQualityReviewView, ContentQualityStateView, HumanReviewDatasetItemView, HumanReviewDatasetView, HumanReviewSubmitInput, HumanReviewItemReviewView, QualityBenchmarkContentView, QualityBenchmarkMetrics, QualityBenchmarkRunView } from "@publisher/db";
 import type { BrowserSessionRuntimeSnapshot, PreSubmitGateResult } from "@publisher/adapters-core";
 import type { ToutiaoActivationResult, ToutiaoSessionStatus } from "../main/toutiao-session-activation";
+import type { ToutiaoLiveShadowResult } from "@publisher/adapters-toutiao/article-api";
 import type { ContentGoal, ContentIntent, ContentQualityStatus, PromotionStrength, SearchIntent } from "@publisher/domain";
 
 export interface BatchGenerationInput {
@@ -171,6 +172,7 @@ export interface ManagedVideoAsset extends VideoAsset {
 }
 
 export interface PublisherApi {
+  toutiaoDiagnostics: { protocolShadow(accountId: string): Promise<ToutiaoLiveShadowResult> };
   dashboard: { get(): Promise<DashboardStats> };
   videoAssets: {
     list(filters?: { brandId?: string }): Promise<ManagedVideoAsset[]>;

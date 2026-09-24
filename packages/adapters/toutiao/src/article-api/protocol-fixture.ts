@@ -2,6 +2,7 @@ import type { SafeToutiaoProtocolObservation } from "./protocol-shadow";
 
 const FIXTURE_KEYS = ["source", "secretsRedacted", "capturedAt", "platform", "host", "endpointPath", "method", "status",
   "responseShapeVersion", "queryParameterNames", "requestHeaderNames", "responseHeaderNames", "responseKeyShape", "cookies", "tokens"] as const;
+const TOKEN_POST_KEYS = [...FIXTURE_KEYS, "requestBodyKeyNames", "requestBodySha256"] as const;
 const COOKIE_KEYS = ["name", "domain", "path", "secure", "httpOnly", "sameSite"] as const;
 const TOKEN_KEYS = ["present", "length", "sha256"] as const;
 const TOKEN_NAMES = ["csrf", "antiToken", "msToken", "aBogus"] as const;
@@ -24,13 +25,15 @@ export function protocolShadowEnabled(env: Readonly<Record<string, string | unde
 export function assertSafeProtocolFixture(value: unknown): SafeToutiaoProtocolObservation {
   const item = object(value);
   const simpleName = /^[a-zA-Z_$][\w$-]{0,79}$/u;
-  const shapeName = /^[a-zA-Z_$][\w$-]*(?:\[\])?(?:\.[a-zA-Z_$][\w$-]*(?:\[\])?)*$/u;
-  if (!item || !exactly(item, FIXTURE_KEYS) || !["MOCK_FIXTURE", "AUTHORIZED_SHADOW_CAPTURE"].includes(String(item.source))
+  const shapeName = /^[a-zA-Z_$][\w$-]*(?:\[\])*(?:\.[a-zA-Z_$][\w$-]*(?:\[\])*)*$/u;
+  const tokenPost = item?.method === "POST" && item.host === "mssdk.bytedance.com"
+    && ["/web/r/token", "/web/common"].includes(String(item.endpointPath));
+  if (!item || !exactly(item, tokenPost ? TOKEN_POST_KEYS : FIXTURE_KEYS) || !["MOCK_FIXTURE", "AUTHORIZED_SHADOW_CAPTURE"].includes(String(item.source))
     || item.secretsRedacted !== true || item.platform !== "toutiao" || typeof item.capturedAt !== "string"
     || !Number.isFinite(Date.parse(item.capturedAt)) || !["mp.toutiao.com", "mssdk.bytedance.com"].includes(String(item.host))
     || typeof item.endpointPath !== "string" || !/^\/(?:[a-zA-Z_][\w.-]{0,63}\/)*[a-zA-Z_][\w.-]{0,63}\/?$/u.test(item.endpointPath)
-    || /\/(?:article\/(?:new|publish|save)|draft|upload|delete|create)(?:\/|$)/iu.test(item.endpointPath)
-    || !["GET", "OPTIONS"].includes(String(item.method)) || !Number.isInteger(item.status) || Number(item.status) < 100 || Number(item.status) > 599
+    || /\/(?:article\/new|draft|upload|delete|create|save|update|publish|schedule)(?:\/|$)/iu.test(item.endpointPath)
+    || (!["GET", "OPTIONS"].includes(String(item.method)) && !tokenPost) || !Number.isInteger(item.status) || Number(item.status) < 100 || Number(item.status) > 599
     || typeof item.responseShapeVersion !== "string" || !simpleName.test(item.responseShapeVersion)
     || !safeNames(item.queryParameterNames, simpleName) || !safeNames(item.requestHeaderNames, simpleName)
     || !safeNames(item.responseHeaderNames, simpleName) || !safeNames(item.responseKeyShape, shapeName)
@@ -52,5 +55,7 @@ export function assertSafeProtocolFixture(value: unknown): SafeToutiaoProtocolOb
       || (token.present && (Number(token.length) === 0 || typeof token.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(token.sha256)))
       || (!token.present && (token.length !== 0 || token.sha256 !== null))) throw new Error("UNSAFE_TOUTIAO_PROTOCOL_FIXTURE");
   }
+  if (tokenPost && (!safeNames(item.requestBodyKeyNames, simpleName)
+    || (item.requestBodySha256 !== null && (typeof item.requestBodySha256 !== "string" || !/^[a-f0-9]{64}$/u.test(item.requestBodySha256))))) throw new Error("UNSAFE_TOUTIAO_PROTOCOL_FIXTURE");
   return item as unknown as SafeToutiaoProtocolObservation;
 }

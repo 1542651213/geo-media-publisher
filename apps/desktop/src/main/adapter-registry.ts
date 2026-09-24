@@ -43,6 +43,7 @@ export function createRuntimeAdapterRegistry(credentials: CredentialStore, inclu
     onSessionLifecycle: onBrowserSessionLifecycle,
     onOperationPageLifecycle,
     browserProfileRootDir,
+    blockServiceWorkersForPlatforms: process.env.TOUTIAO_PROTOCOL_SHADOW_ENABLED === "true" ? ["toutiao"] : [],
     persistentProfilePlatforms: ["xiaohongshu"],
     persistentProfileCredentialSnapshotPlatforms: [],
     platformPolicies: {
