@@ -5,6 +5,7 @@ import type { ContentQualityAuditView, ContentQualityItemView, ContentQualityRev
 import type { BrowserSessionRuntimeSnapshot, PreSubmitGateResult } from "@publisher/adapters-core";
 import type { ToutiaoActivationResult, ToutiaoSessionStatus } from "../main/toutiao-session-activation";
 import type { ToutiaoLiveShadowResult, ControlledPublishCaptureResult } from "@publisher/adapters-toutiao/article-api";
+import type { CapturedOneShotResult } from "../main/toutiao-captured-request-one-shot";
 import type { ContentGoal, ContentIntent, ContentQualityStatus, PromotionStrength, SearchIntent } from "@publisher/domain";
 
 export interface BatchGenerationInput {
@@ -173,7 +174,8 @@ export interface ManagedVideoAsset extends VideoAsset {
 
 export interface PublisherApi {
   toutiaoDiagnostics: { protocolShadow(accountId: string, mode?: "HOME" | "EDITOR" | "SIGNER_CONTRACT" | "SIGNER_INPUT" | "BRIDGE" | "CONTROLLED_ARTICLE_NEW"): Promise<ToutiaoLiveShadowResult>;
-    publishRequestCapture(accountId: string): Promise<ControlledPublishCaptureResult> };
+    publishRequestCapture(accountId: string): Promise<ControlledPublishCaptureResult>;
+    oneShotCapturedReplay(accountId: string, jobId: string): Promise<CapturedOneShotResult> };
   dashboard: { get(): Promise<DashboardStats> };
   videoAssets: {
     list(filters?: { brandId?: string }): Promise<ManagedVideoAsset[]>;

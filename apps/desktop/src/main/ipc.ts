@@ -12,7 +12,7 @@ import type { AccountDisconnectResult, BatchGenerationInput, ContentStudioGenera
 import { AIProviderError, DeepSeekErrorMapper, DeepSeekProvider, FallbackAIProvider, MockAIProvider, OpenAICompatibleProvider, contentHash, type AIConnectionDiagnostic, type AIConnectionResult, type AIProvider } from "@publisher/ai";
 import { MockImageProvider, OpenAICompatibleImageProvider, persistGeneratedImage, type ImageProvider } from "@publisher/image";
 import { exportLogBundle } from "@publisher/logger";
-import { CredentialDecryptError, type CredentialStatus, type CredentialStore } from "@publisher/security";
+import { CredentialDecryptError, SafeStorageCredentialStore, type CredentialStatus, type CredentialStore } from "@publisher/security";
 import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STUDIO_PLATFORM_KEYS, EXCEL_ADVANCED_ARTICLE_HEADERS, EXCEL_SIMPLE_ARTICLE_HEADERS, PROMOTION_STRENGTHS, SEARCH_INTENTS, checkGeneratedArticleQuality, selectRelevantBrandFacts, type AccountContext, type AccountProfile, type AccountStatus, type AIUsage, type CredentialField, type ContentStudioPlatformKey, type ExcelImportPreview, type ImageAsset } from "@publisher/domain";
 import { BrowserRuntimeError, assertExternalLaunchAllowed, browserSessionCredentialKey, browserSessionIdHash, isAutomationAdapter, type AdapterRegistry, type AutomationAdapter, type ExternalLaunchTriggerSource, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
@@ -23,7 +23,9 @@ import { runQualityGate, runQualityGateForArticle, runQualityGateForVariant } fr
 import { runQualityBenchmark } from "./quality-benchmark";
 import { OAuthSessionManager } from "./oauth-session-manager";
 import { ToutiaoSessionActivation } from "./toutiao-session-activation";
-import { claimControlledArticleNewCapture, claimControlledPublishRequestCapture } from "./toutiao-article-new-once";
+import { claimControlledArticleNewCapture, claimControlledPublishRequestCapture, claimMvp5OneShotCapture } from "./toutiao-article-new-once";
+import { ToutiaoCapturedRequestOneShot } from "./toutiao-captured-request-one-shot";
+import { ToutiaoCredentialBundleService } from "@publisher/adapters-toutiao/article-api";
 import { writeAdvancedExcelTemplate, writeSimpleExcelTemplate } from "./excel-templates";
 import { buildExcelImportErrorReportCsv, readExcelArticleFile } from "./excel-import";
 import { PlatformSelfTestService } from "./platform-self-test";
@@ -578,6 +580,31 @@ export function registerIpc(deps: IpcDependencies): void {
     if (!(adapter instanceof ToutiaoArticleBrowserAdapter)) throw new Error("TOUTIAO_CAPTURE_BROWSER_ADAPTER_REQUIRED");
     claimControlledPublishRequestCapture(dataDirectory);
     return adapter.runGuardedPublishRequestCapture(accountContext(input.accountId, "toutiao"));
+  });
+  register("toutiao:mvp5-one-shot", async (_event, payload) => {
+    if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true" || !protocolShadowEnabled(process.env))
+      throw new Error("TOUTIAO_MVP5_ONE_SHOT_DISABLED");
+    const input = z.object({ accountId: idSchema, jobId: idSchema }).parse(payload);
+    const job = repository.getJob(input.jobId);
+    if (!job || job.accountId !== input.accountId || job.platformKey !== "toutiao")
+      throw new Error("TOUTIAO_MVP5_JOB_ACCOUNT_MISMATCH");
+    const adapter = registry.getForConnection("toutiao");
+    if (!(adapter instanceof ToutiaoArticleBrowserAdapter) || !(credentials instanceof SafeStorageCredentialStore))
+      throw new Error("TOUTIAO_MVP5_RUNTIME_UNAVAILABLE");
+    const sessionBound = (accountId: string): boolean => {
+      const status = toutiaoSessionActivation.status(accountId);
+      return status.accountId === accountId && status.storedAuthorization === "AUTHORIZED_SAVED"
+        && status.runtimeState === "ACTIVE" && status.sessionExists && status.contextExists
+        && status.canonicalPageExists && status.contextOwnsPage && status.pageAlive && status.pageHost === "mp.toutiao.com";
+    };
+    const service = new ToutiaoCapturedRequestOneShot(repository,
+      new ToutiaoCredentialBundleService(credentials, repository), undefined, undefined, sessionBound,
+      async (accountId) => {
+        if (accountId !== input.accountId || !sessionBound(accountId)) throw new Error("TOUTIAO_MVP5_SESSION_CHANGED");
+        return adapter.snapshotOwnedCreatorCookies(accountContext(accountId, "toutiao"));
+      });
+    return service.captureAndSubmit(input.jobId, accountContext(input.accountId, "toutiao"), adapter,
+      () => { claimMvp5OneShotCapture(dataDirectory); });
   });
   register("accounts:pre-submit-gate", async (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);

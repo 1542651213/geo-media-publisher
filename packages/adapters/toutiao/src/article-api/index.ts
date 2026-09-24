@@ -29,3 +29,5 @@ export { assertSafeProtocolFixture, protocolShadowEnabled } from "./protocol-fix
 export { classifyShadowRequest, runReadOnlyToutiaoProtocolShadow } from "./protocol-live-shadow";
 export type { ToutiaoLiveShadowResult } from "./protocol-live-shadow";
 export type { ControlledPublishCaptureResult } from "./protocol-publish-capture";
+export { CapturedRequestReplay, captureAbortedPublishRequest, nodeFetchReplayTransport, MAX_CAPTURE_TO_SEND_DELAY_MS } from "./captured-request-replay";
+export type { AbortedPublishRequest, CapturedPublishRequestEvidence, ReplayResponseEvidence, ReplayTransport } from "./captured-request-replay";

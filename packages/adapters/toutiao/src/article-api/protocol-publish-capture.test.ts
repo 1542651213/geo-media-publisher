@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BrowserContext, Page, Request, Response, Route } from "playwright-core";
 import { createControlledPublishCaptureGuard, runControlledToutiaoPublishCapture } from "./protocol-publish-capture";
+import type { AbortedPublishRequest } from "./captured-request-replay";
 
 function request(method: string, url: string, body: string | null = null): Request {
   return { method: () => method, url: () => url,
     headers: () => ({ cookie: "cookie-secret", "content-type": "application/x-www-form-urlencoded", "x-secsdk-csrf-token": "token-secret" }),
+    allHeaders: async () => ({ cookie: "cookie-secret", "content-type": "application/x-www-form-urlencoded", "x-secsdk-csrf-token": "token-secret" }),
     postDataBuffer: () => body === null ? null : Buffer.from(body) } as unknown as Request;
 }
 
@@ -15,6 +17,25 @@ function routeFor(item: Request): { route: Route; continued: ReturnType<typeof v
 }
 
 describe("controlled publish request capture guard", () => {
+  it("hands raw material to Main memory only after browser abort succeeds", async () => {
+    const captures: AbortedPublishRequest[] = [];
+    const guard = createControlledPublishCaptureGuard(undefined, (captured) => { captures.push(captured); });
+    const publish = routeFor(request("POST", "https://mp.toutiao.com/mp/agw/article/publish?a_bogus=fake-signature",
+      "title=fixture&content=fixture"));
+    await guard.handle(publish.route);
+    expect(captures).toHaveLength(1);
+    expect(captures[0]?.requestHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(JSON.stringify(captures[0])).not.toMatch(/fake-signature|cookie-secret|token-secret|fixture/u);
+    expect(publish.aborted).toHaveBeenCalledOnce();
+
+    const failedAbort = routeFor(request("POST", "https://mp.toutiao.com/mp/agw/article/publish?a_bogus=fake-signature",
+      "title=fixture&content=fixture"));
+    vi.mocked(failedAbort.aborted).mockRejectedValueOnce(new Error("failed"));
+    let leaked: AbortedPublishRequest | null = null;
+    const failingGuard = createControlledPublishCaptureGuard(undefined, (captured) => { leaked = captured; });
+    await expect(failingGuard.handle(failedAbort.route)).rejects.toThrow("TOUTIAO_CAPTURE_GUARD_ABORT_FAILED");
+    expect(leaked).toBeNull();
+  });
   it("captures only the final publish request shape and aborts before dispatch", async () => {
     const guard = createControlledPublishCaptureGuard();
     const publish = routeFor(request("POST", "https://mp.toutiao.com/mp/agw/article/publish?a_bogus=signature-secret",

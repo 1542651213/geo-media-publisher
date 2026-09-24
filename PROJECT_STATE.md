@@ -1,5 +1,11 @@
 # Project State
 
+## Toutiao MVP-5 captured request replay foundation — 2026-09-25
+
+- An experimental, default-disabled Main-only path captures the browser-generated `article/publish` request after a context-wide guard aborts it, and can hand the exact URL, headers and body bytes to one Node transport call. The raw request stays in Main memory; persisted evidence contains hashes and field names only.
+- The path requires a frozen existing Job, matching Article content, an active account-owned BrowserSession, an R1-C SafeStorage Credential Bundle whose version and login generation match SQLite metadata, and current Browser cookies matching the captured request. It uses the global publish gate and durably claims the R1-A final-submit count before Node transport. Timeout or lost response enters reconciliation and cannot be replayed.
+- The production account currently lacks Toutiao Credential Bundle metadata, so the real one-shot attempt is blocked before browser capture or Node POST. No real publish was attempted. Existing Toutiao Browser reconciliation does not yet prove a unique article in the management list or public URL, so the experimental path stops at `SUBMIT_ACCEPTED` pending confirmation even on a successful mock response. The ordinary Article API adapter remains disabled by default.
+
 ## Toutiao MVP-3 acrawler runtime discovery — 2026-09-24
 
 - 仅在隔离 worktree 和 Owner 已保存授权的应用 BrowserContext 中运行只读 EDITOR Shadow。Canonical Session 在探测前后均为 ACTIVE，编辑器加载 38 个脚本。Guard 在发送前阻断 1 次 `GET /mp/agw/article/new` 与 39 次未知 POST；没有内容写请求、草稿、上传或 Final Submit 被放行。

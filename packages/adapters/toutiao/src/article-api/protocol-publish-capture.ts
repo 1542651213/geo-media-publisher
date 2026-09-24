@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { BrowserContext, Page, Request, Response, Route } from "playwright-core";
 import { classifyCreatorSessionBody, classifyShadowRequest, isSafeCreatorHomePath, readBoundedResponseJson, TOUTIAO_GUARDED_EDITOR_URL } from "./protocol-live-shadow";
 import { protocolKeyShape, safeProtocolName } from "./protocol-shadow";
+import { captureAbortedPublishRequest, type AbortedPublishRequest } from "./captured-request-replay";
 
 export interface SafeBlockedPublishRequest {
   readonly method: string;
@@ -78,7 +79,7 @@ function safeBlockedPublishRequest(request: Request): SafeBlockedPublishRequest 
 }
 
 /** The only permitted content endpoint is one exact article/new GET. Publish is captured and aborted. */
-export function createControlledPublishCaptureGuard(onPublishAttempt?: () => void): {
+export function createControlledPublishCaptureGuard(onPublishAttempt?: () => void, onAbortedPublish?: (request: AbortedPublishRequest) => void): {
   handle(route: Route): Promise<void>;
   evidence(): ControlledPublishGuardEvidence;
 } {
@@ -107,17 +108,30 @@ export function createControlledPublishCaptureGuard(onPublishAttempt?: () => voi
       else if (decision === "DENY_CONTENT_MUTATION") blockedContentMutationCount += 1;
       else blockedUnknownMutationCount += 1;
       const isPublish = exactPath(request.method(), request.url(), "/mp/agw/article/publish") !== null;
+      let secretMaterial: { method: string; url: string; headers: Record<string, string>; body: Buffer } | null = null;
       if (isPublish) {
         publishAttemptCount += 1;
         if (publishRequest === null) {
           try { publishRequest = safeBlockedPublishRequest(request); }
           catch { /* Even a malformed body must be aborted. */ }
         }
-        onPublishAttempt?.();
+        if (onAbortedPublish && publishAttemptCount === 1) {
+          try {
+            const bytes = request.postDataBuffer();
+            if (bytes) secretMaterial = { method: request.method(), url: request.url(), headers: await request.allHeaders(), body: Buffer.from(bytes) };
+          } catch { /* Missing capture material fails closed after abort. */ }
+        }
       }
       try {
         await route.abort("blockedbyclient");
-        if (isPublish) blockedPublishCount += 1;
+        if (isPublish) {
+          blockedPublishCount += 1;
+          try { onPublishAttempt?.(); } catch { /* Observer failures must not alter the abort decision. */ }
+          if (secretMaterial && onAbortedPublish) {
+            try { onAbortedPublish(captureAbortedPublishRequest(secretMaterial, Date.now())); }
+            catch { /* The browser request stays blocked even if material is unusable. */ }
+          }
+        }
       } catch {
         guardAbortFailed = true;
         throw new Error("TOUTIAO_CAPTURE_GUARD_ABORT_FAILED");
@@ -149,7 +163,8 @@ export interface ControlledPublishCaptureResult {
 /** Diagnostic only. Installs the account-context guard before any page action. */
 export async function runControlledToutiaoPublishCapture(
   context: BrowserContext, canonicalPage: Page,
-  action: (editorPage: Page, marks: ControlledPublishMarks) => Promise<void>
+  action: (editorPage: Page, marks: ControlledPublishMarks) => Promise<void>,
+  onAbortedPublish?: (request: AbortedPublishRequest) => void
 ): Promise<ControlledPublishCaptureResult> {
   const location = (page: Page): URL | null => { try { return new URL(page.url()); } catch { return null; } };
   const home = location(canonicalPage);
@@ -157,7 +172,7 @@ export async function runControlledToutiaoPublishCapture(
     || !isSafeCreatorHomePath(home.pathname)) throw new Error("TOUTIAO_CAPTURE_SESSION_UNAVAILABLE");
   if (context.serviceWorkers().length > 0) throw new Error("TOUTIAO_CAPTURE_SERVICE_WORKER_UNGUARDED");
 
-  const guard = createControlledPublishCaptureGuard();
+  const guard = createControlledPublishCaptureGuard(undefined, onAbortedPublish);
   const pending = new Set<Promise<void>>();
   const auth: { state: "VALID" | "INVALID" | "UNKNOWN" } = { state: "UNKNOWN" };
   let articleNewResponseStatus: number | null = null;

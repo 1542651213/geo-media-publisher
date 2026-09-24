@@ -4,6 +4,7 @@ import type { AppRepository } from "@publisher/db";
 import { canReuseArticle, decideFailure, validatePlatformArticle, type Account, type AdapterManifest, type ErrorCode, type PlatformCapability, type PublishJob, type PublishMode, type PublishResult, type PublishVideoInput } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
 import { GlobalPublishExecutionGate } from "./global-publish-execution-gate";
+export { GlobalPublishExecutionGate } from "./global-publish-execution-gate";
 
 export interface PublishExecutionResult { job: PublishJob; message: string; }
 export interface AssistedPrepareResult { job: PublishJob; record: ReturnType<AppRepository["getPublishRecordByJob"]>; message: string; }

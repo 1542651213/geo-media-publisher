@@ -38,3 +38,22 @@ export function claimControlledPublishRequestCapture(dataDirectory: string): str
   } finally { closeSync(descriptor); }
   return path;
 }
+
+/** Task-wide claim before the MVP5 editor click. Never delete this file to obtain another attempt. */
+export function claimMvp5OneShotCapture(dataDirectory: string): string {
+  const directory = join(dataDirectory, "diagnostics");
+  mkdirSync(directory, { recursive: true });
+  const path = join(directory, "toutiao-mvp-5-one-shot.claim");
+  let descriptor: number;
+  try { descriptor = openSync(path, "wx", 0o600); }
+  catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "EEXIST")
+      throw new Error("TOUTIAO_MVP5_ALREADY_CLAIMED");
+    throw new Error("TOUTIAO_MVP5_CLAIM_FAILED");
+  }
+  try {
+    writeSync(descriptor, JSON.stringify({ task: "TOUTIAO_MVP_5_CAPTURE_REPLAY_ONE_SHOT_REAL_PUBLISH", claimedAt: new Date().toISOString() }));
+    fsyncSync(descriptor);
+  } finally { closeSync(descriptor); }
+  return path;
+}
