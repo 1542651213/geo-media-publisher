@@ -63,6 +63,15 @@ describe("Toutiao BrowserSession activation", () => {
     expect(h.activation.status("a")).toMatchObject({ runtimeState: "ACTIVE", pageHost: "mp.toutiao.com" });
   });
 
+  it("accepts the observed Creator dashboard landing without accepting a login page", async () => {
+    const h = harness();
+    h.states.set("a", { ...snapshot("a", true, "mp.toutiao.com"), canonicalPagePath: "/profile_v4/index" });
+    expect(h.activation.status("a")).toMatchObject({ runtimeState: "ACTIVE", contextOwnsPage: true });
+    expect((await h.activation.activate("a")).outcome).toBe("ACTIVE_REUSED");
+    h.states.set("a", { ...snapshot("a", true, "mp.toutiao.com"), canonicalPagePath: "/profile_v4/login" });
+    expect(h.activation.status("a").runtimeState).toBe("DISCONNECTED");
+  });
+
   it("opens the normal Owner login flow when no saved session exists", async () => {
     const h = harness(); h.stored.delete("a");
     expect((await h.activation.activate("a")).outcome).toBe("OWNER_LOGIN_REQUIRED");

@@ -155,7 +155,7 @@ export function registerIpc(deps: IpcDependencies): void {
       if (!isAutomationAdapter(adapter) || !adapter.closeRuntimeSession) throw new Error("TOUTIAO_BROWSER_RUNTIME_UNAVAILABLE");
       await adapter.closeRuntimeSession(accountContext(accountId, "toutiao"));
     },
-    onHeartbeat: (status) => logger.info("ACCOUNT", "TOUTIAO_RUNTIME_HEARTBEAT", "头条 BrowserSession 运行时心跳", { accountId: status.accountId, sessionExists: status.sessionExists, contextExists: status.contextExists, canonicalPageExists: status.canonicalPageExists, pageAlive: status.pageAlive, pageHost: status.pageHost, runtimeState: status.runtimeState, lastHeartbeatAt: status.lastHeartbeatAt })
+    onHeartbeat: (status) => logger.info("ACCOUNT", "TOUTIAO_RUNTIME_HEARTBEAT", "头条 BrowserSession 运行时心跳", { accountId: status.accountId, sessionExists: status.sessionExists, contextExists: status.contextExists, canonicalPageExists: status.canonicalPageExists, contextOwnsPage: status.contextOwnsPage, pageAlive: status.pageAlive, pageHost: status.pageHost, runtimeState: status.runtimeState, lastHeartbeatAt: status.lastHeartbeatAt })
   });
   const platformSelfTests = new PlatformSelfTestService({ repository, registry, publisher, resolveAccountSecrets, logger });
   const validateVideoAsset = async (assetId: string, platformKey: string): Promise<{ asset: NonNullable<ReturnType<AppRepository["getManagedVideoAsset"]>>; validation: { valid: boolean; errors: string[]; warnings: string[] } }> => {
@@ -543,7 +543,7 @@ export function registerIpc(deps: IpcDependencies): void {
   register("accounts:activate-session", async (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: z.literal("toutiao") }).parse(payload);
     const result = await toutiaoSessionActivation.activate(input.accountId);
-    logger.info("ACCOUNT", "TOUTIAO_SESSION_ACTIVATION", "头条账号 BrowserSession 激活结果", { accountId: input.accountId, outcome: result.outcome, runtimeState: result.runtimeState, reasonCode: result.reasonCode, sessionExists: result.sessionExists, contextExists: result.contextExists, canonicalPageExists: result.canonicalPageExists, pageAlive: result.pageAlive, pageHost: result.pageHost, lastHeartbeatAt: result.lastHeartbeatAt });
+    logger.info("ACCOUNT", "TOUTIAO_SESSION_ACTIVATION", "头条账号 BrowserSession 激活结果", { accountId: input.accountId, outcome: result.outcome, runtimeState: result.runtimeState, reasonCode: result.reasonCode, sessionExists: result.sessionExists, contextExists: result.contextExists, canonicalPageExists: result.canonicalPageExists, contextOwnsPage: result.contextOwnsPage, pageAlive: result.pageAlive, pageHost: result.pageHost, lastHeartbeatAt: result.lastHeartbeatAt });
     return result;
   });
   register("accounts:close-runtime-session", async (_event, payload) => {

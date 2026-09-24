@@ -31,6 +31,7 @@ export interface ToutiaoSessionStatus {
   sessionExists: boolean;
   contextExists: boolean;
   canonicalPageExists: boolean;
+  contextOwnsPage: boolean;
   pageAlive: boolean;
   pageHost: string | null;
   lastHeartbeatAt: string;
@@ -42,6 +43,7 @@ export interface ToutiaoActivationResult extends ToutiaoSessionStatus {
 }
 
 function creatorHost(host: string | null): boolean { return host === "mp.toutiao.com"; }
+const CREATOR_LANDING_PATHS = new Set(["/", "/profile_v4/index"]);
 function hostOf(url: string): string | null {
   try { return new URL(url).hostname.toLowerCase(); } catch { return null; }
 }
@@ -49,7 +51,7 @@ function healthy(snapshot: ToutiaoSessionSnapshot): boolean {
   return snapshot.platformKey === "toutiao" && snapshot.sessionExists && snapshot.contextExists
     && snapshot.canonicalPageExists && snapshot.canonicalPageClosed === false
     && snapshot.canonicalPageContextMatchesSession === true && snapshot.browserConnected === true
-    && creatorHost(snapshot.canonicalPageHost) && snapshot.canonicalPagePath === "/";
+    && creatorHost(snapshot.canonicalPageHost) && CREATOR_LANDING_PATHS.has(snapshot.canonicalPagePath ?? "");
 }
 
 export class ToutiaoSessionActivation {
@@ -71,6 +73,7 @@ export class ToutiaoSessionActivation {
       sessionExists: snapshot.sessionExists,
       contextExists: snapshot.contextExists,
       canonicalPageExists: snapshot.canonicalPageExists && snapshot.canonicalPageClosed === false,
+      contextOwnsPage: snapshot.canonicalPageContextMatchesSession === true,
       pageAlive: snapshot.canonicalPageExists && snapshot.canonicalPageClosed === false && snapshot.browserConnected === true,
       pageHost: snapshot.canonicalPageHost,
       lastHeartbeatAt: new Date().toISOString()
