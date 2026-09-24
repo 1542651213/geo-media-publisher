@@ -23,3 +23,6 @@ export { UnverifiedAbogusAlgorithm } from "./signer/abogus";
 export type { ToutiaoArticleSigner, ToutiaoSignerInput, ToutiaoSignerResult, ToutiaoAbogusAlgorithm } from "./signer";
 export { toutiaoAuthSignerEvidence } from "./evidence";
 export type { ToutiaoAuthSignerEvidence } from "./evidence";
+export { captureSafeProtocolObservation, describeShadowReadiness, UNVERIFIED_TOUTIAO_PROTOCOL_PROFILE } from "./protocol-shadow";
+export type { ToutiaoProtocolProfile, SafeToutiaoProtocolObservation, RawToutiaoShadowObservation, ToutiaoTokenRequirement, ToutiaoTokenLifetime } from "./protocol-shadow";
+export { assertSafeProtocolFixture, protocolShadowEnabled } from "./protocol-fixture";

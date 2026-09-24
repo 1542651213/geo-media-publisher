@@ -44,7 +44,8 @@ describe("Toutiao R1-C durable non-secret bindings", () => {
     const final = buildToutiaoFinalPayload(prepared.payload, prepared.contentBindingHash, []);
     expect(final.state).toBe("FINAL_PAYLOAD_READY");
     if (final.state !== "FINAL_PAYLOAD_READY") return;
-    const signer = new BoundToutiaoArticleSigner({ version: "offline-fixture-v1", compute: async (canonical) => createHash("sha256").update(`fixture-signature:${canonical}`).digest("hex") });
+    const signer = new BoundToutiaoArticleSigner({ version: "offline-fixture-v1", compute: async (canonical) => createHash("sha256").update(`fixture-signature:${canonical}`).digest("hex") },
+      { accountId: account.id, finalPayloadHash: final.finalPayloadHash, credentialBundleVersion: credential.version, loginGeneration: credential.loginGeneration }, ["csrf", "antiToken", "msToken"]);
     const signed = await signer.sign({ finalPayload: final.payload, finalPayloadHash: final.finalPayloadHash, credentialBundleVersion: credential.version,
       loginGeneration: credential.loginGeneration, tokenMaterial: { csrf: "csrf-secret", antiToken: "anti-secret", msToken: "ms-secret" }, requestMetadata: { method: "POST" } });
     repo.bindToutiaoFinalPayloadForFutureSubmit({ jobId: job.id, intentId: intent.id, accountId: account.id, contentBindingHash: prepared.contentBindingHash,

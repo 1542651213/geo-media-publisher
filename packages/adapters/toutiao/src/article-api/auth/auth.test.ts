@@ -23,13 +23,13 @@ afterEach(() => { for (const db of dbs.splice(0)) if (db.open) db.close(); for (
 const cookie: ToutiaoCookie = { name: "session", value: "secret-value", domain: "mp.toutiao.com", path: "/", hostOnly: true, secure: true, expiresAt: null };
 const material: ToutiaoCredentialMaterial = { cookieMaterial: [cookie], sessionIdentity: "creator-a", csrf: null, antiToken: null, msToken: null,
   expiresAt: null, validatedAt: "2026-09-24T00:00:00.000Z", state: "VALID", source: "browser_session" };
-function fixture() {
+function fixture(storagePort: SafeStoragePort = fixtureSafeStorage) {
   const dir = mkdtempSync(join(tmpdir(), "toutiao-credentials-")); dirs.push(dir);
   const opened = openDatabase(join(dir, "app.db"), join(process.cwd(), "packages", "db", "migrations")); dbs.push(opened.db);
   opened.repository.seedDevelopment(join(process.cwd(), "PLATFORMS.csv"));
   const account = opened.repository.createAccount({ platformKey: "toutiao", name: "Offline account" });
-  const store = new SafeStorageCredentialStore(join(dir, "credentials.enc"), fixtureSafeStorage);
-  return { repo: opened.repository, account, store, service: new ToutiaoCredentialBundleService(store, opened.repository) };
+  const store = new SafeStorageCredentialStore(join(dir, "credentials.enc"), storagePort);
+  return { dir, repo: opened.repository, account, store, service: new ToutiaoCredentialBundleService(store, opened.repository) };
 }
 function bundle(): ToutiaoCredentialBundle { return { accountId: "account", version: 1, loginGeneration: 1, capturedAt: "2026-09-24T00:00:00.000Z", ...material }; }
 
@@ -64,6 +64,37 @@ describe("Toutiao credential bundle", () => {
     expect(service.read(account.id)?.version).toBe(1);
     store.set(`toutiao:article-api:credential-bundle:${account.id}`, JSON.stringify({ ...service.read(account.id), accountId: "other-account" }));
     expect(() => service.read(account.id)).toThrowError(expect.objectContaining({ code: "CREDENTIAL_BINDING_MISMATCH" }));
+  });
+
+  it("fails closed after a restart when a crash leaves the secret bundle ahead of SQLite", () => {
+    const { dir, repo, account, store, service } = fixture();
+    const first = service.update(account.id, material, "initial_login");
+    store.set(`toutiao:article-api:credential-bundle:${account.id}`, JSON.stringify({ ...first, version: 2, msToken: "new-token" }));
+    const restarted = new ToutiaoCredentialBundleService(new SafeStorageCredentialStore(join(dir, "credentials.enc"), fixtureSafeStorage), repo);
+    expect(() => restarted.read(account.id)).toThrowError(expect.objectContaining({ code: "CREDENTIAL_BINDING_MISMATCH" }));
+    expect(() => restarted.assertBound(account.id, 1, 1, "pre_submit")).toThrow();
+  });
+
+  it("fails closed after a restart when SQLite is ahead of the secret bundle", () => {
+    const { dir, repo, account, service } = fixture();
+    const first = service.update(account.id, material, "initial_login");
+    repo.updateToutiaoCredentialMetadata({ accountId: account.id, bundleVersion: 2, loginGeneration: 1, credentialState: "VALID",
+      credentialFingerprint: credentialFingerprint(first), validatedAt: first.validatedAt }, 1);
+    const restarted = new ToutiaoCredentialBundleService(new SafeStorageCredentialStore(join(dir, "credentials.enc"), fixtureSafeStorage), repo);
+    expect(() => restarted.read(account.id)).toThrowError(expect.objectContaining({ code: "CREDENTIAL_BINDING_MISMATCH" }));
+  });
+
+  it("keeps SQLite and the old encrypted bundle when encryption fails before a refresh", () => {
+    let fail = false;
+    const port: SafeStoragePort = { isEncryptionAvailable: () => true,
+      encryptString: (value) => { if (fail) throw new Error("fixture encrypt failed"); return Buffer.from(`fixture:${value}`); },
+      decryptString: (value) => value.toString("utf8").slice("fixture:".length) };
+    const { dir, repo, account, service } = fixture(port);
+    service.update(account.id, material, "initial_login");
+    fail = true;
+    expect(() => service.update(account.id, { ...material, msToken: "new-token" }, "token_refresh")).toThrow("fixture encrypt failed");
+    expect(repo.getToutiaoCredentialMetadata(account.id)?.bundleVersion).toBe(1);
+    expect(new ToutiaoCredentialBundleService(new SafeStorageCredentialStore(join(dir, "credentials.enc"), port), repo).read(account.id)?.version).toBe(1);
   });
 });
 

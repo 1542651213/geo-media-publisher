@@ -1,5 +1,14 @@
 # Project State
 
+## Toutiao R1-D offline Shadow foundation — 2026-09-24
+
+- 基线：R1-C commit `8d6c5145322dbc6fb8cbab5576053fb5cf969a27`，仅在隔离 worktree 实施。原始脏工作区未修改。
+- 对现有生产数据只读检查：唯一 Toutiao Account 的登录状态为 `expired`，且没有运行中的应用 BrowserSession。因此真实协议捕获为 `BLOCKED_NO_AUTHORIZED_SESSION`；未连接头条、mssdk 或任何发布接口。
+- 新增默认关闭的 `TOUTIAO_PROTOCOL_SHADOW_ENABLED`、不发起网络请求的结构化观察转换、严格白名单 fixture 校验和离线诊断命令。当前 fixture 全部明确标记 `MOCK_FIXTURE`；没有真实协议 fixture。
+- `ToutiaoProtocolProfile` 中认证响应、三类 Token 的必要性与生命周期、Signer 输入依赖均为 `UNKNOWN`，生产 signer 路径仍为 `BLOCKED`。Signer 现将 FinalPayloadHash、账号、Credential Bundle Version 和 Login Generation 与冻结绑定比对；Token 必需清单由调用方显式指定，不视为已验证平台规则。
+- SafeStorage 与 SQLite 并非跨存储事务。新增重启测试覆盖两侧各自领先及加密写入失败；不一致时读取和提交前绑定均 fail closed。Article API Adapter 仍在 Final Submit 之前拒绝执行。
+- 离线完整测试：107 files / 757 tests PASS；typecheck、lint PASS。下一步需由 Owner 在应用自有 BrowserSession 中正常恢复本人头条登录，再进行只读协议 Shadow。
+
 ## Toutiao R1-C auth and final binding foundation — 2026-09-24
 
 - 基线：R1-B commit `4fad1d54db0dcb8889ae837238a12a9c0b1a0e5a`；继续仅在隔离 worktree 实施，原始脏工作区未修改。

@@ -13,6 +13,7 @@
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx scripts/test-with-native.mts",
+    "toutiao:protocol-shadow": "tsx scripts/toutiao-protocol-shadow.mts",
     "test:watch": "vitest",
     "db:migrate": "tsx scripts/migrate-dev.ts",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3"
