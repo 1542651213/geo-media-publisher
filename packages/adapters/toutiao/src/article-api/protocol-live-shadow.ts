@@ -1,5 +1,5 @@
 import type { BrowserContext, Page, Request, Response, Route } from "playwright-core";
-import { captureSafeProtocolObservation, type RawToutiaoShadowObservation, type SafeToutiaoProtocolObservation } from "./protocol-shadow";
+import { captureSafeProtocolObservation, protocolKeyShape, safeProtocolName, type RawToutiaoShadowObservation, type SafeToutiaoProtocolObservation } from "./protocol-shadow";
 import { inspectProtocolScript, inspectRuntimeSdkSurface, type SafeProtocolScriptEvidence, type SafeRuntimeSdkSurface } from "./protocol-script-discovery";
 import { probeAcrCrawlerSignInPage } from "./protocol-signer-contract";
 import { probeAcrCrawlerInputContractInPage } from "./protocol-signer-input-probe";
@@ -36,6 +36,43 @@ export function classifyShadowRequest(method: string, rawUrl: string): ShadowReq
   return "DENY_UNKNOWN_MUTATION";
 }
 
+/** A diagnostic-only exception. The ordinary Shadow classifier always denies this endpoint. */
+function isExactControlledArticleNewGet(method: string, rawUrl: string): boolean {
+  try {
+    const url = new URL(rawUrl);
+    return method.toUpperCase() === "GET" && url.origin === "https://mp.toutiao.com"
+      && decodeURIComponent(url.pathname) === "/mp/agw/article/new" && !url.hash
+      && ![...url.searchParams.keys()].some((key) => /^(?:create|save|update|delete|upload|publish|schedule|draft|action|operation|op|cmd)$/iu.test(key));
+  } catch { return false; }
+}
+
+export interface SafeControlledArticleNewCapture {
+  readonly method: "GET";
+  readonly host: "mp.toutiao.com";
+  readonly endpointPath: "/mp/agw/article/new";
+  readonly status: number;
+  readonly queryParameterNames: readonly string[];
+  readonly requestHeaderNames: readonly string[];
+  readonly responseHeaderNames: readonly string[];
+  readonly requestBodyKeyNames: readonly string[];
+  readonly requestBodySha256: null;
+  readonly responseKeyShape: readonly string[];
+  readonly remoteObjectPossible: boolean;
+}
+
+function safeControlledArticleNewCapture(request: Request, status: number, requestHeaders: Record<string, string>,
+  responseHeaders: Record<string, string>, body: unknown): SafeControlledArticleNewCapture {
+  if (!isExactControlledArticleNewGet(request.method(), request.url())) throw new Error("UNSAFE_ARTICLE_NEW_CAPTURE");
+  const url = new URL(request.url());
+  const names = (headers: Record<string, string>) => [...new Set(Object.keys(headers).map((key) => safeProtocolName(key.toLowerCase())))].sort();
+  const responseKeyShape = protocolKeyShape(body);
+  return { method: "GET", host: "mp.toutiao.com", endpointPath: "/mp/agw/article/new", status,
+    queryParameterNames: [...new Set([...url.searchParams.keys()].map(safeProtocolName))].sort(),
+    requestHeaderNames: names(requestHeaders), responseHeaderNames: names(responseHeaders),
+    requestBodyKeyNames: [], requestBodySha256: null, responseKeyShape,
+    remoteObjectPossible: responseKeyShape.some((key) => /(?:^|\.)(?:pgc_id|article_id|draft_id|media_id|item_id|group_id)$/iu.test(key)) };
+}
+
 export interface ToutiaoLiveShadowResult {
   readonly status: "CAPTURED" | "SESSION_DISCONNECTED";
   readonly observations: readonly SafeToutiaoProtocolObservation[];
@@ -46,7 +83,9 @@ export interface ToutiaoLiveShadowResult {
   readonly sdkRuntime: Readonly<{ home: SafeAcrCrawlerRuntimeEvidence; editor: SafeAcrCrawlerRuntimeEvidence }> | null;
   readonly scripts: readonly SafeProtocolScriptEvidence[];
   readonly loadedScriptCount: number;
-  readonly discoveryMode: "HOME" | "EDITOR" | "SIGNER_CONTRACT" | "SIGNER_INPUT" | "BRIDGE";
+  readonly discoveryMode: "HOME" | "EDITOR" | "SIGNER_CONTRACT" | "SIGNER_INPUT" | "BRIDGE" | "CONTROLLED_ARTICLE_NEW";
+  readonly articleNewAllowedCount: number;
+  readonly articleNewCapture: SafeControlledArticleNewCapture | null;
   readonly requestBridge: Readonly<{ capture: SafeBrowserGeneratedRequestShape | null; replay: SafeReadonlyReplayResult | null }> | null;
   readonly signerContract: Awaited<ReturnType<typeof probeAcrCrawlerSignInPage>> | null;
   readonly signerInputContract: Awaited<ReturnType<typeof probeAcrCrawlerInputContractInPage>> | null;
@@ -119,7 +158,7 @@ function safePageLocation(page: Page): { host: string | null; path: string | nul
 
 /** The caller must first verify account ownership and an ACTIVE app-owned canonical Page. */
 export async function runReadOnlyToutiaoProtocolShadow(context: BrowserContext, page: Page, options: Readonly<{
-  mode?: "HOME" | "EDITOR" | "SIGNER_CONTRACT" | "SIGNER_INPUT" | "BRIDGE";
+  mode?: "HOME" | "EDITOR" | "SIGNER_CONTRACT" | "SIGNER_INPUT" | "BRIDGE" | "CONTROLLED_ARTICLE_NEW";
   replayTransport?: (url: string, init: RequestInit) => Promise<globalThis.Response>;
 }> = {}): Promise<ToutiaoLiveShadowResult> {
   const initialLocation = safePageLocation(page);
@@ -128,6 +167,13 @@ export async function runReadOnlyToutiaoProtocolShadow(context: BrowserContext, 
   // Playwright routing cannot guard traffic owned by a pre-existing Service Worker.
   if (context.serviceWorkers().length > 0) throw new Error("TOUTIAO_SHADOW_SERVICE_WORKER_UNGUARDED");
   const guarded = new WeakSet<Request>();
+  const allowedArticleNew = new WeakSet<Request>();
+  const controlledArticleNew = options.mode === "CONTROLLED_ARTICLE_NEW";
+  let articleNewArmed = false;
+  let articleNewAllowedCount = 0;
+  let articleNewCapture: SafeControlledArticleNewCapture | null = null;
+  let notifyArticleNewResponse: (() => void) | null = null;
+  const articleNewResponse = new Promise<void>((resolve) => { notifyArticleNewResponse = resolve; });
   const observations: SafeToutiaoProtocolObservation[] = [];
   const scripts: SafeProtocolScriptEvidence[] = [];
   const pending = new Set<Promise<void>>();
@@ -135,6 +181,7 @@ export async function runReadOnlyToutiaoProtocolShadow(context: BrowserContext, 
   let nonContentTelemetryCount = 0;
   let authTokenBootstrapCount = 0;
   let remoteAuthState: "VALID" | "INVALID" | "UNKNOWN" = "UNKNOWN";
+  const currentRemoteAuthState = (): "VALID" | "INVALID" | "UNKNOWN" => remoteAuthState;
   const bridgeCandidate: { value: Readonly<{ request: BrowserGeneratedReadonlyRequest; browser: Readonly<{ status: number; authState: "VALID" | "INVALID" | "UNKNOWN" }> }> | null } = { value: null };
   let blockedArticleNewCount = 0;
   let blockedContentMutationCount = 0;
@@ -145,6 +192,17 @@ export async function runReadOnlyToutiaoProtocolShadow(context: BrowserContext, 
   const guard = async (route: Route): Promise<void> => {
     const request = route.request();
     const decision = classifyShadowRequest(request.method(), request.url());
+    if (controlledArticleNew && articleNewArmed && articleNewAllowedCount === 0
+      && decision === "DENY_ARTICLE_NEW" && isExactControlledArticleNewGet(request.method(), request.url())) {
+      // Consume the one-shot permit before dispatch. A failed or timed-out request is never retried.
+      articleNewArmed = false;
+      articleNewAllowedCount = 1;
+      guarded.add(request);
+      allowedArticleNew.add(request);
+      guardedRequestCount += 1;
+      await route.continue();
+      return;
+    }
     if (signerProbeRunning && signerProbeRequestShapes.length < 40)
       signerProbeRequestShapes.push(safeRequestShape(request.method(), request.url(), decision));
     if (decision === "READ_ONLY" || decision === "NON_CONTENT_TELEMETRY" || decision === "AUTH_TOKEN_BOOTSTRAP") {
@@ -166,6 +224,8 @@ export async function runReadOnlyToutiaoProtocolShadow(context: BrowserContext, 
   const onResponse = (response: Response): void => {
     const request = response.request();
     if (!guarded.has(request)) return;
+    const isArticleNew = allowedArticleNew.has(request);
+    if (isArticleNew) notifyArticleNewResponse?.();
     if (scripts.length < 100) {
       const scriptWork = (async (): Promise<void> => {
         let url: URL;
@@ -184,6 +244,13 @@ export async function runReadOnlyToutiaoProtocolShadow(context: BrowserContext, 
     }
     if (observations.length + pending.size >= 80) return;
     const work = (async (): Promise<void> => {
+      if (isArticleNew) {
+        const requestHeaders = await request.allHeaders();
+        const responseHeaders = await response.allHeaders();
+        const responseBody = await readBoundedResponseJson(response, responseHeaders);
+        articleNewCapture = safeControlledArticleNewCapture(request, response.status(), requestHeaders, responseHeaders, responseBody);
+        return;
+      }
       const decision = classifyShadowRequest(request.method(), request.url());
       if (decision !== "READ_ONLY" && decision !== "AUTH_TOKEN_BOOTSTRAP") return;
       if (decision === "READ_ONLY" && !["GET", "OPTIONS"].includes(request.method())) return;
@@ -241,14 +308,23 @@ export async function runReadOnlyToutiaoProtocolShadow(context: BrowserContext, 
     const mode = options.mode ?? "HOME";
     const sdkRuntimeHome = mode === "EDITOR" ? await inspectAcrCrawlerRuntime(page) : null;
     let inspectedPage = page;
-    if (mode === "EDITOR" || mode === "SIGNER_CONTRACT" || mode === "SIGNER_INPUT") {
+    if (controlledArticleNew) {
+      await page.reload({ waitUntil: "domcontentloaded", timeout: 20_000 });
+      await page.waitForTimeout(1_000);
+      await Promise.allSettled([...pending]);
+      if (currentRemoteAuthState() !== "VALID") throw new Error("TOUTIAO_SHADOW_AUTH_UNVERIFIED");
+    }
+    if (mode === "EDITOR" || mode === "SIGNER_CONTRACT" || mode === "SIGNER_INPUT" || controlledArticleNew) {
       editorPage = await context.newPage();
       inspectedPage = editorPage;
+      if (controlledArticleNew) articleNewArmed = true;
       try { await editorPage.goto(TOUTIAO_GUARDED_EDITOR_URL, { waitUntil: "domcontentloaded", timeout: 20_000 }); }
       catch { /* Guarded article/new may prevent editor initialization; scripts remain observable. */ }
     } else await page.reload({ waitUntil: "domcontentloaded", timeout: 20_000 });
-    await inspectedPage.waitForTimeout(5_000);
-    if (mode === "EDITOR" || mode === "SIGNER_CONTRACT" || mode === "SIGNER_INPUT") {
+    if (controlledArticleNew) await Promise.race([articleNewResponse, inspectedPage.waitForTimeout(5_000)]);
+    else await inspectedPage.waitForTimeout(5_000);
+    articleNewArmed = false;
+    if (mode === "EDITOR" || mode === "SIGNER_CONTRACT" || mode === "SIGNER_INPUT" || controlledArticleNew) {
       const editorLocation = safePageLocation(inspectedPage);
       if (editorLocation.host !== "mp.toutiao.com" || editorLocation.path !== "/profile_v4/graphic/publish")
         throw new Error("TOUTIAO_SHADOW_EDITOR_ROUTE_UNAVAILABLE");
@@ -298,6 +374,7 @@ export async function runReadOnlyToutiaoProtocolShadow(context: BrowserContext, 
     return { status: page.isClosed() || location.host !== "mp.toutiao.com" || !isSafeCreatorHomePath(location.path ?? "") ? "SESSION_DISCONNECTED" : "CAPTURED",
       observations, cookieMetadata, signerGlobals, runtimeGlobals, runtimeSdkSurfaces, sdkRuntime, scripts, loadedScriptCount, discoveryMode: mode,
       requestBridge, signerContract, signerInputContract, signerProbeNetworkRequestDelta, signerProbeCookieMetadataChanged, signerProbeRequestShapes,
+      articleNewAllowedCount, articleNewCapture,
       pageHost: location.host, pagePath: location.path,
       guardedRequestCount, nonContentTelemetryCount, authTokenBootstrapCount, remoteAuthState,
       blockedArticleNewCount, blockedContentMutationCount, blockedUnknownMutationCount, blockedRequestShapes };

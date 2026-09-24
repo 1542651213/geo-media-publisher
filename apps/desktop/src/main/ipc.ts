@@ -23,6 +23,7 @@ import { runQualityGate, runQualityGateForArticle, runQualityGateForVariant } fr
 import { runQualityBenchmark } from "./quality-benchmark";
 import { OAuthSessionManager } from "./oauth-session-manager";
 import { ToutiaoSessionActivation } from "./toutiao-session-activation";
+import { claimControlledArticleNewCapture } from "./toutiao-article-new-once";
 import { writeAdvancedExcelTemplate, writeSimpleExcelTemplate } from "./excel-templates";
 import { buildExcelImportErrorReportCsv, readExcelArticleFile } from "./excel-import";
 import { PlatformSelfTestService } from "./platform-self-test";
@@ -554,11 +555,15 @@ export function registerIpc(deps: IpcDependencies): void {
   });
   register("toutiao:protocol-shadow", async (_event, payload) => {
     if (!protocolShadowEnabled(process.env)) throw new Error("TOUTIAO_PROTOCOL_SHADOW_DISABLED");
-    const input = z.object({ accountId: idSchema, mode: z.enum(["HOME", "EDITOR", "SIGNER_CONTRACT", "SIGNER_INPUT", "BRIDGE"]).optional() }).parse(payload);
+    const input = z.object({ accountId: idSchema, mode: z.enum(["HOME", "EDITOR", "SIGNER_CONTRACT", "SIGNER_INPUT", "BRIDGE", "CONTROLLED_ARTICLE_NEW"]).optional() }).parse(payload);
     const status = toutiaoSessionActivation.status(input.accountId);
     if (status.storedAuthorization !== "AUTHORIZED_SAVED" || status.runtimeState !== "ACTIVE") throw new Error("TOUTIAO_SHADOW_SESSION_UNAVAILABLE");
     const adapter = registry.getForConnection("toutiao");
     if (!(adapter instanceof ToutiaoArticleBrowserAdapter)) throw new Error("TOUTIAO_SHADOW_BROWSER_ADAPTER_REQUIRED");
+    if (input.mode === "CONTROLLED_ARTICLE_NEW") {
+      if (process.env.TOUTIAO_ARTICLE_NEW_CAPTURE_ENABLED !== "true") throw new Error("TOUTIAO_ARTICLE_NEW_CAPTURE_DISABLED");
+      claimControlledArticleNewCapture(dataDirectory);
+    }
     return adapter.runReadOnlyProtocolShadow(accountContext(input.accountId, "toutiao"), input.mode);
   });
   register("accounts:pre-submit-gate", async (_event, payload) => {

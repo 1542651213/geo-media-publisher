@@ -72,18 +72,18 @@ export interface SafeToutiaoProtocolObservation {
   readonly requestBodySha256?: string | null;
 }
 
-function safeName(name: string): string {
+export function safeProtocolName(name: string): string {
   return /^[a-zA-Z_$][\w$-]{0,79}$/u.test(name) ? name : "redactedKey";
 }
 
-function keyShape(body: unknown): string[] {
+export function protocolKeyShape(body: unknown): string[] {
   const result: string[] = [];
   function visit(value: unknown, prefix: string, depth: number): void {
     if (depth > 5 || result.length >= 100 || !value || typeof value !== "object") return;
     if (Array.isArray(value)) { if (value[0] !== undefined) visit(value[0], `${prefix}[]`, depth + 1); return; }
     for (const [key, item] of Object.entries(value)) {
       if (result.length >= 100) break;
-      const path = prefix ? `${prefix}.${safeName(key)}` : safeName(key);
+      const path = prefix ? `${prefix}.${safeProtocolName(key)}` : safeProtocolName(key);
       result.push(path);
       visit(item, path, depth + 1);
     }
@@ -101,10 +101,10 @@ function requestBodyKeys(body: Uint8Array | null | undefined, contentType: strin
   if (!body || body.byteLength > 512_000) return [];
   const text = new TextDecoder().decode(body);
   try {
-    if (contentType.includes("application/x-www-form-urlencoded")) return [...new Set([...new URLSearchParams(text).keys()].map(safeName))].sort();
+    if (contentType.includes("application/x-www-form-urlencoded")) return [...new Set([...new URLSearchParams(text).keys()].map(safeProtocolName))].sort();
     if (contentType.includes("json")) {
       const parsed = JSON.parse(text) as unknown;
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? Object.keys(parsed).map(safeName).sort() : [];
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? Object.keys(parsed).map(safeProtocolName).sort() : [];
     }
   } catch { /* Opaque request bodies contribute only their byte hash. */ }
   return [];
@@ -125,16 +125,16 @@ export function captureSafeProtocolObservation(input: RawToutiaoShadowObservatio
     || ["action", "operation", "op", "cmd"].some((key) => /^(?:create|save|update|delete|upload|publish|schedule|draft)$/iu.test(url.searchParams.get(key) ?? ""))
     || !Number.isInteger(input.status) || input.status < 100 || input.status > 599
     || !Number.isFinite(Date.parse(input.capturedAt))) throw new Error("UNSAFE_SHADOW_OBSERVATION");
-  const names = (headers: Readonly<Record<string, string>>) => [...new Set(Object.keys(headers).map((name) => safeName(name.toLowerCase())))].sort();
+  const names = (headers: Readonly<Record<string, string>>) => [...new Set(Object.keys(headers).map((name) => safeProtocolName(name.toLowerCase())))].sort();
   const endpointPath = decodedPath.split("/").map((part) => !part || /^[a-zA-Z_][\w.-]{0,63}$/u.test(part) ? part : "redactedSegment").join("/");
   return {
     source: input.source, secretsRedacted: true, capturedAt: input.capturedAt, platform: "toutiao", host: url.hostname.toLowerCase(),
     endpointPath, method: method as "GET" | "OPTIONS" | "POST", status: input.status,
-    responseShapeVersion: safeName(input.responseShapeVersion ?? "UNKNOWN"),
-    queryParameterNames: [...new Set([...url.searchParams.keys()].map(safeName))].sort(),
+    responseShapeVersion: safeProtocolName(input.responseShapeVersion ?? "UNKNOWN"),
+    queryParameterNames: [...new Set([...url.searchParams.keys()].map(safeProtocolName))].sort(),
     requestHeaderNames: names(input.requestHeaders), responseHeaderNames: names(input.responseHeaders),
-    responseKeyShape: keyShape(input.responseBody),
-    cookies: input.cookies.map((cookie) => ({ name: safeName(cookie.name),
+    responseKeyShape: protocolKeyShape(input.responseBody),
+    cookies: input.cookies.map((cookie) => ({ name: safeProtocolName(cookie.name),
       domain: /^\.?[a-z0-9.-]{1,100}$/iu.test(cookie.domain) ? cookie.domain.toLowerCase() : "redacted.invalid",
       path: cookie.path.split("/").map((part) => !part || /^[a-zA-Z_][\w.-]{0,40}$/u.test(part) ? part : "redactedSegment").join("/"),
       secure: cookie.secure, httpOnly: cookie.httpOnly,

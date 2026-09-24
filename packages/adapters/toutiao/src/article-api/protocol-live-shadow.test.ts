@@ -161,6 +161,50 @@ describe("Toutiao live Shadow network guard", () => {
     expect(result.blockedArticleNewCount).toBe(1);
   });
 
+  it("permits one exact article/new GET in controlled mode and captures only its shape", async () => {
+    let guard: ((route: Route) => Promise<void>) | undefined;
+    let onResponse: ((response: Response) => void) | undefined;
+    const outcomes: string[] = [];
+    const context = {
+      serviceWorkers: () => [],
+      route: vi.fn(async (_: string, callback: (route: Route) => Promise<void>) => { guard = callback; }),
+      on: vi.fn((_event: string, callback: (response: Response) => void) => { onResponse = callback; }),
+      off: vi.fn(), unroute: vi.fn(async () => undefined), cookies: vi.fn(async () => []),
+      newPage: vi.fn(async () => editorPage)
+    } as unknown as BrowserContext;
+    const dispatch = async (method: string, url: string, body: unknown = {}): Promise<void> => {
+      const request = { method: () => method, url: () => url,
+        allHeaders: async () => ({ cookie: "cookie-secret", "x-secsdk-csrf-token": "csrf-secret" }),
+        postDataBuffer: () => null } as unknown as Request;
+      const route = { request: () => request, continue: vi.fn(async () => { outcomes.push("sent"); }),
+        abort: vi.fn(async () => { outcomes.push("blocked"); }) } as unknown as Route;
+      await guard?.(route);
+      if (route.continue && vi.mocked(route.continue).mock.calls.length && onResponse) onResponse({
+        request: () => request, status: () => 200,
+        allHeaders: async () => ({ "content-type": "application/json" }),
+        json: async () => body
+      } as unknown as Response);
+    };
+    const home = { isClosed: () => false, context: () => context, url: () => "https://mp.toutiao.com/profile_v4/index",
+      evaluate: vi.fn(async () => []), waitForTimeout: vi.fn(async () => undefined),
+      reload: vi.fn(async () => dispatch("GET", "https://mp.toutiao.com/mp/agw/media/user_login_status_api", { code: 0, data: { is_login: true } })) } as unknown as Page;
+    const editorPage = { isClosed: () => false, context: () => context, url: () => "https://mp.toutiao.com/profile_v4/graphic/publish",
+      evaluate: vi.fn(async () => []), waitForTimeout: vi.fn(async () => undefined), close: vi.fn(async () => undefined),
+      goto: vi.fn(async () => {
+        await dispatch("GET", "https://mp.toutiao.com/mp/agw/article/new?a_bogus=signature-secret&msToken=token-secret", { code: 0, data: { pgc_id: "remote-secret" } });
+        await dispatch("GET", "https://mp.toutiao.com/mp/agw/article/new?a_bogus=another-secret");
+        await dispatch("POST", "https://mp.toutiao.com/mp/agw/article/publish");
+      }) } as unknown as Page;
+    const result = await runReadOnlyToutiaoProtocolShadow(context, home, { mode: "CONTROLLED_ARTICLE_NEW" });
+    expect(result.articleNewAllowedCount).toBe(1);
+    expect(result.blockedArticleNewCount).toBe(1);
+    expect(result.blockedContentMutationCount).toBe(1);
+    expect(result.articleNewCapture).toMatchObject({ method: "GET", endpointPath: "/mp/agw/article/new", status: 200,
+      queryParameterNames: ["a_bogus", "msToken"], responseKeyShape: ["code", "data", "data.pgc_id"] });
+    expect(outcomes).toEqual(["sent", "sent", "blocked", "blocked"]);
+    expect(JSON.stringify(result)).not.toMatch(/cookie-secret|csrf-secret|signature-secret|token-secret|remote-secret/u);
+  });
+
   it("invokes the contract probe only after installing the editor write guard", async () => {
     let guardInstalled = false;
     const context = { serviceWorkers: () => [], route: vi.fn(async () => { guardInstalled = true; }),
