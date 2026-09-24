@@ -210,4 +210,30 @@ describe("Toutiao live Shadow network guard", () => {
     expect(JSON.stringify(result)).not.toContain("token=secret");
     expect(editorPage.close).toHaveBeenCalledOnce();
   });
+
+  it("captures an app-owned readonly GET and replays it only through the diagnostic bridge", async () => {
+    let guard: ((route: Route) => Promise<void>) | undefined;
+    let onResponse: ((response: Response) => void) | undefined;
+    const transport = vi.fn(async () => new globalThis.Response(JSON.stringify({ code: 0, data: { is_login: true } }),
+      { status: 200, headers: { "content-type": "application/json" } }));
+    const context = { serviceWorkers: () => [], route: vi.fn(async (_: string, callback: (route: Route) => Promise<void>) => { guard = callback; }),
+      unroute: vi.fn(async () => undefined), on: vi.fn((_event: string, callback: (response: Response) => void) => { onResponse = callback; }),
+      off: vi.fn(), cookies: vi.fn(async () => []) } as unknown as BrowserContext;
+    const page = { isClosed: () => false, context: () => context, url: () => "https://mp.toutiao.com/profile_v4/index",
+      evaluate: vi.fn(async () => []), waitForTimeout: vi.fn(async () => undefined),
+      reload: vi.fn(async () => {
+        const request = { method: () => "GET", url: () => "https://mp.toutiao.com/mp/agw/media/user_login_status_api?msToken=query-secret",
+          allHeaders: async () => ({ cookie: "cookie-secret", "x-secsdk-csrf-token": "csrf-secret" }) } as unknown as Request;
+        const route = { request: () => request, continue: vi.fn(async () => undefined), abort: vi.fn(async () => undefined) } as unknown as Route;
+        await guard?.(route);
+        expect(route.continue).toHaveBeenCalledOnce();
+        onResponse?.({ request: () => request, status: () => 200, allHeaders: async () => ({ "content-type": "application/json" }),
+          json: async () => ({ code: 0, data: { is_login: true } }) } as unknown as Response);
+      }) } as unknown as Page;
+    const result = await runReadOnlyToutiaoProtocolShadow(context, page, { mode: "BRIDGE", replayTransport: transport });
+    expect(transport).toHaveBeenCalledOnce();
+    expect(result.requestBridge?.capture?.path).toBe("/mp/agw/media/user_login_status_api");
+    expect(result.requestBridge?.replay).toMatchObject({ attempted: true, nodeStatus: 200, authStatesMatch: true });
+    expect(JSON.stringify(result.requestBridge)).not.toMatch(/query-secret|cookie-secret|csrf-secret/u);
+  });
 });

@@ -1,5 +1,13 @@
 # Project State
 
+## Toutiao MVP-0 guarded Browser request bridge — 2026-09-24
+
+- 继续在隔离 worktree 中，用 Owner 已保存授权且应用内 Canonical Page 为 ACTIVE 的 Toutiao BrowserContext 运行默认关闭的 Shadow 诊断模式。Guard 在页面重新加载前安装；本轮没有进入编辑器，`article/new` 阻断计数为 0，内容写请求发送数为 0。
+- 从 Creator 首页自然产生的 `GET /mp/agw/media/user_login_status_api` 捕获浏览器最终请求，仅在 Main 内存中保留 URL 查询值和请求头值；对外只返回 method、host/path、query/header 名称及无 body 的形状。该请求只出现 `is_new_register` 查询参数和 Cookie 等普通头名，没有观察到签名参数。其他自然 GET 包括 `/mp/agw/creator_center/user_info` 与 `/mp/agw/media/get_media_info`；一条不同的只读 GET 携带 `x-secsdk-csrf-token`，不能据此推断登录状态 GET 或发布请求需要该头。
+- 只对上述精确 allowlist 的登录状态 GET 进行一次 Node replay，跳转不跟随，POST、`article/new`、publish、upload 与其他内容端点在 replay 前拒绝。Browser 与 Node 均返回 HTTP 200、`data.is_login=true`，且脱敏响应字段形状一致。Node 响应 Content-Type 为 `text/plain`，诊断解析器按现有 Shadow 规则兼容该 JSON 载体。Cookie/Token/签名值从未写入 IPC、日志、SQLite 或 evidence。
+- 本轮证明已捕获的只读认证请求可由 Node 在内存中复现，不能证明浏览器生成了发布所需动态签名字段，也未定位业务 request wrapper 到 security middleware 的调用链。因此完整 Browser Native Request Bridge 对未来发布仍为 `UNKNOWN`；Browser-bound 与生产 Signer 路径保持未定，Article API Submit 保持 fail closed。
+- 离线回归：114 files / 811 tests PASS；typecheck、lint、build PASS。独立测试覆盖 GET/OPTIONS 形状、POST/内容端点拒绝、只读 replay、响应比较、传输错误及 secret redaction。
+
 ## Toutiao R1-H dummy signer input and side-effect probe — 2026-09-24
 
 - 在 Owner 已授权的应用 BrowserContext 中确认 Canonical Page ACTIVE 后，使用同一默认关闭的 Shadow 诊断入口和写请求 Guard，仅对页面原生 `byted_acrawler.sign` 执行 10 次无内容 dummy 输入探测。传入无参数、空对象、`/test`、`/test-a`、`/test-b`、dummy query 与 dummy body；未传入文章内容、真实发布路径或凭据。无参数仍被脱敏归类为 URL 参数 `TypeError`，对象输入返回长度 147 的字符串。
