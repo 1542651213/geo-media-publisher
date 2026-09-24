@@ -1,5 +1,13 @@
 # Project State
 
+## Toutiao R1-B Article API offline preparation — 2026-09-24
+
+- 基线：R1-A commit `dbdc7c30132d9245bc781260844e641204db522d`；仅在独立 worktree 实施，原始脏工作区未修改。
+- 新增默认关闭的 `TOUTIAO_ARTICLE_API_PUBLISHER_ENABLED`。开启时，头条图文选择离线 Article Web API Adapter；头条视频仍使用既有官方 OAuth API Adapter。未实现的图文提交在 Intent / Final Submit 前 fail closed。
+- 图文 Job 的设置快照与离线 Prepared Payload 存入 migration 0024；remoteScheduledAt 独立于 Job scheduledAt。Payload 对标题、HTML、封面、广告设置、远端时间和素材字节 SHA-256 做 canonical SHA-256 binding。
+- 外链正文图片保持 `UNRESOLVED_EXTERNAL_IMAGE`，不执行下载或上传。平台标题和定时数值上限仍属 `UNVERIFIED_PLATFORM_RULE`，不得视为已验证平台规则。
+- 离线完整测试：100 files / 731 tests PASS；typecheck、lint PASS。未调用 Toutiao 网络接口，未进行真实发布或 Final Submit。R1-C 需在签名/提交前实现远端素材转换、冻结后 payload 绑定以及安全确认；本任务停止于离线准备。
+
 ## Task 10G Creator Home readiness / DOM topology diagnostics — DIAGNOSTICS PASS / DEPLOYMENT BLOCKED - 2026-08-31
 
 本轮仅围绕 `platformKey=xiaohongshu`、`accountId=54b390ac-d81e-440a-baeb-d00f9f346cc3` 完成离线 diagnostics hardening。没有登录、checkLogin、live PRE-SUBMIT Gate、SELF_TEST、preparePublish、标题/正文/图片 mutation、草稿保存、发布设置修改、final submit 或真实发布；没有创建 Job、SubmissionIntent 或 PublishRecord。

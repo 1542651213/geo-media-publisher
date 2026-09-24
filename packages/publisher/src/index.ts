@@ -30,7 +30,7 @@ function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: string)
 function errorCode(error: unknown): ErrorCode {
   if (typeof error === "object" && error !== null && "code" in error) {
     const code = (error as { code: unknown }).code;
-    const allowed: ErrorCode[] = ["NETWORK_ERROR", "LOGIN_EXPIRED", "AUTH_REQUIRED", "USER_ACTION_REQUIRED", "UPLOAD_FAILED", "PLATFORM_CHANGED", "CONTENT_REJECTED", "RATE_LIMITED", "PERMISSION_DENIED", "API_REVIEW_REQUIRED", "PROCESSING", "TIMEOUT", "SUBMISSION_UNCERTAIN", "FINAL_SUBMIT_ALREADY_USED", "FINAL_SUBMIT_CONTROL_NOT_FOUND", "REQUIRED_FIELD_MISSING", "EXTERNAL_EVIDENCE_INCOMPLETE", "RECONCILIATION_UNCERTAIN", "CONFIRMED_NOT_PUBLISHED", "UNKNOWN"];
+    const allowed: ErrorCode[] = ["NETWORK_ERROR", "LOGIN_EXPIRED", "AUTH_REQUIRED", "USER_ACTION_REQUIRED", "UPLOAD_FAILED", "PLATFORM_CHANGED", "CONTENT_REJECTED", "RATE_LIMITED", "PERMISSION_DENIED", "API_REVIEW_REQUIRED", "PROCESSING", "TIMEOUT", "SUBMISSION_UNCERTAIN", "FINAL_SUBMIT_ALREADY_USED", "FINAL_SUBMIT_CONTROL_NOT_FOUND", "REQUIRED_FIELD_MISSING", "EXTERNAL_EVIDENCE_INCOMPLETE", "RECONCILIATION_UNCERTAIN", "CONFIRMED_NOT_PUBLISHED", "ARTICLE_API_SUBMIT_NOT_IMPLEMENTED", "TRANSPORT_FALLBACK_FORBIDDEN", "UNKNOWN"];
     if (typeof code === "string" && allowed.includes(code as ErrorCode)) return code as ErrorCode;
   }
   return "UNKNOWN";
@@ -246,6 +246,9 @@ export class PublisherService {
     try {
       if (!job.dryRun) this.repository.updateGlobalFormalPublishExecution(job.id, "EXECUTING");
       const adapter = this.adapters.getForContent(job.platformKey, job.contentKind ?? "article");
+      const requiredTransport = this.repository.getFrozenContentTransport(job.id);
+      if (requiredTransport && adapter.getCapabilities().contentTransport !== requiredTransport) throw Object.assign(new Error("Job content transport differs from its frozen preparation; automatic fallback is forbidden"), { code: "TRANSPORT_FALLBACK_FORBIDDEN" });
+      if (!job.dryRun) adapter.assertFormalSubmitAvailable?.();
       if (!job.dryRun && job.manualConfirmationRequired) throw Object.assign(new Error("Formal publishing requires user confirmation"), { code: "USER_ACTION_REQUIRED" });
       if (!job.dryRun && account.lastPublishAt && account.minimumIntervalSeconds > 0) {
         const nextAllowedAt = new Date(new Date(account.lastPublishAt).getTime() + account.minimumIntervalSeconds * 1000);

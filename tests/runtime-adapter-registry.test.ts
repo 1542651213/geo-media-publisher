@@ -42,6 +42,18 @@ describe("runtime AdapterRegistry", () => {
     expect(() => registry.getForContent("toutiao", "image")).toThrow(/unsupported content kind/i);
   });
 
+  it("routes Toutiao article by the explicit API flag while video stays official API", () => {
+    const credentials = new MemoryCredentialStore();
+    const off = createRuntimeAdapterRegistry(credentials, false, undefined, undefined, undefined, { toutiaoArticleApiPublisherEnabled: false });
+    const on = createRuntimeAdapterRegistry(credentials, false, undefined, undefined, undefined, { toutiaoArticleApiPublisherEnabled: true });
+    expect(off.getForContent("toutiao", "article").constructor.name).toBe("ToutiaoArticleBrowserAdapter");
+    expect(on.getForContent("toutiao", "article").constructor.name).toBe("ToutiaoArticleApiAdapter");
+    expect(on.getForContent("toutiao", "article").getCapabilities().contentTransport).toBe("ARTICLE_WEB_API");
+    expect(on.getForContent("toutiao", "video").constructor.name).toBe("ToutiaoAdapter");
+    expect(on.getForContent("toutiao", "video").manifest.transport).toBe("official_api");
+    expect(on.get("toutiao").manifest.supportsVideo).toBe(true);
+  });
+
   it("routes Xiaohongshu article content to BrowserAutomation and rejects video", () => {
     const registry = createRuntimeAdapterRegistry(new MemoryCredentialStore(), false);
     const article = registry.getForContent("xiaohongshu", "article");

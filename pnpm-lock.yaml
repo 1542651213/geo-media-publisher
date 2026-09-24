@@ -351,6 +351,9 @@ importers:
       '@publisher/adapters-core':
         specifier: workspace:*
         version: link:../core
+      '@publisher/db':
+        specifier: workspace:*
+        version: link:../../db
       '@publisher/domain':
         specifier: workspace:*
         version: link:../../domain

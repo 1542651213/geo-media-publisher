@@ -68,6 +68,8 @@ export interface PlatformAdapter {
   refreshLogin?(ctx: AccountContext): Promise<unknown>;
   getAccountProfile?(ctx: AccountContext): Promise<AccountProfile>;
   publishArticle(ctx: AccountContext, article: PublishArticleInput): Promise<PublishResult>;
+  /** Optional fail-closed availability check before Publisher creates a submission intent or crosses its submit boundary. */
+  assertFormalSubmitAvailable?(): void;
   /** Optional platform-specific no-click readiness check before the atomic submit claim. */
   prepareFinalSubmit?(ctx: AccountContext, article: PublishArticleInput): Promise<BrowserPublishPreflightResult>;
   /** Platform-specific L5 final submit. Generic adapters must remain fail-closed. */

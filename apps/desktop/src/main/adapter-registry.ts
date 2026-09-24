@@ -9,6 +9,7 @@ import { TestPlatformAdapter } from "@publisher/adapters-test";
 import { TikTokAdapter } from "@publisher/adapters-tiktok";
 import { ToutiaoAdapter } from "@publisher/adapters-toutiao";
 import { ToutiaoArticleBrowserAdapter } from "@publisher/adapters-toutiao/browser";
+import { ToutiaoArticleApiAdapter } from "@publisher/adapters-toutiao/article-api";
 import { WeChatOfficialAdapter } from "@publisher/adapters-wechat";
 import { WechatChannelsSemiAutoAdapter } from "@publisher/adapters-wechat-channels/semi-auto";
 import { WeiboBrowserAdapter } from "@publisher/adapters-weibo/browser";
@@ -23,7 +24,7 @@ import type { Logger } from "@publisher/logger";
 import type { BrowserConnectionDiagnostic } from "@publisher/adapters-browser";
 import type { XiaohongshuAuthStateDiagnostic, XiaohongshuCanonicalPageOperationEvidence, XiaohongshuEditorEntryDiagnostic, XiaohongshuLoginEvaluation } from "@publisher/adapters-xiaohongshu/browser";
 
-export function createRuntimeAdapterRegistry(credentials: CredentialStore, includeTestPlatform: boolean, logger?: Logger, browserProfileRootDir?: string, credentialFilePath?: string): AdapterRegistry {
+export function createRuntimeAdapterRegistry(credentials: CredentialStore, includeTestPlatform: boolean, logger?: Logger, browserProfileRootDir?: string, credentialFilePath?: string, options: { toutiaoArticleApiPublisherEnabled?: boolean } = {}): AdapterRegistry {
   const registry = new AdapterRegistry();
   const onBrowserRuntimeEvent = (event: BrowserRuntimeEvent): void => {
     if (event.code === "BROWSER_RUNTIME_SELECTED") logger?.info("BROWSER_RUNTIME", event.code, "已选择系统浏览器运行时", event);
@@ -86,7 +87,9 @@ export function createRuntimeAdapterRegistry(credentials: CredentialStore, inclu
   registry.register(new YouTubeAdapter({ credentialStore: credentials }));
   registry.register(new TikTokAdapter({ credentialStore: credentials }));
   registry.register(new ToutiaoAdapter({ credentialStore: credentials }));
-  registry.register(new ToutiaoArticleBrowserAdapter({ credentialStore: credentials, sessionManager: browserSessionManager, onBrowserRuntimeEvent }));
+  const articleApiEnabled = options.toutiaoArticleApiPublisherEnabled ?? process.env.TOUTIAO_ARTICLE_API_PUBLISHER_ENABLED === "true";
+  if (articleApiEnabled) registry.register(new ToutiaoArticleApiAdapter());
+  else registry.register(new ToutiaoArticleBrowserAdapter({ credentialStore: credentials, sessionManager: browserSessionManager, onBrowserRuntimeEvent }));
   registry.register(new FacebookPagesAdapter({ credentialStore: credentials }));
   registry.register(new WeiboBrowserAdapter({ credentialStore: credentials, sessionManager: browserSessionManager, onBrowserRuntimeEvent }));
   registry.register(new BaijiahaoBrowserAdapter({ credentialStore: credentials, sessionManager: browserSessionManager, onBrowserRuntimeEvent }));

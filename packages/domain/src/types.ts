@@ -55,6 +55,8 @@ export const ERROR_CODES = [
   "EXTERNAL_EVIDENCE_INCOMPLETE",
   "RECONCILIATION_UNCERTAIN",
   "CONFIRMED_NOT_PUBLISHED",
+  "ARTICLE_API_SUBMIT_NOT_IMPLEMENTED",
+  "TRANSPORT_FALLBACK_FORBIDDEN",
   "UNKNOWN"
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -88,8 +90,9 @@ export const PLATFORM_LIFECYCLE_STATUSES = [
 export type PlatformLifecycleStatus = (typeof PLATFORM_LIFECYCLE_STATUSES)[number];
 /** @deprecated Use PlatformLifecycleStatus. Kept as an alias for V0.3 callers. */
 export type PlatformVerificationStatus = PlatformLifecycleStatus;
+import type { ContentTransport, CoverConstraint, RemoteScheduleConstraint, TitleConstraint } from "./toutiao-article";
 export type PlatformCapability = "API" | "OAuth" | "BrowserAutomation" | "SemiAuto" | "Manual" | "Blocked";
-export type AdapterTransport = "official_api" | "official_sdk" | "browser" | "semi_auto" | "hybrid" | "manual";
+export type AdapterTransport = "official_api" | "official_sdk" | "web_api" | "browser" | "semi_auto" | "hybrid" | "manual";
 export type PublishMode = "AUTO" | "ASSISTED" | "MANUAL";
 export type FinalPublishMode = "PREPARE_ONLY" | "CONFIRM_BEFORE_PUBLISH" | "AUTO_PUBLISH";
 export type ImageSelectionMode = "random" | "manual" | "none";
@@ -560,6 +563,11 @@ export interface ImageAsset {
 
 export interface PlatformCapabilities {
   article: boolean;
+  /** Content-specific transport; platform-level integrationMode remains account-facing metadata. */
+  contentTransport?: ContentTransport;
+  titleConstraint?: TitleConstraint;
+  remoteScheduleConstraint?: RemoteScheduleConstraint;
+  coverConstraint?: CoverConstraint;
   imagePost: boolean;
   video: boolean;
   /** Explicit, typed entry modes exposed by the platform UI. */

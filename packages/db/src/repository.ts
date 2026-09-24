@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type Database from "better-sqlite3";
-import { CONTENT_STUDIO_PLATFORM_KEYS, CORE_AI_FABRICATION_RULES, conservativePlatformContentRules, expandKeywords, normalizeContentReviewMode } from "@publisher/domain";
+import { CONTENT_STUDIO_PLATFORM_KEYS, CORE_AI_FABRICATION_RULES, canonicalSerialize, conservativePlatformContentRules, expandKeywords, normalizeContentReviewMode, normalizeToutiaoSettings } from "@publisher/domain";
 import type { Account, ActivityLog, AdapterManifest, AIProviderProfile, AIUsage, Article, ArticleVariant, BackgroundAutomationStatus, Brand, BrandAsset, BrandDifferentiationMetrics, BrandKnowledgeCategory, BrandKnowledgeEntry, CityRegion, ContentGoal, ContentIntent, ContentQualityCheckResult, ContentQualityContentType, ContentQualityIssue, ContentQualityStatus, ContentQualityTrigger, ContentReviewMode, ContentSource, ContentStudioContent, ContentStudioPlatformKey, ContentStudioTopicPlan, DashboardStats, ExcelArticleRowInput, ExcelImportDiagnostic, ExcelImportDiagnosticCode, ExcelImportPreview, ExcelImportPreviewRow, ExcelImportResult, ExcelImportSheetCandidate, FinalPublishMode, ImageAsset, ImageSelectionMode, KnowledgeSnapshot, KeywordItem, KeywordTemplate, LoginStatus, Notification, Platform, PlatformCapability, PlatformCapabilities, PlatformContentRules, PlatformProfile, PlatformSelfTestCleanupStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PlatformSelfTestStep, PromotionStrength, PublishJob, PublishPlan, PublishRecord, SearchIntent, VideoAsset } from "@publisher/domain";
-import type { PublishRemoteStatus } from "@publisher/domain";
+import type { PublishRemoteStatus, ToutiaoArticleSettingsSnapshot } from "@publisher/domain";
 
 type SqlValue = string | number | null;
 type Row = Record<string, unknown>;
@@ -757,10 +757,10 @@ export class AppRepository {
     return id;
   }
 
-  getMediaAsset(id: string): { id: string; filePath: string; provider: string; model: string } | null {
-    const row = this.db.prepare("SELECT id,file_path,provider,model FROM media_assets WHERE id=?").get(id) as Row | undefined;
+  getMediaAsset(id: string): { id: string; brandId: string | null; filePath: string; provider: string; model: string; metadata: Record<string, unknown> } | null {
+    const row = this.db.prepare("SELECT id,brand_id,file_path,provider,model,metadata_json FROM media_assets WHERE id=?").get(id) as Row | undefined;
     if (!row) return null;
-    return { id: textValue(row.id), filePath: textValue(row.file_path), provider: textValue(row.provider), model: textValue(row.model) };
+    return { id: textValue(row.id), brandId: typeof row.brand_id === "string" ? row.brand_id : null, filePath: textValue(row.file_path), provider: textValue(row.provider), model: textValue(row.model), metadata: parseJson<Record<string, unknown>>(row.metadata_json, {}) };
   }
 
   listImageAssets(brandId?: string, enabledOnly = false): ImageAsset[] {
@@ -2181,7 +2181,7 @@ export class AppRepository {
     return this.getJob(id) as PublishJob;
   }
 
-  createArticlePublishJob(input: { articleId: string; platformKey: string; platformAccountId: string; publishMode?: "ASSISTED" | "MANUAL"; finalPublishMode?: FinalPublishMode; selectedImageAssetId?: string | null; imageSelectionMode?: ImageSelectionMode }): PublishJob {
+  createArticlePublishJob(input: { articleId: string; platformKey: string; platformAccountId: string; publishMode?: "ASSISTED" | "MANUAL"; finalPublishMode?: FinalPublishMode; selectedImageAssetId?: string | null; imageSelectionMode?: ImageSelectionMode; articleTransport?: "browser" | "api" }): PublishJob {
     const article = this.getArticle(input.articleId);
     if (!article) throw new Error("文章不存在");
     this.assertArticlePublishAllowed(article.id);
@@ -2202,7 +2202,7 @@ export class AppRepository {
     const timestamp = now();
     const finalPublishMode = input.finalPublishMode ?? (input.publishMode === "MANUAL" ? "PREPARE_ONLY" : "CONFIRM_BEFORE_PUBLISH");
     const platform = this.listPlatforms().find((item) => item.platformKey === input.platformKey);
-    const apiAutoPublish = finalPublishMode === "AUTO_PUBLISH" && platform?.integrationMode === "API";
+    const apiAutoPublish = finalPublishMode === "AUTO_PUBLISH" && (input.articleTransport ? input.articleTransport === "api" : input.platformKey === "toutiao" ? false : platform?.integrationMode === "API");
     this.db.prepare("INSERT INTO publish_jobs (id,plan_id,account_id,platform_account_id,platform_key,article_id,article_variant_id,scheduled_at,status,max_attempts,created_at,dry_run,manual_confirmation_required,selected_image_asset_id,image_selection_mode,final_publish_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(id, null, account.id, account.platformAccountId, input.platformKey, input.articleId, null, timestamp, apiAutoPublish ? "Scheduled" : "AwaitingConfirmation", 3, timestamp, 0, apiAutoPublish ? 0 : 1, selectedImageAssetId, requestedImageMode, finalPublishMode);
     return this.getJob(id) as PublishJob;
   }
@@ -2419,6 +2419,60 @@ export class AppRepository {
       this.updateGlobalFormalPublishExecution(textValue(row.job_id), "SUBMITTING");
       return { id: textValue(row.id), jobId: textValue(row.job_id), attempt: intValue(row.attempt), submissionAttemptId };
     })();
+  }
+
+  createToutiaoArticlePublishJob(input: { articleId: string; platformAccountId: string; settings?: ToutiaoArticleSettingsSnapshot; finalPublishMode?: FinalPublishMode; publishMode?: "ASSISTED" | "MANUAL"; selectedImageAssetId?: string | null; imageSelectionMode?: ImageSelectionMode }): PublishJob {
+    return this.db.transaction(() => {
+      const job = this.createArticlePublishJob({ articleId: input.articleId, platformKey: "toutiao", platformAccountId: input.platformAccountId, finalPublishMode: input.finalPublishMode, publishMode: input.publishMode, selectedImageAssetId: input.selectedImageAssetId, imageSelectionMode: input.imageSelectionMode, articleTransport: "api" });
+      const settings = input.settings ?? { version: 1, coverMode: job.selectedImageAssetId ? "single" : "none", coverImages: job.selectedImageAssetId ? [job.selectedImageAssetId] : [], articleAdType: "none", remoteScheduledAt: null } satisfies ToutiaoArticleSettingsSnapshot;
+      this.freezeToutiaoArticleSettings(job.id, settings);
+      return job;
+    })();
+  }
+
+  freezeToutiaoArticleSettings(jobId: string, settings: ToutiaoArticleSettingsSnapshot): void {
+    const job = this.getJob(jobId);
+    if (!job || job.platformKey !== "toutiao" || (job.contentKind ?? "article") !== "article") throw new Error("Toutiao article Job is required for settings snapshot");
+    const normalized = normalizeToutiaoSettings(settings);
+    const serialized = canonicalSerialize(normalized);
+    const existing = this.db.prepare("SELECT settings_json FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
+    if (existing) { if (existing.settings_json !== serialized) throw new Error("Toutiao article settings snapshot is already frozen"); return; }
+    this.db.prepare("INSERT INTO toutiao_article_job_preparations (job_id,account_id,article_id,settings_version,content_transport,settings_json,created_at) VALUES (?,?,?,?,'ARTICLE_WEB_API',?,?)").run(job.id, job.accountId, job.articleId, normalized.version, serialized, now());
+  }
+
+  getFrozenContentTransport(jobId: string): "ARTICLE_WEB_API" | null {
+    const row = this.db.prepare("SELECT content_transport FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
+    return row?.content_transport === "ARTICLE_WEB_API" ? "ARTICLE_WEB_API" : null;
+  }
+
+  getToutiaoArticleSettingsSnapshot(jobId: string): ToutiaoArticleSettingsSnapshot | null {
+    const row = this.db.prepare("SELECT settings_json FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
+    return row ? parseJson<ToutiaoArticleSettingsSnapshot>(row.settings_json, { version: 1, coverMode: "none", coverImages: [], articleAdType: "none", remoteScheduledAt: null }) : null;
+  }
+
+  saveToutiaoArticlePreparedPayload(jobId: string, canonicalJson: string, payloadHash: string): void {
+    const row = this.db.prepare("SELECT account_id,article_id,canonical_payload_json,payload_hash FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
+    if (!row) throw new Error("Toutiao article settings snapshot is missing");
+    const parsed = JSON.parse(canonicalJson) as Record<string, unknown>;
+    if (parsed.jobId !== jobId || parsed.accountId !== row.account_id || parsed.articleId !== row.article_id || canonicalSerialize(parsed) !== canonicalJson || createHash("sha256").update(canonicalJson).digest("hex") !== payloadHash) throw new Error("Prepared payload binding does not match the frozen Job identity and hash");
+    if (typeof row.payload_hash === "string") { if (row.payload_hash !== payloadHash || row.canonical_payload_json !== canonicalJson) throw new Error("Toutiao prepared payload is already frozen"); return; }
+    this.db.prepare("UPDATE toutiao_article_job_preparations SET canonical_payload_json=?,payload_hash=?,prepared_at=? WHERE job_id=? AND payload_hash IS NULL").run(canonicalJson, payloadHash, now(), jobId);
+  }
+
+  bindToutiaoArticlePreparationToIntent(jobId: string, intentId: string): void {
+    this.db.transaction(() => {
+      const preparation = this.db.prepare("SELECT payload_hash,intent_id FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
+      const intent = this.db.prepare("SELECT job_id,final_submit_count FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
+      if (!preparation || typeof preparation.payload_hash !== "string" || !intent || intent.job_id !== jobId || intValue(intent.final_submit_count) !== 0 || (preparation.intent_id && preparation.intent_id !== intentId)) throw new Error("Prepared payload cannot be bound to this submission intent");
+      this.db.prepare("UPDATE toutiao_article_job_preparations SET intent_id=? WHERE job_id=?").run(intentId, jobId);
+      this.db.prepare("UPDATE submission_intents SET payload_hash=? WHERE id=?").run(preparation.payload_hash, intentId);
+    })();
+  }
+
+  getToutiaoArticlePreparation(jobId: string): { settingsVersion: number; settings: ToutiaoArticleSettingsSnapshot; canonicalPayloadJson: string | null; payloadHash: string | null; preparedAt: string | null; intentId: string | null } | null {
+    const row = this.db.prepare("SELECT settings_version,settings_json,canonical_payload_json,payload_hash,prepared_at,intent_id FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
+    if (!row) return null;
+    return { settingsVersion: intValue(row.settings_version), settings: parseJson<ToutiaoArticleSettingsSnapshot>(row.settings_json, { version: 1, coverMode: "none", coverImages: [], articleAdType: "none", remoteScheduledAt: null }), canonicalPayloadJson: typeof row.canonical_payload_json === "string" ? row.canonical_payload_json : null, payloadHash: typeof row.payload_hash === "string" ? row.payload_hash : null, preparedAt: typeof row.prepared_at === "string" ? row.prepared_at : null, intentId: typeof row.intent_id === "string" ? row.intent_id : null };
   }
 
   reserveSubmissionAttempt(intentId: string): string {

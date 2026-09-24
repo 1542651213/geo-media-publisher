@@ -1,4 +1,5 @@
 export * from "./types";
+export * from "./toutiao-article";
 export * from "./keywords";
 export * from "./prompt";
 export * from "./similarity";

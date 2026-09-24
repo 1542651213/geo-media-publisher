@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { basename, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
+import { prepareToutiaoArticleJob } from "@publisher/adapters-toutiao/article-api";
 import { backupDatabase, validateDatabaseBackup, type AIBatchTarget, type AppRepository, type ContentStudioTaskPayload, type HumanReviewSubmitInput } from "@publisher/db";
 import type { AccountDisconnectResult, BatchGenerationInput, ContentStudioGenerationInput } from "../shared/api";
 import { AIProviderError, DeepSeekErrorMapper, DeepSeekProvider, FallbackAIProvider, MockAIProvider, OpenAICompatibleProvider, contentHash, type AIConnectionDiagnostic, type AIConnectionResult, type AIProvider } from "@publisher/ai";
@@ -401,13 +402,21 @@ export function registerIpc(deps: IpcDependencies): void {
     return result.filePath;
   });
   register("articles:prepare-publish", async (_event, payload) => {
-    const input = z.object({ articleId: idSchema, platformKey: idSchema, platformAccountId: idSchema, publishMode: z.enum(["ASSISTED", "MANUAL"]).optional(), finalPublishMode: z.enum(["PREPARE_ONLY", "CONFIRM_BEFORE_PUBLISH", "AUTO_PUBLISH"]).optional(), selectedImageAssetId: idSchema.nullable().optional(), imageSelectionMode: z.enum(["random", "manual", "none"]).optional() }).parse(payload);
+    const input = z.object({ articleId: idSchema, platformKey: idSchema, platformAccountId: idSchema, publishMode: z.enum(["ASSISTED", "MANUAL"]).optional(), finalPublishMode: z.enum(["PREPARE_ONLY", "CONFIRM_BEFORE_PUBLISH", "AUTO_PUBLISH"]).optional(), selectedImageAssetId: idSchema.nullable().optional(), imageSelectionMode: z.enum(["random", "manual", "none"]).optional(), toutiaoArticleSettings: z.object({ version: z.literal(1), coverMode: z.enum(["auto", "none", "single", "multiple"]), coverImages: z.array(idSchema), articleAdType: z.enum(["none", "platform_default"]), remoteScheduledAt: z.string().nullable() }).optional() }).parse(payload);
     const configuredMode = repository.getSettings().finalPublishMode;
     const finalPublishMode = input.finalPublishMode ?? (configuredMode === "prepare_only" ? "PREPARE_ONLY" : configuredMode === "auto_publish" ? "AUTO_PUBLISH" : "CONFIRM_BEFORE_PUBLISH");
-    const job = repository.createArticlePublishJob({ ...input, finalPublishMode });
+    const articleAdapter = registry.getForContent(input.platformKey, "article");
+    const isApiPlatform = articleAdapter.manifest.transport === "official_api" || articleAdapter.manifest.transport === "web_api";
+    const isToutiaoArticleApi = input.platformKey === "toutiao" && articleAdapter.manifest.transport === "web_api";
+    const job = isToutiaoArticleApi
+      ? repository.createToutiaoArticlePublishJob({ ...input, finalPublishMode, settings: input.toutiaoArticleSettings })
+      : repository.createArticlePublishJob({ ...input, finalPublishMode, articleTransport: isApiPlatform ? "api" : "browser" });
     logger.info("QUALITY_GATE", "CONTENT_REVIEW_MODE_APPLIED", "文章按当前内容审核模式进入发布流程", { articleId: input.articleId, platformKey: input.platformKey, contentReviewMode: repository.getContentReviewMode() });
-    const platform = repository.listPlatforms().find((item) => item.platformKey === input.platformKey);
-    const isApiPlatform = platform?.integrationMode === "API";
+    if (isToutiaoArticleApi) {
+      const prepared = prepareToutiaoArticleJob(repository, job.id);
+      logger.info("PUBLISHER", "TOUTIAO_ARTICLE_PREPARED", "头条图文离线准备完成", { jobId: job.id, payloadHash: prepared.payloadHash, settingsSnapshotVersion: prepared.payload.settingsSnapshotVersion });
+      if (finalPublishMode !== "AUTO_PUBLISH") return { job, record: null, message: "头条图文已离线准备；API 提交尚未实现。" };
+    }
     if (finalPublishMode === "PREPARE_ONLY" && isApiPlatform) return { job, record: null, message: "内容已准备并写入任务；只准备内容模式不会调用平台发布 API。" };
     const action = createUserAction("START_PUBLISH");
     if (finalPublishMode === "AUTO_PUBLISH" && isApiPlatform) {
