@@ -1,5 +1,13 @@
 # Project State
 
+## Toutiao R1-G guarded acrawler contract probe — 2026-09-24
+
+- 在 Owner 已授权且应用内状态为 ACTIVE 的头条 BrowserContext 中，复用 R1-F 的编辑器 Network Guard，只调用页面原生 `byted_acrawler.sign()` 与 `sign({})`。诊断开关仅在测试进程启用；正式图文 API Submit 仍未实现。
+- 页面原生 `sign` 存在，函数 arity 为 0；无参数调用抛出 `TypeError`，脱敏分类为需要 URL 参数；空对象调用返回长度 147 的字符串。源码仅记录长度 112 与 SHA-256，签名原值、异常原文、Cookie 和 Token 均未输出。
+- 两次调用的同步观察均未见 DOM 变化；空对象调用窗口内观察到 Storage 变化。Guard 继续保持 1 秒时又观察到 3 个请求，当前无法将 Storage 或网络变化归因于 signer 而排除编辑器后台活动，故纯计算性质和生产可用性均未证实。URL 以外的输入依赖及最终签名附加位置仍未知，生产 Signer 路径保持 `BLOCKED`。
+- 编辑器初始化产生的一次 `GET /mp/agw/article/new` 被 Guard 阻断，另有未知 POST 被阻断；没有任何内容写请求被放行，没有文章、草稿、图片上传或 Final Submit。探测前后 Canonical Session 均为 ACTIVE，探测结束后关闭测试应用 Runtime。
+- 离线回归：112 files / 802 tests PASS；typecheck、lint、build PASS。此结论只覆盖受控 dummy 输入，不建立发布请求签名合同。
+
 ## Toutiao R1-F guarded browser-native signer discovery — 2026-09-24
 
 - 从 `5e043bc614d4c9b9b882328821244882e45b4bb0` 的隔离 worktree 构建测试包，Owner 已保存授权的 Toutiao BrowserSession 在应用中恢复为 ACTIVE；探测前后均确认 Canonical Page 属于该 Context，host 为 `mp.toutiao.com`。诊断开关只在测试进程开启，生产默认保持关闭。

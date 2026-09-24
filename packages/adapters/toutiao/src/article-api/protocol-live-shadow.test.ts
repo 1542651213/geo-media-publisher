@@ -155,4 +155,30 @@ describe("Toutiao live Shadow network guard", () => {
     expect(editorPage.close).toHaveBeenCalledOnce();
     expect(result.blockedArticleNewCount).toBe(1);
   });
+
+  it("invokes the contract probe only after installing the editor write guard", async () => {
+    let guardInstalled = false;
+    const context = { serviceWorkers: () => [], route: vi.fn(async () => { guardInstalled = true; }),
+      unroute: vi.fn(async () => undefined), on: vi.fn(), off: vi.fn(), cookies: vi.fn(async () => []),
+      newPage: vi.fn(async () => editorPage) } as unknown as BrowserContext;
+    const home = { isClosed: () => false, context: () => context, url: () => "https://mp.toutiao.com/profile_v4/index",
+      evaluate: vi.fn(async () => []), reload: vi.fn() } as unknown as Page;
+    const contract = { exists: true, signExists: true, initExists: true, objectKeys: ["sign"], signName: "sign",
+      signLength: 1, signSourceLength: 20, signSourceSha256: "hash", probes: [] };
+    const editorPage = { isClosed: () => false, context: () => context, url: () => "https://mp.toutiao.com/profile_v4/graphic/publish",
+      goto: vi.fn(async () => undefined), waitForTimeout: vi.fn(async () => undefined), close: vi.fn(async () => undefined),
+      evaluate: vi.fn(async (fn: () => unknown) => {
+        if (fn.name === "probeAcrCrawlerSignInPage") {
+          expect(guardInstalled).toBe(true);
+          return contract;
+        }
+        return [];
+      }) } as unknown as Page;
+    const result = await runReadOnlyToutiaoProtocolShadow(context, home, { mode: "SIGNER_CONTRACT" });
+    expect(result.signerContract).toEqual(contract);
+    expect(result.signerProbeNetworkRequestDelta).toBe(0);
+    expect(home.reload).not.toHaveBeenCalled();
+    expect(editorPage.close).toHaveBeenCalledOnce();
+    expect(context.unroute).toHaveBeenCalledOnce();
+  });
 });

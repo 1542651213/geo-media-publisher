@@ -554,7 +554,7 @@ export function registerIpc(deps: IpcDependencies): void {
   });
   register("toutiao:protocol-shadow", async (_event, payload) => {
     if (!protocolShadowEnabled(process.env)) throw new Error("TOUTIAO_PROTOCOL_SHADOW_DISABLED");
-    const input = z.object({ accountId: idSchema, mode: z.enum(["HOME", "EDITOR"]).optional() }).parse(payload);
+    const input = z.object({ accountId: idSchema, mode: z.enum(["HOME", "EDITOR", "SIGNER_CONTRACT"]).optional() }).parse(payload);
     const status = toutiaoSessionActivation.status(input.accountId);
     if (status.storedAuthorization !== "AUTHORIZED_SAVED" || status.runtimeState !== "ACTIVE") throw new Error("TOUTIAO_SHADOW_SESSION_UNAVAILABLE");
     const adapter = registry.getForConnection("toutiao");
