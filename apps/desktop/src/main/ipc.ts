@@ -23,7 +23,7 @@ import { runQualityGate, runQualityGateForArticle, runQualityGateForVariant } fr
 import { runQualityBenchmark } from "./quality-benchmark";
 import { OAuthSessionManager } from "./oauth-session-manager";
 import { ToutiaoSessionActivation } from "./toutiao-session-activation";
-import { claimControlledArticleNewCapture } from "./toutiao-article-new-once";
+import { claimControlledArticleNewCapture, claimControlledPublishRequestCapture } from "./toutiao-article-new-once";
 import { writeAdvancedExcelTemplate, writeSimpleExcelTemplate } from "./excel-templates";
 import { buildExcelImportErrorReportCsv, readExcelArticleFile } from "./excel-import";
 import { PlatformSelfTestService } from "./platform-self-test";
@@ -565,6 +565,19 @@ export function registerIpc(deps: IpcDependencies): void {
       claimControlledArticleNewCapture(dataDirectory);
     }
     return adapter.runReadOnlyProtocolShadow(accountContext(input.accountId, "toutiao"), input.mode);
+  });
+  register("toutiao:publish-request-capture", async (_event, payload) => {
+    if (!protocolShadowEnabled(process.env) || process.env.TOUTIAO_PUBLISH_REQUEST_CAPTURE_ENABLED !== "true")
+      throw new Error("TOUTIAO_PUBLISH_CAPTURE_DISABLED");
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    const status = toutiaoSessionActivation.status(input.accountId);
+    if (status.storedAuthorization !== "AUTHORIZED_SAVED" || status.runtimeState !== "ACTIVE"
+      || !status.sessionExists || !status.contextExists || !status.canonicalPageExists || !status.contextOwnsPage || !status.pageAlive
+      || status.pageHost !== "mp.toutiao.com") throw new Error("TOUTIAO_CAPTURE_SESSION_UNAVAILABLE");
+    const adapter = registry.getForConnection("toutiao");
+    if (!(adapter instanceof ToutiaoArticleBrowserAdapter)) throw new Error("TOUTIAO_CAPTURE_BROWSER_ADAPTER_REQUIRED");
+    claimControlledPublishRequestCapture(dataDirectory);
+    return adapter.runGuardedPublishRequestCapture(accountContext(input.accountId, "toutiao"));
   });
   register("accounts:pre-submit-gate", async (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);

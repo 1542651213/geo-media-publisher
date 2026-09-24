@@ -4,6 +4,7 @@ import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomatio
 import type { Frame, Locator, Page } from "playwright-core";
 import type { PublishResult, PublishStatusResult } from "@publisher/domain";
 import { runReadOnlyToutiaoProtocolShadow, TOUTIAO_GUARDED_EDITOR_URL, type ToutiaoLiveShadowResult } from "./article-api/protocol-live-shadow";
+import { runControlledToutiaoPublishCapture, type ControlledPublishCaptureResult } from "./article-api/protocol-publish-capture";
 
 const TOUTIAO_CREATOR_HOME = "https://mp.toutiao.com/";
 const TOUTIAO_ARTICLE_EDITOR_URL = TOUTIAO_GUARDED_EDITOR_URL;
@@ -344,6 +345,29 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
     catch (error) {
       const message = error instanceof Error ? error.message : "";
       throw new Error(/^TOUTIAO_SHADOW_[A-Z_]+$/u.test(message) ? message : "TOUTIAO_PROTOCOL_SHADOW_FAILED");
+    }
+  }
+
+  /** One-click diagnostics only. The context-wide write guard is installed before the editor opens. */
+  async runGuardedPublishRequestCapture(ctx: AccountContext): Promise<ControlledPublishCaptureResult> {
+    const owned = this.sessionManager.getCanonicalPage({ platformKey: "toutiao", accountId: ctx.accountId });
+    if (!owned) throw new Error("TOUTIAO_CAPTURE_SESSION_UNAVAILABLE");
+    try {
+      return await runControlledToutiaoPublishCapture(owned.session.context, owned.page, async (editor, marks) => {
+        await this.assertNoSecurityChallenge(editor);
+        const title = await discover(editor, "title");
+        const body = await discover(editor, "body");
+        await fillAndRead(title, "title", "测试文章发布流程");
+        await fillAndRead(body, "body", "这是一段仅用于验证编辑器请求结构的临时测试文本，不包含真实项目、客户或联系方式。".repeat(4));
+        marks.contentFilled();
+        await this.assertNoSecurityChallenge(editor);
+        const control = await this.inspectFinalSubmitControl(editor);
+        marks.buttonTriggered(); // Durable task claim is already written by IPC; no second click is permitted.
+        await control.locator.click({ timeout: 10_000 });
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      throw new Error(/^TOUTIAO_CAPTURE_[A-Z_]+$/u.test(message) ? message : "TOUTIAO_CAPTURE_FAILED");
     }
   }
 

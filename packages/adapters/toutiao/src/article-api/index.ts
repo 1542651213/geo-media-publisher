@@ -28,3 +28,4 @@ export type { ToutiaoProtocolProfile, SafeToutiaoProtocolObservation, RawToutiao
 export { assertSafeProtocolFixture, protocolShadowEnabled } from "./protocol-fixture";
 export { classifyShadowRequest, runReadOnlyToutiaoProtocolShadow } from "./protocol-live-shadow";
 export type { ToutiaoLiveShadowResult } from "./protocol-live-shadow";
+export type { ControlledPublishCaptureResult } from "./protocol-publish-capture";
