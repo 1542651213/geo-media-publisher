@@ -4,7 +4,7 @@ import type { PublisherApi } from "../shared/api";
 const invoke = <T>(channel: string, payload?: unknown): Promise<T> => ipcRenderer.invoke(channel, payload) as Promise<T>;
 
 const api: PublisherApi = {
-  toutiaoDiagnostics: { protocolShadow: (accountId) => invoke("toutiao:protocol-shadow", { accountId }) },
+  toutiaoDiagnostics: { protocolShadow: (accountId, mode) => invoke("toutiao:protocol-shadow", { accountId, mode }) },
   dashboard: { get: () => invoke("dashboard:get") },
   videoAssets: { list: (filters) => invoke("video-assets:list", filters), pickVideo: () => invoke("video-assets:pick-video"), pickCover: () => invoke("video-assets:pick-cover"), create: (input) => invoke("video-assets:create", input), update: (id, input) => invoke("video-assets:update", { id, input }), preflight: (input) => invoke("video-assets:preflight", input) },
   brands: { list: () => invoke("brands:list"), create: (input) => invoke("brands:create", input), update: (id, data) => invoke("brands:update", { id, data }), assets: (brandId) => invoke("brands:assets", { brandId }), addAsset: (input) => invoke("brands:asset-create", input) },

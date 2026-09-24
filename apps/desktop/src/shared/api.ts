@@ -172,7 +172,7 @@ export interface ManagedVideoAsset extends VideoAsset {
 }
 
 export interface PublisherApi {
-  toutiaoDiagnostics: { protocolShadow(accountId: string): Promise<ToutiaoLiveShadowResult> };
+  toutiaoDiagnostics: { protocolShadow(accountId: string, mode?: "HOME" | "EDITOR"): Promise<ToutiaoLiveShadowResult> };
   dashboard: { get(): Promise<DashboardStats> };
   videoAssets: {
     list(filters?: { brandId?: string }): Promise<ManagedVideoAsset[]>;

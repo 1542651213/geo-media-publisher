@@ -1,5 +1,13 @@
 # Project State
 
+## Toutiao R1-F guarded browser-native signer discovery — 2026-09-24
+
+- 从 `5e043bc614d4c9b9b882328821244882e45b4bb0` 的隔离 worktree 构建测试包，Owner 已保存授权的 Toutiao BrowserSession 在应用中恢复为 ACTIVE；探测前后均确认 Canonical Page 属于该 Context，host 为 `mp.toutiao.com`。诊断开关只在测试进程开启，生产默认保持关闭。
+- Creator 首页有 38 个 script 标签，受 Guard 捕获 31 份 JS 响应；只读登录状态 GET 未出现签名参数。首页资源出现 `secsdk` 和 `byted_acrawler` 结构线索，未出现 `a_bogus` 或 `X-Bogus` 字符串。
+- 现有 Browser Adapter 已使用 `/profile_v4/graphic/publish` 作为编辑器前端路由。诊断仅对该精确、无查询参数的 GET 放行，在同账号 Context 的独立 Page 中加载 bundle；Canonical 首页不变。两次编辑器探测各拦截一次 `GET /mp/agw/article/new`，未放行任何内容写请求。编辑器 `graphic/publish` chunk 同时包含 `article/publish` 路径与 `byted_acrawler.init` 的静态引用；运行时 `byted_acrawler` 对象有 `init`、`sign` 等自有函数。
+- 未调用 `byted_acrawler.sign`：目前没有证据证明其输入边界、纯计算性质或与只读 GET 的安全调用关系。静态共现不是签名调用链证明，Browser Native Signer 仍未验证，生产 Signer 路径保持 `BLOCKED`；未实现 Local Signer，也未接入正式 Article API Submit。
+- 诊断代码只返回脚本路径脱敏形式、字节大小、SHA-256、关键词 offset、SDK 自有属性名称/类型/arity 和 Guard 计数；不保存 JS 源码、Cookie、Token 或签名原值。没有图片上传、草稿、article/new 实际请求、article/publish 或 Final Submit。
+
 ## Toutiao R1-E authorized read-only protocol Shadow — 2026-09-24
 
 - 在隔离 worktree 的打包应用中，使用 Owner 已保存授权的 Toutiao BrowserSession 恢复 Canonical Page；采集前检查账号归属与 ACTIVE 状态。诊断开关仅在该进程设置，生产默认仍为关闭。Context 在诊断进程中阻止 Service Worker，Network Guard 在重新加载 Creator 首页前安装；未知业务 POST 默认拦截。

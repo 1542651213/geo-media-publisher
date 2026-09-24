@@ -1,6 +1,6 @@
 import type { BrowserContext, Page, Request, Response, Route } from "playwright-core";
 import { describe, expect, it, vi } from "vitest";
-import { classifyCreatorSessionBody, classifyShadowRequest, readBoundedResponseJson, runReadOnlyToutiaoProtocolShadow } from "./protocol-live-shadow";
+import { classifyCreatorSessionBody, classifyShadowRequest, isSafeCreatorHomePath, readBoundedResponseJson, runReadOnlyToutiaoProtocolShadow } from "./protocol-live-shadow";
 
 describe("Toutiao live Shadow network guard", () => {
   it("allows only read methods for ordinary endpoints", () => {
@@ -92,5 +92,67 @@ describe("Toutiao live Shadow network guard", () => {
     expect(result.observations[0]?.responseKeyShape).toContain("data.loggedIn");
     expect(result.observations[0]?.queryParameterNames).toEqual(["msToken"]);
     expect(JSON.stringify(result)).not.toMatch(/cookie-secret|csrf-secret|query-secret|body-secret/u);
+  });
+
+  it("allows only the exact editor document route while blocking article/new", () => {
+    expect(classifyShadowRequest("GET", "https://mp.toutiao.com/profile_v4/graphic/publish")).toBe("READ_ONLY");
+    expect(classifyShadowRequest("GET", "https://mp.toutiao.com/profile_v4/graphic/publish?draft=1")).toBe("DENY_CONTENT_MUTATION");
+    expect(classifyShadowRequest("POST", "https://mp.toutiao.com/profile_v4/graphic/publish")).toBe("DENY_CONTENT_MUTATION");
+    expect(classifyShadowRequest("GET", "https://mp.toutiao.com/mp/agw/article/new")).toBe("DENY_ARTICLE_NEW");
+  });
+
+  it("requires a canonical Creator home path and rejects same-host login pages", () => {
+    expect(isSafeCreatorHomePath("/")).toBe(true);
+    expect(isSafeCreatorHomePath("/profile_v4/")).toBe(true);
+    expect(isSafeCreatorHomePath("/profile_v4/index")).toBe(true);
+    expect(isSafeCreatorHomePath("/auth/login")).toBe(false);
+    expect(isSafeCreatorHomePath("/profile_v4/graphic/publish")).toBe(false);
+  });
+
+  it("captures only hashed script metadata after installing the guard", async () => {
+    let guard: ((route: Route) => Promise<void>) | undefined;
+    let listener: ((response: Response) => void) | undefined;
+    const context = {
+      serviceWorkers: () => [], route: async (_: string, callback: (route: Route) => Promise<void>) => { guard = callback; },
+      on: (_: string, callback: (response: Response) => void) => { listener = callback; },
+      off: vi.fn(), unroute: vi.fn(async () => undefined), cookies: vi.fn(async () => [])
+    } as unknown as BrowserContext;
+    const page = { isClosed: () => false, context: () => context, url: () => "https://mp.toutiao.com/profile_v4/index",
+      evaluate: vi.fn(async () => []), waitForTimeout: vi.fn(async () => undefined),
+      reload: vi.fn(async () => {
+        const request = { method: () => "GET", url: () => "https://mp.toutiao.com/static/app.js?token=secret", allHeaders: async () => ({}) } as unknown as Request;
+        const route = { request: () => request, continue: vi.fn(async () => undefined), abort: vi.fn(async () => undefined) } as unknown as Route;
+        await guard?.(route);
+        listener?.({ request: () => request, status: () => 200, allHeaders: async () => ({ "content-type": "application/javascript" }),
+          body: async () => new TextEncoder().encode('const key="a_bogus"; const marker="/mp/agw/article/publish";') } as unknown as Response);
+      }) } as unknown as Page;
+    const result = await runReadOnlyToutiaoProtocolShadow(context, page);
+    expect(result.scripts).toHaveLength(1);
+    expect(result.scripts[0]?.keywordOffsets.a_bogus).toHaveLength(1);
+    expect(result.scripts[0]?.keywordOffsets["/mp/agw/article/publish"]).toHaveLength(1);
+    expect(JSON.stringify(result)).not.toMatch(/token=secret|const key=/u);
+  });
+
+  it("opens a separate guarded editor page and leaves the canonical home page untouched", async () => {
+    let guard: ((route: Route) => Promise<void>) | undefined;
+    const context = { serviceWorkers: () => [], route: async (_: string, callback: (route: Route) => Promise<void>) => { guard = callback; },
+      on: vi.fn(), off: vi.fn(), unroute: vi.fn(async () => undefined), cookies: vi.fn(async () => []),
+      newPage: vi.fn(async () => editorPage) } as unknown as BrowserContext;
+    const home = { isClosed: () => false, context: () => context, url: () => "https://mp.toutiao.com/profile_v4/index",
+      evaluate: vi.fn(async () => []), reload: vi.fn() } as unknown as Page;
+    const editorPage = { isClosed: () => false, context: () => context, url: () => "https://mp.toutiao.com/profile_v4/graphic/publish",
+      evaluate: vi.fn(async () => []), waitForTimeout: vi.fn(async () => undefined), close: vi.fn(async () => undefined),
+      goto: vi.fn(async () => {
+        const request = { method: () => "GET", url: () => "https://mp.toutiao.com/mp/agw/article/new" } as unknown as Request;
+        const route = { request: () => request, continue: vi.fn(), abort: vi.fn(async () => undefined) } as unknown as Route;
+        await guard?.(route);
+        expect(route.abort).toHaveBeenCalledOnce();
+      }) } as unknown as Page;
+    const result = await runReadOnlyToutiaoProtocolShadow(context, home, { mode: "EDITOR" });
+    expect(home.reload).not.toHaveBeenCalled();
+    expect(context.newPage).toHaveBeenCalledOnce();
+    expect(editorPage.goto).toHaveBeenCalledWith("https://mp.toutiao.com/profile_v4/graphic/publish", expect.any(Object));
+    expect(editorPage.close).toHaveBeenCalledOnce();
+    expect(result.blockedArticleNewCount).toBe(1);
   });
 });

@@ -3,10 +3,10 @@ import type { AutomationPrepareResult, BrowserPublishAttemptContext, BrowserPubl
 import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomationAdapterOptions, type BrowserPlatformDefinition } from "@publisher/adapters-browser";
 import type { Frame, Locator, Page } from "playwright-core";
 import type { PublishResult, PublishStatusResult } from "@publisher/domain";
-import { runReadOnlyToutiaoProtocolShadow, type ToutiaoLiveShadowResult } from "./article-api/protocol-live-shadow";
+import { runReadOnlyToutiaoProtocolShadow, TOUTIAO_GUARDED_EDITOR_URL, type ToutiaoLiveShadowResult } from "./article-api/protocol-live-shadow";
 
 const TOUTIAO_CREATOR_HOME = "https://mp.toutiao.com/";
-const TOUTIAO_ARTICLE_EDITOR_URL = "https://mp.toutiao.com/profile_v4/graphic/publish";
+const TOUTIAO_ARTICLE_EDITOR_URL = TOUTIAO_GUARDED_EDITOR_URL;
 const TOUTIAO_ARTICLE_EDITOR_PATH = /\/graphic\/publish|\/article\/publish|\/publish\/article/iu;
 const TOUTIAO_TITLE_SELECTORS = [
   'input[placeholder*="\u6807\u9898"], textarea[placeholder*="\u6807\u9898"], input[aria-label*="\u6807\u9898"], textarea[aria-label*="\u6807\u9898"]',
@@ -337,10 +337,10 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
   constructor(options: BrowserAutomationAdapterOptions = {}) { super(definition, options); }
 
   /** Diagnostics only. The caller enforces the default-off Shadow flag and account authorization. */
-  async runReadOnlyProtocolShadow(ctx: AccountContext): Promise<ToutiaoLiveShadowResult> {
+  async runReadOnlyProtocolShadow(ctx: AccountContext, mode: "HOME" | "EDITOR" = "HOME"): Promise<ToutiaoLiveShadowResult> {
     const owned = this.sessionManager.getCanonicalPage({ platformKey: "toutiao", accountId: ctx.accountId });
     if (!owned) throw new Error("TOUTIAO_SHADOW_SESSION_UNAVAILABLE");
-    try { return await runReadOnlyToutiaoProtocolShadow(owned.session.context, owned.page); }
+    try { return await runReadOnlyToutiaoProtocolShadow(owned.session.context, owned.page, { mode }); }
     catch (error) {
       const message = error instanceof Error ? error.message : "";
       throw new Error(/^TOUTIAO_SHADOW_[A-Z_]+$/u.test(message) ? message : "TOUTIAO_PROTOCOL_SHADOW_FAILED");
