@@ -1,5 +1,13 @@
 # Project State
 
+## Toutiao R1-H dummy signer input and side-effect probe — 2026-09-24
+
+- 在 Owner 已授权的应用 BrowserContext 中确认 Canonical Page ACTIVE 后，使用同一默认关闭的 Shadow 诊断入口和写请求 Guard，仅对页面原生 `byted_acrawler.sign` 执行 10 次无内容 dummy 输入探测。传入无参数、空对象、`/test`、`/test-a`、`/test-b`、dummy query 与 dummy body；未传入文章内容、真实发布路径或凭据。无参数仍被脱敏归类为 URL 参数 `TypeError`，对象输入返回长度 147 的字符串。
+- 同一 `/test` 输入连续两次的输出 SHA-256 相同；URL、query、body 的变更分别改变输出摘要。这只证明当前授权 Context 中这组 dummy 输入的短时观察，不证明跨 Session 或跨时间的确定性。输出原文从未离开页面。
+- 每次成功调用的同步前后快照显示同一个 localStorage 键的值变化；诊断只保存键名 SHA-256 与变化计数，不保存键名或值。sessionStorage 无变化、DOM MutationObserver 计数为 0、Cookie 元数据无变化。Storage 效应类别仍未知；`sign` 不能视为纯计算，生产 Browser Native Signer 保持未验证，生产路径继续 `BLOCKED`。
+- Guard 在编辑器启动时阻断 1 次 `GET /mp/agw/article/new`；探测窗口另观察到 2 次静态资源 GET，无法归因于 signer。没有内容写请求被放行，没有文章、草稿、图片上传或 Final Submit。探测前后应用自有 Session 均为 ACTIVE；结束后关闭测试 Runtime。诊断开关的生产默认值未改变。
+- 离线回归：113 files / 805 tests PASS；typecheck、lint、build PASS。下一步若继续研究，应先查明 localStorage 变化的非敏感语义和页面 signer 如何接入正式请求，仍不得进行真实发布。
+
 ## Toutiao R1-G guarded acrawler contract probe — 2026-09-24
 
 - 在 Owner 已授权且应用内状态为 ACTIVE 的头条 BrowserContext 中，复用 R1-F 的编辑器 Network Guard，只调用页面原生 `byted_acrawler.sign()` 与 `sign({})`。诊断开关仅在测试进程启用；正式图文 API Submit 仍未实现。

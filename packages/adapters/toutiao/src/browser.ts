@@ -337,7 +337,7 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
   constructor(options: BrowserAutomationAdapterOptions = {}) { super(definition, options); }
 
   /** Diagnostics only. The caller enforces the default-off Shadow flag and account authorization. */
-  async runReadOnlyProtocolShadow(ctx: AccountContext, mode: "HOME" | "EDITOR" | "SIGNER_CONTRACT" = "HOME"): Promise<ToutiaoLiveShadowResult> {
+  async runReadOnlyProtocolShadow(ctx: AccountContext, mode: "HOME" | "EDITOR" | "SIGNER_CONTRACT" | "SIGNER_INPUT" = "HOME"): Promise<ToutiaoLiveShadowResult> {
     const owned = this.sessionManager.getCanonicalPage({ platformKey: "toutiao", accountId: ctx.accountId });
     if (!owned) throw new Error("TOUTIAO_SHADOW_SESSION_UNAVAILABLE");
     try { return await runReadOnlyToutiaoProtocolShadow(owned.session.context, owned.page, { mode }); }

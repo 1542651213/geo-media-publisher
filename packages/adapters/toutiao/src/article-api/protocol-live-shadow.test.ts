@@ -181,4 +181,33 @@ describe("Toutiao live Shadow network guard", () => {
     expect(editorPage.close).toHaveBeenCalledOnce();
     expect(context.unroute).toHaveBeenCalledOnce();
   });
+
+  it("runs the input matrix under the same guard and reports only safe request shapes", async () => {
+    let guard: ((route: Route) => Promise<void>) | undefined;
+    const context = { serviceWorkers: () => [], route: vi.fn(async (_: string, callback: (route: Route) => Promise<void>) => { guard = callback; }),
+      unroute: vi.fn(async () => undefined), on: vi.fn(), off: vi.fn(), cookies: vi.fn(async () => []),
+      newPage: vi.fn(async () => editorPage) } as unknown as BrowserContext;
+    const home = { isClosed: () => false, context: () => context, url: () => "https://mp.toutiao.com/profile_v4/index",
+      evaluate: vi.fn(async () => []), reload: vi.fn() } as unknown as Page;
+    const inputContract = { exists: true, signExists: true, signLength: 0, signSourceSha256: "hash", probes: [] };
+    const editorPage = { isClosed: () => false, context: () => context, url: () => "https://mp.toutiao.com/profile_v4/graphic/publish",
+      goto: vi.fn(async () => undefined), waitForTimeout: vi.fn(async () => undefined), close: vi.fn(async () => undefined),
+      evaluate: vi.fn(async (fn: () => unknown) => {
+        if (fn.name === "probeAcrCrawlerInputContractInPage") {
+          const request = { method: () => "POST", url: () => "https://mp.toutiao.com/mp/agw/article/publish?token=secret" } as unknown as Request;
+          const route = { request: () => request, continue: vi.fn(), abort: vi.fn(async () => undefined) } as unknown as Route;
+          await guard?.(route);
+          expect(route.abort).toHaveBeenCalledOnce();
+          return inputContract;
+        }
+        return [];
+      }) } as unknown as Page;
+    const result = await runReadOnlyToutiaoProtocolShadow(context, home, { mode: "SIGNER_INPUT" });
+    expect(result.signerInputContract).toEqual(inputContract);
+    expect(result.signerProbeNetworkRequestDelta).toBe(1);
+    expect(result.signerProbeRequestShapes).toEqual([{ method: "POST", host: "mp.toutiao.com", path: "/mp/agw/article/publish", category: "DENY_CONTENT_MUTATION" }]);
+    expect(result.signerProbeCookieMetadataChanged).toBe(false);
+    expect(JSON.stringify(result)).not.toContain("token=secret");
+    expect(editorPage.close).toHaveBeenCalledOnce();
+  });
 });

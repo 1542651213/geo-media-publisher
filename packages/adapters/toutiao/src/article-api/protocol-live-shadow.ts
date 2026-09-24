@@ -2,6 +2,7 @@ import type { BrowserContext, Page, Request, Response, Route } from "playwright-
 import { captureSafeProtocolObservation, type RawToutiaoShadowObservation, type SafeToutiaoProtocolObservation } from "./protocol-shadow";
 import { inspectProtocolScript, inspectRuntimeSdkSurface, type SafeProtocolScriptEvidence, type SafeRuntimeSdkSurface } from "./protocol-script-discovery";
 import { probeAcrCrawlerSignInPage } from "./protocol-signer-contract";
+import { probeAcrCrawlerInputContractInPage } from "./protocol-signer-input-probe";
 
 export const TOUTIAO_GUARDED_EDITOR_URL = "https://mp.toutiao.com/profile_v4/graphic/publish";
 
@@ -42,9 +43,12 @@ export interface ToutiaoLiveShadowResult {
   readonly runtimeSdkSurfaces: readonly SafeRuntimeSdkSurface[];
   readonly scripts: readonly SafeProtocolScriptEvidence[];
   readonly loadedScriptCount: number;
-  readonly discoveryMode: "HOME" | "EDITOR" | "SIGNER_CONTRACT";
+  readonly discoveryMode: "HOME" | "EDITOR" | "SIGNER_CONTRACT" | "SIGNER_INPUT";
   readonly signerContract: Awaited<ReturnType<typeof probeAcrCrawlerSignInPage>> | null;
+  readonly signerInputContract: Awaited<ReturnType<typeof probeAcrCrawlerInputContractInPage>> | null;
   readonly signerProbeNetworkRequestDelta: number | null;
+  readonly signerProbeCookieMetadataChanged: boolean | null;
+  readonly signerProbeRequestShapes: readonly Readonly<{ method: string; host: string; path: string; category: ShadowRequestDecision }> [];
   readonly pageHost: string | null;
   readonly pagePath: string | null;
   readonly guardedRequestCount: number;
@@ -57,7 +61,7 @@ export interface ToutiaoLiveShadowResult {
   readonly blockedRequestShapes: readonly Readonly<{ method: string; host: string; path: string; category: Exclude<ShadowRequestDecision, "READ_ONLY" | "NON_CONTENT_TELEMETRY" | "AUTH_TOKEN_BOOTSTRAP"> }> [];
 }
 
-function blockedRequestShape(method: string, rawUrl: string, category: Exclude<ShadowRequestDecision, "READ_ONLY" | "NON_CONTENT_TELEMETRY" | "AUTH_TOKEN_BOOTSTRAP">): ToutiaoLiveShadowResult["blockedRequestShapes"][number] {
+function safeRequestShape<T extends ShadowRequestDecision>(method: string, rawUrl: string, category: T): Readonly<{ method: string; host: string; path: string; category: T }> {
   try {
     const url = new URL(rawUrl);
     const path = "/" + decodeURIComponent(url.pathname).split("/").slice(1, 5)
@@ -110,7 +114,7 @@ function safePageLocation(page: Page): { host: string | null; path: string | nul
 }
 
 /** The caller must first verify account ownership and an ACTIVE app-owned canonical Page. */
-export async function runReadOnlyToutiaoProtocolShadow(context: BrowserContext, page: Page, options: Readonly<{ mode?: "HOME" | "EDITOR" | "SIGNER_CONTRACT" }> = {}): Promise<ToutiaoLiveShadowResult> {
+export async function runReadOnlyToutiaoProtocolShadow(context: BrowserContext, page: Page, options: Readonly<{ mode?: "HOME" | "EDITOR" | "SIGNER_CONTRACT" | "SIGNER_INPUT" }> = {}): Promise<ToutiaoLiveShadowResult> {
   const initialLocation = safePageLocation(page);
   if (page.isClosed() || page.context() !== context || initialLocation.host !== "mp.toutiao.com"
     || !isSafeCreatorHomePath(initialLocation.path ?? "")) throw new Error("TOUTIAO_SHADOW_SESSION_UNAVAILABLE");
@@ -128,9 +132,13 @@ export async function runReadOnlyToutiaoProtocolShadow(context: BrowserContext, 
   let blockedContentMutationCount = 0;
   let blockedUnknownMutationCount = 0;
   const blockedRequestShapes: Array<ToutiaoLiveShadowResult["blockedRequestShapes"][number]> = [];
+  const signerProbeRequestShapes: Array<ToutiaoLiveShadowResult["signerProbeRequestShapes"][number]> = [];
+  let signerProbeRunning = false;
   const guard = async (route: Route): Promise<void> => {
     const request = route.request();
     const decision = classifyShadowRequest(request.method(), request.url());
+    if (signerProbeRunning && signerProbeRequestShapes.length < 40)
+      signerProbeRequestShapes.push(safeRequestShape(request.method(), request.url(), decision));
     if (decision === "READ_ONLY" || decision === "NON_CONTENT_TELEMETRY" || decision === "AUTH_TOKEN_BOOTSTRAP") {
       guarded.add(request);
       guardedRequestCount += 1;
@@ -142,7 +150,7 @@ export async function runReadOnlyToutiaoProtocolShadow(context: BrowserContext, 
     if (decision === "DENY_ARTICLE_NEW") blockedArticleNewCount += 1;
     else if (decision === "DENY_CONTENT_MUTATION") blockedContentMutationCount += 1;
     else blockedUnknownMutationCount += 1;
-    if (blockedRequestShapes.length < 60) blockedRequestShapes.push(blockedRequestShape(request.method(), request.url(), decision));
+    if (blockedRequestShapes.length < 60) blockedRequestShapes.push(safeRequestShape(request.method(), request.url(), decision));
     await route.abort("blockedbyclient");
   };
   // Install the write guard first. Only responses to routed requests may be recorded.
@@ -218,14 +226,14 @@ export async function runReadOnlyToutiaoProtocolShadow(context: BrowserContext, 
     }).cookies;
     const mode = options.mode ?? "HOME";
     let inspectedPage = page;
-    if (mode === "EDITOR" || mode === "SIGNER_CONTRACT") {
+    if (mode === "EDITOR" || mode === "SIGNER_CONTRACT" || mode === "SIGNER_INPUT") {
       editorPage = await context.newPage();
       inspectedPage = editorPage;
       try { await editorPage.goto(TOUTIAO_GUARDED_EDITOR_URL, { waitUntil: "domcontentloaded", timeout: 20_000 }); }
       catch { /* Guarded article/new may prevent editor initialization; scripts remain observable. */ }
     } else await page.reload({ waitUntil: "domcontentloaded", timeout: 20_000 });
     await inspectedPage.waitForTimeout(5_000);
-    if (mode === "EDITOR" || mode === "SIGNER_CONTRACT") {
+    if (mode === "EDITOR" || mode === "SIGNER_CONTRACT" || mode === "SIGNER_INPUT") {
       const editorLocation = safePageLocation(inspectedPage);
       if (editorLocation.host !== "mp.toutiao.com" || editorLocation.path !== "/profile_v4/graphic/publish")
         throw new Error("TOUTIAO_SHADOW_EDITOR_ROUTE_UNAVAILABLE");
@@ -244,19 +252,28 @@ export async function runReadOnlyToutiaoProtocolShadow(context: BrowserContext, 
     const observedScriptCount = await inspectedPage.evaluate(() => document.scripts.length);
     const loadedScriptCount = typeof observedScriptCount === "number" ? observedScriptCount : scripts.length;
     let signerContract: ToutiaoLiveShadowResult["signerContract"] = null;
+    let signerInputContract: ToutiaoLiveShadowResult["signerInputContract"] = null;
     let signerProbeNetworkRequestDelta: number | null = null;
-    if (mode === "SIGNER_CONTRACT") {
+    let signerProbeCookieMetadataChanged: boolean | null = null;
+    if (mode === "SIGNER_CONTRACT" || mode === "SIGNER_INPUT") {
       if (context.serviceWorkers().length > 0 || inspectedPage.isClosed()) throw new Error("TOUTIAO_SHADOW_SIGNER_GUARD_UNAVAILABLE");
+      const cookieShape = (cookies: Awaited<ReturnType<BrowserContext["cookies"]>>) => JSON.stringify(cookies.map((cookie) =>
+        [cookie.name, cookie.domain, cookie.path, cookie.secure, cookie.httpOnly, cookie.sameSite, cookie.expires > 0]).sort());
+      const beforeCookies = cookieShape(await context.cookies());
       const beforeRequests = guardedRequestCount + blockedArticleNewCount + blockedContentMutationCount + blockedUnknownMutationCount;
-      signerContract = await inspectedPage.evaluate(probeAcrCrawlerSignInPage);
+      signerProbeRunning = true;
+      if (mode === "SIGNER_INPUT") signerInputContract = await inspectedPage.evaluate(probeAcrCrawlerInputContractInPage);
+      else signerContract = await inspectedPage.evaluate(probeAcrCrawlerSignInPage);
       // Keep the route active briefly for any request queued by the synchronous SDK call.
       await inspectedPage.waitForTimeout(1_000);
+      signerProbeRunning = false;
       signerProbeNetworkRequestDelta = guardedRequestCount + blockedArticleNewCount + blockedContentMutationCount + blockedUnknownMutationCount - beforeRequests;
+      signerProbeCookieMetadataChanged = beforeCookies !== cookieShape(await context.cookies());
     }
     const location = safePageLocation(page);
     return { status: page.isClosed() || location.host !== "mp.toutiao.com" || !isSafeCreatorHomePath(location.path ?? "") ? "SESSION_DISCONNECTED" : "CAPTURED",
       observations, cookieMetadata, signerGlobals, runtimeGlobals, runtimeSdkSurfaces, scripts, loadedScriptCount, discoveryMode: mode,
-      signerContract, signerProbeNetworkRequestDelta,
+      signerContract, signerInputContract, signerProbeNetworkRequestDelta, signerProbeCookieMetadataChanged, signerProbeRequestShapes,
       pageHost: location.host, pagePath: location.path,
       guardedRequestCount, nonContentTelemetryCount, authTokenBootstrapCount, remoteAuthState,
       blockedArticleNewCount, blockedContentMutationCount, blockedUnknownMutationCount, blockedRequestShapes };
