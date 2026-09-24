@@ -62,6 +62,7 @@ export class TestPlatformAdapter implements PlatformAdapter {
     if (this.mode === "permanent_failure") throw new AdapterError("CONTENT_REJECTED", "模拟内容被平台拒绝");
     return {
       success: true,
+      status: "published",
       externalId: `test-${randomUUID()}`,
       publishedUrl: `test://published/${article.articleId}`,
       response: { adapter: this.platformKey, simulated: true }

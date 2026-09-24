@@ -21,8 +21,9 @@ export type BrowserPublishReconciliationStatus = "FOUND_PUBLISHED" | "CONFIRMED_
 export interface BrowserPublishAttemptContext {
   jobId: string;
   submissionIntentId: string;
+  submissionAttemptId?: string;
   attempt: number;
-  /** Called immediately before the adapter triggers the real final-submit side effect. */
+  /** Must be called synchronously immediately before the real final-submit side effect; persists the one-shot boundary and throws if already used. */
   markSubmissionSideEffect?: () => void;
 }
 
@@ -82,6 +83,7 @@ export interface PlatformAdapter {
   /** Optional reviewed cleanup capability. It must never be called without a separate user confirmation. */
   deleteContent?(ctx: AccountContext, externalId: string): Promise<{ deleted: boolean; response: Record<string, unknown> }>;
   publishVideo?(ctx: AccountContext, video: PublishVideoInput): Promise<PublishResult>;
+  /** Read-only remote status lookup. This method must never submit or retry a publish request. */
   getPublishStatus?(ctx: AccountContext, externalId: string): Promise<PublishStatusResult>;
   validateArticle?(article: PublishArticleInput): Promise<ValidationResult>;
   validateVideo?(video: PublishVideoInput): Promise<ValidationResult>;

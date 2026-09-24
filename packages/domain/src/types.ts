@@ -98,6 +98,7 @@ export type ContentReviewMode = (typeof CONTENT_REVIEW_MODES)[number];
 export const normalizeContentReviewMode = (value: unknown): ContentReviewMode =>
   CONTENT_REVIEW_MODES.includes(value as ContentReviewMode) ? value as ContentReviewMode : "WarningOnly";
 export type PublishRecordVerificationStatus = "NotTested" | "WaitingUser" | "Verified" | "Failed";
+export type PublishRemoteStatus = "SUBMIT_NOT_STARTED" | "SUBMITTING" | "SUBMIT_ACCEPTED" | "SCHEDULED_ACCEPTED" | "CONFIRMING" | "PUBLISHED_CONFIRMED" | "FAILED_CONFIRMED" | "UNCERTAIN" | "SAFE_TO_RETRY";
 export const PLATFORM_SELF_TEST_LEVELS = ["L1_LOGIN", "L2_EDITOR", "L3_CONTENT_FILL", "L4_DRAFT", "L5_PUBLISH"] as const;
 export type PlatformSelfTestLevel = (typeof PLATFORM_SELF_TEST_LEVELS)[number];
 export const PLATFORM_SELF_TEST_RESULTS = ["NOT_TESTED", "TESTING", "PASSED", "PARTIAL_PASSED", "WAITING_FOR_USER", "FAILED", "NOT_SUPPORTED"] as const;
@@ -531,6 +532,8 @@ export interface PublishRecord {
   bodyFilled?: boolean | null;
   selectedImageAssetId?: string | null;
   imageSelectionMode?: ImageSelectionMode;
+  submissionAttemptId?: string | null;
+  remoteStatus?: PublishRemoteStatus | null;
 }
 
 export interface ImageAsset {
@@ -624,7 +627,7 @@ export interface PublishVideoInput {
 
 export interface PublishResult {
   success: boolean;
-  status?: "published" | "publishing" | "failed";
+  status?: "published" | "publishing" | "scheduled" | "failed";
   dryRun?: boolean;
   prepared?: boolean;
   publishedUrl?: string;
@@ -758,7 +761,7 @@ export interface ExcelImportResult {
 }
 
 export interface PublishStatusResult {
-  status: "publishing" | "published" | "failed";
+  status: "publishing" | "scheduled" | "published" | "failed";
   externalId?: string;
   publishedUrl?: string;
   response: Record<string, unknown>;

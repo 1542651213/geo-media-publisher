@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { isAutomationAdapter, withUserInitiatedActionSettings, type AdapterRegistry, type BrowserExecutionMode, type BrowserPublishAttemptContext, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
 import { canReuseArticle, decideFailure, validatePlatformArticle, type Account, type AdapterManifest, type ErrorCode, type PlatformCapability, type PublishJob, type PublishMode, type PublishResult, type PublishVideoInput } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
+import { GlobalPublishExecutionGate } from "./global-publish-execution-gate";
 
 export interface PublishExecutionResult { job: PublishJob; message: string; }
 export interface AssistedPrepareResult { job: PublishJob; record: ReturnType<AppRepository["getPublishRecordByJob"]>; message: string; }
@@ -54,6 +56,10 @@ function operationSettings(
   };
 }
 
+function publishInputHash(input: unknown): string {
+  return createHash("sha256").update(JSON.stringify(input)).digest("hex");
+}
+
 function publishRecordMetadata(manifest: AdapterManifest, job: PublishJob, account: Account, result: PublishResult): {
   publishMode: PublishMode;
   automationType: PlatformCapability;
@@ -85,7 +91,10 @@ function publishRecordMetadata(manifest: AdapterManifest, job: PublishJob, accou
 }
 
 export class PublisherService {
-  constructor(private readonly repository: AppRepository, private readonly adapters: AdapterRegistry, private readonly logger: Logger, private readonly options: PublisherOptions = {}) {}
+  private readonly formalExecutionGate: GlobalPublishExecutionGate;
+  constructor(private readonly repository: AppRepository, private readonly adapters: AdapterRegistry, private readonly logger: Logger, private readonly options: PublisherOptions = {}) {
+    this.formalExecutionGate = GlobalPublishExecutionGate.forRepository(repository);
+  }
 
   isPlatformRegistered(platformKey: string): boolean {
     return this.adapters.tryGet(platformKey) !== null;
@@ -212,6 +221,13 @@ export class PublisherService {
   }
 
   async executeJob(jobId: string, action?: UserInitiatedAction, browserExecutionMode?: BrowserExecutionMode): Promise<PublishExecutionResult> {
+    const job = this.repository.getJob(jobId);
+    if (!job) throw new Error("Publish job not found");
+    if (job.dryRun || ["NeedsReconciliation", "Submitted", "Publishing", "Published", "Success"].includes(job.status)) return this.executeJobWithinGate(jobId, action, browserExecutionMode);
+    return this.formalExecutionGate.run(jobId, () => this.executeJobWithinGate(jobId, action, browserExecutionMode));
+  }
+
+  private async executeJobWithinGate(jobId: string, action?: UserInitiatedAction, browserExecutionMode?: BrowserExecutionMode): Promise<PublishExecutionResult> {
     const existing = this.repository.getJob(jobId);
     if (!existing) throw new Error("Publish job not found");
     if (existing.status === "NeedsReconciliation") return { job: existing, message: "Submission result is unknown; reconcile before retry" };
@@ -228,6 +244,7 @@ export class PublisherService {
     let finalSubmitSideEffectTriggered = false;
     let platformFinalSubmitPath = false;
     try {
+      if (!job.dryRun) this.repository.updateGlobalFormalPublishExecution(job.id, "EXECUTING");
       const adapter = this.adapters.getForContent(job.platformKey, job.contentKind ?? "article");
       if (!job.dryRun && job.manualConfirmationRequired) throw Object.assign(new Error("Formal publishing requires user confirmation"), { code: "USER_ACTION_REQUIRED" });
       if (!job.dryRun && account.lastPublishAt && account.minimumIntervalSeconds > 0) {
@@ -261,7 +278,11 @@ export class PublisherService {
           const validation = await adapter.validateVideo(input);
           if (!validation.valid) throw Object.assign(new Error(validation.errors.join("; ")), { code: "CONTENT_REJECTED" });
         }
-        if (!job.dryRun) submissionIntentId = this.repository.prepareSubmissionIntent(job.id).id;
+        if (!job.dryRun) {
+          submissionIntentId = this.repository.prepareSubmissionIntent(job.id).id;
+          const claimed = this.repository.claimFinalSubmitAttempt(submissionIntentId, { payloadHash: publishInputHash(input), adapterId: `${adapter.platformKey}@${adapter.manifest.version}` });
+          this.logger.info("PUBLISHER", "FINAL_SUBMIT_BOUNDARY_ENTERED", "Durable formal submit boundary entered", { jobId: job.id, submissionAttemptId: claimed.submissionAttemptId, platformKey: job.platformKey });
+        }
         result = await withTimeout(adapter.publishVideo(ctx, input), this.options.operationTimeoutMs ?? 120_000, "Platform video publish").finally(async () => {
           if (isAutomationAdapter(adapter)) await adapter.releaseOperationSession?.(ctx).catch(() => undefined);
         });
@@ -286,15 +307,21 @@ export class PublisherService {
           if (adapter.prepareFinalSubmit) await withTimeout(adapter.prepareFinalSubmit(ctx, input), this.options.operationTimeoutMs ?? 120_000, "Platform final-submit preflight");
           const intent = this.repository.getSubmissionIntentByJob(job.id);
           if (!intent) throw new Error("Persisted submission intent is missing before platform final submit");
-          const claimedAttempt = this.repository.claimFinalSubmitAttempt(intent.id);
+          const submissionAttemptId = this.repository.reserveSubmissionAttempt(intent.id);
           const attempt: BrowserPublishAttemptContext = {
             jobId: job.id,
-            submissionIntentId: claimedAttempt.id,
-            attempt: claimedAttempt.attempt,
-            markSubmissionSideEffect: () => { finalSubmitSideEffectTriggered = true; }
+            submissionIntentId: intent.id,
+            submissionAttemptId,
+            attempt: intent.attempt,
+            markSubmissionSideEffect: () => {
+              const claimed = this.repository.claimFinalSubmitAttempt(intent.id, { payloadHash: publishInputHash(input), adapterId: `${adapter.platformKey}@${adapter.manifest.version}` });
+              finalSubmitSideEffectTriggered = true;
+              this.logger.info("PUBLISHER", "FINAL_SUBMIT_BOUNDARY_ENTERED", "Durable formal submit boundary entered", { jobId: job.id, submissionAttemptId: claimed.submissionAttemptId, platformKey: job.platformKey });
+            }
           };
           try {
             result = await withTimeout(adapter.finalSubmit(ctx, input, attempt), this.options.operationTimeoutMs ?? 120_000, "Platform final submit").then(async (submitted) => {
+              if (!finalSubmitSideEffectTriggered) throw Object.assign(new Error("Platform final submit returned without a durable submit boundary"), { code: "RECONCILIATION_UNCERTAIN" });
               let collected = submitted;
               if (adapter.collectPublishResult) collected = await withTimeout(adapter.collectPublishResult(ctx, input, attempt), this.options.operationTimeoutMs ?? 120_000, "Platform publish result collection");
               if (!collected.externalId || !collected.publishedUrl) throw Object.assign(new Error("Platform final submit did not return a verifiable External ID and URL"), { code: "EXTERNAL_EVIDENCE_INCOMPLETE" });
@@ -309,6 +336,10 @@ export class PublisherService {
           }
           if (isAutomationAdapter(adapter)) await adapter.releaseOperationSession?.(ctx).catch(() => undefined);
         } else {
+          if (submissionIntentId) {
+            const claimed = this.repository.claimFinalSubmitAttempt(submissionIntentId, { payloadHash: publishInputHash(input), adapterId: `${adapter.platformKey}@${adapter.manifest.version}` });
+            this.logger.info("PUBLISHER", "FINAL_SUBMIT_BOUNDARY_ENTERED", "Durable formal submit boundary entered", { jobId: job.id, submissionAttemptId: claimed.submissionAttemptId, platformKey: job.platformKey });
+          }
           result = await withTimeout(adapter.publishArticle(ctx, input), this.options.operationTimeoutMs ?? 120_000, "Platform article publish").finally(async () => {
             if (isAutomationAdapter(adapter)) await adapter.releaseOperationSession?.(ctx).catch(() => undefined);
           });
@@ -326,8 +357,10 @@ export class PublisherService {
           imageInsertion: job.selectedImageAssetId ? result.response.imageUploaded === true ? "uploaded_verified" : "failed" : "none"
         }
       };
-      if (submissionIntentId) this.repository.markSubmissionIntentSubmitted(submissionIntentId, result.externalId ?? null);
-      const pending = !job.dryRun && result.status === "publishing";
+      const publishedConfirmed = result.status === "published" && Boolean(result.externalId && result.publishedUrl);
+      const remoteStatus = result.status === "scheduled" ? "SCHEDULED_ACCEPTED" : publishedConfirmed ? "PUBLISHED_CONFIRMED" : "SUBMIT_ACCEPTED";
+      if (submissionIntentId) this.repository.markSubmissionIntentSubmitted(submissionIntentId, result.externalId ?? null, remoteStatus);
+      const pending = !job.dryRun && !publishedConfirmed;
       const record = usePlatformFinalSubmit && preparedRecord
         ? this.repository.updatePublishRecord(preparedRecord.id, { status: pending ? "Publishing" : "Published", success: !pending, publishedUrl: result.publishedUrl ?? null, publishedExternalId: result.externalId ?? null, response: result.response, verificationStatus: pending ? "WaitingUser" : "Verified" })
         : this.repository.insertPublishRecord({ jobId: job.id, accountId: job.accountId, platformAccountId: job.platformAccountId, platformKey: job.platformKey, articleId: job.articleId, publishedUrl: result.publishedUrl ?? null, publishedExternalId: result.externalId ?? null, success: !pending, response: result.response, dryRun: job.dryRun, status: job.dryRun ? "DryRun" : pending ? "Publishing" : "Published", ...publishRecordMetadata(adapter.manifest, job, account, result) });
@@ -335,7 +368,7 @@ export class PublisherService {
       else if (pending) this.repository.markJobPublishing(job.id, record.id);
       else this.repository.markJobSuccess(job.id);
       if (!job.dryRun && !pending) { this.repository.markArticlePublished(article.id); this.repository.markAccountPublished(account.id); }
-      const message = job.dryRun ? "Dry Run completed; awaiting confirmation" : pending ? "Submission accepted; waiting for platform status" : "Publish completed";
+      const message = job.dryRun ? "Dry Run completed; awaiting confirmation" : result.status === "scheduled" ? "Remote schedule accepted; publication is not confirmed" : pending ? "Submission accepted; waiting for platform status" : "Publish completed";
       this.repository.updatePlatformHealth(job.platformKey, "healthy");
       this.repository.createNotification({ level: job.dryRun ? "info" : "success", title: job.dryRun ? "Dry Run completed" : "Publish completed", message, relatedId: job.id });
       this.logger.info("PUBLISHER", job.dryRun ? "PUBLISH_DRY_RUN" : "PUBLISH_SUCCESS", message, { jobId: job.id, platformKey: job.platformKey, accountId: account.id, dryRun: job.dryRun });
@@ -347,14 +380,13 @@ export class PublisherService {
         if (intent?.state === "Submitted") return { job: this.repository.getJob(job.id) as PublishJob, message: "Submission accepted; record recovery is pending" };
         const code = errorCode(error);
         const preSubmitUserAction = platformFinalSubmitPath && ["FINAL_SUBMIT_CONTROL_NOT_FOUND", "REQUIRED_FIELD_MISSING", "USER_ACTION_REQUIRED"].includes(code);
-        if (preSubmitUserAction && !finalSubmitSideEffectTriggered && intent && (intent.finalSubmitCount === 0 || (intent.state === "Submitting" && intent.finalSubmitCount === 1))) {
+        if (preSubmitUserAction && !finalSubmitSideEffectTriggered && intent && intent.finalSubmitCount === 0) {
           const waiting = this.repository.resetSubmissionIntentForUserAction(intent.id, errorCode(error));
           this.logger.warn("PUBLISHER", "USER_ACTION_REQUIRED", error instanceof Error ? error.message : "Platform final submit is waiting for user action", { jobId: job.id, finalSubmitCount: intent.finalSubmitCount, submissionSideEffectTriggered: false });
           return { job: waiting, message: error instanceof Error ? error.message : "平台最终提交前仍需要用户完成字段或安全验证" };
         }
-        if (platformFinalSubmitPath && !finalSubmitSideEffectTriggered && intent && intent.finalSubmitCount === 0) return this.fail(job, code, error instanceof Error ? error.message : "Final submit did not execute");
         const uncertain = this.repository.markSubmissionIntentUncertain(intent?.id ?? submissionIntentId, errorCode(error));
-        this.logger.error("PUBLISHER", "SUBMISSION_UNCERTAIN", error instanceof Error ? error.message : "Submission result is unknown", { jobId: job.id, attempt: job.attemptCount, submissionSideEffectTriggered: finalSubmitSideEffectTriggered });
+        this.logger.error("PUBLISHER", "SUBMISSION_UNCERTAIN", error instanceof Error ? error.message : "Submission result is unknown", { jobId: job.id, submissionAttemptId: intent?.submissionAttemptId ?? null, submissionSideEffectTriggered: finalSubmitSideEffectTriggered });
         return { job: uncertain, message: `Submission result is unknown; reconciliation is required${error instanceof Error ? `: ${error.message}` : ""}` };
       }
       return this.fail(job, errorCode(error), error instanceof Error ? error.message : "Unknown publish error");
@@ -366,7 +398,7 @@ export class PublisherService {
     if (existing) return { job, message: "Submission already recorded; no duplicate publish was attempted" };
     const intent = this.repository.getSubmissionIntentByJob(job.id);
     if (!intent?.externalId) return { job, message: "Submission was accepted without an external id; reconciliation is required" };
-    const record = this.repository.insertPublishRecord({ jobId: job.id, accountId: job.accountId, platformAccountId: job.platformAccountId, platformKey: job.platformKey, articleId: job.articleId, publishedUrl: null, publishedExternalId: intent.externalId, success: true, response: { recoveredFromSubmissionIntent: true }, dryRun: false, status: "Submitted", publishMode: "AUTO", automationType: "API", operator: "desktop-user", verificationStatus: "WaitingUser" });
+    const record = this.repository.insertPublishRecord({ jobId: job.id, accountId: job.accountId, platformAccountId: job.platformAccountId, platformKey: job.platformKey, articleId: job.articleId, publishedUrl: null, publishedExternalId: intent.externalId, success: false, response: { recoveredFromSubmissionIntent: true }, dryRun: false, status: "Submitted", publishMode: "AUTO", automationType: "API", operator: "desktop-user", verificationStatus: "WaitingUser" });
     const repaired = this.repository.markJobPublishing(job.id, record.id);
     return { job: repaired, message: "Recovered accepted submission without resubmitting" };
   }
@@ -375,8 +407,10 @@ export class PublisherService {
     const job = this.repository.getJob(jobId);
     if (!job || (job.status !== "Publishing" && job.status !== "NeedsReconciliation")) throw new Error("Job is not awaiting reconciliation");
     const pollingStartedAt = job.startedAt ? Date.parse(job.startedAt) : Date.parse(job.scheduledAt);
-    if (enforceDeadline && Number.isFinite(pollingStartedAt) && Date.now() - pollingStartedAt >= (this.options.publishPollingTimeoutMs ?? 24 * 60 * 60 * 1000)) {
+    const currentIntent = this.repository.getSubmissionIntentByJob(job.id);
+    if (enforceDeadline && currentIntent?.remoteStatus !== "SCHEDULED_ACCEPTED" && Number.isFinite(pollingStartedAt) && Date.now() - pollingStartedAt >= (this.options.publishPollingTimeoutMs ?? 24 * 60 * 60 * 1000)) {
       const expired = this.repository.updateJobFailure(job.id, "NeedsReconciliation", "TIMEOUT", "Platform publish status exceeded the polling deadline; user reconciliation is required", null);
+      this.repository.updateSubmissionRemoteStatus(job.id, "UNCERTAIN", true);
       this.repository.createNotification({ level: "warning", title: "Publish requires reconciliation", message: "Platform status polling reached its time limit. Confirm the platform result before any retry.", relatedId: job.id });
       return { job: expired, message: "Platform status polling reached its time limit; manual reconciliation is required" };
     }
@@ -392,11 +426,25 @@ export class PublisherService {
       const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: false, manualConfirmationRequired: false }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
       const status = await withTimeout(adapter.getPublishStatus(ctx, externalId), this.options.statusCheckTimeoutMs ?? 30_000, "Platform publish status check");
       this.repository.markJobPolled(job.id);
-      if (status.status === "publishing") return { job: this.repository.getJob(job.id) as PublishJob, message: "Platform is still processing publish" };
-      if (status.status === "failed") {
-        if (record) this.repository.updatePublishRecord(record.id, { status: "Failed", success: false, response: status.response });
-        return this.fail(job, status.errorCode ?? "UNKNOWN", status.errorMessage ?? "Platform publish failed");
+      if (status.status === "scheduled") {
+        this.repository.updateSubmissionRemoteStatus(job.id, "SCHEDULED_ACCEPTED", true);
+        return { job: this.repository.getJob(job.id) as PublishJob, message: "Remote schedule is accepted; publication is not confirmed" };
       }
+      if (status.status === "publishing") {
+        if (intent?.remoteStatus !== "SCHEDULED_ACCEPTED") this.repository.updateSubmissionRemoteStatus(job.id, "CONFIRMING", true);
+        return { job: this.repository.getJob(job.id) as PublishJob, message: "Platform is still processing publish" };
+      }
+      if (status.status === "failed") {
+        this.repository.updateSubmissionRemoteStatus(job.id, "FAILED_CONFIRMED", false);
+        if (record) this.repository.updatePublishRecord(record.id, { status: "Failed", success: false, response: status.response });
+        const failed = this.repository.updateJobFailure(job.id, "Failed", status.errorCode ?? "UNKNOWN", status.errorMessage ?? "Platform publish failed", null);
+        return { job: failed, message: status.errorMessage ?? "Platform publish failed" };
+      }
+      if (status.status !== "published" || !status.publishedUrl || (status.externalId && status.externalId !== externalId)) {
+        this.repository.updateSubmissionRemoteStatus(job.id, "UNCERTAIN", true);
+        return { job: this.repository.getJob(job.id) as PublishJob, message: "Platform confirmation lacks a public URL or remote identifier" };
+      }
+      this.repository.updateSubmissionRemoteStatus(job.id, "PUBLISHED_CONFIRMED", false);
       if (record) this.repository.updatePublishRecord(record.id, { status: "Published", success: true, publishedUrl: status.publishedUrl ?? null, response: status.response });
       else this.repository.insertPublishRecord({ jobId: job.id, accountId: job.accountId, platformAccountId: job.platformAccountId, platformKey: job.platformKey, articleId: job.articleId, publishedUrl: status.publishedUrl ?? null, publishedExternalId: externalId, success: true, response: status.response, dryRun: false, status: "Published", publishMode: "AUTO", automationType: inferredAutomationType(adapter.manifest), operator: process.env.USERNAME?.trim() || process.env.USER?.trim() || "desktop-user", verificationStatus: "Verified" });
       this.repository.markJobSuccess(job.id);
@@ -406,7 +454,9 @@ export class PublisherService {
       this.repository.updatePlatformHealth(job.platformKey, "healthy");
       return { job: this.repository.getJob(job.id) as PublishJob, message: "Reconciliation confirmed publish" };
     } catch (error) {
-      return this.fail(job, errorCode(error), error instanceof Error ? error.message : "Status reconciliation failed");
+      this.logger.warn("PUBLISHER", "CONFIRMATION_UNCERTAIN", error instanceof Error ? error.message : "Status reconciliation failed", { jobId: job.id, platformKey: job.platformKey, code: errorCode(error) });
+      this.repository.markJobPolled(job.id);
+      return { job: this.repository.getJob(job.id) as PublishJob, message: "Confirmation is still uncertain; no new submit was attempted" };
     }
   }
 
@@ -435,6 +485,7 @@ export class PersistentScheduler {
     const recoveredBrowserJobs = this.repository.listJobs().filter((job) => this.publisher.isPlatformRegistered(job.platformKey) && ["Running", "Preparing", "ReadyToSubmit"].includes(job.status) && this.publisher.isBrowserAutomationPlatform(job.platformKey, job.contentKind ?? "article"));
     const recovered = this.repository.recoverRunningJobs();
     for (const job of recoveredBrowserJobs) {
+      if (this.repository.getJob(job.id)?.status !== "Retry") continue;
       this.repository.updateJobFailure(job.id, "NeedsUserAction", "USER_ACTION_REQUIRED", "应用已恢复；浏览器平台任务等待用户点击“继续”，不会自动打开平台窗口", null);
       this.repository.createNotification({ level: "warning", title: "有任务需要继续", message: `${job.platformKey} 任务等待用户继续`, relatedId: job.id });
     }
@@ -466,7 +517,7 @@ export class PersistentScheduler {
         return account?.enabled === true && platforms.get(job.platformKey)?.healthStatus !== "paused" && (safeDryRun || approvedAutoPublish) && (!job.nextRetryAt || new Date(job.nextRetryAt).getTime() <= now.getTime());
       });
       const results: PublishExecutionResult[] = [];
-      const globalLimit = Math.max(1, this.options.globalConcurrency ?? 2);
+      const globalLimit = 1;
       const platformRunning = new Map<string, number>();
       const accountRunning = new Map<string, number>();
       let selectedCount = 0;

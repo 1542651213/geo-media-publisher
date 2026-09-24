@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import type Database from "better-sqlite3";
 import { CONTENT_STUDIO_PLATFORM_KEYS, CORE_AI_FABRICATION_RULES, conservativePlatformContentRules, expandKeywords, normalizeContentReviewMode } from "@publisher/domain";
 import type { Account, ActivityLog, AdapterManifest, AIProviderProfile, AIUsage, Article, ArticleVariant, BackgroundAutomationStatus, Brand, BrandAsset, BrandDifferentiationMetrics, BrandKnowledgeCategory, BrandKnowledgeEntry, CityRegion, ContentGoal, ContentIntent, ContentQualityCheckResult, ContentQualityContentType, ContentQualityIssue, ContentQualityStatus, ContentQualityTrigger, ContentReviewMode, ContentSource, ContentStudioContent, ContentStudioPlatformKey, ContentStudioTopicPlan, DashboardStats, ExcelArticleRowInput, ExcelImportDiagnostic, ExcelImportDiagnosticCode, ExcelImportPreview, ExcelImportPreviewRow, ExcelImportResult, ExcelImportSheetCandidate, FinalPublishMode, ImageAsset, ImageSelectionMode, KnowledgeSnapshot, KeywordItem, KeywordTemplate, LoginStatus, Notification, Platform, PlatformCapability, PlatformCapabilities, PlatformContentRules, PlatformProfile, PlatformSelfTestCleanupStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PlatformSelfTestStep, PromotionStrength, PublishJob, PublishPlan, PublishRecord, SearchIntent, VideoAsset } from "@publisher/domain";
+import type { PublishRemoteStatus } from "@publisher/domain";
 
 type SqlValue = string | number | null;
 type Row = Record<string, unknown>;
@@ -584,6 +585,25 @@ export class AppRepository {
 
   constructor(db: Database.Database) {
     this.db = db;
+  }
+
+  getGlobalFormalPublishExecution(): { jobId: string; ownerPid: number; acquiredAt: string; executionPhase: string; submitBoundaryEnteredAt: string | null; updatedAt: string } | null {
+    const row = this.db.prepare("SELECT job_id,owner_pid,acquired_at,execution_phase,submit_boundary_entered_at,updated_at FROM global_formal_publish_execution WHERE singleton_id=1").get() as Row | undefined;
+    return row ? { jobId: textValue(row.job_id), ownerPid: intValue(row.owner_pid), acquiredAt: textValue(row.acquired_at), executionPhase: textValue(row.execution_phase), submitBoundaryEnteredAt: typeof row.submit_boundary_entered_at === "string" ? row.submit_boundary_entered_at : null, updatedAt: textValue(row.updated_at) } : null;
+  }
+
+  acquireGlobalFormalPublishExecution(jobId: string): void {
+    const timestamp = now();
+    const acquired = this.db.prepare("INSERT OR IGNORE INTO global_formal_publish_execution (singleton_id,job_id,owner_pid,acquired_at,execution_phase,updated_at) VALUES (1,?, ?,?,'CLAIMING',?)").run(jobId, process.pid, timestamp, timestamp);
+    if (acquired.changes !== 1) throw Object.assign(new Error("Another formal publish execution already holds the global slot"), { code: "GLOBAL_PUBLISH_BUSY" });
+  }
+
+  updateGlobalFormalPublishExecution(jobId: string, phase: "EXECUTING" | "SUBMITTING" | "CONFIRMING" | "UNCERTAIN_IN_FLIGHT"): void {
+    this.db.prepare("UPDATE global_formal_publish_execution SET execution_phase=?,submit_boundary_entered_at=CASE WHEN ?='SUBMITTING' THEN COALESCE(submit_boundary_entered_at,?) ELSE submit_boundary_entered_at END,updated_at=? WHERE singleton_id=1 AND job_id=?").run(phase, phase, now(), now(), jobId);
+  }
+
+  releaseGlobalFormalPublishExecution(jobId: string): void {
+    this.db.prepare("DELETE FROM global_formal_publish_execution WHERE singleton_id=1 AND job_id=?").run(jobId);
   }
 
   listBrands(): Brand[] {
@@ -2317,6 +2337,8 @@ export class AppRepository {
   }
 
   claimJob(id: string): PublishJob {
+    const priorIntent = this.getSubmissionIntentByJob(id);
+    if (priorIntent && (priorIntent.finalSubmitCount >= 1 || priorIntent.submitBoundaryEnteredAt || priorIntent.state === "Unknown" || priorIntent.remoteStatus === "UNCERTAIN")) throw Object.assign(new Error("A previous final submit requires confirmed remote non-publication before a new Job may be created"), { code: "FINAL_SUBMIT_ALREADY_USED" });
     const timestamp = now();
     const result = this.db.prepare("UPDATE publish_jobs SET status='Preparing', attempt_count=attempt_count+1, started_at=?, finished_at=NULL WHERE id=? AND status IN ('Pending','Scheduled','Retry','NeedsUserAction')").run(timestamp, id);
     if (result.changes === 0) throw new Error("任务当前不可执行");
@@ -2324,6 +2346,10 @@ export class AppRepository {
   }
 
   updateJobFailure(id: string, status: string, code: string, message: string, nextRetryAt: string | null): PublishJob {
+    if (status === "Retry") {
+      const intent = this.getSubmissionIntentByJob(id);
+      if (intent && (intent.finalSubmitCount >= 1 || intent.submitBoundaryEnteredAt || intent.state === "Unknown" || intent.remoteStatus === "UNCERTAIN")) throw Object.assign(new Error("A final submit attempt requires reconciliation; automatic or manual retry is forbidden"), { code: "FINAL_SUBMIT_ALREADY_USED" });
+    }
     this.db.prepare("UPDATE publish_jobs SET status=?, last_error_code=?, last_error_message=?, next_retry_at=?, finished_at=? WHERE id=?").run(status, code, message, nextRetryAt, status === "Retry" ? null : now(), id);
     return this.getJob(id) as PublishJob;
   }
@@ -2342,11 +2368,21 @@ export class AppRepository {
 
   recoverRunningJobs(): number {
     const timestamp = now();
+    const holder = this.getGlobalFormalPublishExecution();
+    if (holder && holder.ownerPid > 0) {
+      let ownerIsAlive = false;
+      try { process.kill(holder.ownerPid, 0); ownerIsAlive = true; }
+      catch (error) { if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) ownerIsAlive = true; }
+      if (ownerIsAlive) throw Object.assign(new Error("A live process still owns the global formal publish execution"), { code: "GLOBAL_PUBLISH_BUSY" });
+    }
     const recover = this.db.transaction(() => {
-      const safe = this.db.prepare("UPDATE publish_jobs SET status='Retry', next_retry_at=?, finished_at=NULL WHERE status IN ('Running','Preparing','ReadyToSubmit')").run(timestamp).changes;
-      const uncertain = this.db.prepare("UPDATE publish_jobs SET status='NeedsReconciliation', next_retry_at=NULL, finished_at=? WHERE status='Submitting'").run(timestamp).changes;
-      this.db.prepare("UPDATE submission_intents SET state='Unknown', updated_at=? WHERE state IN ('Prepared','Submitting') AND job_id IN (SELECT id FROM publish_jobs WHERE status='NeedsReconciliation')").run(timestamp);
-      return safe + uncertain;
+      const safe = this.db.prepare("UPDATE publish_jobs SET status='Retry', next_retry_at=?, finished_at=NULL WHERE status IN ('Running','Preparing','ReadyToSubmit') AND NOT EXISTS (SELECT 1 FROM submission_intents i WHERE i.job_id=publish_jobs.id AND (i.final_submit_count>=1 OR i.submit_boundary_entered_at IS NOT NULL OR i.state='Unknown' OR i.remote_status='UNCERTAIN'))").run(timestamp).changes;
+      const preparedSafe = this.db.prepare("UPDATE publish_jobs SET status='Retry', next_retry_at=?, finished_at=NULL WHERE status='Submitting' AND EXISTS (SELECT 1 FROM submission_intents i WHERE i.job_id=publish_jobs.id AND i.state='Prepared' AND i.final_submit_count=0 AND i.submit_boundary_entered_at IS NULL)").run(timestamp).changes;
+      this.db.prepare("UPDATE submission_intents SET state='NotSubmitted',remote_status='SAFE_TO_RETRY',updated_at=? WHERE job_id IN (SELECT id FROM publish_jobs WHERE status='Retry') AND state='Prepared' AND final_submit_count=0").run(timestamp);
+      const uncertain = this.db.prepare("UPDATE publish_jobs SET status='NeedsReconciliation', next_retry_at=NULL, finished_at=? WHERE status IN ('Running','Preparing','ReadyToSubmit','Submitting')").run(timestamp).changes;
+      this.db.prepare("UPDATE submission_intents SET state='Unknown',remote_status='UNCERTAIN',reconciliation_required=1,updated_at=? WHERE state IN ('Prepared','Submitting') AND job_id IN (SELECT id FROM publish_jobs WHERE status='NeedsReconciliation')").run(timestamp);
+      this.db.prepare("DELETE FROM global_formal_publish_execution WHERE singleton_id=1").run();
+      return safe + preparedSafe + uncertain;
     });
     return recover();
   }
@@ -2366,23 +2402,37 @@ export class AppRepository {
     return { id, job: this.getJob(jobId) as PublishJob };
   }
 
-  getSubmissionIntentByJob(jobId: string): { id: string; jobId: string; state: string; externalId: string | null; attempt: number; finalSubmitCount: number; errorCode: string | null; updatedAt: string } | null {
-    const row = this.db.prepare("SELECT id,job_id,state,external_id,attempt,final_submit_count,error_code,updated_at FROM submission_intents WHERE job_id=? ORDER BY created_at DESC LIMIT 1").get(jobId) as Row | undefined;
+  getSubmissionIntentByJob(jobId: string): { id: string; jobId: string; state: string; externalId: string | null; attempt: number; finalSubmitCount: number; errorCode: string | null; updatedAt: string; submissionAttemptId: string | null; submitBoundaryEnteredAt: string | null; remoteStatus: PublishRemoteStatus; payloadHash: string | null; adapterId: string | null; credentialVersion: string | null } | null {
+    const row = this.db.prepare("SELECT id,job_id,state,external_id,attempt,final_submit_count,error_code,updated_at,submission_attempt_id,submit_boundary_entered_at,remote_status,payload_hash,adapter_id,credential_version FROM submission_intents WHERE job_id=? ORDER BY created_at DESC LIMIT 1").get(jobId) as Row | undefined;
     if (!row) return null;
-    return { id: textValue(row.id), jobId: textValue(row.job_id), state: textValue(row.state), externalId: typeof row.external_id === "string" ? row.external_id : null, attempt: intValue(row.attempt), finalSubmitCount: intValue(row.final_submit_count), errorCode: typeof row.error_code === "string" ? row.error_code : null, updatedAt: textValue(row.updated_at) };
+    return { id: textValue(row.id), jobId: textValue(row.job_id), state: textValue(row.state), externalId: typeof row.external_id === "string" ? row.external_id : null, attempt: intValue(row.attempt), finalSubmitCount: intValue(row.final_submit_count), errorCode: typeof row.error_code === "string" ? row.error_code : null, updatedAt: textValue(row.updated_at), submissionAttemptId: typeof row.submission_attempt_id === "string" ? row.submission_attempt_id : null, submitBoundaryEnteredAt: typeof row.submit_boundary_entered_at === "string" ? row.submit_boundary_entered_at : null, remoteStatus: textValue(row.remote_status) as PublishRemoteStatus, payloadHash: typeof row.payload_hash === "string" ? row.payload_hash : null, adapterId: typeof row.adapter_id === "string" ? row.adapter_id : null, credentialVersion: typeof row.credential_version === "string" ? row.credential_version : null };
   }
 
-  claimFinalSubmitAttempt(intentId: string): { id: string; jobId: string; attempt: number } {
+  claimFinalSubmitAttempt(intentId: string, evidence: { payloadHash?: string; adapterId?: string; credentialVersion?: string } = {}): { id: string; jobId: string; attempt: number; submissionAttemptId: string } {
     const timestamp = now();
-    const update = this.db.prepare("UPDATE submission_intents SET final_submit_count=final_submit_count+1,state='Submitting',updated_at=? WHERE id=? AND state='Prepared' AND final_submit_count=0").run(timestamp, intentId);
-    if (update.changes === 0) throw Object.assign(new Error("The persisted publish attempt has already been used or is not ready for final submit"), { code: "FINAL_SUBMIT_ALREADY_USED" });
-    const row = this.db.prepare("SELECT id,job_id,attempt FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
-    if (!row) throw new Error("Submission intent not found");
-    return { id: textValue(row.id), jobId: textValue(row.job_id), attempt: intValue(row.attempt) };
+    return this.db.transaction(() => {
+      const submissionAttemptId = this.reserveSubmissionAttempt(intentId);
+      const update = this.db.prepare("UPDATE submission_intents SET final_submit_count=1,state='Submitting',submit_boundary_entered_at=?,payload_hash=?,adapter_id=?,credential_version=?,remote_request_started_at=?,remote_status='SUBMITTING',updated_at=? WHERE id=? AND state='Prepared' AND final_submit_count=0 AND submit_boundary_entered_at IS NULL").run(timestamp, evidence.payloadHash ?? null, evidence.adapterId ?? null, evidence.credentialVersion ?? null, timestamp, timestamp, intentId);
+      if (update.changes === 0) throw Object.assign(new Error("The persisted publish attempt has already been used or is not ready for final submit"), { code: "FINAL_SUBMIT_ALREADY_USED" });
+      const row = this.db.prepare("SELECT id,job_id,attempt FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
+      if (!row) throw new Error("Submission intent not found");
+      this.updateGlobalFormalPublishExecution(textValue(row.job_id), "SUBMITTING");
+      return { id: textValue(row.id), jobId: textValue(row.job_id), attempt: intValue(row.attempt), submissionAttemptId };
+    })();
   }
 
-  markSubmissionIntentSubmitted(intentId: string, externalId: string | null): void {
-    this.db.prepare("UPDATE submission_intents SET state='Submitted', external_id=?, updated_at=? WHERE id=?").run(externalId, now(), intentId);
+  reserveSubmissionAttempt(intentId: string): string {
+    const existing = this.db.prepare("SELECT submission_attempt_id,final_submit_count,submit_boundary_entered_at,state FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
+    if (!existing || textValue(existing.state) !== "Prepared" || intValue(existing.final_submit_count) !== 0 || existing.submit_boundary_entered_at) throw Object.assign(new Error("The persisted publish attempt has already been used or is not ready for final submit"), { code: "FINAL_SUBMIT_ALREADY_USED" });
+    if (typeof existing.submission_attempt_id === "string") return existing.submission_attempt_id;
+    const submissionAttemptId = randomUUID();
+    this.db.prepare("UPDATE submission_intents SET submission_attempt_id=?,updated_at=? WHERE id=? AND submission_attempt_id IS NULL AND state='Prepared' AND final_submit_count=0").run(submissionAttemptId, now(), intentId);
+    const reserved = this.db.prepare("SELECT submission_attempt_id FROM submission_intents WHERE id=?").get(intentId) as Row;
+    return textValue(reserved.submission_attempt_id);
+  }
+
+  markSubmissionIntentSubmitted(intentId: string, externalId: string | null, remoteStatus: "SUBMIT_ACCEPTED" | "SCHEDULED_ACCEPTED" | "PUBLISHED_CONFIRMED" = "SUBMIT_ACCEPTED"): void {
+    this.db.prepare("UPDATE submission_intents SET state='Submitted', external_id=?,remote_status=?,remote_response_received_at=?,reconciliation_required=?, updated_at=? WHERE id=?").run(externalId, remoteStatus, now(), remoteStatus === "PUBLISHED_CONFIRMED" ? 0 : 1, now(), intentId);
     // Keep the job recoverable until PublishRecord is persisted, even without an external id.
     this.db.prepare("UPDATE publish_jobs SET status='Submitted', external_id=? WHERE submission_intent_id=?").run(externalId, intentId);
   }
@@ -2406,16 +2456,25 @@ export class AppRepository {
   }
 
   markSubmissionIntentUncertain(intentId: string, errorCode: string): PublishJob {
-    this.db.prepare("UPDATE submission_intents SET state='Unknown', error_code=?, updated_at=? WHERE id=?").run(errorCode, now(), intentId);
+    this.db.prepare("UPDATE submission_intents SET state='Unknown', error_code=?,remote_status='UNCERTAIN',reconciliation_required=1,updated_at=? WHERE id=?").run(errorCode, now(), intentId);
     const row = this.db.prepare("SELECT job_id FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
     if (!row) throw new Error("Submission intent not found");
     this.db.prepare("UPDATE publish_jobs SET status='NeedsReconciliation', last_error_code=?, next_retry_at=NULL, finished_at=? WHERE id=?").run(errorCode, now(), textValue(row.job_id));
     return this.getJob(textValue(row.job_id)) as PublishJob;
   }
 
+  updateSubmissionRemoteStatus(jobId: string, remoteStatus: PublishRemoteStatus, reconciliationRequired: boolean): void {
+    const intent = this.getSubmissionIntentByJob(jobId);
+    if (!intent) return;
+    this.db.prepare("UPDATE submission_intents SET remote_status=?,reconciliation_required=?,updated_at=? WHERE id=?").run(remoteStatus, reconciliationRequired ? 1 : 0, now(), intent.id);
+    this.db.prepare("UPDATE publish_records SET remote_status=? WHERE job_id=?").run(remoteStatus, jobId);
+  }
+
   resetSubmissionIntentForUserAction(intentId: string, errorCode: string): PublishJob {
+    const existing = this.db.prepare("SELECT final_submit_count,submit_boundary_entered_at FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
+    if (existing && (intValue(existing.final_submit_count) >= 1 || existing.submit_boundary_entered_at)) throw Object.assign(new Error("A final submit attempt cannot be reset for user action"), { code: "FINAL_SUBMIT_ALREADY_USED" });
     const timestamp = now();
-    this.db.prepare("UPDATE submission_intents SET state='Prepared', final_submit_count=0, error_code=?, updated_at=? WHERE id=? AND ((state='Prepared' AND final_submit_count=0) OR (state='Submitting' AND final_submit_count=1) OR (state='Unknown' AND final_submit_count=1 AND error_code='FINAL_SUBMIT_ALREADY_USED'))").run(errorCode, timestamp, intentId);
+    this.db.prepare("UPDATE submission_intents SET state='Prepared', error_code=?, updated_at=? WHERE id=? AND state='Prepared' AND final_submit_count=0 AND submit_boundary_entered_at IS NULL").run(errorCode, timestamp, intentId);
     const row = this.db.prepare("SELECT job_id FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
     if (!row) throw new Error("Submission intent not found");
     this.db.prepare("UPDATE publish_jobs SET status='NeedsUserAction', last_error_code=?, last_error_message=?, next_retry_at=NULL, finished_at=? WHERE id=?").run(errorCode, errorCode === "USER_ACTION_REQUIRED" ? "平台最终提交前仍需要用户完成字段或安全验证" : errorCode, timestamp, textValue(row.job_id));
@@ -2423,12 +2482,9 @@ export class AppRepository {
   }
 
   resetSubmissionIntentAfterPreviewOnly(intentId: string, errorCode: string): PublishJob {
-    const timestamp = now();
-    this.db.prepare("UPDATE submission_intents SET state='Prepared', final_submit_count=0, error_code=?, updated_at=? WHERE id=? AND state='Unknown' AND final_submit_count=1 AND error_code='SUBMISSION_UNCERTAIN'").run(errorCode, timestamp, intentId);
-    const row = this.db.prepare("SELECT job_id FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
-    if (!row) throw new Error("Submission intent not found");
-    this.db.prepare("UPDATE publish_jobs SET status='NeedsUserAction', last_error_code=?, last_error_message=?, next_retry_at=NULL, finished_at=? WHERE id=?").run(errorCode, errorCode, timestamp, textValue(row.job_id));
-    return this.getJob(textValue(row.job_id)) as PublishJob;
+    const existing = this.db.prepare("SELECT final_submit_count,submit_boundary_entered_at FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
+    if (existing && (intValue(existing.final_submit_count) >= 1 || existing.submit_boundary_entered_at)) throw Object.assign(new Error("A final submit attempt cannot be reset after preview"), { code: "FINAL_SUBMIT_ALREADY_USED" });
+    return this.resetSubmissionIntentForUserAction(intentId, errorCode);
   }
 
   markJobDryRunPassed(id: string): PublishJob {
@@ -2438,6 +2494,7 @@ export class AppRepository {
 
   markJobReconciledNotSubmitted(id: string): PublishJob {
     const intent = this.getSubmissionIntentByJob(id);
+    if (intent && (intent.finalSubmitCount >= 1 || intent.submitBoundaryEnteredAt || intent.state === "Unknown" || intent.remoteStatus === "UNCERTAIN")) throw Object.assign(new Error("Remote non-publication proof is required; this method cannot reopen an uncertain submit attempt"), { code: "FINAL_SUBMIT_ALREADY_USED" });
     if (intent) this.db.prepare("UPDATE submission_intents SET state='NotSubmitted', updated_at=? WHERE id=?").run(now(), intent.id);
     this.db.prepare("UPDATE publish_jobs SET status='Retry', next_retry_at=?, last_error_code=NULL, last_error_message=NULL, finished_at=NULL WHERE id=?").run(now(), id);
     return this.getJob(id) as PublishJob;
@@ -2450,8 +2507,9 @@ export class AppRepository {
 
   insertPublishRecord(input: Omit<PublishRecord, "id" | "publishedAt" | "dryRun" | "status"> & { dryRun?: boolean; status?: PublishRecord["status"] }): PublishRecord {
     const dryRun = input.dryRun ?? false;
-    const record: PublishRecord = { ...input, platformAccountId: input.platformAccountId ?? input.accountId, status: input.status ?? (dryRun ? "DryRun" : input.success ? "Published" : "Failed"), dryRun, id: randomUUID(), publishedAt: now(), publishMode: input.publishMode ?? (dryRun ? "ASSISTED" : "MANUAL"), automationType: input.automationType ?? "Manual", browserSessionIdHash: input.browserSessionIdHash ?? null, operator: input.operator ?? "desktop-user", verificationStatus: input.verificationStatus ?? (dryRun ? "WaitingUser" : input.success ? "Verified" : "Failed"), editorOpenedAt: input.editorOpenedAt ?? null, titleFilled: input.titleFilled ?? null, bodyFilled: input.bodyFilled ?? null, selectedImageAssetId: input.selectedImageAssetId ?? null, imageSelectionMode: input.imageSelectionMode ?? "none" };
-    this.db.prepare("INSERT INTO publish_records (id,job_id,account_id,platform_account_id,platform_key,article_id,published_url,published_external_id,success,response_json,published_at,dry_run,status,publish_mode,automation_type,browser_session_id_hash,operator,verification_status,editor_opened_at,title_filled,body_filled,selected_image_asset_id,image_selection_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(record.id, record.jobId, record.accountId, record.platformAccountId, record.platformKey, record.articleId, record.publishedUrl, record.publishedExternalId, record.success ? 1 : 0, json(record.response), record.publishedAt, record.dryRun ? 1 : 0, record.status, record.publishMode, record.automationType, record.browserSessionIdHash, record.operator, record.verificationStatus, record.editorOpenedAt, record.titleFilled === null || record.titleFilled === undefined ? null : record.titleFilled ? 1 : 0, record.bodyFilled === null || record.bodyFilled === undefined ? null : record.bodyFilled ? 1 : 0, record.selectedImageAssetId, record.imageSelectionMode);
+    const intent = this.getSubmissionIntentByJob(input.jobId);
+    const record: PublishRecord = { ...input, platformAccountId: input.platformAccountId ?? input.accountId, status: input.status ?? (dryRun ? "DryRun" : input.success ? "Published" : "Failed"), dryRun, id: randomUUID(), publishedAt: now(), publishMode: input.publishMode ?? (dryRun ? "ASSISTED" : "MANUAL"), automationType: input.automationType ?? "Manual", browserSessionIdHash: input.browserSessionIdHash ?? null, operator: input.operator ?? "desktop-user", verificationStatus: input.verificationStatus ?? (dryRun ? "WaitingUser" : input.success ? "Verified" : "Failed"), editorOpenedAt: input.editorOpenedAt ?? null, titleFilled: input.titleFilled ?? null, bodyFilled: input.bodyFilled ?? null, selectedImageAssetId: input.selectedImageAssetId ?? null, imageSelectionMode: input.imageSelectionMode ?? "none", submissionAttemptId: input.submissionAttemptId ?? intent?.submissionAttemptId ?? null, remoteStatus: input.remoteStatus ?? intent?.remoteStatus ?? null };
+    this.db.prepare("INSERT INTO publish_records (id,job_id,account_id,platform_account_id,platform_key,article_id,published_url,published_external_id,success,response_json,published_at,dry_run,status,publish_mode,automation_type,browser_session_id_hash,operator,verification_status,editor_opened_at,title_filled,body_filled,selected_image_asset_id,image_selection_mode,submission_attempt_id,remote_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(record.id, record.jobId, record.accountId, record.platformAccountId, record.platformKey, record.articleId, record.publishedUrl, record.publishedExternalId, record.success ? 1 : 0, json(record.response), record.publishedAt, record.dryRun ? 1 : 0, record.status, record.publishMode, record.automationType, record.browserSessionIdHash, record.operator, record.verificationStatus, record.editorOpenedAt, record.titleFilled === null || record.titleFilled === undefined ? null : record.titleFilled ? 1 : 0, record.bodyFilled === null || record.bodyFilled === undefined ? null : record.bodyFilled ? 1 : 0, record.selectedImageAssetId, record.imageSelectionMode, record.submissionAttemptId, record.remoteStatus);
     return record;
   }
 
@@ -2461,7 +2519,7 @@ export class AppRepository {
   }
 
   updatePublishRecord(id: string, input: { status: PublishRecord["status"]; success: boolean; publishedUrl?: string | null; publishedExternalId?: string | null; response?: Record<string, unknown>; verificationStatus?: PublishRecord["verificationStatus"] }): PublishRecord {
-    this.db.prepare("UPDATE publish_records SET status=?,success=?,published_url=COALESCE(?,published_url),published_external_id=COALESCE(?,published_external_id),response_json=?,verification_status=COALESCE(?,verification_status) WHERE id=?").run(input.status, input.success ? 1 : 0, input.publishedUrl ?? null, input.publishedExternalId ?? null, json(input.response ?? {}), input.verificationStatus ?? null, id);
+    this.db.prepare("UPDATE publish_records SET status=?,success=?,published_url=COALESCE(?,published_url),published_external_id=COALESCE(?,published_external_id),response_json=?,verification_status=COALESCE(?,verification_status),submission_attempt_id=COALESCE(submission_attempt_id,(SELECT submission_attempt_id FROM submission_intents WHERE job_id=publish_records.job_id ORDER BY created_at DESC LIMIT 1)),remote_status=(SELECT remote_status FROM submission_intents WHERE job_id=publish_records.job_id ORDER BY created_at DESC LIMIT 1) WHERE id=?").run(input.status, input.success ? 1 : 0, input.publishedUrl ?? null, input.publishedExternalId ?? null, json(input.response ?? {}), input.verificationStatus ?? null, id);
     const row = this.db.prepare("SELECT * FROM publish_records WHERE id=?").get(id) as Row;
     return toRecord(row);
   }
@@ -2469,12 +2527,12 @@ export class AppRepository {
   reconcileJobAsPublished(jobId: string, input: { externalId: string; publishedUrl: string; response: Record<string, unknown> }): { job: PublishJob; record: PublishRecord } {
     const job = this.getJob(jobId);
     if (!job || !["NeedsReconciliation", "Submitted"].includes(job.status)) throw new Error("Only a NeedsReconciliation or Submitted Job can be closed by read-only publish reconciliation");
+    const intent = this.getSubmissionIntentByJob(jobId);
+    if (intent) this.db.prepare("UPDATE submission_intents SET state='Submitted',external_id=?,remote_status='PUBLISHED_CONFIRMED',reconciliation_required=0,updated_at=? WHERE id=?").run(input.externalId, now(), intent.id);
     const existing = this.getPublishRecordByJob(jobId);
     const record = existing
       ? this.updatePublishRecord(existing.id, { status: "Published", success: true, publishedExternalId: input.externalId, publishedUrl: input.publishedUrl, response: input.response, verificationStatus: "Verified" })
       : this.insertPublishRecord({ jobId, accountId: job.accountId, platformAccountId: job.platformAccountId, platformKey: job.platformKey, articleId: job.articleId, publishedUrl: input.publishedUrl, publishedExternalId: input.externalId, success: true, response: input.response, dryRun: false, status: "Published", publishMode: "ASSISTED", automationType: "BrowserAutomation", operator: "desktop-user", verificationStatus: "Verified" });
-    const intent = this.getSubmissionIntentByJob(jobId);
-    if (intent) this.db.prepare("UPDATE submission_intents SET state='Submitted',external_id=?,updated_at=? WHERE id=?").run(input.externalId, now(), intent.id);
     this.db.prepare("UPDATE publish_jobs SET status='Success',external_id=?,last_error_code=NULL,last_error_message=NULL,next_retry_at=NULL,finished_at=? WHERE id=?").run(input.externalId, now(), jobId);
     if (!existing?.success) {
       this.markArticlePublished(job.articleId);
@@ -2485,7 +2543,7 @@ export class AppRepository {
 
   markJobReconciledNotPublished(id: string, message: string, response: Record<string, unknown> = {}): PublishJob {
     const intent = this.getSubmissionIntentByJob(id);
-    if (intent) this.db.prepare("UPDATE submission_intents SET state='NotSubmitted',error_code='CONFIRMED_NOT_PUBLISHED',updated_at=? WHERE id=?").run(now(), intent.id);
+    if (intent) this.db.prepare("UPDATE submission_intents SET state='NotSubmitted',error_code='CONFIRMED_NOT_PUBLISHED',remote_status='FAILED_CONFIRMED',reconciliation_required=0,updated_at=? WHERE id=?").run(now(), intent.id);
     const existing = this.getPublishRecordByJob(id);
     if (existing) this.updatePublishRecord(existing.id, { status: "Failed", success: false, response: { ...existing.response, reconciliation: response, reconciliationStatus: "CONFIRMED_NOT_PUBLISHED" }, verificationStatus: "Failed" });
     this.db.prepare("UPDATE publish_jobs SET status='ReconciledNotPublished',last_error_code='CONFIRMED_NOT_PUBLISHED',last_error_message=?,next_retry_at=NULL,finished_at=? WHERE id=? AND status='NeedsReconciliation'").run(message, now(), id);
@@ -2913,6 +2971,6 @@ function toStoredVideoAsset(row: Row, db: Database.Database): StoredVideoAsset {
   const status: StoredVideoAssetStatus = records.some((record) => boolValue(record.success) && !boolValue(record.dry_run) && textValue(record.status) === "Published") ? "Published" : records.some((record) => textValue(record.status) === "Failed" || (!boolValue(record.success) && !boolValue(record.dry_run))) || jobs.some((job) => textValue(job.status) === "Failed") ? "Failed" : records.some((record) => boolValue(record.success) && boolValue(record.dry_run)) ? "DryRun" : jobs.length > 0 ? "Ready" : ["Draft", "Ready", "DryRun", "Published", "Failed"].includes(storedStatus) ? storedStatus : "Draft";
   return { ...toVideoAsset(row), brandId: typeof row.brand_id === "string" ? row.brand_id : null, title: textValue(row.title) || textValue(row.file_name), description: textValue(metadata.description), tags: Array.isArray(metadata.tags) ? metadata.tags.filter((item): item is string => typeof item === "string") : [], coverPath: typeof metadata.coverPath === "string" ? metadata.coverPath : null, coverAssetId: typeof metadata.coverAssetId === "string" ? metadata.coverAssetId : null, platformFields: nestedStringRecord(metadata.platformFields), status };
 }
-function toRecord(row: Row): PublishRecord { const status = ["DryRun", "Prepared", "Submitted", "Publishing", "Published", "Failed"].includes(textValue(row.status)) ? textValue(row.status) as PublishRecord["status"] : "Published"; const publishMode = ["AUTO", "ASSISTED", "MANUAL"].includes(textValue(row.publish_mode)) ? textValue(row.publish_mode) as PublishRecord["publishMode"] : "MANUAL"; const verificationStatus = ["NotTested", "WaitingUser", "Verified", "Failed"].includes(textValue(row.verification_status)) ? textValue(row.verification_status) as PublishRecord["verificationStatus"] : "NotTested"; const imageSelectionMode = ["random", "manual", "none"].includes(textValue(row.image_selection_mode)) ? textValue(row.image_selection_mode) as PublishRecord["imageSelectionMode"] : "none"; return { id: textValue(row.id), jobId: textValue(row.job_id), accountId: textValue(row.account_id), platformAccountId: textValue(row.platform_account_id) || textValue(row.account_id), platformKey: textValue(row.platform_key), articleId: textValue(row.article_id), publishedUrl: typeof row.published_url === "string" ? row.published_url : null, publishedExternalId: typeof row.published_external_id === "string" ? row.published_external_id : null, success: boolValue(row.success), status, response: parseJson<Record<string, unknown>>(row.response_json, {}), publishedAt: textValue(row.published_at), dryRun: boolValue(row.dry_run), publishMode, automationType: isPlatformCapability(row.automation_type) ? row.automation_type : "Manual", browserSessionIdHash: typeof row.browser_session_id_hash === "string" ? row.browser_session_id_hash : null, operator: textValue(row.operator) || "desktop-user", verificationStatus, editorOpenedAt: typeof row.editor_opened_at === "string" ? row.editor_opened_at : null, titleFilled: row.title_filled === null || row.title_filled === undefined ? null : boolValue(row.title_filled), bodyFilled: row.body_filled === null || row.body_filled === undefined ? null : boolValue(row.body_filled), selectedImageAssetId: typeof row.selected_image_asset_id === "string" ? row.selected_image_asset_id : null, imageSelectionMode }; }
+function toRecord(row: Row): PublishRecord { const status = ["DryRun", "Prepared", "Submitted", "Publishing", "Published", "Failed"].includes(textValue(row.status)) ? textValue(row.status) as PublishRecord["status"] : "Published"; const publishMode = ["AUTO", "ASSISTED", "MANUAL"].includes(textValue(row.publish_mode)) ? textValue(row.publish_mode) as PublishRecord["publishMode"] : "MANUAL"; const verificationStatus = ["NotTested", "WaitingUser", "Verified", "Failed"].includes(textValue(row.verification_status)) ? textValue(row.verification_status) as PublishRecord["verificationStatus"] : "NotTested"; const imageSelectionMode = ["random", "manual", "none"].includes(textValue(row.image_selection_mode)) ? textValue(row.image_selection_mode) as PublishRecord["imageSelectionMode"] : "none"; return { id: textValue(row.id), jobId: textValue(row.job_id), accountId: textValue(row.account_id), platformAccountId: textValue(row.platform_account_id) || textValue(row.account_id), platformKey: textValue(row.platform_key), articleId: textValue(row.article_id), publishedUrl: typeof row.published_url === "string" ? row.published_url : null, publishedExternalId: typeof row.published_external_id === "string" ? row.published_external_id : null, success: boolValue(row.success), status, response: parseJson<Record<string, unknown>>(row.response_json, {}), publishedAt: textValue(row.published_at), dryRun: boolValue(row.dry_run), publishMode, automationType: isPlatformCapability(row.automation_type) ? row.automation_type : "Manual", browserSessionIdHash: typeof row.browser_session_id_hash === "string" ? row.browser_session_id_hash : null, operator: textValue(row.operator) || "desktop-user", verificationStatus, editorOpenedAt: typeof row.editor_opened_at === "string" ? row.editor_opened_at : null, titleFilled: row.title_filled === null || row.title_filled === undefined ? null : boolValue(row.title_filled), bodyFilled: row.body_filled === null || row.body_filled === undefined ? null : boolValue(row.body_filled), selectedImageAssetId: typeof row.selected_image_asset_id === "string" ? row.selected_image_asset_id : null, imageSelectionMode, submissionAttemptId: typeof row.submission_attempt_id === "string" ? row.submission_attempt_id : null, remoteStatus: typeof row.remote_status === "string" ? row.remote_status as PublishRemoteStatus : null }; }
 function toNotification(row: Row): Notification { return { id: textValue(row.id), level: row.level as Notification["level"], title: textValue(row.title), message: textValue(row.message), relatedId: typeof row.related_id === "string" ? row.related_id : null, read: boolValue(row.read), createdAt: textValue(row.created_at) }; }
 function toLog(row: Row): ActivityLog { return { id: textValue(row.id), timestamp: textValue(row.created_at), level: row.level as ActivityLog["level"], module: textValue(row.module), code: textValue(row.code), message: textValue(row.message), context: parseJson<Record<string, unknown>>(row.context_json, {}) }; }

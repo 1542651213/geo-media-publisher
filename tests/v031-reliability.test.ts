@@ -56,16 +56,15 @@ describe("V0.3.1 external side-effect safety", () => {
     setupData.db.close();
   });
 
-  it("moves an uncertain timeout to NeedsReconciliation and only retries after explicit confirmation", async () => {
+  it("moves an uncertain timeout to NeedsReconciliation and rejects an unproved manual retry", async () => {
     const setupData = setup("timeout");
     const first = await setupData.publisher.executeJob(setupData.job.id);
     expect(first.job.status).toBe("NeedsReconciliation");
     expect(setupData.adapter.calls).toBe(1);
-    const reconciled = setupData.repository.markJobReconciledNotSubmitted(setupData.job.id);
-    expect(reconciled.status).toBe("Retry");
-    const second = await setupData.publisher.executeJob(setupData.job.id);
-    expect(second.job.status).toBe("NeedsReconciliation");
-    expect(setupData.adapter.calls).toBe(2);
+    expect(() => setupData.repository.markJobReconciledNotSubmitted(setupData.job.id)).toThrow(/proof/);
+    const unchanged = await setupData.publisher.executeJob(setupData.job.id);
+    expect(unchanged.job.status).toBe("NeedsReconciliation");
+    expect(setupData.adapter.calls).toBe(1);
     setupData.db.close();
   });
 

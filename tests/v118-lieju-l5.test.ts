@@ -22,8 +22,9 @@ class LiejuL5Fixture implements PlatformAdapter {
   readonly platformKey = "lieju";
   readonly manifest: AdapterManifest = { platformKey: this.platformKey, displayName: "列举网 L5 fixture", category: "分类信息", version: "1.1.8", adapterStatus: "ready", authStrategy: "ManualSession", callbackStrategy: "ManualCodeCallback", status: "WaitingForUser", researchStatus: "partial", transport: "browser", integrationMode: "BrowserAutomation", supportsArticle: true, supportsVideo: false, officialWebsite: "https://www.lieju.com/", credentialSchema: [], officialSources: ["https://www.lieju.com/"] };
   readonly checkLogin = vi.fn(async (_ctx: AccountContext): Promise<LoginStatus> => "logged_in");
-  readonly finalSubmit = vi.fn(async (_ctx: AccountContext, _article: PublishArticleInput, _attempt: { jobId: string; submissionIntentId: string; attempt: number }): Promise<PublishResult> => {
+  readonly finalSubmit = vi.fn(async (_ctx: AccountContext, _article: PublishArticleInput, attempt: { jobId: string; submissionIntentId: string; attempt: number; markSubmissionSideEffect?: () => void }): Promise<PublishResult> => {
     if (this.finalSubmit.mock.calls.length === 1) throw Object.assign(new Error("CAPTCHA: complete normal platform verification"), { code: "USER_ACTION_REQUIRED" });
+    attempt.markSubmissionSideEffect?.();
     return { success: true, status: "published", externalId: "11800001", publishedUrl: "https://nj.lieju.com/jiadian/11800001.html", response: { finalSubmitCount: 1 } };
   });
   readonly collectPublishResult = vi.fn(async (): Promise<PublishResult> => ({ success: true, status: "published", externalId: "11800001", publishedUrl: "https://nj.lieju.com/jiadian/11800001.html", response: { collected: true } }));
@@ -67,6 +68,8 @@ describe("V1.1.8 Lieju L5 submit gate", () => {
     expect(waiting.job.status).toBe("NeedsUserAction");
     expect(waiting.message).toContain("CAPTCHA");
     expect(repository.getSubmissionIntentByJob(job.id)).toMatchObject({ state: "Prepared", finalSubmitCount: 0 });
+    const reservedAttemptId = repository.getSubmissionIntentByJob(job.id)?.submissionAttemptId;
+    expect(reservedAttemptId).toBeTruthy();
 
     const completed = await publisher.executeJob(job.id, { ...action, triggerSource: "CONTINUE_PENDING_ACTION" }, "VISIBLE");
     expect(completed.job.status).toBe("Success");
@@ -74,6 +77,7 @@ describe("V1.1.8 Lieju L5 submit gate", () => {
     expect(adapter.collectPublishResult).toHaveBeenCalledTimes(1);
     expect(adapter.verifyPublished).toHaveBeenCalledTimes(1);
     expect(repository.getSubmissionIntentByJob(job.id)).toMatchObject({ state: "Submitted", finalSubmitCount: 1 });
+    expect(repository.getSubmissionIntentByJob(job.id)?.submissionAttemptId).toBe(reservedAttemptId);
     expect(repository.getPublishRecordByJob(job.id)).toMatchObject({ status: "Published", success: true, publishedExternalId: "11800001", publishedUrl: "https://nj.lieju.com/jiadian/11800001.html", verificationStatus: "Verified" });
   });
 });
