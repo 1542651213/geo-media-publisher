@@ -207,6 +207,8 @@ export interface BrowserSessionRuntimeSnapshot {
   contextExists: boolean;
   contextPageCount: number | null;
   canonicalPageExists: boolean;
+  canonicalPageHost: string | null;
+  canonicalPagePath: string | null;
   canonicalPageClosed: boolean | null;
   canonicalPageContextMatchesSession: boolean | null;
   runtimeAuthState: BrowserRuntimeAuthState;
@@ -557,8 +559,13 @@ export class PlaywrightSessionManager {
     const session = this.activeSessions.get(key) ?? null;
     const runtimeState = this.getRuntimeAuthState(identity);
     const contextExists = Boolean(session?.context);
-    const canonicalPageExists = Boolean(session?.page);
     const canonicalPageClosed = session?.page ? this.isPageClosed(session.page) : null;
+    const canonicalPageExists = Boolean(session?.page);
+    let canonicalPageHost: string | null = null;
+    let canonicalPagePath: string | null = null;
+    if (canonicalPageExists && canonicalPageClosed === false && session) {
+      try { const url = new URL(session.page.url()); canonicalPageHost = url.hostname.toLowerCase(); canonicalPagePath = url.pathname; } catch { /* Page may still be about:blank. */ }
+    }
     const canonicalPageContextMatchesSession = session?.page ? this.pageContextIdentityMatches(session, session.page) : null;
     const disconnect = this.lastDisconnectEvidence.get(key);
     return {
@@ -571,6 +578,8 @@ export class PlaywrightSessionManager {
       contextExists,
       contextPageCount: contextExists && session ? this.safePageCount(session.context) : null,
       canonicalPageExists,
+      canonicalPageHost,
+      canonicalPagePath,
       canonicalPageClosed,
       canonicalPageContextMatchesSession,
       runtimeAuthState: runtimeState.state,

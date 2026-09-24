@@ -20,6 +20,7 @@ import { CONTENT_STUDIO_PROMPT_VERSION, resumeContentStudioTasks, runContentStud
 import { runQualityGate, runQualityGateForArticle, runQualityGateForVariant } from "./quality-gate";
 import { runQualityBenchmark } from "./quality-benchmark";
 import { OAuthSessionManager } from "./oauth-session-manager";
+import { ToutiaoSessionActivation } from "./toutiao-session-activation";
 import { writeAdvancedExcelTemplate, writeSimpleExcelTemplate } from "./excel-templates";
 import { buildExcelImportErrorReportCsv, readExcelArticleFile } from "./excel-import";
 import { PlatformSelfTestService } from "./platform-self-test";
@@ -131,6 +132,31 @@ export function registerIpc(deps: IpcDependencies): void {
     });
   };
   const oauthSessions = new OAuthSessionManager({ repository, registry, credentials, logger, accountContext });
+  const toutiaoSessionActivation = new ToutiaoSessionActivation({
+    account: (accountId) => repository.listAccounts().find((item) => item.id === accountId && item.platformKey === "toutiao") ?? null,
+    hasStoredSession: (accountId) => credentials.has(browserSessionCredentialKey({ platformKey: "toutiao", accountId })),
+    snapshot: (accountId) => {
+      const adapter = registry.getForConnection("toutiao");
+      if (!isAutomationAdapter(adapter) || !adapter.getBrowserRuntimeSnapshot) throw new Error("TOUTIAO_BROWSER_RUNTIME_UNAVAILABLE");
+      return adapter.getBrowserRuntimeSnapshot(accountContext(accountId, "toutiao"));
+    },
+    openBackend: (accountId) => {
+      const adapter = registry.getForConnection("toutiao");
+      if (!isAutomationAdapter(adapter)) throw new Error("TOUTIAO_BROWSER_RUNTIME_UNAVAILABLE");
+      return adapter.openBackend(accountContext(accountId, "toutiao", createUserAction("OPEN_BACKEND")));
+    },
+    beginLogin: (accountId) => {
+      const adapter = registry.getForConnection("toutiao");
+      if (!isAutomationAdapter(adapter)) throw new Error("TOUTIAO_BROWSER_RUNTIME_UNAVAILABLE");
+      return adapter.beginLogin(accountContext(accountId, "toutiao", createUserAction("CONNECT_ACCOUNT")));
+    },
+    closeRuntime: async (accountId) => {
+      const adapter = registry.getForConnection("toutiao");
+      if (!isAutomationAdapter(adapter) || !adapter.closeRuntimeSession) throw new Error("TOUTIAO_BROWSER_RUNTIME_UNAVAILABLE");
+      await adapter.closeRuntimeSession(accountContext(accountId, "toutiao"));
+    },
+    onHeartbeat: (status) => logger.info("ACCOUNT", "TOUTIAO_RUNTIME_HEARTBEAT", "头条 BrowserSession 运行时心跳", { accountId: status.accountId, sessionExists: status.sessionExists, contextExists: status.contextExists, canonicalPageExists: status.canonicalPageExists, pageAlive: status.pageAlive, pageHost: status.pageHost, runtimeState: status.runtimeState, lastHeartbeatAt: status.lastHeartbeatAt })
+  });
   const platformSelfTests = new PlatformSelfTestService({ repository, registry, publisher, resolveAccountSecrets, logger });
   const validateVideoAsset = async (assetId: string, platformKey: string): Promise<{ asset: NonNullable<ReturnType<AppRepository["getManagedVideoAsset"]>>; validation: { valid: boolean; errors: string[]; warnings: string[] } }> => {
     const asset = repository.getManagedVideoAsset(assetId);
@@ -506,8 +532,23 @@ export function registerIpc(deps: IpcDependencies): void {
     if (!adapter || !isAutomationAdapter(adapter) || !adapter.getBrowserRuntimeSnapshot) throw new Error("该平台没有可读取的 BrowserSession runtime snapshot");
     recordRuntimeHeartbeat(logger, "accounts:session-heartbeat");
     const snapshot = adapter.getBrowserRuntimeSnapshot(accountContext(account.id, account.platformKey));
-    logger.info("ACCOUNT", "CANONICAL_SESSION_HEARTBEAT", "只读读取 account-scoped BrowserSession live objects", { phase: input.phase ?? "MANUAL", heartbeatSequence: input.heartbeatSequence ?? randomUUID(), loginGeneration: input.loginGeneration ?? null, ...snapshot });
+    const { canonicalPagePath: _canonicalPagePath, ...safeSnapshot } = snapshot;
+    logger.info("ACCOUNT", "CANONICAL_SESSION_HEARTBEAT", "只读读取 account-scoped BrowserSession live objects", { phase: input.phase ?? "MANUAL", heartbeatSequence: input.heartbeatSequence ?? randomUUID(), loginGeneration: input.loginGeneration ?? null, ...safeSnapshot });
     return snapshot;
+  });
+  register("accounts:get-runtime-session-status", (_event, payload) => {
+    const input = z.object({ accountId: idSchema, platformKey: z.literal("toutiao") }).parse(payload);
+    return toutiaoSessionActivation.status(input.accountId);
+  });
+  register("accounts:activate-session", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema, platformKey: z.literal("toutiao") }).parse(payload);
+    const result = await toutiaoSessionActivation.activate(input.accountId);
+    logger.info("ACCOUNT", "TOUTIAO_SESSION_ACTIVATION", "头条账号 BrowserSession 激活结果", { accountId: input.accountId, outcome: result.outcome, runtimeState: result.runtimeState, reasonCode: result.reasonCode, sessionExists: result.sessionExists, contextExists: result.contextExists, canonicalPageExists: result.canonicalPageExists, pageAlive: result.pageAlive, pageHost: result.pageHost, lastHeartbeatAt: result.lastHeartbeatAt });
+    return result;
+  });
+  register("accounts:close-runtime-session", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema, platformKey: z.literal("toutiao") }).parse(payload);
+    return toutiaoSessionActivation.close(input.accountId);
   });
   register("accounts:pre-submit-gate", async (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);
@@ -534,11 +575,14 @@ export function registerIpc(deps: IpcDependencies): void {
     }
     return repository.listAccounts().map((account) => {
       const registeredAdapter = registry.tryGetForConnection(account.platformKey);
+      const toutiaoRuntime = account.platformKey === "toutiao" ? toutiaoSessionActivation.status(account.id) : null;
       const browserConnecting = registeredAdapter ? isAutomationAdapter(registeredAdapter) && registeredAdapter.isConnectionPending(accountContext(account.id, account.platformKey)) : false;
       const runtimeAuthState = account.platformKey === "xiaohongshu" && registeredAdapter && isAutomationAdapter(registeredAdapter)
         ? registeredAdapter.getBrowserRuntimeState?.(accountContext(account.id, account.platformKey))?.state ?? null
         : null;
-      const accountStatus: AccountStatus = account.platformKey === "xiaohongshu"
+      const accountStatus: AccountStatus = account.platformKey === "toutiao" && account.loginStatus === "logged_in"
+        ? toutiaoRuntime?.runtimeState === "ACTIVE" ? "Connected" : "Unverified"
+        : account.platformKey === "xiaohongshu"
         ? runtimeAuthState === "AUTHENTICATED" ? "Connected"
           : runtimeAuthState === "CHECKING" ? "Connecting"
             : runtimeAuthState === "NEEDS_USER_ACTION" || runtimeAuthState === "DISCONNECTED" ? "NeedsLogin"

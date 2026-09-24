@@ -328,6 +328,10 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     finally { this.finishConnection(identity); }
   }
 
+  async closeRuntimeSession(ctx: AccountContext): Promise<void> {
+    await this.closeActive(this.identity(ctx), { reason: "CONNECTION_RELEASE", callerOperation: "BrowserAutomationAdapter.closeRuntimeSession" });
+  }
+
   rebindAccountSession(from: AccountContext, to: AccountContext): void {
     const fromIdentity = this.identity(from);
     const toIdentity = this.identity(to);
@@ -406,6 +410,8 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
       contextExists: false,
       contextPageCount: null,
       canonicalPageExists: false,
+      canonicalPageHost: null,
+      canonicalPagePath: null,
       canonicalPageClosed: null,
       canonicalPageContextMatchesSession: null,
       runtimeAuthState: runtimeState.state,
@@ -562,7 +568,9 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
   private activeSession(identity: { platformKey: string; accountId: string }): BrowserSession | null {
     const manager = this.sessionManager as unknown as { getActiveSession?: (value: { platformKey: string; accountId: string }) => BrowserSession | null; clearActiveSession?: (value: { platformKey: string; accountId: string }) => void };
     const managed = manager.getActiveSession?.(identity) ?? null;
-    const session = managed ?? this.fallbackActiveSessions.get(`${identity.platformKey}:${identity.accountId}`) ?? null;
+    const key = `${identity.platformKey}:${identity.accountId}`;
+    if (typeof manager.getActiveSession === "function" && !managed) this.fallbackActiveSessions.delete(key);
+    const session = typeof manager.getActiveSession === "function" ? managed : this.fallbackActiveSessions.get(key) ?? null;
     if (session && this.isPageClosed(session.page)) {
       if (this.retainsContextAfterPageClose(identity)) {
         try {

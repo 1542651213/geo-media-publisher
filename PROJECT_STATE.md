@@ -1,5 +1,14 @@
 # Project State
 
+## Toutiao R1-E0 BrowserSession activation — 2026-09-24
+
+- 基线：R1-D commit `f50883155a6792f5ae67a4b6c8a60691d8bd361e`；所有源码修改仅在隔离 worktree。原始脏工作区未修改。
+- 根因：头条账号的 DB `logged_in` 和 `browserSessionId` 表示已保存授权与稳定审计哈希，不表示当前进程有活的 BrowserSession。通用登录完成流程会保存 SafeStorage 中的 Playwright StorageState 并释放登录资源；应用重启后只有按账号显式打开后台才会恢复 Context。通用 Browser Adapter 此前还可能回退到断连后的旧 Session 缓存。
+- 新增头条专用懒激活与只读运行时状态 IPC。激活复用健康 Creator 首页，或从原有加密 StorageState 恢复；失效时打开 Owner 正常登录流程。状态明确分开 Stored Authorization、Runtime 与未验证的 Remote Auth；关闭 Runtime 不清除授权。账号中心不再把头条 DB `logged_in` 单独当作在线运行时，并提供“激活会话”操作。没有头条协议探测或发布操作。
+- Owner 在现有已安装 GEO 应用点击“打开后台”，应用主进程确实创建了 Chrome 子进程并显示“头条号”窗口。Computer Use 随后因不能可靠判定当前浏览器 URL 而停止浏览器控制，因此未取得新 IPC 的直接 `sessionExists/contextExists/canonicalPageExists` 快照；该现场验证仍为 `NOT_VERIFIED`。当前已安装应用也不是本 worktree 的新构建。
+- `pnpm build` 被基线已存在的 renderer 依赖 `packages/domain/src/toutiao-article.ts` 的 `node:crypto/createHash` 阻断；该导入在本轮基线 commit 中已经存在，R1-E0 未扩大范围修改它。后续部署本轮激活入口前，须先独立修复此构建问题并在新版本应用中核对运行时快照。
+- R1-E 协议 Shadow、Auth API、Token、Signer、素材上传、article/new、draft、article/publish、Final Submit 均未运行。Browser StorageState 与未来 Article API Credential Bundle 仍是不同存储；本轮未凭空生成新的 API Credential Bundle 或 Login Generation。
+
 ## Toutiao R1-D offline Shadow foundation — 2026-09-24
 
 - 基线：R1-C commit `8d6c5145322dbc6fb8cbab5576053fb5cf969a27`，仅在隔离 worktree 实施。原始脏工作区未修改。

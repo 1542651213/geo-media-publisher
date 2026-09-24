@@ -18,6 +18,39 @@ class MemoryCredentialStore implements CredentialStore {
 const userAction: UserInitiatedAction = { userActionId: "11111111-1111-4111-8111-111111111111", triggerSource: "CONNECT_ACCOUNT" };
 
 describe("BrowserSessionManager credential boundary", () => {
+  it("restores a Toutiao ephemeral Context from the saved credential store after manager restart", async () => {
+    const store = new MemoryCredentialStore();
+    const identity = { platformKey: "toutiao", accountId: "restart-owner" };
+    const savedState = { cookies: [], origins: [] };
+    store.set("session:toutiao:restart-owner", JSON.stringify(savedState));
+    const context = { setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => page), pages: vi.fn(() => [page]), close: vi.fn(async () => undefined) } as unknown as BrowserContext;
+    const page = { isClosed: () => false, url: () => "about:blank", context: () => context };
+    const browser = { newContext: vi.fn(async () => context), close: vi.fn(async () => undefined), isConnected: () => true } as unknown as Browser;
+    const launchBrowser = vi.fn(async () => browser);
+    const first = new BrowserSessionManager(store, { launchBrowser });
+    await first.open(identity, userAction);
+    await first.closeAll();
+    const restarted = new BrowserSessionManager(store, { launchBrowser });
+    const restored = await restarted.open(identity, userAction);
+    expect(restored.hasStoredSession).toBe(true);
+    expect(browser.newContext).toHaveBeenCalledTimes(2);
+    expect(browser.newContext).toHaveBeenLastCalledWith({ storageState: savedState });
+    expect(restarted.getSessionSnapshot(identity)).toMatchObject({ sessionExists: true, contextExists: true, canonicalPageExists: true });
+  });
+
+  it("reports a closed Toutiao canonical Page as absent without treating saved authorization as expired", async () => {
+    let closed = false;
+    const page = { isClosed: () => closed, url: () => "https://mp.toutiao.com/", context: () => context };
+    const context = { setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => page), pages: vi.fn(() => [page]), close: vi.fn(async () => undefined) } as unknown as BrowserContext;
+    const browser = { newContext: vi.fn(async () => context), close: vi.fn(async () => undefined), isConnected: () => true } as unknown as Browser;
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser: vi.fn(async () => browser) });
+    const identity = { platformKey: "toutiao", accountId: "owner-account" };
+    await manager.open(identity, userAction);
+    expect(manager.getSessionSnapshot(identity)).toMatchObject({ sessionExists: true, canonicalPageExists: true, canonicalPageHost: "mp.toutiao.com", canonicalPagePath: "/" });
+    closed = true;
+    expect(manager.getSessionSnapshot(identity)).toMatchObject({ sessionExists: true, canonicalPageExists: true, canonicalPageClosed: true, canonicalPageHost: null });
+  });
+
   it("closes an XHS operation Page without closing its canonical Context", async () => {
     const firstPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), close: vi.fn(async () => undefined), context: vi.fn(() => context) };
     const secondPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), close: vi.fn(async () => undefined), context: vi.fn(() => context) };

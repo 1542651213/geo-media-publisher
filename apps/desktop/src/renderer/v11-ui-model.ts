@@ -102,6 +102,7 @@ export const accountStatusLabel = (account: Pick<Account, "loginStatus"> & { acc
 export const isOnlineAccount = (account: AccountRuntimeView): boolean =>
   account.enabled
   && (account.platformKey !== "xiaohongshu" || account.runtimeAuthState === "AUTHENTICATED")
+  && (account.platformKey !== "toutiao" || account.accountStatus === "Connected")
   && (account.loginStatus === "logged_in" || account.accountStatus === "Connected");
 
 export function connectedAccountsForPlatform<T extends AccountRuntimeView>(accounts: T[], platformKey: string): T[] {

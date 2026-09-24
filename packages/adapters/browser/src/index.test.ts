@@ -62,6 +62,24 @@ function fixture(staysOnLogin = false, hasStoredSession = false, saveFails = fal
 }
 
 describe("BrowserAutomationAdapter login lifecycle", () => {
+  it("does not reuse a stale adapter fallback after the manager reports browser disconnect", async () => {
+    const { adapter, manager } = fixture(false, true);
+    manager.getActiveSession = vi.fn(() => null);
+    const ctx = context();
+    await adapter.openBackend(ctx);
+    await adapter.openBackend(ctx);
+    expect(manager.open).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes only the runtime while preserving the encrypted authorization snapshot", async () => {
+    const { adapter, manager } = fixture(false, true);
+    const ctx = context();
+    await adapter.openBackend(ctx);
+    await adapter.closeRuntimeSession(ctx);
+    expect(manager.close).toHaveBeenCalledTimes(1);
+    expect(manager.clear).not.toHaveBeenCalled();
+  });
+
   it("verifies in the dedicated login session, saves storageState and closes without opening a second browser", async () => {
     const { adapter, manager, page } = fixture();
     const ctx = context();

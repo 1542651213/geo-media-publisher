@@ -193,6 +193,8 @@ export interface AutomationAdapter extends PlatformAdapter {
   releaseOperationSession?(ctx: AccountContext): Promise<void>;
   /** Releases the visible login-only session after account identity has been persisted. */
   releaseConnectionSession?(ctx: AccountContext): Promise<void>;
+  /** Closes only an already active runtime; saved authorization remains intact. */
+  closeRuntimeSession?(ctx: AccountContext): Promise<void>;
   /** Releases only the visible connection Page while retaining the owned Context when supported. */
   releaseConnectionPage?(ctx: AccountContext): Promise<void>;
   /** Persists a deferred visible login Session after same-Page identity readback. */
