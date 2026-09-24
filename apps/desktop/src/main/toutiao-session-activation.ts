@@ -43,7 +43,7 @@ export interface ToutiaoActivationResult extends ToutiaoSessionStatus {
 }
 
 function creatorHost(host: string | null): boolean { return host === "mp.toutiao.com"; }
-const CREATOR_LANDING_PATHS = new Set(["/", "/profile_v4/index"]);
+const CREATOR_LANDING_PATHS = new Set(["/", "/profile_v4/", "/profile_v4/index"]);
 function hostOf(url: string): string | null {
   try { return new URL(url).hostname.toLowerCase(); } catch { return null; }
 }

@@ -68,6 +68,8 @@ describe("Toutiao BrowserSession activation", () => {
     h.states.set("a", { ...snapshot("a", true, "mp.toutiao.com"), canonicalPagePath: "/profile_v4/index" });
     expect(h.activation.status("a")).toMatchObject({ runtimeState: "ACTIVE", contextOwnsPage: true });
     expect((await h.activation.activate("a")).outcome).toBe("ACTIVE_REUSED");
+    h.states.set("a", { ...snapshot("a", true, "mp.toutiao.com"), canonicalPagePath: "/profile_v4/" });
+    expect(h.activation.status("a").runtimeState).toBe("ACTIVE");
     h.states.set("a", { ...snapshot("a", true, "mp.toutiao.com"), canonicalPagePath: "/profile_v4/login" });
     expect(h.activation.status("a").runtimeState).toBe("DISCONNECTED");
   });
