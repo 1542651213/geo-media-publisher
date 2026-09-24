@@ -1,5 +1,13 @@
 # Project State
 
+## Toutiao MVP-3 acrawler runtime discovery — 2026-09-24
+
+- 仅在隔离 worktree 和 Owner 已保存授权的应用 BrowserContext 中运行只读 EDITOR Shadow。Canonical Session 在探测前后均为 ACTIVE，编辑器加载 38 个脚本。Guard 在发送前阻断 1 次 `GET /mp/agw/article/new` 与 39 次未知 POST；没有内容写请求、草稿、上传或 Final Submit 被放行。
+- 新增仅用于诊断的 CDP 函数位置探针。它读取对象描述符、`Function.toString()` 的 SHA-256 和函数位置元数据，不调用 `init`、`sign`、`fetch` 或 XHR，不输出源码、Cookie、Token 或签名。CDP 将编辑器的 `byted_acrawler.init` 与 `sign` 都定位到 `sf1-cdn-tos.toutiaostatic.com/obj/rc-web-sdk/acrawler.js`；该脚本捕获 SHA-256 为 `78f0a6391588c3d6803ef311e422492c0e4b22656425b5245274ed5c642eaf33`。
+- `init` 与 `sign` 是不同函数对象，但 `Function.toString()` 的可见文本长度和哈希相同，不能用该哈希唯一识别签名实现。SDK 脚本未暴露可直接搜索的 `sign`、`init`、`intercept` 或 `fetch` 字符串；按本轮禁止反混淆的边界，内部模块、调用链和签名注入点仍为 UNKNOWN。
+- 编辑器的 `fetch`、`XMLHttpRequest.prototype.open/send` 当前函数位置指向单独的 `bdms.js` 安全脚本；Creator 首页对应包装函数则来自 Slardar。该差异不能归因于 acrawler，也不能证明 acrawler 注册了这些 hook。已观察的只读 GET 不在编辑器 `enablePathList` 中，故不能推断发布请求的动态字段或 Browser-bound 范围。
+- 图文 API Submit 保持未实现。新增三项定点测试覆盖 CDP URL 脱敏、非法位置拒绝和只读探针不调用 SDK 函数；本轮无真实发布。
+
 ## Toutiao MVP-0 guarded Browser request bridge — 2026-09-24
 
 - 继续在隔离 worktree 中，用 Owner 已保存授权且应用内 Canonical Page 为 ACTIVE 的 Toutiao BrowserContext 运行默认关闭的 Shadow 诊断模式。Guard 在页面重新加载前安装；本轮没有进入编辑器，`article/new` 阻断计数为 0，内容写请求发送数为 0。

@@ -2,6 +2,11 @@ import type { BrowserContext, Page, Request, Response, Route } from "playwright-
 import { describe, expect, it, vi } from "vitest";
 import { classifyCreatorSessionBody, classifyShadowRequest, isSafeCreatorHomePath, readBoundedResponseJson, runReadOnlyToutiaoProtocolShadow } from "./protocol-live-shadow";
 
+// This suite verifies routing and guard behavior; runtime CDP metadata has its own tests.
+vi.mock("./protocol-acrawler-runtime", () => ({ inspectAcrCrawlerRuntime: vi.fn(async () => ({
+  objectFound: false, initSignSameObject: null, locationStatus: "CDP_UNAVAILABLE", functions: []
+})) }));
+
 describe("Toutiao live Shadow network guard", () => {
   it("allows only read methods for ordinary endpoints", () => {
     expect(classifyShadowRequest("GET", "https://mp.toutiao.com/profile_v4/index")).toBe("READ_ONLY");

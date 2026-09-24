@@ -4,6 +4,7 @@ import { inspectProtocolScript, inspectRuntimeSdkSurface, type SafeProtocolScrip
 import { probeAcrCrawlerSignInPage } from "./protocol-signer-contract";
 import { probeAcrCrawlerInputContractInPage } from "./protocol-signer-input-probe";
 import { describeReadonlyBrowserRequest, replayCapturedReadonlyGet, type BrowserGeneratedReadonlyRequest, type SafeBrowserGeneratedRequestShape, type SafeReadonlyReplayResult } from "./protocol-request-bridge";
+import { inspectAcrCrawlerRuntime, type SafeAcrCrawlerRuntimeEvidence } from "./protocol-acrawler-runtime";
 
 export const TOUTIAO_GUARDED_EDITOR_URL = "https://mp.toutiao.com/profile_v4/graphic/publish";
 
@@ -42,6 +43,7 @@ export interface ToutiaoLiveShadowResult {
   readonly signerGlobals: readonly string[];
   readonly runtimeGlobals: readonly Readonly<{ name: string; kind: string; arity: number | null }> [];
   readonly runtimeSdkSurfaces: readonly SafeRuntimeSdkSurface[];
+  readonly sdkRuntime: Readonly<{ home: SafeAcrCrawlerRuntimeEvidence; editor: SafeAcrCrawlerRuntimeEvidence }> | null;
   readonly scripts: readonly SafeProtocolScriptEvidence[];
   readonly loadedScriptCount: number;
   readonly discoveryMode: "HOME" | "EDITOR" | "SIGNER_CONTRACT" | "SIGNER_INPUT" | "BRIDGE";
@@ -237,6 +239,7 @@ export async function runReadOnlyToutiaoProtocolShadow(context: BrowserContext, 
         secure: cookie.secure, httpOnly: cookie.httpOnly, sameSite: cookie.sameSite })), tokenCandidates: {}
     }).cookies;
     const mode = options.mode ?? "HOME";
+    const sdkRuntimeHome = mode === "EDITOR" ? await inspectAcrCrawlerRuntime(page) : null;
     let inspectedPage = page;
     if (mode === "EDITOR" || mode === "SIGNER_CONTRACT" || mode === "SIGNER_INPUT") {
       editorPage = await context.newPage();
@@ -261,6 +264,7 @@ export async function runReadOnlyToutiaoProtocolShadow(context: BrowserContext, 
     const runtimeSdkSurfaces = (await Promise.all(["byted_acrawler", "secsdk"].map((name) =>
       inspectedPage.evaluate(inspectRuntimeSdkSurface, name as SafeRuntimeSdkSurface["name"]))))
       .filter((surface): surface is SafeRuntimeSdkSurface => Boolean(surface) && !Array.isArray(surface));
+    const sdkRuntime = sdkRuntimeHome ? { home: sdkRuntimeHome, editor: await inspectAcrCrawlerRuntime(inspectedPage) } : null;
     const observedScriptCount = await inspectedPage.evaluate(() => document.scripts.length);
     const loadedScriptCount = typeof observedScriptCount === "number" ? observedScriptCount : scripts.length;
     let requestBridge: ToutiaoLiveShadowResult["requestBridge"] = null;
@@ -292,7 +296,7 @@ export async function runReadOnlyToutiaoProtocolShadow(context: BrowserContext, 
     }
     const location = safePageLocation(page);
     return { status: page.isClosed() || location.host !== "mp.toutiao.com" || !isSafeCreatorHomePath(location.path ?? "") ? "SESSION_DISCONNECTED" : "CAPTURED",
-      observations, cookieMetadata, signerGlobals, runtimeGlobals, runtimeSdkSurfaces, scripts, loadedScriptCount, discoveryMode: mode,
+      observations, cookieMetadata, signerGlobals, runtimeGlobals, runtimeSdkSurfaces, sdkRuntime, scripts, loadedScriptCount, discoveryMode: mode,
       requestBridge, signerContract, signerInputContract, signerProbeNetworkRequestDelta, signerProbeCookieMetadataChanged, signerProbeRequestShapes,
       pageHost: location.host, pagePath: location.path,
       guardedRequestCount, nonContentTelemetryCount, authTokenBootstrapCount, remoteAuthState,
