@@ -32,6 +32,12 @@ describe("Kangyi durable operation metadata", () => {
     expect(() => assertKangyiExactJsonBody('{"draft":{"title":"B"}}', base.create.requestBodySha256)).toThrow("KANGYI_EXACT_BODY_HASH_MISMATCH");
   });
 
+  it("round-trips the optional one-time pilot authorization while retaining legacy metadata compatibility", () => {
+    expect(parseKangyiOperationMetadata(JSON.stringify(base))?.pilotAuthorizationId).toBeUndefined();
+    expect(parseKangyiOperationMetadata(serializeKangyiOperationMetadata({ ...base, pilotAuthorizationId: "owner-pilot-1" }))?.pilotAuthorizationId).toBe("owner-pilot-1");
+    expect(() => parseKangyiOperationMetadata(JSON.stringify({ ...base, pilotAuthorizationId: "" }))).toThrow("KANGYI_OPERATION_METADATA_PILOT_AUTH");
+  });
+
   it("does not accept an invalid idempotency key or malformed persisted metadata", () => {
     expect(() => parseKangyiOperationMetadata(JSON.stringify({ ...base, create: { ...base.create, idempotencyKey: "bad key" } }))).toThrow("KANGYI_INVALID_IDEMPOTENCY_KEY");
     expect(() => parseKangyiOperationMetadata(JSON.stringify({ ...base, create: { ...base.create, exactRequestBody: "not-json" } }))).toThrow("KANGYI_EXACT_BODY_HASH_MISMATCH");

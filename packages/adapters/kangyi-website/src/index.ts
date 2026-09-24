@@ -2,9 +2,21 @@ import { ClientError, CmsV2Client, type Capabilities, type ClientConfig, type De
 import { PlatformAdapterError, type PlatformAdapter } from "@publisher/adapters-core";
 import type { AccountContext, AccountProfile, AdapterManifest, CredentialField, LoginSession, LoginStatus, PlatformCapabilities, PublishArticleInput, PublishResult, ValidationResult } from "@publisher/domain";
 import type { CredentialStore } from "@publisher/security";
+import { buildKangyiCmsDraft, prepareKangyiWebsiteContent, type KangyiImageFact, type KangyiPreparedContent } from "./mapping";
+
+export * from "./mapping";
 
 export interface KangyiCapabilitiesClient { capabilities(): Promise<Success<Capabilities>> }
 export interface KangyiWebsiteAdapterOptions { credentialStore?: CredentialStore; clientFactory?: (config: ClientConfig) => KangyiCapabilitiesClient }
+
+export interface KangyiWebsitePrepareInput {
+  article: Parameters<typeof prepareKangyiWebsiteContent>[0]["article"];
+  snapshot: Parameters<typeof prepareKangyiWebsiteContent>[0]["snapshot"];
+  account: Parameters<typeof prepareKangyiWebsiteContent>[0]["account"];
+  kind?: Parameters<typeof prepareKangyiWebsiteContent>[0]["kind"];
+  approvedSlug?: string | null;
+  imageFacts?: KangyiImageFact[];
+}
 
 const credentialSchema: CredentialField[] = [
   { key: "origin", label: "康一 Publishing API Origin", type: "text", required: true, helpText: "例如 https://staging.kangyihb.com；只填写 scheme、host 和可选端口" },
@@ -60,6 +72,14 @@ export class KangyiWebsiteAdapter implements PlatformAdapter {
 
   getCapabilities(): PlatformCapabilities { return { ...capabilities }; }
   getCredentialSchema(): CredentialField[] { return credentialSchema.map((field) => ({ ...field })); }
+
+  prepareContent(input: KangyiWebsitePrepareInput): KangyiPreparedContent {
+    return prepareKangyiWebsiteContent(input);
+  }
+
+  bindPreparedMedia(prepared: KangyiPreparedContent, mediaIds?: Record<string, string>) {
+    return buildKangyiCmsDraft(prepared, mediaIds);
+  }
 
   async readRemoteCapabilities(ctx: AccountContext): Promise<Capabilities> {
     const config = this.readClientConfig(ctx);

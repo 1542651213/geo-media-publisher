@@ -17,5 +17,7 @@ export type * from "./submission-barrier";
 
 export * from "./content-snapshot";
 export * from "./kangyi-operation";
+export * from "./kangyi-website-prepared";
+export * from "./kangyi-phase2-gates";
 
 export * from "./ordinary-xhs";

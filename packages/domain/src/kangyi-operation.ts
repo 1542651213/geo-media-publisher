@@ -38,6 +38,8 @@ export interface KangyiPollMetadata {
 
 export interface KangyiWebsiteOperationMetadataV1 {
   version: 1;
+  /** One owner authorization can reserve exactly one staging intent for the first-article pilot. */
+  pilotAuthorizationId?: string;
   siteId: string;
   environment: "local" | "staging" | "production";
   accountId: string;
@@ -211,6 +213,7 @@ export function parseKangyiOperationMetadata(serialized: string | null | undefin
   }
   return {
     version: 1,
+    ...(value.pilotAuthorizationId === undefined ? {} : { pilotAuthorizationId: requireString(value.pilotAuthorizationId, "KANGYI_OPERATION_METADATA_PILOT_AUTH") }),
     siteId: requireString(value.siteId, "KANGYI_OPERATION_METADATA_SITE"),
     environment,
     accountId: requireString(value.accountId, "KANGYI_OPERATION_METADATA_ACCOUNT"),

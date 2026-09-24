@@ -1,16 +1,17 @@
-import { assertOrdinaryXhsInput } from "@publisher/domain";
+import { assertKangyiAccountScope, assertKangyiPhase2Authorization, assertKangyiPilotBudget, assertOrdinaryXhsInput, type KangyiPhase2Authorization } from "@publisher/domain";
 import type { SubmissionActionResult } from "@publisher/domain";
 import { isAutomationAdapter, OneShotPublicationGuard, withUserInitiatedActionSettings, type AdapterRegistry, type AutomationAdapter, type BrowserExecutionMode, type BrowserPublishAttemptContext, type OneShotPublicationAuthorization, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
-import { canReuseArticle, decideFailure, ERROR_CODES, evaluateContentQualityGate, validatePlatformArticle, type Account, type AccountContext, type AdapterManifest, type ContentSnapshot, type ErrorCode, type PlatformCapability, type PublishArticleInput, type PublishJob, type PublishMode, type PublishResult, type PublishVideoInput, type XhsContextIdentityAttestation } from "@publisher/domain";
+import { canReuseArticle, decideFailure, ERROR_CODES, evaluateContentQualityGate, validatePlatformArticle, type Account, type AccountContext, type AdapterManifest, type ContentSnapshot, type ErrorCode, type KangyiWebsitePreparedContentV1, type PlatformCapability, type PublishArticleInput, type PublishJob, type PublishMode, type PublishResult, type PublishVideoInput, type XhsContextIdentityAttestation } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
 import { KangyiDurableOperationRunner, type KangyiDurableContinuationInput, type KangyiDurableOperationInput, type KangyiDurableOperationTransport, type KangyiDurableRunResult } from "./kangyi-durable-operation";
 
 export { preparedPublishMessage } from "./publish-capability";
-export * from "./kangyi-durable-operation";
+export type { KangyiDurableContinuationInput, KangyiDurableOperationInput, KangyiDurableOperationTransport, KangyiDurableRunResult } from "./kangyi-durable-operation";
 
 export interface PublishExecutionResult { job: PublishJob; message: string; code?: string; }
 export interface AssistedPrepareResult { job: PublishJob; record: ReturnType<AppRepository["getPublishRecordByJob"]>; message: string; }
+export type KangyiPhase2ExecutionInput = KangyiDurableOperationInput & { phase2Authorization: KangyiPhase2Authorization };
 
 /** Formal-pilot only: never exposed to Renderer/IPC as an unlock action. */
 export interface ProductionPilotGuard {
@@ -109,13 +110,33 @@ function publishRecordMetadata(manifest: AdapterManifest, job: PublishJob, accou
 export class PublisherService {
   constructor(private readonly repository: AppRepository, private readonly adapters: AdapterRegistry, private readonly logger: Logger, private readonly options: PublisherOptions = {}) {}
 
+  /** Persists an immutable local Website mapping on the existing Job; this method performs no network request. */
+  saveKangyiPreparedContent(jobId: string, prepared: KangyiWebsitePreparedContentV1): ReturnType<AppRepository["saveKangyiPreparedContent"]> {
+    return this.repository.saveKangyiPreparedContent(jobId, prepared);
+  }
+
   /** Explicit Phase 2 seam: the durable website runner owns preparatory CMS writes and claims F01 only at publish. */
-  async executeKangyiDurableOperation(input: KangyiDurableOperationInput, transport: KangyiDurableOperationTransport): Promise<KangyiDurableRunResult> {
-    return new KangyiDurableOperationRunner(this.repository, transport).run(input);
+  async executeKangyiDurableOperation(input: KangyiPhase2ExecutionInput, transport: KangyiDurableOperationTransport): Promise<KangyiDurableRunResult> {
+    assertKangyiPhase2Authorization(input.phase2Authorization);
+    assertKangyiAccountScope({ accountId: input.binding.accountId, expectedAccountId: input.phase2Authorization.accountId, siteId: input.binding.siteId, environment: input.binding.environment, writesEnabled: input.phase2Authorization.writesEnabled });
+    const account = this.repository.getAccountById(input.binding.accountId, "kangyi_website");
+    if (!account || !account.enabled || account.loginStatus !== "logged_in" || account.connectionMode !== "OfficialAPI" || account.authorizationStatus !== "Authorized" || account.publishMode !== "manual" || account.allowAutoPublish) throw new Error("KANGYI_ACCOUNT_NOT_WRITE_READY");
+    if (input.binding.pilotAuthorizationId && input.binding.pilotAuthorizationId !== input.phase2Authorization.authorizationId) throw new Error("KANGYI_PHASE2_AUTHORIZATION_MISMATCH");
+    assertKangyiPilotBudget({ articleCount: 1, imageCount: input.media?.length ?? 0, logicalCreateCount: 1, logicalDraftCount: input.draft ? 1 : 0, logicalValidateCount: 1, logicalPublishCount: 1 });
+    const { phase2Authorization: _phase2Authorization, ...operation } = input;
+    operation.binding.pilotAuthorizationId = input.phase2Authorization.authorizationId;
+    return new KangyiDurableOperationRunner(this.repository, transport).run(operation);
   }
 
   /** Recovery path for a retained Kangyi intent; persisted payloads take precedence over continuation input. */
-  async resumeKangyiDurableOperation(intentId: string, transport: KangyiDurableOperationTransport, continuation?: KangyiDurableContinuationInput): Promise<KangyiDurableRunResult> {
+  async resumeKangyiDurableOperation(intentId: string, transport: KangyiDurableOperationTransport, phase2Authorization: KangyiPhase2Authorization, continuation?: KangyiDurableContinuationInput): Promise<KangyiDurableRunResult> {
+    assertKangyiPhase2Authorization(phase2Authorization);
+    const metadata = this.repository.getKangyiOperationMetadata(intentId);
+    if (!metadata || metadata.pilotAuthorizationId !== phase2Authorization.authorizationId || metadata.accountId !== phase2Authorization.accountId) throw new Error("KANGYI_PHASE2_AUTHORIZATION_MISMATCH");
+    assertKangyiAccountScope({ accountId: metadata.accountId, expectedAccountId: phase2Authorization.accountId, siteId: metadata.siteId, environment: metadata.environment, writesEnabled: phase2Authorization.writesEnabled });
+    const account = this.repository.getAccountById(metadata.accountId, "kangyi_website");
+    if (!account || !account.enabled || account.loginStatus !== "logged_in" || account.connectionMode !== "OfficialAPI" || account.authorizationStatus !== "Authorized" || account.publishMode !== "manual" || account.allowAutoPublish) throw new Error("KANGYI_ACCOUNT_NOT_WRITE_READY");
+    assertKangyiPilotBudget({ articleCount: 1, imageCount: Math.max(metadata.media.length, continuation?.media?.length ?? 0), logicalCreateCount: 1, logicalDraftCount: metadata.draft || continuation?.draft ? 1 : 0, logicalValidateCount: 1, logicalPublishCount: 1 });
     return new KangyiDurableOperationRunner(this.repository, transport).resume(intentId, continuation);
   }
 

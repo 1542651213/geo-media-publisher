@@ -1,4 +1,4 @@
-import { assertKangyiExactJsonBody, assertKangyiIdempotencyKey, parseKangyiOperationMetadata, serializeKangyiOperationMetadata, type KangyiJsonOperationMetadata, type KangyiMediaOperationMetadata, type KangyiOperationName, type KangyiOperationPhase, type KangyiPollMetadata, type KangyiPublishOperationMetadata, type KangyiWebsiteOperationMetadataV1, type XhsContextIdentityAttestation } from "@publisher/domain";
+import { assertKangyiExactJsonBody, assertKangyiIdempotencyKey, parseKangyiOperationMetadata, serializeKangyiOperationMetadata, type KangyiJsonOperationMetadata, type KangyiMediaOperationMetadata, type KangyiOperationName, type KangyiOperationPhase, type KangyiPollMetadata, type KangyiPublishOperationMetadata, type KangyiWebsiteOperationMetadataV1, type KangyiWebsitePreparedContentV1, type XhsContextIdentityAttestation } from "@publisher/domain";
 import { ContentSnapshots } from "./content-snapshots";
 import type { SubmissionActionResult, SubmissionReconciliationRequest, SubmissionNegativeEvidence } from "@publisher/domain";
 import { createHash, randomUUID } from "node:crypto";
@@ -60,10 +60,12 @@ export interface ProductionPilotPreparedBinding {
 
 export interface KangyiOperationBindingInput {
   intentId: string;
+  accountId: string;
   siteId: string;
   environment: "local" | "staging" | "production";
   snapshotId: string;
   contentBindingId: string;
+  pilotAuthorizationId?: string;
 }
 
 export interface KangyiJsonOperationPreparation {
@@ -195,6 +197,15 @@ function parseJson<T>(value: unknown, fallback: T): T {
     return JSON.parse(value) as T;
   } catch {
     return fallback;
+  }
+}
+function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
+function assertKangyiPreparedContentHasNoCredentials(value: unknown): void {
+  if (Array.isArray(value)) { for (const item of value) assertKangyiPreparedContentHasNoCredentials(item); return; }
+  if (!isRecord(value)) return;
+  for (const [key, item] of Object.entries(value)) {
+    if (/(?:secret|password|token|cookie|authorization|signature|nonce|timestamp)/iu.test(key)) throw new Error("KANGYI_PREPARED_CONTENT_FORBIDDEN_FIELD");
+    assertKangyiPreparedContentHasNoCredentials(item);
   }
 }
 function textValue(value: unknown): string { return typeof value === "string" ? value : ""; }
@@ -2969,20 +2980,76 @@ export class AppRepository {
     return row ? parseKangyiOperationMetadata(textValue(row.operation_metadata_json)) : null;
   }
 
+  saveKangyiPreparedContent(jobId: string, prepared: KangyiWebsitePreparedContentV1): { prepared: KangyiWebsitePreparedContentV1; sha256: string } {
+    return this.db.transaction(() => {
+      const job = this.getJob(jobId);
+      if (!job || job.platformKey !== "kangyi_website" || job.finalPublishMode !== "PREPARE_ONLY") throw new Error("KANGYI_PREPARED_JOB_SCOPE_INVALID");
+      const account = this.getAccountById(job.accountId, "kangyi_website");
+      const article = this.getArticle(job.articleId);
+      if (!account || !account.enabled || account.connectionMode !== "OfficialAPI" || account.authorizationStatus !== "Authorized" || account.externalAccountId !== "kangyi" || account.publishMode !== "manual" || account.allowAutoPublish || !article) throw new Error("KANGYI_PREPARED_ACCOUNT_OR_ARTICLE_INVALID");
+      if (prepared.version !== 1 || prepared.articleId !== job.articleId || prepared.brandId !== article.brandId || prepared.accountId !== job.accountId || prepared.snapshotId !== job.contentBindingId || prepared.contentBindingId !== job.contentBindingId || prepared.siteId !== "kangyi" || prepared.environment !== "staging" || prepared.kind !== prepared.draftPreview.kind || prepared.slug !== prepared.draftPreview.slug || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(prepared.slug)) throw new Error("KANGYI_PREPARED_BINDING_MISMATCH");
+      assertKangyiPreparedContentHasNoCredentials(prepared);
+      const snapshot = this.contentSnapshots.assertCurrent(jobId);
+      if (snapshot.id !== prepared.snapshotId || snapshot.sourceArticleId !== prepared.articleId || snapshot.accountId !== prepared.accountId) throw new Error("KANGYI_PREPARED_SNAPSHOT_MISMATCH");
+      const historical = this.contentSnapshots.historicalInput(snapshot, article.id);
+      if (prepared.imageBindings.length !== snapshot.images.length) throw new Error("KANGYI_PREPARED_IMAGE_BINDING_MISMATCH");
+      for (const binding of prepared.imageBindings) {
+        const image = snapshot.images.find((candidate) => candidate.assetId === binding.assetId);
+        const bytes = historical.boundImages?.find((candidate) => candidate.assetId === binding.assetId);
+        const asset = this.getImageAsset(binding.assetId);
+        if (!image || !bytes || !asset || asset.brandId !== article.brandId || image.sha256 !== binding.snapshotSha256 || bytes.sha256 !== binding.snapshotSha256 || bytes.mimeType !== binding.mimeType || bytes.buffer.byteLength !== binding.bytes || binding.mediaId !== null) throw new Error("KANGYI_PREPARED_IMAGE_BINDING_MISMATCH");
+      }
+      const serialized = JSON.stringify(prepared);
+      const sha256 = createHash("sha256").update(serialized, "utf8").digest("hex");
+      const row = this.db.prepare("SELECT publish_payload_json FROM publish_jobs WHERE id=?").get(jobId) as Row | undefined;
+      const payload = parseJson<Record<string, unknown>>(typeof row?.publish_payload_json === "string" ? row.publish_payload_json : null, {});
+      const existing = payload.kangyiWebsitePreparedContent;
+      if (existing !== undefined) {
+        if (!isRecord(existing) || typeof existing.sha256 !== "string" || existing.sha256 !== createHash("sha256").update(JSON.stringify(existing.prepared), "utf8").digest("hex")) throw new Error("KANGYI_PREPARED_CONTENT_CORRUPT");
+        if (JSON.stringify(existing.prepared) !== serialized) throw new Error("KANGYI_PREPARED_CONTENT_IMMUTABLE");
+        return { prepared: JSON.parse(serialized) as KangyiWebsitePreparedContentV1, sha256 };
+      }
+      this.db.prepare("UPDATE publish_jobs SET publish_payload_json=? WHERE id=? AND content_binding_id=?").run(json({ ...payload, kangyiWebsitePreparedContent: { sha256, prepared } }), jobId, prepared.contentBindingId);
+      return { prepared: JSON.parse(serialized) as KangyiWebsitePreparedContentV1, sha256 };
+    }).immediate();
+  }
+
+  getKangyiPreparedContent(jobId: string): { prepared: KangyiWebsitePreparedContentV1; sha256: string } | null {
+    const row = this.db.prepare("SELECT publish_payload_json,article_id,account_id,platform_key,content_binding_id FROM publish_jobs WHERE id=?").get(jobId) as Row | undefined;
+    if (!row || textValue(row.platform_key) !== "kangyi_website") return null;
+    const payload = parseJson<Record<string, unknown>>(typeof row.publish_payload_json === "string" ? row.publish_payload_json : null, {});
+    const value = payload.kangyiWebsitePreparedContent;
+    if (value === undefined) return null;
+    if (!isRecord(value) || !isRecord(value.prepared) || typeof value.sha256 !== "string") throw new Error("KANGYI_PREPARED_CONTENT_CORRUPT");
+    const serialized = JSON.stringify(value.prepared);
+    const sha256 = createHash("sha256").update(serialized, "utf8").digest("hex");
+    const prepared = value.prepared as unknown as KangyiWebsitePreparedContentV1;
+    if (sha256 !== value.sha256 || prepared.version !== 1 || prepared.articleId !== row.article_id || prepared.accountId !== row.account_id || prepared.siteId !== "kangyi" || prepared.environment !== "staging" || prepared.contentBindingId !== row.content_binding_id || prepared.snapshotId !== row.content_binding_id || prepared.slug !== prepared.draftPreview?.slug) throw new Error("KANGYI_PREPARED_CONTENT_BINDING_INVALID");
+    return { prepared: JSON.parse(serialized) as KangyiWebsitePreparedContentV1, sha256 };
+  }
+
   initializeKangyiOperation(input: KangyiOperationBindingInput): KangyiWebsiteOperationMetadataV1 {
     return this.db.transaction(() => {
       const row = this.db.prepare("SELECT * FROM submission_intents WHERE id=?").get(input.intentId) as Row | undefined;
       if (!row) throw new Error("Submission intent not found");
       const job = this.getJob(textValue(row.job_id));
       if (!job || job.platformKey !== "kangyi_website") throw new Error("KANGYI_OPERATION_PLATFORM_MISMATCH");
+      if (input.accountId !== job.accountId) throw new Error("KANGYI_OPERATION_ACCOUNT_MISMATCH");
       if (textValue(row.content_binding_id) !== input.contentBindingId || input.snapshotId !== input.contentBindingId) throw new Error("KANGYI_OPERATION_BINDING_MISMATCH");
       const existing = parseKangyiOperationMetadata(typeof row.operation_metadata_json === "string" ? row.operation_metadata_json : null);
       if (existing) {
-        if (existing.siteId !== input.siteId || existing.environment !== input.environment || existing.accountId !== job.accountId || existing.jobId !== job.id || existing.intentId !== input.intentId || existing.contentBindingId !== input.contentBindingId || existing.snapshotId !== input.snapshotId) throw new Error("KANGYI_OPERATION_BINDING_IMMUTABLE");
+        if (existing.siteId !== input.siteId || existing.environment !== input.environment || existing.accountId !== job.accountId || existing.jobId !== job.id || existing.intentId !== input.intentId || existing.contentBindingId !== input.contentBindingId || existing.snapshotId !== input.snapshotId || existing.pilotAuthorizationId !== input.pilotAuthorizationId) throw new Error("KANGYI_OPERATION_BINDING_IMMUTABLE");
         return existing;
+      }
+      if (input.pilotAuthorizationId) {
+        const rows = this.db.prepare("SELECT operation_metadata_json FROM submission_intents WHERE operation_metadata_json IS NOT NULL AND id<>? AND account_id=? AND platform_key='kangyi_website'").all(input.intentId, job.accountId) as Row[];
+        const occupiedPilot = rows.map((candidate) => parseKangyiOperationMetadata(typeof candidate.operation_metadata_json === "string" ? candidate.operation_metadata_json : null)).find((candidate) => candidate?.pilotAuthorizationId);
+        if (occupiedPilot?.pilotAuthorizationId === input.pilotAuthorizationId) throw new Error("KANGYI_PILOT_AUTHORIZATION_ALREADY_BOUND");
+        if (occupiedPilot) throw new Error("KANGYI_PILOT_SLOT_ALREADY_CLAIMED");
       }
       const metadata: KangyiWebsiteOperationMetadataV1 = {
         version: 1,
+        ...(input.pilotAuthorizationId ? { pilotAuthorizationId: input.pilotAuthorizationId } : {}),
         siteId: input.siteId,
         environment: input.environment,
         accountId: job.accountId,
@@ -3016,6 +3083,10 @@ export class AppRepository {
         if (current.idempotencyKey !== input.idempotencyKey || current.exactRequestBody !== input.exactRequestBody || current.requestBodySha256 !== input.requestBodySha256) throw new Error("KANGYI_OPERATION_PAYLOAD_IMMUTABLE");
         return metadata;
       }
+      if (operation === "create" && metadata.media.some((item) => item.state !== "SUCCEEDED")) throw new Error("KANGYI_MEDIA_NOT_COMPLETE");
+      if (operation === "draft" && metadata.create?.state !== "SUCCEEDED") throw new Error("KANGYI_CREATE_NOT_COMPLETE");
+      if (operation === "validate" && (metadata.create?.state !== "SUCCEEDED" || (metadata.draft !== null && metadata.draft.state !== "SUCCEEDED"))) throw new Error("KANGYI_DRAFT_NOT_COMPLETE");
+      if (operation === "publish" && metadata.validate?.state !== "SUCCEEDED") throw new Error("KANGYI_VALIDATE_NOT_COMPLETE");
       const phase: KangyiOperationPhase = operation === "create" ? "CREATE" : operation === "draft" ? "DRAFT" : operation === "validate" ? "VALIDATE" : "PUBLISH";
       const next = { ...metadata, phase, lastErrorCode: null };
       const prepared: KangyiJsonOperationMetadata = { ...input, state: "PREPARED" };
@@ -3038,6 +3109,7 @@ export class AppRepository {
         if (existing.snapshotSha256 !== input.snapshotSha256 || existing.mime !== input.mime || existing.bytes !== input.bytes || existing.idempotencyKey !== input.idempotencyKey) throw new Error("KANGYI_MEDIA_BINDING_IMMUTABLE");
         return metadata;
       }
+      if (metadata.create || metadata.draft || metadata.validate || metadata.publish) throw new Error("KANGYI_MEDIA_AFTER_CONTENT_PREPARE");
       const next: KangyiWebsiteOperationMetadataV1 = { ...metadata, phase: "MEDIA", lastErrorCode: null, media: [...metadata.media, { ...input, mediaId: null, serverSha256: null, width: null, height: null, state: "PREPARED" }] };
       this.db.prepare("UPDATE submission_intents SET operation_metadata_json=?,updated_at=? WHERE id=?").run(serializeKangyiOperationMetadata(next), now(), intentId);
       return next;
@@ -3090,6 +3162,25 @@ export class AppRepository {
       else if (operation === "validate") next.validate = next.validate ? { ...next.validate, state: "OUTCOME_UNKNOWN" } : null;
       else next.publish = next.publish ? { ...next.publish, state: "OUTCOME_UNKNOWN" } : null;
       this.db.prepare("UPDATE submission_intents SET operation_metadata_json=?,updated_at=? WHERE id=?").run(serializeKangyiOperationMetadata(next), now(), intentId);
+      return next;
+    }).immediate();
+  }
+
+  failKangyiOperation(intentId: string, operation: KangyiOperationName, errorCode: string): KangyiWebsiteOperationMetadataV1 {
+    return this.db.transaction(() => {
+      const metadata = this.getKangyiOperationMetadata(intentId);
+      if (!metadata) throw new Error("KANGYI_OPERATION_NOT_INITIALIZED");
+      const next: KangyiWebsiteOperationMetadataV1 = { ...metadata, phase: "FAILED", lastErrorCode: errorCode };
+      if (operation === "media") {
+        const last = next.media.at(-1);
+        if (!last) throw new Error("KANGYI_MEDIA_OPERATION_NOT_PREPARED");
+        next.media = next.media.map((item, index) => index === next.media.length - 1 ? { ...item, state: "FAILED" } : item);
+      } else if (operation === "create") next.create = next.create ? { ...next.create, state: "FAILED" } : null;
+      else if (operation === "draft") next.draft = next.draft ? { ...next.draft, state: "FAILED" } : null;
+      else if (operation === "validate") next.validate = next.validate ? { ...next.validate, state: "FAILED" } : null;
+      else next.publish = next.publish ? { ...next.publish, state: "FAILED" } : null;
+      this.db.prepare("UPDATE submission_intents SET operation_metadata_json=?,state='NeedsReconciliation',error_code=?,updated_at=? WHERE id=?").run(serializeKangyiOperationMetadata(next), errorCode, now(), intentId);
+      this.db.prepare("UPDATE publish_jobs SET status='NeedsReconciliation',last_error_code=?,last_error_message='Kangyi CMS contract stop condition',next_retry_at=NULL WHERE id=?").run(errorCode, metadata.jobId);
       return next;
     }).immediate();
   }
