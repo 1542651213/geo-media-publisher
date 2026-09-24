@@ -1,4 +1,5 @@
-import { canonicalSerialize, deepFreeze, hashToutiaoContentBinding, isSecretEvidenceKey, sha256Canonical, ToutiaoPreparationError } from "@publisher/domain";
+import { canonicalSerialize, deepFreeze, isSecretEvidenceKey, ToutiaoPreparationError } from "@publisher/domain";
+import { hashToutiaoContentBinding, sha256Canonical } from "@publisher/domain/toutiao-hash";
 import { makeAssetUploadKey } from "./assets";
 import { normalizeToutiaoArticleContent } from "./content";
 import type { ToutiaoArticlePreparedPayload } from "./payload";

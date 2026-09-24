@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
 import { extname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { deepFreeze, hashToutiaoContentBinding, normalizeToutiaoSettings, ToutiaoPreparationError, validateRemoteSchedule, validateTitle, type Article, type PublishJob, type ToutiaoArticleSettingsSnapshot } from "@publisher/domain";
+import { deepFreeze, normalizeToutiaoSettings, ToutiaoPreparationError, validateRemoteSchedule, validateTitle, type Article, type PublishJob, type ToutiaoArticleSettingsSnapshot } from "@publisher/domain";
+import { hashToutiaoContentBinding } from "@publisher/domain/toutiao-hash";
 import type { AppRepository } from "@publisher/db";
 import { assertPreparedAssetsCurrent, assertPreparedPayloadBinding, prepareToutiaoArticlePayload, type ToutiaoArticlePreparedPayload } from "./payload";
 import type { LocalAssetSource } from "./assets";

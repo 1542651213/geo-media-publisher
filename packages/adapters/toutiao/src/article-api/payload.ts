@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { canonicalSerialize, deepFreeze, hashToutiaoContentBinding, normalizeToutiaoSettings, ToutiaoPreparationError, validateRemoteSchedule, validateTitle, type RemoteScheduleConstraint, type TitleConstraint, type ToutiaoArticleSettingsSnapshot } from "@publisher/domain";
+import { canonicalSerialize, deepFreeze, normalizeToutiaoSettings, ToutiaoPreparationError, validateRemoteSchedule, validateTitle, type RemoteScheduleConstraint, type TitleConstraint, type ToutiaoArticleSettingsSnapshot } from "@publisher/domain";
+import { hashToutiaoContentBinding } from "@publisher/domain/toutiao-hash";
 import { assertAssetSnapshotCurrent, makeAssetUploadKey, snapshotLocalAsset, type LocalAssetSource, type ToutiaoAssetSnapshot } from "./assets";
 import { normalizeToutiaoArticleContent, replaceImageSources } from "./content";
 

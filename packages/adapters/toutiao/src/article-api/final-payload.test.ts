@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { hashToutiaoContentBinding } from "@publisher/domain";
+import { hashToutiaoContentBinding } from "@publisher/domain/toutiao-hash";
 import { buildToutiaoFinalPayload, hashToutiaoFinalPayload, type ToutiaoRemoteAssetResolution } from "./final-payload";
 import { prepareToutiaoArticlePayload } from "./payload";
 

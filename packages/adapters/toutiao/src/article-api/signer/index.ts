@@ -1,4 +1,5 @@
-import { canonicalSerialize, sha256Canonical, ToutiaoPreparationError } from "@publisher/domain";
+import { canonicalSerialize, ToutiaoPreparationError } from "@publisher/domain";
+import { sha256Canonical } from "@publisher/domain/toutiao-hash";
 import { assertToutiaoFinalPayloadReady, hashToutiaoFinalPayload, type ToutiaoArticleFinalPayload } from "../final-payload";
 
 export interface ToutiaoSignerInput {
