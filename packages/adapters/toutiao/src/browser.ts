@@ -458,7 +458,10 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
     readonly structure: { readonly pagePath: string; readonly anchorCount: number;
       readonly structuredRowCount: number; readonly emptyStateObserved: boolean;
       readonly managementMarkerObserved: boolean; readonly statusMarkerObserved: boolean;
-      readonly dateMarkerObserved: boolean };
+      readonly dateMarkerObserved: boolean; readonly timeMarkerObserved: boolean;
+      readonly chineseDateObserved: boolean; readonly bodyCharCount: number;
+      readonly articleHrefCount: number; readonly candidateContainerCount: number;
+      readonly readonlyResponseShapes: readonly { path: string; status: number }[] };
   }> {
     const owned = this.sessionManager.getCanonicalPage({ platformKey: "toutiao", accountId: ctx.accountId });
     if (!owned || owned.page.isClosed() || owned.page.context() !== owned.session.context
@@ -489,6 +492,16 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
     let page: Page | null = null;
     try {
       page = await owned.session.context.newPage();
+      const readonlyResponseShapes: Array<{ path: string; status: number }> = [];
+      page.on("response", (response) => {
+        try {
+          const url = new URL(response.url());
+          if (response.request().method() === "GET" && url.hostname === "mp.toutiao.com"
+            && /\/mp\/agw\//u.test(url.pathname) && readonlyResponseShapes.length < 25
+            && !readonlyResponseShapes.some((item) => item.path === url.pathname))
+            readonlyResponseShapes.push({ path: url.pathname.slice(0, 180), status: response.status() });
+        } catch { /* only safe path/status metadata is retained */ }
+      });
       await page.goto("https://mp.toutiao.com/profile_v4/manage/content/all", { waitUntil: "domcontentloaded", timeout: 30_000 });
       if (new URL(page.url()).hostname !== "mp.toutiao.com") throw new Error("TOUTIAO_MANAGEMENT_REDIRECTED");
       await page.waitForTimeout(1_000);
@@ -519,7 +532,12 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
         return { listStructureVerified: managementMarkerObserved && (visibleStructuredRows > 0 || emptyStateObserved),
           anchorCount: anchors.length, visibleStructuredRows, emptyStateObserved, managementMarkerObserved,
           statusMarkerObserved: /审核|已发布|草稿|定时|预约|拒绝|失败/u.test(body),
-          dateMarkerObserved: /(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2})\s+\d{1,2}:\d{2}/u.test(body), rows };
+          dateMarkerObserved: /(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2})\s+\d{1,2}:\d{2}/u.test(body),
+          timeMarkerObserved: /\d{1,2}:\d{2}/u.test(body), chineseDateObserved: /\d{1,2}月\d{1,2}日/u.test(body),
+          bodyCharCount: body.length,
+          articleHrefCount: anchors.filter((item) => /\/(?:article|item|w)\/\d+/u.test(item.getAttribute("href") ?? "")).length,
+          candidateContainerCount: document.querySelectorAll('[class*="content-list"], [class*="article-list"], [class*="works-list"], table, [role="table"]').length,
+          rows };
       }, target?.title ?? null);
       return { listStructureVerified: observed.listStructureVerified, accountIdentityVerified,
         blockedMutationCount, blockedRequestShapes, match: target && observed.listStructureVerified
@@ -527,7 +545,10 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
         structure: { pagePath: new URL(page.url()).pathname, anchorCount: observed.anchorCount,
           structuredRowCount: observed.visibleStructuredRows, emptyStateObserved: observed.emptyStateObserved,
           managementMarkerObserved: observed.managementMarkerObserved,
-          statusMarkerObserved: observed.statusMarkerObserved, dateMarkerObserved: observed.dateMarkerObserved } };
+          statusMarkerObserved: observed.statusMarkerObserved, dateMarkerObserved: observed.dateMarkerObserved,
+          timeMarkerObserved: observed.timeMarkerObserved, chineseDateObserved: observed.chineseDateObserved,
+          bodyCharCount: observed.bodyCharCount, articleHrefCount: observed.articleHrefCount,
+          candidateContainerCount: observed.candidateContainerCount, readonlyResponseShapes } };
     } finally {
       await page?.close().catch(() => undefined);
       await owned.session.context.unroute("**/*", guard);

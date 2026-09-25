@@ -180,7 +180,10 @@ export interface PublisherApi {
       accountIdentityVerified: boolean; blockedMutationCount: number;
       blockedRequestShapes: readonly { host: string; path: string; method: string }[]; match: null;
       structure: { pagePath: string; anchorCount: number; structuredRowCount: number; emptyStateObserved: boolean;
-        managementMarkerObserved: boolean; statusMarkerObserved: boolean; dateMarkerObserved: boolean } }>;
+        managementMarkerObserved: boolean; statusMarkerObserved: boolean; dateMarkerObserved: boolean;
+        timeMarkerObserved: boolean; chineseDateObserved: boolean; bodyCharCount: number;
+        articleHrefCount: number; candidateContainerCount: number;
+        readonlyResponseShapes: readonly { path: string; status: number }[] } }>;
     oneShotRuntimePreflight(accountId: string): Promise<{ sessionActive: boolean; accountIdentityMatch: boolean;
       managementListStructureVerified: boolean; blockedReadOnlySmokeMutations: number; bundleVersion: number;
       loginGeneration: number; credentialChanged: boolean; backupVerified: boolean }>;
