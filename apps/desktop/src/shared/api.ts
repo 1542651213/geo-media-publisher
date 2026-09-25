@@ -183,7 +183,8 @@ export interface PublisherApi {
         managementMarkerObserved: boolean; statusMarkerObserved: boolean; dateMarkerObserved: boolean;
         timeMarkerObserved: boolean; chineseDateObserved: boolean; bodyCharCount: number;
         articleHrefCount: number; candidateContainerCount: number;
-        readonlyResponseShapes: readonly { path: string; status: number }[] } }>;
+        readonlyResponseShapes: readonly { path: string; status: number }[];
+        framePaths: readonly { host: string; path: string }[]; loadingObserved: boolean; errorObserved: boolean } }>;
     oneShotRuntimePreflight(accountId: string): Promise<{ sessionActive: boolean; accountIdentityMatch: boolean;
       managementListStructureVerified: boolean; blockedReadOnlySmokeMutations: number; bundleVersion: number;
       loginGeneration: number; credentialChanged: boolean; backupVerified: boolean }>;

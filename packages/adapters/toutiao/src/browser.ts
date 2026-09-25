@@ -461,7 +461,9 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
       readonly dateMarkerObserved: boolean; readonly timeMarkerObserved: boolean;
       readonly chineseDateObserved: boolean; readonly bodyCharCount: number;
       readonly articleHrefCount: number; readonly candidateContainerCount: number;
-      readonly readonlyResponseShapes: readonly { path: string; status: number }[] };
+      readonly readonlyResponseShapes: readonly { path: string; status: number }[];
+      readonly framePaths: readonly { host: string; path: string }[];
+      readonly loadingObserved: boolean; readonly errorObserved: boolean };
   }> {
     const owned = this.sessionManager.getCanonicalPage({ platformKey: "toutiao", accountId: ctx.accountId });
     if (!owned || owned.page.isClosed() || owned.page.context() !== owned.session.context
@@ -504,7 +506,11 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
       });
       await page.goto("https://mp.toutiao.com/profile_v4/manage/content/all", { waitUntil: "domcontentloaded", timeout: 30_000 });
       if (new URL(page.url()).hostname !== "mp.toutiao.com") throw new Error("TOUTIAO_MANAGEMENT_REDIRECTED");
-      await page.waitForTimeout(1_000);
+      await page.waitForTimeout(8_000);
+      const framePaths = page.frames().map((frame) => {
+        try { const url = new URL(frame.url()); return { host: url.hostname.slice(0, 100), path: url.pathname.slice(0, 180) }; }
+        catch { return { host: "", path: "" }; }
+      });
       const observed = await page.evaluate((wantedTitle) => {
         const body = document.body?.innerText ?? "";
         const anchors = Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"));
@@ -537,6 +543,7 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
           bodyCharCount: body.length,
           articleHrefCount: anchors.filter((item) => /\/(?:article|item|w)\/\d+/u.test(item.getAttribute("href") ?? "")).length,
           candidateContainerCount: document.querySelectorAll('[class*="content-list"], [class*="article-list"], [class*="works-list"], table, [role="table"]').length,
+          loadingObserved: /加载中|正在加载|loading/u.test(body), errorObserved: /出错|错误|失败|重试|网络异常/u.test(body),
           rows };
       }, target?.title ?? null);
       return { listStructureVerified: observed.listStructureVerified, accountIdentityVerified,
@@ -548,7 +555,8 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
           statusMarkerObserved: observed.statusMarkerObserved, dateMarkerObserved: observed.dateMarkerObserved,
           timeMarkerObserved: observed.timeMarkerObserved, chineseDateObserved: observed.chineseDateObserved,
           bodyCharCount: observed.bodyCharCount, articleHrefCount: observed.articleHrefCount,
-          candidateContainerCount: observed.candidateContainerCount, readonlyResponseShapes } };
+          candidateContainerCount: observed.candidateContainerCount, readonlyResponseShapes,
+          framePaths, loadingObserved: observed.loadingObserved, errorObserved: observed.errorObserved } };
     } finally {
       await page?.close().catch(() => undefined);
       await owned.session.context.unroute("**/*", guard);
