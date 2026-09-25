@@ -592,6 +592,16 @@ export function registerIpc(deps: IpcDependencies): void {
     return { mainCodeSha256: createHash("sha256").update(readFileSync(join(__dirname, "main.js"))).digest("hex"),
       packageVersion: app.getVersion(), packaged: app.isPackaged };
   });
+  register("toutiao:mvp5-management-diagnostic", async (_event, payload) => {
+    if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true") throw new Error("TOUTIAO_MVP5_ONE_SHOT_DISABLED");
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    const expectedCreatorId = process.env.TOUTIAO_MVP5_EXPECTED_CREATOR_ID;
+    if (input.accountId !== process.env.TOUTIAO_MVP5_ACCOUNT_ID || !expectedCreatorId)
+      throw new Error("TOUTIAO_MVP5_TARGET_IDENTITY_NOT_CONFIGURED");
+    const adapter = registry.getForConnection("toutiao");
+    if (!(adapter instanceof ToutiaoArticleBrowserAdapter)) throw new Error("TOUTIAO_MVP5_RUNTIME_UNAVAILABLE");
+    return adapter.inspectOwnedManagementList(accountContext(input.accountId, "toutiao"), expectedCreatorId, null);
+  });
   register("toutiao:mvp5-runtime-preflight", async (_event, payload) => {
     if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true" || !protocolShadowEnabled(process.env))
       throw new Error("TOUTIAO_MVP5_ONE_SHOT_DISABLED");

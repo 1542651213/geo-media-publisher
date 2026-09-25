@@ -176,6 +176,10 @@ export interface PublisherApi {
   toutiaoDiagnostics: { protocolShadow(accountId: string, mode?: "HOME" | "EDITOR" | "SIGNER_CONTRACT" | "SIGNER_INPUT" | "BRIDGE" | "CONTROLLED_ARTICLE_NEW"): Promise<ToutiaoLiveShadowResult>;
     publishRequestCapture(accountId: string): Promise<ControlledPublishCaptureResult>;
     oneShotBuildIdentity(): Promise<{ mainCodeSha256: string; packageVersion: string; packaged: boolean }>;
+    oneShotManagementDiagnostic(accountId: string): Promise<{ listStructureVerified: boolean;
+      accountIdentityVerified: boolean; blockedMutationCount: number; match: null;
+      structure: { pagePath: string; anchorCount: number; structuredRowCount: number; emptyStateObserved: boolean;
+        managementMarkerObserved: boolean; statusMarkerObserved: boolean; dateMarkerObserved: boolean } }>;
     oneShotRuntimePreflight(accountId: string): Promise<{ sessionActive: boolean; accountIdentityMatch: boolean;
       managementListStructureVerified: boolean; blockedReadOnlySmokeMutations: number; bundleVersion: number;
       loginGeneration: number; credentialChanged: boolean; backupVerified: boolean }>;

@@ -454,6 +454,10 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
   async inspectOwnedManagementList(ctx: AccountContext, expectedCreatorId: string, target: ToutiaoManagementTarget | null): Promise<{
     readonly listStructureVerified: boolean; readonly accountIdentityVerified: boolean;
     readonly blockedMutationCount: number; readonly match: ToutiaoManagementMatch | null;
+    readonly structure: { readonly pagePath: string; readonly anchorCount: number;
+      readonly structuredRowCount: number; readonly emptyStateObserved: boolean;
+      readonly managementMarkerObserved: boolean; readonly statusMarkerObserved: boolean;
+      readonly dateMarkerObserved: boolean };
   }> {
     const owned = this.sessionManager.getCanonicalPage({ platformKey: "toutiao", accountId: ctx.accountId });
     if (!owned || owned.page.isClosed() || owned.page.context() !== owned.session.context
@@ -501,12 +505,20 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
             }
           }
         }
-        return { listStructureVerified: /作品管理|内容管理|全部作品/u.test(body)
-          && (visibleStructuredRows > 0 || /暂无内容|暂无作品|暂无数据/u.test(body)), rows };
+        const managementMarkerObserved = /作品管理|内容管理|全部作品/u.test(body);
+        const emptyStateObserved = /暂无内容|暂无作品|暂无数据/u.test(body);
+        return { listStructureVerified: managementMarkerObserved && (visibleStructuredRows > 0 || emptyStateObserved),
+          anchorCount: anchors.length, visibleStructuredRows, emptyStateObserved, managementMarkerObserved,
+          statusMarkerObserved: /审核|已发布|草稿|定时|预约|拒绝|失败/u.test(body),
+          dateMarkerObserved: /(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2})\s+\d{1,2}:\d{2}/u.test(body), rows };
       }, target?.title ?? null);
       return { listStructureVerified: observed.listStructureVerified, accountIdentityVerified,
         blockedMutationCount, match: target && observed.listStructureVerified
-          ? matchToutiaoManagementRows(observed.rows, { ...target, accountIdentityVerified }) : null };
+          ? matchToutiaoManagementRows(observed.rows, { ...target, accountIdentityVerified }) : null,
+        structure: { pagePath: new URL(page.url()).pathname, anchorCount: observed.anchorCount,
+          structuredRowCount: observed.visibleStructuredRows, emptyStateObserved: observed.emptyStateObserved,
+          managementMarkerObserved: observed.managementMarkerObserved,
+          statusMarkerObserved: observed.statusMarkerObserved, dateMarkerObserved: observed.dateMarkerObserved } };
     } finally {
       await page?.close().catch(() => undefined);
       await owned.session.context.unroute("**/*", guard);
