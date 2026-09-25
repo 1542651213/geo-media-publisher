@@ -7,6 +7,7 @@ const api: PublisherApi = {
   toutiaoDiagnostics: { protocolShadow: (accountId, mode) => invoke("toutiao:protocol-shadow", { accountId, mode }),
     publishRequestCapture: (accountId) => invoke("toutiao:publish-request-capture", { accountId }),
     oneShotBuildIdentity: () => invoke("toutiao:mvp5-build-identity"),
+    oneShotBindingReadiness: (accountId, jobId) => invoke("toutiao:mvp5-binding-readiness", { accountId, jobId }),
     oneShotManagementDiagnostic: (accountId) => invoke("toutiao:mvp5-management-diagnostic", { accountId }),
     oneShotRuntimePreflight: (accountId) => invoke("toutiao:mvp5-runtime-preflight", { accountId }),
     oneShotPrepareTestJob: (accountId) => invoke("toutiao:mvp5-prepare-test-job", { accountId }),

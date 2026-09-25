@@ -1,4 +1,4 @@
-import { closeSync, fsyncSync, mkdirSync, openSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 
 /** Task-wide, fail-closed claim. A crash after this point does not authorize another request. */
@@ -61,4 +61,33 @@ export function claimMvp5OneShotCapture(dataDirectory: string, binding: {
     fsyncSync(descriptor);
   } finally { closeSync(descriptor); }
   return path;
+}
+
+export interface Mvp5CaptureTicketBinding {
+  readonly accountId: string;
+  readonly jobId: string;
+  readonly articleId: string;
+  readonly contentBindingHash: string;
+}
+
+/** Read-only audit. A locked ticket is never made reusable by this function. */
+export function auditMvp5OneShotCapture(dataDirectory: string, expected: Mvp5CaptureTicketBinding,
+  finalSubmitCount: number): { state: "MISSING" | "LOCKED" | "ID_MISMATCH" | "INVALID" | "SUBMIT_CONSUMED";
+    publishQuotaConsumed: boolean } {
+  const consumed = finalSubmitCount >= 1;
+  const path = join(dataDirectory, "diagnostics", "toutiao-mvp-5-one-shot.claim");
+  if (!existsSync(path)) return { state: consumed ? "SUBMIT_CONSUMED" : "MISSING", publishQuotaConsumed: consumed };
+  let ticket: unknown;
+  try { ticket = JSON.parse(readFileSync(path, "utf8")) as unknown; }
+  catch { return { state: consumed ? "SUBMIT_CONSUMED" : "INVALID", publishQuotaConsumed: consumed }; }
+  if (!ticket || typeof ticket !== "object" || Array.isArray(ticket))
+    return { state: consumed ? "SUBMIT_CONSUMED" : "INVALID", publishQuotaConsumed: consumed };
+  const value = ticket as Record<string, unknown>;
+  if (value.task !== "TOUTIAO_MVP_5_CAPTURE_REPLAY_ONE_SHOT_REAL_PUBLISH"
+    || typeof value.claimedAt !== "string" || !Number.isFinite(Date.parse(value.claimedAt)))
+    return { state: consumed ? "SUBMIT_CONSUMED" : "INVALID", publishQuotaConsumed: consumed };
+  const matches = value.accountId === expected.accountId && value.jobId === expected.jobId
+    && value.articleId === expected.articleId && value.contentBindingHash === expected.contentBindingHash;
+  return { state: consumed ? "SUBMIT_CONSUMED" : matches ? "LOCKED" : "ID_MISMATCH",
+    publishQuotaConsumed: consumed };
 }

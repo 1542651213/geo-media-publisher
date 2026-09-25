@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { basename, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
-import { prepareToutiaoArticleJob } from "@publisher/adapters-toutiao/article-api";
+import { credentialFingerprint, prepareToutiaoArticleJob, ToutiaoCredentialBundleService } from "@publisher/adapters-toutiao/article-api";
 import { protocolShadowEnabled } from "@publisher/adapters-toutiao/article-api";
 import { ToutiaoArticleBrowserAdapter } from "@publisher/adapters-toutiao/browser";
 import { backupDatabase, validateDatabaseBackup, type AIBatchTarget, type AppRepository, type ContentStudioTaskPayload, type HumanReviewSubmitInput } from "@publisher/db";
@@ -23,10 +23,10 @@ import { runQualityGate, runQualityGateForArticle, runQualityGateForVariant } fr
 import { runQualityBenchmark } from "./quality-benchmark";
 import { OAuthSessionManager } from "./oauth-session-manager";
 import { ToutiaoSessionActivation } from "./toutiao-session-activation";
-import { claimControlledArticleNewCapture, claimControlledPublishRequestCapture, claimMvp5OneShotCapture } from "./toutiao-article-new-once";
+import { auditMvp5OneShotCapture, claimControlledArticleNewCapture, claimControlledPublishRequestCapture, claimMvp5OneShotCapture } from "./toutiao-article-new-once";
+import { evaluateMvp5CaptureReadiness } from "./toutiao-capture-binding-readiness";
 import { ToutiaoCapturedRequestOneShot } from "./toutiao-captured-request-one-shot";
 import { synchronizeOwnedToutiaoCredential } from "./toutiao-owned-credential-binding";
-import { ToutiaoCredentialBundleService } from "@publisher/adapters-toutiao/article-api";
 import { writeAdvancedExcelTemplate, writeSimpleExcelTemplate } from "./excel-templates";
 import { buildExcelImportErrorReportCsv, readExcelArticleFile } from "./excel-import";
 import { PlatformSelfTestService } from "./platform-self-test";
@@ -592,6 +592,64 @@ export function registerIpc(deps: IpcDependencies): void {
     return { mainCodeSha256: createHash("sha256").update(readFileSync(join(__dirname, "main.js"))).digest("hex"),
       packageVersion: app.getVersion(), packaged: app.isPackaged };
   });
+  register("toutiao:mvp5-binding-readiness", async (_event, payload) => {
+    if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true" || !protocolShadowEnabled(process.env))
+      throw new Error("TOUTIAO_MVP5_READINESS_DISABLED");
+    const input = z.object({ accountId: idSchema, jobId: idSchema }).parse(payload);
+    const expectedCreatorId = process.env.TOUTIAO_MVP5_EXPECTED_CREATOR_ID;
+    if (input.accountId !== process.env.TOUTIAO_MVP5_ACCOUNT_ID || !expectedCreatorId || !/^\d+$/u.test(expectedCreatorId))
+      throw new Error("TOUTIAO_MVP5_TARGET_IDENTITY_NOT_CONFIGURED");
+    const adapter = registry.getForConnection("toutiao");
+    if (!(adapter instanceof ToutiaoArticleBrowserAdapter) || !(credentials instanceof SafeStorageCredentialStore))
+      throw new Error("TOUTIAO_MVP5_RUNTIME_UNAVAILABLE");
+    // Activation restores the saved account-owned Context but never touches the old capture ticket.
+    const activation = await toutiaoSessionActivation.activate(input.accountId);
+    const ctx = accountContext(input.accountId, "toutiao");
+    const snapshot = adapter.getBrowserRuntimeSnapshot(ctx);
+    const runtimeActive = activation.runtimeState === "ACTIVE" && activation.contextOwnsPage && activation.pageAlive;
+    const remoteAuthState = runtimeActive ? await adapter.checkOwnedCreatorSession(ctx) : "UNKNOWN";
+    const remoteCreatorId = runtimeActive && remoteAuthState === "VALID"
+      ? await adapter.inspectOwnedCreatorIdentity(ctx) : null;
+    const account = repository.getAccountById(input.accountId, "toutiao");
+    const job = repository.getJob(input.jobId);
+    const article = job ? repository.getArticle(job.articleId) : null;
+    const preparation = repository.getToutiaoArticlePreparation(input.jobId);
+    const metadata = repository.getToutiaoCredentialMetadata(input.accountId);
+    const intent = repository.getSubmissionIntentByJob(input.jobId);
+    const record = repository.getPublishRecordByJob(input.jobId);
+    const ticket = auditMvp5OneShotCapture(dataDirectory, {
+      accountId: input.accountId, jobId: input.jobId, articleId: article?.id ?? "",
+      contentBindingHash: preparation?.contentBindingHash ?? ""
+    }, intent?.finalSubmitCount ?? 0);
+    let bundle: ReturnType<ToutiaoCredentialBundleService["read"]> = null;
+    let credentialReadError = false;
+    try { bundle = new ToutiaoCredentialBundleService(credentials, repository).read(input.accountId); }
+    catch { credentialReadError = true; }
+    let runtimeCookiesChangedSinceBundle: boolean | null = null;
+    if (runtimeActive && remoteAuthState === "VALID" && bundle && !credentialReadError) {
+      try {
+        const current = await adapter.snapshotOwnedCreatorCookies(ctx);
+        runtimeCookiesChangedSinceBundle = credentialFingerprint({ ...bundle, cookieMaterial: current })
+          !== credentialFingerprint(bundle);
+      } catch { runtimeCookiesChangedSinceBundle = null; }
+    }
+    const result = evaluateMvp5CaptureReadiness({ expectedAccountId: input.accountId, expectedCreatorId,
+      account, job, article, preparation, metadata, credentialReadError,
+      bundle: bundle ? { version: bundle.version, loginGeneration: bundle.loginGeneration,
+        sessionIdentity: bundle.sessionIdentity, state: bundle.state, validatedAt: bundle.validatedAt } : null,
+      runtime: { accountId: input.accountId, runtimeState: activation.runtimeState,
+        sessionExists: activation.sessionExists, contextExists: activation.contextExists,
+        canonicalPageExists: activation.canonicalPageExists, contextOwnsPage: activation.contextOwnsPage,
+        pageAlive: activation.pageAlive, pageHost: activation.pageHost, contextDebugId: snapshot.contextDebugId },
+      remoteAuthState, remoteCreatorId, runtimeCookiesChangedSinceBundle, ticket,
+      intentCount: intent ? 1 : 0, recordCount: record ? 1 : 0 });
+    logger.info("TOUTIAO", "MVP5_BINDING_READINESS", "Read-only capture binding readiness", {
+      accountId: input.accountId, jobId: input.jobId, ticketState: result.ticketState,
+      reasonCodes: result.reasonCodes, recaptureEligibility: result.recaptureEligibility });
+    return { ...result, ownerLoginRequired: activation.outcome === "OWNER_LOGIN_REQUIRED",
+      runtimeState: activation.runtimeState, remoteAuthState,
+      bundleVersion: metadata?.bundleVersion ?? null, loginGeneration: metadata?.loginGeneration ?? null };
+  });
   register("toutiao:mvp5-management-diagnostic", async (_event, payload) => {
     if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true") throw new Error("TOUTIAO_MVP5_ONE_SHOT_DISABLED");
     const input = z.object({ accountId: idSchema }).parse(payload);
@@ -724,7 +782,8 @@ export function registerIpc(deps: IpcDependencies): void {
           || await adapter.inspectOwnedCreatorIdentity(currentCtx) !== expectedCreatorId)
           throw new Error("TOUTIAO_MVP5_SESSION_IDENTITY_CHANGED");
         return adapter.snapshotOwnedCreatorCookies(currentCtx);
-      });
+      }, (accountId) => accountId === input.accountId && sessionBound(accountId)
+        ? adapter.getBrowserRuntimeSnapshot(accountContext(accountId, "toutiao")).contextDebugId : null);
     const preparation = repository.getToutiaoArticlePreparation(input.jobId);
     if (!preparation?.contentBindingHash) throw new Error("TOUTIAO_MVP5_PREPARATION_MISSING");
     const articleId = job.articleId;
@@ -732,9 +791,13 @@ export function registerIpc(deps: IpcDependencies): void {
     const contentBindingHash = preparation.contentBindingHash;
     if (!contentBindingHash) throw new Error("TOUTIAO_MVP5_PREPARATION_MISSING");
     await adapter.installMvp5PublishQuarantine(accountContext(input.accountId, "toutiao"));
-    return service.captureAndSubmit(input.jobId, accountContext(input.accountId, "toutiao"), adapter,
+    const result = await service.captureAndSubmit(input.jobId, accountContext(input.accountId, "toutiao"), adapter,
       () => { claimMvp5OneShotCapture(dataDirectory, { accountId: input.accountId, jobId: input.jobId,
         articleId, contentBindingHash }); });
+    if (result.bindingReasonCode) logger.warn("TOUTIAO", "MVP5_CAPTURE_BINDING_FAILED", "Captured request rejected before submit", {
+      accountId: input.accountId, jobId: input.jobId, requestHash: result.requestHash,
+      bindingReasonCode: result.bindingReasonCode });
+    return result;
   });
   register("toutiao:mvp5-reconcile", async (_event, payload) => {
     if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true") throw new Error("TOUTIAO_MVP5_ONE_SHOT_DISABLED");

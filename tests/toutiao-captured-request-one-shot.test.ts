@@ -14,7 +14,8 @@ function fixture() {
     headers: { "content-type": "application/x-www-form-urlencoded", cookie: "session=fake-secret" },
     body: Buffer.from("title=Test&content=%3Cp%3EHello%3C%2Fp%3E")
   }, Date.now());
-  const account = { id: "account", platformAccountId: "creator", loginStatus: "logged_in", enabled: true };
+  const account = { id: "account", platformAccountId: "creator", externalAccountId: "creator",
+    loginStatus: "logged_in", enabled: true };
   const article = { id: "article", title: "Test", body: "Hello" };
   const job = { id: "job", accountId: "account", articleId: "article", platformKey: "toutiao", contentKind: "article", status: "AwaitingConfirmation", finalPublishMode: "CONFIRM_BEFORE_PUBLISH" };
   let finalSubmitCount = 0;
@@ -43,7 +44,7 @@ function fixture() {
     markJobPublishing: vi.fn(() => { order.push("publishing"); }),
     resetSubmissionIntentForUserAction: vi.fn(), updateJobFailure: vi.fn()
   };
-  const credentials = { assertBound: vi.fn(() => ({ cookieMaterial: [{ name: "session", value: "fake-secret",
+  const credentials = { assertBound: vi.fn(() => ({ sessionIdentity: "creator", cookieMaterial: [{ name: "session", value: "fake-secret",
     domain: "mp.toutiao.com", path: "/", hostOnly: true, secure: true, expiresAt: null }] })) };
   const currentCookies = vi.fn(async () => [{ name: "session", value: "fake-secret",
     domain: "mp.toutiao.com", path: "/", hostOnly: true, secure: true, expiresAt: null }]);
@@ -64,7 +65,7 @@ describe("Toutiao captured request one-shot coordinator", () => {
     }) };
     const service = new ToutiaoCapturedRequestOneShot(repo as unknown as AppRepository,
       credentials as unknown as ToutiaoCredentialBundleService, transport,
-      gate as unknown as Pick<GlobalPublishExecutionGate, "run">, () => true, currentCookies);
+      gate as unknown as Pick<GlobalPublishExecutionGate, "run">, () => true, currentCookies, () => "fixture-context");
     const result = await service.captureAndSubmit("job", { accountId: "account" } as AccountContext,
       adapter as unknown as Pick<ToutiaoArticleBrowserAdapter, "captureAbortedPublishRequest">,
       () => { order.push("disk-claim"); });
@@ -98,10 +99,57 @@ describe("Toutiao captured request one-shot coordinator", () => {
       }) };
       const service = new ToutiaoCapturedRequestOneShot(repo as unknown as AppRepository,
         credentials as unknown as ToutiaoCredentialBundleService, transport,
-        gate as unknown as Pick<GlobalPublishExecutionGate, "run">, () => true, currentCookies);
+        gate as unknown as Pick<GlobalPublishExecutionGate, "run">, () => true, currentCookies, () => "fixture-context");
       expect((await service.captureAndSubmit("job", { accountId: "account" } as AccountContext,
         adapter as unknown as Pick<ToutiaoArticleBrowserAdapter, "captureAbortedPublishRequest">,
         () => undefined)).state).toBe("BLOCKED_PRE_SUBMIT");
+      expect(repo.claimFinalSubmitAttempt).not.toHaveBeenCalled();
+      expect(transport).not.toHaveBeenCalled();
+    }
+  });
+
+  it("rejects a Context replacement between capture and submit before any durable submit claim", async () => {
+    const { captured, repo, credentials, currentCookies, gate } = fixture();
+    let contextId = "context-one";
+    const transport = vi.fn(async () => ({ status: 200, responseShape: [], platformCode: 0 }));
+    const adapter = { captureAbortedPublishRequest: vi.fn(async (_ctx: AccountContext,
+      _article: { title: string; body: string }, onCapture?: (request: typeof captured) => void) => {
+      onCapture?.(captured);
+      contextId = "context-two";
+      return { status: "REQUEST_CAPTURED", remoteAuthState: "VALID", contentFilled: true, buttonTriggered: true,
+        guard: { guardAbortFailed: false, publishAttemptCount: 1, blockedPublishCount: 1, publishSentCount: 0,
+          draftSentCount: 0, uploadSentCount: 0 } };
+    }) };
+    const service = new ToutiaoCapturedRequestOneShot(repo as unknown as AppRepository,
+      credentials as unknown as ToutiaoCredentialBundleService, transport,
+      gate as unknown as Pick<GlobalPublishExecutionGate, "run">, () => true, currentCookies, () => contextId);
+    expect(await service.captureAndSubmit("job", { accountId: "account" } as AccountContext,
+      adapter as unknown as Pick<ToutiaoArticleBrowserAdapter, "captureAbortedPublishRequest">,
+      () => undefined)).toMatchObject({ state: "BLOCKED_PRE_SUBMIT", bindingReasonCode: "BROWSER_SESSION_MISMATCH" });
+    expect(repo.claimFinalSubmitAttempt).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it("rejects a Bundle version or login generation change after capture", async () => {
+    for (const field of ["bundleVersion", "loginGeneration"] as const) {
+      const { captured, repo, credentials, currentCookies, gate } = fixture();
+      const transport = vi.fn(async () => ({ status: 200, responseShape: [], platformCode: 0 }));
+      const original = repo.getToutiaoCredentialMetadata();
+      const adapter = { captureAbortedPublishRequest: vi.fn(async (_ctx: AccountContext,
+        _article: { title: string; body: string }, onCapture?: (request: typeof captured) => void) => {
+        onCapture?.(captured);
+        repo.getToutiaoCredentialMetadata.mockReturnValue({ ...original!, [field]: 2 });
+        return { status: "REQUEST_CAPTURED", remoteAuthState: "VALID", contentFilled: true, buttonTriggered: true,
+          guard: { guardAbortFailed: false, publishAttemptCount: 1, blockedPublishCount: 1, publishSentCount: 0,
+            draftSentCount: 0, uploadSentCount: 0 } };
+      }) };
+      const service = new ToutiaoCapturedRequestOneShot(repo as unknown as AppRepository,
+        credentials as unknown as ToutiaoCredentialBundleService, transport,
+        gate as unknown as Pick<GlobalPublishExecutionGate, "run">, () => true, currentCookies, () => "context-one");
+      expect(await service.captureAndSubmit("job", { accountId: "account" } as AccountContext,
+        adapter as unknown as Pick<ToutiaoArticleBrowserAdapter, "captureAbortedPublishRequest">,
+        () => undefined)).toMatchObject({ state: "BLOCKED_PRE_SUBMIT", bindingReasonCode:
+          field === "bundleVersion" ? "CREDENTIAL_BUNDLE_VERSION_MISMATCH" : "LOGIN_GENERATION_MISMATCH" });
       expect(repo.claimFinalSubmitAttempt).not.toHaveBeenCalled();
       expect(transport).not.toHaveBeenCalled();
     }
@@ -152,8 +200,25 @@ describe("Toutiao captured request one-shot coordinator", () => {
     const service = new ToutiaoCapturedRequestOneShot(repo as unknown as AppRepository,
       credentials as unknown as ToutiaoCredentialBundleService, transport,
       gate as unknown as Pick<GlobalPublishExecutionGate, "run">, () => true, currentCookies);
-    expect(await service.submit("job", captured)).toMatchObject({ state: "BLOCKED_PRE_SUBMIT", reasonCode: "TOUTIAO_CAPTURE_BINDING_FAILED" });
+    expect(await service.submit("job", captured)).toMatchObject({ state: "BLOCKED_PRE_SUBMIT", reasonCode: "TOUTIAO_CAPTURE_BINDING_FAILED",
+      bindingReasonCode: "COOKIE_BINDING_MISMATCH" });
     expect(repo.claimFinalSubmitAttempt).not.toHaveBeenCalled();
     expect(transport).not.toHaveBeenCalled();
+  });
+
+  it("accepts an SDK cookie refresh before capture when the captured header still matches the live context", async () => {
+    const { repo, credentials, gate, currentCookies } = fixture();
+    const rotated = captureAbortedPublishRequest({ method: "POST",
+      url: "https://mp.toutiao.com/mp/agw/article/publish?a_bogus=rotated&msToken=rotated",
+      headers: { "content-type": "application/x-www-form-urlencoded", cookie: "session=rotated-session" },
+      body: Buffer.from("title=Test&content=%3Cp%3EHello%3C%2Fp%3E") }, Date.now());
+    currentCookies.mockResolvedValue([{ name: "session", value: "rotated-session",
+      domain: "mp.toutiao.com", path: "/", hostOnly: true, secure: true, expiresAt: null }]);
+    const transport = vi.fn(async () => ({ status: 200, responseShape: ["code"], platformCode: 0 }));
+    const service = new ToutiaoCapturedRequestOneShot(repo as unknown as AppRepository,
+      credentials as unknown as ToutiaoCredentialBundleService, transport,
+      gate as unknown as Pick<GlobalPublishExecutionGate, "run">, () => true, currentCookies);
+    expect(await service.submit("job", rotated)).toMatchObject({ state: "SUBMIT_ACCEPTED" });
+    expect(transport).toHaveBeenCalledOnce();
   });
 });

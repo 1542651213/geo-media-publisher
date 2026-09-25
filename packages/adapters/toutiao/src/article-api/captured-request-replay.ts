@@ -1,11 +1,22 @@
 import { createHash } from "node:crypto";
 import { normalizeToutiaoArticleContent } from "./content";
-import { resolveCreatorCookies, type ToutiaoCookie } from "./auth/cookie-resolver";
+import type { ToutiaoCookie } from "./auth/cookie-resolver";
 
 const PUBLISH_ORIGIN = "https://mp.toutiao.com";
 const PUBLISH_PATH = "/mp/agw/article/publish";
 export const MAX_CAPTURE_TO_SEND_DELAY_MS = 30_000;
 const TRANSPORT_MANAGED_HEADERS = new Set(["content-length", "host", "connection", "transfer-encoding", "keep-alive"]);
+
+export type ToutiaoCaptureBindingReason = "CAPTURE_TOO_OLD" | "REQUEST_METHOD_MISMATCH" | "REQUEST_HOST_MISMATCH"
+  | "ACCOUNT_ID_MISMATCH"
+  | "REQUEST_PATH_MISMATCH" | "CONTENT_TYPE_MISMATCH" | "TITLE_BINDING_MISMATCH" | "BODY_BINDING_MISMATCH"
+  | "CONTENT_BINDING_HASH_MISMATCH" | "COOKIE_BINDING_MISMATCH" | "DYNAMIC_FIELD_MISSING"
+  | "REQUEST_HASH_MISMATCH" | "UNKNOWN_BINDING_FAILURE";
+
+/** The code is safe to log. Error messages never include captured values. */
+export class ToutiaoCaptureBindingError extends Error {
+  constructor(readonly code: ToutiaoCaptureBindingReason) { super(code); }
+}
 
 export interface CapturedPublishRequestEvidence {
   readonly requestHash: string;
@@ -42,14 +53,14 @@ export class AbortedPublishRequest {
   /** Only the replay boundary can consume the material; never expose via IPC or JSON. */
   forReplay(nowMs: number): RawPublishRequest {
     if (!Number.isFinite(nowMs) || nowMs < this.#capturedAtMs || nowMs - this.#capturedAtMs > MAX_CAPTURE_TO_SEND_DELAY_MS)
-      throw new Error("TOUTIAO_CAPTURE_EXPIRED");
+      throw new ToutiaoCaptureBindingError("CAPTURE_TOO_OLD");
     return this.#raw;
   }
 
   /** Compare the exact title and normalized complete text without exposing the form. */
   assertArticleBinding(article: { readonly title: string; readonly body: string }): true {
     const url = new URL(this.#raw.url);
-    if (!url.searchParams.get("a_bogus")) throw new Error("TOUTIAO_REQUEST_SIGNATURE_MISSING");
+    if (!url.searchParams.get("a_bogus")) throw new ToutiaoCaptureBindingError("DYNAMIC_FIELD_MISSING");
     const form = new URLSearchParams(this.#raw.body.toString("utf8"));
     const title = form.getAll("title");
     const content = form.getAll("content");
@@ -59,26 +70,50 @@ export class AbortedPublishRequest {
     const covers = form.get("pgc_feed_covers");
     const timerStatus = form.get("timer_status");
     const timerTime = form.get("timer_time");
-    if (title.length !== 1 || content.length !== 1 || normalize(title[0] ?? "") !== normalize(article.title)
-      || preparedContent.plainText !== expectedContent.plainText || preparedContent.imageReferences.length !== 0
-      || covers && !["[]", "{}", "null"].includes(covers.trim())
+    if (title.length !== 1 || normalize(title[0] ?? "") !== normalize(article.title))
+      throw new ToutiaoCaptureBindingError("TITLE_BINDING_MISMATCH");
+    if (content.length !== 1 || preparedContent.plainText !== expectedContent.plainText
+      || preparedContent.imageReferences.length !== 0)
+      throw new ToutiaoCaptureBindingError("BODY_BINDING_MISMATCH");
+    if (covers && !["[]", "{}", "null"].includes(covers.trim())
       || timerStatus && !["0", "false"].includes(timerStatus.trim().toLowerCase())
       || timerTime && timerTime.trim() !== "0")
-      throw new Error("TOUTIAO_REQUEST_CONTENT_MISMATCH");
+      throw new ToutiaoCaptureBindingError("CONTENT_BINDING_HASH_MISMATCH");
     return true;
   }
 
   assertCookieBinding(cookies: readonly ToutiaoCookie[]): true {
     const header = Object.entries(this.#raw.headers).find(([name]) => name.toLowerCase() === "cookie")?.[1];
-    if (!header) throw new Error("TOUTIAO_CAPTURE_CREDENTIAL_MISMATCH");
-    const selected = resolveCreatorCookies(cookies, []).selected;
-    const expected = new Map(selected.map((item) => [item.name, item.value]));
+    if (!header) throw new ToutiaoCaptureBindingError("COOKIE_BINDING_MISMATCH");
+    const request = new URL(this.#raw.url);
+    const now = Date.now();
+    const eligible = cookies.filter((cookie) => {
+      const domain = cookie.domain.toLowerCase().replace(/^\./u, "");
+      const path = cookie.path || "/";
+      const requestPath = request.pathname;
+      return cookie.name && cookie.value && request.protocol === "https:"
+        && (cookie.hostOnly ? request.hostname === domain
+          : request.hostname === domain || request.hostname.endsWith(`.${domain}`))
+        && (requestPath === path || requestPath.startsWith(path.endsWith("/") ? path : `${path}/`))
+        && (!cookie.expiresAt || Date.parse(cookie.expiresAt) > now);
+    });
+    // A browser may send same-name cookies from both the creator host and its parent domain.
+    // Match each captured pair to one currently eligible Context cookie without logging values.
+    const available = new Map<string, number>();
+    for (const cookie of eligible) {
+      const key = `${cookie.name}\0${cookie.value}`;
+      available.set(key, (available.get(key) ?? 0) + 1);
+    }
     const pairs = header.split(";").map((part) => part.trim()).filter(Boolean);
     if (!pairs.length || pairs.some((pair) => {
       const separator = pair.indexOf("=");
       if (separator < 1) return true;
-      return expected.get(pair.slice(0, separator)) !== pair.slice(separator + 1);
-    })) throw new Error("TOUTIAO_CAPTURE_CREDENTIAL_MISMATCH");
+      const key = `${pair.slice(0, separator)}\0${pair.slice(separator + 1)}`;
+      const count = available.get(key) ?? 0;
+      if (count < 1) return true;
+      available.set(key, count - 1);
+      return false;
+    })) throw new ToutiaoCaptureBindingError("COOKIE_BINDING_MISMATCH");
     return true;
   }
 
@@ -116,10 +151,14 @@ function hashBusinessPayload(raw: RawPublishRequest): string {
 export function captureAbortedPublishRequest(input: RawPublishRequest, capturedAtMs: number): AbortedPublishRequest {
   let url: URL;
   try { url = new URL(input.url); }
-  catch { throw new Error("TOUTIAO_CAPTURE_INVALID_REQUEST"); }
+  catch { throw new ToutiaoCaptureBindingError("REQUEST_HOST_MISMATCH"); }
   const contentType = Object.entries(input.headers).find(([key]) => key.toLowerCase() === "content-type")?.[1];
-  if (input.method !== "POST" || url.origin !== PUBLISH_ORIGIN || url.pathname !== PUBLISH_PATH || url.hash
-    || !contentType?.toLowerCase().startsWith("application/x-www-form-urlencoded") || !Buffer.isBuffer(input.body)
+  if (input.method !== "POST") throw new ToutiaoCaptureBindingError("REQUEST_METHOD_MISMATCH");
+  if (url.origin !== PUBLISH_ORIGIN) throw new ToutiaoCaptureBindingError("REQUEST_HOST_MISMATCH");
+  if (url.pathname !== PUBLISH_PATH || url.hash) throw new ToutiaoCaptureBindingError("REQUEST_PATH_MISMATCH");
+  if (!contentType?.toLowerCase().startsWith("application/x-www-form-urlencoded"))
+    throw new ToutiaoCaptureBindingError("CONTENT_TYPE_MISMATCH");
+  if (!Buffer.isBuffer(input.body)
     || input.body.length === 0 || input.body.length > 512_000 || input.url.length > 16_384
     || Object.entries(input.headers).some(([name, value]) => name.length > 128 || value.length > 65_536 || /[\r\n]/u.test(name + value))
     || !Number.isFinite(capturedAtMs))
@@ -163,7 +202,7 @@ export class CapturedRequestReplay {
     const raw = captured.forReplay(nowMs);
     if (permit.claimedRequestHash !== captured.requestHash || permit.claimedAt > nowMs
       || permit.claimedAt < Date.parse(captured.evidence.capturedAt) - 5_000 || hashRequest(raw) !== captured.requestHash)
-      throw new Error("TOUTIAO_REQUEST_BINDING_MISMATCH");
+      throw new ToutiaoCaptureBindingError("REQUEST_HASH_MISMATCH");
     this.usedAttempts.add(permit.submissionAttemptId);
     const headers = Object.fromEntries(Object.entries(raw.headers)
       .filter(([name]) => !TRANSPORT_MANAGED_HEADERS.has(name.toLowerCase())));

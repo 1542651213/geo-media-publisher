@@ -6,6 +6,7 @@ import type { BrowserSessionRuntimeSnapshot, PreSubmitGateResult } from "@publis
 import type { ToutiaoActivationResult, ToutiaoSessionStatus } from "../main/toutiao-session-activation";
 import type { ToutiaoLiveShadowResult, ControlledPublishCaptureResult } from "@publisher/adapters-toutiao/article-api";
 import type { CapturedOneShotResult } from "../main/toutiao-captured-request-one-shot";
+import type { Mvp5ReadinessResult } from "../main/toutiao-capture-binding-readiness";
 import type { ContentGoal, ContentIntent, ContentQualityStatus, PromotionStrength, SearchIntent } from "@publisher/domain";
 
 export interface BatchGenerationInput {
@@ -176,6 +177,9 @@ export interface PublisherApi {
   toutiaoDiagnostics: { protocolShadow(accountId: string, mode?: "HOME" | "EDITOR" | "SIGNER_CONTRACT" | "SIGNER_INPUT" | "BRIDGE" | "CONTROLLED_ARTICLE_NEW"): Promise<ToutiaoLiveShadowResult>;
     publishRequestCapture(accountId: string): Promise<ControlledPublishCaptureResult>;
     oneShotBuildIdentity(): Promise<{ mainCodeSha256: string; packageVersion: string; packaged: boolean }>;
+    oneShotBindingReadiness(accountId: string, jobId: string): Promise<Mvp5ReadinessResult & {
+      ownerLoginRequired: boolean; runtimeState: string; remoteAuthState: string;
+      bundleVersion: number | null; loginGeneration: number | null }>;
     oneShotManagementDiagnostic(accountId: string): Promise<{ listStructureVerified: boolean;
       accountIdentityVerified: boolean; blockedMutationCount: number;
       blockedRequestShapes: readonly { host: string; path: string; method: string }[]; match: null;

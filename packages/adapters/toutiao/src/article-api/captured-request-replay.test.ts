@@ -52,14 +52,14 @@ describe("captured Toutiao request replay", () => {
     const now = Date.now();
     const captured = captureAbortedPublishRequest(fixture(), now - 31_000);
     await expect(replay.sendOnce(captured, { submissionAttemptId: "a", claimedRequestHash: captured.requestHash, claimedAt: now }, now))
-      .rejects.toThrow("TOUTIAO_CAPTURE_EXPIRED");
+      .rejects.toThrow("CAPTURE_TOO_OLD");
     expect(transport).not.toHaveBeenCalled();
     const fresh = captureAbortedPublishRequest(fixture(), now);
     await expect(replay.sendOnce(fresh, { submissionAttemptId: "a", claimedRequestHash: "0".repeat(64), claimedAt: now }, now))
-      .rejects.toThrow("TOUTIAO_REQUEST_BINDING_MISMATCH");
+      .rejects.toThrow("REQUEST_HASH_MISMATCH");
     expect(transport).not.toHaveBeenCalled();
     expect(() => captureAbortedPublishRequest({ ...fixture(), url: "https://evil.example/mp/agw/article/publish" }, now))
-      .toThrow("TOUTIAO_CAPTURE_INVALID_REQUEST");
+      .toThrow("REQUEST_HOST_MISMATCH");
   });
 
   it("never exposes raw secrets through metadata serialization", () => {
@@ -72,10 +72,10 @@ describe("captured Toutiao request replay", () => {
   it("binds title and complete text to the captured form and requires a signed query", () => {
     const captured = captureAbortedPublishRequest(fixture(), Date.now());
     expect(captured.assertArticleBinding({ title: "测试", body: "hello" })).toBe(true);
-    expect(() => captured.assertArticleBinding({ title: "另一标题", body: "hello" })).toThrow("TOUTIAO_REQUEST_CONTENT_MISMATCH");
-    expect(() => captured.assertArticleBinding({ title: "测试", body: "other" })).toThrow("TOUTIAO_REQUEST_CONTENT_MISMATCH");
+    expect(() => captured.assertArticleBinding({ title: "另一标题", body: "hello" })).toThrow("TITLE_BINDING_MISMATCH");
+    expect(() => captured.assertArticleBinding({ title: "测试", body: "other" })).toThrow("BODY_BINDING_MISMATCH");
     const unsigned = captureAbortedPublishRequest({ ...fixture(), url: "https://mp.toutiao.com/mp/agw/article/publish?aid=1" }, Date.now());
-    expect(() => unsigned.assertArticleBinding({ title: "测试", body: "hello" })).toThrow("TOUTIAO_REQUEST_SIGNATURE_MISSING");
+    expect(() => unsigned.assertArticleBinding({ title: "测试", body: "hello" })).toThrow("DYNAMIC_FIELD_MISSING");
   });
 
   it("does not replay a timed-out attempt a second time", async () => {
@@ -109,8 +109,8 @@ describe("captured Toutiao request replay", () => {
     const captured = captureAbortedPublishRequest(fixture(), Date.now());
     const cookie = { name: "cookie", value: "fake-cookie", domain: "mp.toutiao.com", path: "/", hostOnly: true, secure: true, expiresAt: null };
     expect(captured.assertCookieBinding([cookie])).toBe(true);
-    expect(() => captured.assertCookieBinding([{ ...cookie, value: "other" }])).toThrow("TOUTIAO_CAPTURE_CREDENTIAL_MISMATCH");
-    expect(() => captured.assertCookieBinding([])).toThrow("TOUTIAO_CAPTURE_CREDENTIAL_MISMATCH");
+    expect(() => captured.assertCookieBinding([{ ...cookie, value: "other" }])).toThrow("COOKIE_BINDING_MISMATCH");
+    expect(() => captured.assertCookieBinding([])).toThrow("COOKIE_BINDING_MISMATCH");
   });
 
   it("keeps semantic final payload hash separate from rotating authentication material", () => {
@@ -123,5 +123,42 @@ describe("captured Toutiao request replay", () => {
     expect(first.requestHash).not.toBe(refreshed.requestHash);
     const changed = captureAbortedPublishRequest({ ...input, body: Buffer.from("title=Other&content=Hello") }, Date.now());
     expect(changed.finalPayloadHash).not.toBe(first.finalPayloadHash);
+  });
+
+  it("classifies request shape and content binding failures without echoing values", () => {
+    const input = fixture();
+    expect(() => captureAbortedPublishRequest({ ...input, method: "GET" }, Date.now())).toThrow("REQUEST_METHOD_MISMATCH");
+    expect(() => captureAbortedPublishRequest({ ...input, url: input.url.replace("mp.toutiao.com", "example.invalid") }, Date.now())).toThrow("REQUEST_HOST_MISMATCH");
+    expect(() => captureAbortedPublishRequest({ ...input, url: input.url.replace("/article/publish", "/article/save") }, Date.now())).toThrow("REQUEST_PATH_MISMATCH");
+    expect(() => captureAbortedPublishRequest({ ...input, headers: { ...input.headers, "content-type": "application/json" } }, Date.now())).toThrow("CONTENT_TYPE_MISMATCH");
+    const captured = captureAbortedPublishRequest(input, Date.now());
+    expect(() => captured.assertArticleBinding({ title: "changed", body: "hello" })).toThrow("TITLE_BINDING_MISMATCH");
+    expect(() => captured.assertArticleBinding({ title: "测试", body: "changed" })).toThrow("BODY_BINDING_MISMATCH");
+    expect(() => captured.assertCookieBinding([{ name: "cookie", value: "changed", domain: "mp.toutiao.com",
+      path: "/", hostOnly: true, secure: true, expiresAt: null }])).toThrow("COOKIE_BINDING_MISMATCH");
+    expect(() => captured.forReplay(Date.now() + 31_000)).toThrow("CAPTURE_TOO_OLD");
+  });
+
+  it("binds semantic text across equivalent HTML and line endings while dynamic fields affect only request hash", () => {
+    const input = fixture();
+    const normalized = captureAbortedPublishRequest({ ...input,
+      body: Buffer.from("title=%E6%B5%8B%E8%AF%95&content=%3Cp%3Ehello%26nbsp%3B%3C%2Fp%3E") }, Date.now());
+    expect(normalized.assertArticleBinding({ title: "测试", body: "hello\r\n" })).toBe(true);
+    const changedSignature = captureAbortedPublishRequest({ ...input,
+      url: input.url.replace("fake-signature", "rotated").replace("fake-token", "rotated-token") }, Date.now());
+    const original = captureAbortedPublishRequest(input, Date.now());
+    expect(changedSignature.finalPayloadHash).toBe(original.finalPayloadHash);
+    expect(changedSignature.requestHash).not.toBe(original.requestHash);
+  });
+
+  it("accepts duplicate cookie names from separate eligible domains only when each captured value is still current", () => {
+    const captured = captureAbortedPublishRequest({ ...fixture(),
+      headers: { ...fixture().headers, cookie: "sid=parent-value; sid=creator-value" } }, Date.now());
+    const cookie = (value: string, domain: string) => ({ name: "sid", value, domain, path: "/",
+      hostOnly: domain === "mp.toutiao.com", secure: true, expiresAt: null });
+    expect(captured.assertCookieBinding([cookie("parent-value", ".toutiao.com"),
+      cookie("creator-value", "mp.toutiao.com")])).toBe(true);
+    expect(() => captured.assertCookieBinding([cookie("parent-value", ".toutiao.com"),
+      cookie("other-value", "mp.toutiao.com")])).toThrow("COOKIE_BINDING_MISMATCH");
   });
 });

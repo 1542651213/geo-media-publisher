@@ -28,7 +28,7 @@ function fixture() {
   repo.seedDevelopment(join(process.cwd(), "PLATFORMS.csv"));
   const brand = repo.createBrand({ name: "MVP5", companyName: "MVP5" });
   const account = repo.syncBrowserPlatformAccount({ accountId: repo.createAccount({ platformKey: "toutiao", name: "Fixture" }).id,
-    platformKey: "toutiao", browserSessionId: "fixture-session" });
+    platformKey: "toutiao", browserSessionId: "fixture-session", externalAccountId: "fixture-creator" });
   const article = repo.createArticle({ brandId: brand.id, topic: "test", keyword: "test", city: "", title: "Test", body: "<p>Hello</p>",
     summary: "", tags: [], seoKeywords: [], articleType: "科普", aiProvider: "manual", aiModel: "none",
     generatedAt: new Date().toISOString(), reusePolicy: "always", contentHash: "d".repeat(64),
