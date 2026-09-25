@@ -23,7 +23,8 @@ import { runQualityGate, runQualityGateForArticle, runQualityGateForVariant } fr
 import { runQualityBenchmark } from "./quality-benchmark";
 import { OAuthSessionManager } from "./oauth-session-manager";
 import { ToutiaoSessionActivation } from "./toutiao-session-activation";
-import { auditMvp5OneShotCapture, claimControlledArticleNewCapture, claimControlledPublishRequestCapture, claimMvp5OneShotCapture } from "./toutiao-article-new-once";
+import { auditMvp5OneShotCapture, claimControlledArticleNewCapture, claimControlledPublishRequestCapture,
+  claimMvp53OwnerRecapture, readMvp5LockedClaimEvidence } from "./toutiao-article-new-once";
 import { evaluateMvp5CaptureReadiness } from "./toutiao-capture-binding-readiness";
 import { ToutiaoCapturedRequestOneShot } from "./toutiao-captured-request-one-shot";
 import { synchronizeOwnedToutiaoCredential } from "./toutiao-owned-credential-binding";
@@ -757,6 +758,13 @@ export function registerIpc(deps: IpcDependencies): void {
     if (!testArticle || testArticle.source !== "test" || !testArticle.sourceNote?.startsWith("platform-self-test:")
       || !testArticle.title.startsWith("GMP头条单次测试") || job.dryRun)
       throw new Error("TOUTIAO_MVP5_TRANSPARENT_SELF_TEST_REQUIRED");
+    const account = repository.getAccountById(input.accountId, "toutiao");
+    const originalRunId = testArticle.sourceNote.slice("platform-self-test:".length);
+    const originalRun = repository.getPlatformSelfTestRun(originalRunId);
+    if (!account || !originalRun || originalRun.publishJobId !== job.id || originalRun.testArticleId !== testArticle.id
+      || originalRun.platformAccountId !== (account.platformAccountId ?? account.id)
+      || originalRun.platformKey !== "toutiao" || !originalRun.publishConfirmedAt)
+      throw new Error("TOUTIAO_MVP53_ORIGINAL_PUBLISH_AUTHORIZATION_UNVERIFIED");
     const adapter = registry.getForConnection("toutiao");
     if (!(adapter instanceof ToutiaoArticleBrowserAdapter) || !(credentials instanceof SafeStorageCredentialStore))
       throw new Error("TOUTIAO_MVP5_RUNTIME_UNAVAILABLE");
@@ -790,10 +798,38 @@ export function registerIpc(deps: IpcDependencies): void {
     if (!articleId) throw new Error("TOUTIAO_MVP5_ARTICLE_MISSING");
     const contentBindingHash = preparation.contentBindingHash;
     if (!contentBindingHash) throw new Error("TOUTIAO_MVP5_PREPARATION_MISSING");
+    const ticketBinding = { accountId: input.accountId, jobId: input.jobId, articleId, contentBindingHash };
+    const predecessor = readMvp5LockedClaimEvidence(dataDirectory, ticketBinding);
+    if (!predecessor || auditMvp5OneShotCapture(dataDirectory, ticketBinding, 0).state !== "LOCKED")
+      throw new Error("TOUTIAO_MVP53_OLD_TICKET_NOT_LOCKED");
+    if (existsSync(join(dataDirectory, "diagnostics", "toutiao-mvp-5-3-owner-recapture.claim"))
+      || repository.getSubmissionIntentByJob(input.jobId) || repository.getPublishRecordByJob(input.jobId))
+      throw new Error("TOUTIAO_MVP53_RECAPTURE_OR_SUBMIT_ALREADY_CLAIMED");
+    const targetCheck = await adapter.inspectOwnedManagementList(accountContext(input.accountId, "toutiao"),
+      expectedCreatorId, { title: testArticle.title, submittedAt: predecessor.claimedAt,
+        remoteId: null, accountIdentityVerified: true });
+    if (!targetCheck.listStructureVerified || !targetCheck.accountIdentityVerified || !targetCheck.match
+      || targetCheck.structure.targetTitleAnchorCount > 0 || targetCheck.match.state !== "NOT_FOUND")
+      throw new Error("TOUTIAO_MVP53_EXISTING_OR_UNVERIFIED_TARGET");
+    const ownerConfirmation = await dialog.showMessageBox({
+      type: "warning", title: "头条 MVP-5.3：重新捕获与单次发布确认",
+      message: "请确认同一头条测试任务的唯一一次重新捕获与剩余发布额度",
+      detail: `账号 ID：${input.accountId}\nCreator ID：${expectedCreatorId}\n原 Job：${input.jobId}\n原发布授权：platform-self-test:${originalRunId}\n文章：${testArticle.title}\n内容绑定 Hash：${contentBindingHash}\n旧票据：${predecessor.ticketId}\n\n仅新建一张 Capture 票据，旧票据保持锁定；article/new 最多一次，不存草稿、不上传。浏览器原 publish 请求必须中止，Main/Node 最多正式发送一次并只读回查。未知结果不重试、不回退浏览器。`,
+      buttons: ["取消", "同意本次重新捕获及剩余一次发布"], cancelId: 0, defaultId: 0, noLink: true
+    });
+    if (ownerConfirmation.response !== 1) throw new Error("TOUTIAO_MVP53_OWNER_RECAPTURE_AUTHORIZATION_REQUIRED");
+    const ownerApprovalReference = `main-dialog:${randomUUID()}`;
+    const approvedAt = new Date().toISOString();
     await adapter.installMvp5PublishQuarantine(accountContext(input.accountId, "toutiao"));
     const result = await service.captureAndSubmit(input.jobId, accountContext(input.accountId, "toutiao"), adapter,
-      () => { claimMvp5OneShotCapture(dataDirectory, { accountId: input.accountId, jobId: input.jobId,
-        articleId, contentBindingHash }); });
+      () => {
+        const currentIntent = repository.getSubmissionIntentByJob(input.jobId);
+        const currentRecord = repository.getPublishRecordByJob(input.jobId);
+        claimMvp53OwnerRecapture(dataDirectory, ticketBinding, { ownerApprovalReference, approvedAt,
+          originalPublishAuthorizationReference: `platform-self-test:${originalRunId}`,
+          finalSubmitCount: currentIntent?.finalSubmitCount ?? 0,
+          intentCount: currentIntent ? 1 : 0, recordCount: currentRecord ? 1 : 0 });
+      });
     if (result.bindingReasonCode) logger.warn("TOUTIAO", "MVP5_CAPTURE_BINDING_FAILED", "Captured request rejected before submit", {
       accountId: input.accountId, jobId: input.jobId, requestHash: result.requestHash,
       bindingReasonCode: result.bindingReasonCode });

@@ -49,12 +49,19 @@ interface CapturedRuntimeBinding {
   readonly loginGeneration: number;
 }
 
+/** MVP5.3 is intentionally limited to unlinked plain text; semantic structures need a separate binding contract. */
+export function isMvp5PlainTextArticle(body: string): boolean {
+  const text = body.replace(/<\s*\/?\s*(?:p|div|span|br)\s*\/?\s*>/giu, "");
+  return Boolean(text.trim()) && !/<|>|https?:\/\/|www\.|!\[[^\]]*\]\(|\[[^\]]+\]\([^)]+\)/iu.test(text);
+}
+
 function preparedTextMatchesArticle(canonicalJson: string | null, article: { id: string; title: string; body: string }, accountId: string): boolean {
   if (!canonicalJson) return false;
   try {
     const payload: unknown = JSON.parse(canonicalJson);
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
     const value = payload as Record<string, unknown>;
+    if (!isMvp5PlainTextArticle(article.body)) return false;
     const text = normalizeToutiaoArticleContent(article.body);
     return value.articleId === article.id && value.accountId === accountId && value.title === article.title.trim().normalize("NFC")
       && value.plainText === text.plainText && value.coverMode === "none"
@@ -98,14 +105,20 @@ export class ToutiaoCapturedRequestOneShot {
     if (!contextId) return blocked(jobId, "", "TOUTIAO_CAPTURE_BINDING_FAILED", null, null, "CONTEXT_OWNERSHIP_MISMATCH");
     try { this.credentials.assertBound(ctx.accountId, metadata.bundleVersion, metadata.loginGeneration, "pre_submit"); }
     catch { return blocked(jobId, "", "TOUTIAO_CREDENTIAL_BUNDLE_MISMATCH"); }
-    try { claimCapture(); }
-    catch { return blocked(jobId, "", "TOUTIAO_ONE_SHOT_CAPTURE_ALREADY_CLAIMED"); }
+    let ticketClaimed = false;
+    let ticketClaimFailed = false;
     let captured: AbortedPublishRequest | null = null;
     try {
       const result = await adapter.captureAbortedPublishRequest(ctx, { title: article.title, body: article.body },
-        (request) => { if (captured === null) captured = request; });
+        (request) => { if (captured === null) captured = request; },
+        () => {
+          if (ticketClaimed) throw new Error("TOUTIAO_CAPTURE_SECOND_CLAIM_DENIED");
+          try { claimCapture(); ticketClaimed = true; }
+          catch { ticketClaimFailed = true; throw new Error("TOUTIAO_CAPTURE_TICKET_CLAIM_FAILED"); }
+        });
+      if (ticketClaimFailed) return blocked(jobId, "", "TOUTIAO_CAPTURE_BINDING_FAILED", null, null, "TICKET_NOT_ACTIVE");
       const guard = result.guard;
-      if (!captured || result.status !== "REQUEST_CAPTURED" || result.remoteAuthState !== "VALID"
+      if (!ticketClaimed || !captured || result.status !== "REQUEST_CAPTURED" || result.remoteAuthState !== "VALID"
         || !result.contentFilled || !result.buttonTriggered || guard.guardAbortFailed
         || guard.publishAttemptCount !== 1 || guard.blockedPublishCount !== 1 || guard.publishSentCount !== 0
         || guard.draftSentCount !== 0 || guard.uploadSentCount !== 0 || !this.sessionBound(ctx.accountId))
@@ -114,7 +127,8 @@ export class ToutiaoCapturedRequestOneShot {
         return blocked(jobId, "", "TOUTIAO_CAPTURE_BINDING_FAILED", null, null, "BROWSER_SESSION_MISMATCH");
       return this.submit(jobId, captured, { contextId, bundleVersion: metadata.bundleVersion,
         loginGeneration: metadata.loginGeneration });
-    } catch { return blocked(jobId, "", "TOUTIAO_BROWSER_CAPTURE_FAILED"); }
+    } catch { return blocked(jobId, "", "TOUTIAO_BROWSER_CAPTURE_FAILED", null, null,
+      ticketClaimFailed ? "TICKET_NOT_ACTIVE" : undefined); }
   }
 
   async submit(jobId: string, captured: AbortedPublishRequest,

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { canonicalSerialize, normalizeToutiaoSettings, type ToutiaoArticleSettingsSnapshot } from "@publisher/domain";
 import { hashToutiaoContentBinding } from "@publisher/domain/toutiao-hash";
 import { normalizeToutiaoArticleContent, type ToutiaoArticlePreparedPayload } from "@publisher/adapters-toutiao/article-api";
-import type { CaptureBindingReasonCode } from "./toutiao-captured-request-one-shot";
+import { isMvp5PlainTextArticle, type CaptureBindingReasonCode } from "./toutiao-captured-request-one-shot";
 
 export interface Mvp5ReadinessInput {
   readonly expectedAccountId: string;
@@ -46,7 +46,8 @@ export interface Mvp5ReadinessResult {
 
 function preparedContentMatches(input: Mvp5ReadinessInput): boolean {
   const { job, article, preparation } = input;
-  if (!job || !article || !preparation?.canonicalPayloadJson || !preparation.payloadHash || !preparation.contentBindingHash)
+  if (!job || !article || !isMvp5PlainTextArticle(article.body) || !preparation?.canonicalPayloadJson
+    || !preparation.payloadHash || !preparation.contentBindingHash)
     return false;
   try {
     const payload = JSON.parse(preparation.canonicalPayloadJson) as ToutiaoArticlePreparedPayload;

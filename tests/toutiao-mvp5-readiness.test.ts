@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { prepareToutiaoArticlePayload } from "@publisher/adapters-toutiao/article-api";
 import { evaluateMvp5CaptureReadiness, type Mvp5ReadinessInput } from "../apps/desktop/src/main/toutiao-capture-binding-readiness";
+import { isMvp5PlainTextArticle } from "../apps/desktop/src/main/toutiao-captured-request-one-shot";
 
 const settings = { version: 1 as const, coverMode: "none" as const, coverImages: [], articleAdType: "none" as const, remoteScheduledAt: null };
 
@@ -26,6 +27,12 @@ function fixture(): Mvp5ReadinessInput {
 }
 
 describe("Toutiao MVP5 read-only binding readiness", () => {
+  it("rejects links and embedded structures outside the one-shot plain-text contract", () => {
+    expect(isMvp5PlainTextArticle("A simple test paragraph.")).toBe(true);
+    expect(isMvp5PlainTextArticle('<a href="https://example.invalid">hello</a>')).toBe(false);
+    expect(isMvp5PlainTextArticle("Visit https://example.invalid")).toBe(false);
+    expect(isMvp5PlainTextArticle("![cover](asset.png)")).toBe(false);
+  });
   it("reports technical bindings ready while preserving the old locked ticket", () => {
     const result = evaluateMvp5CaptureReadiness(fixture());
     expect(result).toMatchObject({ accountBindingReady: true, sessionBindingReady: true,

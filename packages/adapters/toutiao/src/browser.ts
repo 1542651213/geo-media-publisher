@@ -363,7 +363,9 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
   }
 
   /** Experimental Main-only capture. The browser route is aborted before raw material reaches the callback. */
-  async captureAbortedPublishRequest(ctx: AccountContext, article: { title: string; body: string }, onAbortedPublish?: (request: AbortedPublishRequest) => void): Promise<ControlledPublishCaptureResult> {
+  async captureAbortedPublishRequest(ctx: AccountContext, article: { title: string; body: string },
+    onAbortedPublish?: (request: AbortedPublishRequest) => void,
+    onReadbackReady?: () => void): Promise<ControlledPublishCaptureResult> {
     if (!article.title.trim() || !article.body.trim() || article.title.length > 100 || article.body.length > 20_000)
       throw new Error("TOUTIAO_CAPTURE_INVALID_CONTENT");
     const owned = this.sessionManager.getCanonicalPage({ platformKey: "toutiao", accountId: ctx.accountId });
@@ -377,7 +379,9 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
         await fillAndRead(body, "body", article.body);
         marks.contentFilled();
         await this.assertNoSecurityChallenge(editor);
+        await this.inspectRequiredFields(editor);
         const control = await this.inspectFinalSubmitControl(editor);
+        onReadbackReady?.(); // The durable successor claim is consumed only after content and control readback.
         marks.buttonTriggered(); // Durable task claim is already written by IPC; no second click is permitted.
         await control.locator.click({ timeout: 10_000 });
       }, onAbortedPublish);
@@ -461,6 +465,7 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
       readonly dateMarkerObserved: boolean; readonly timeMarkerObserved: boolean;
       readonly chineseDateObserved: boolean; readonly bodyCharCount: number;
       readonly articleHrefCount: number; readonly candidateContainerCount: number;
+      readonly targetTitleAnchorCount: number;
       readonly readonlyResponseShapes: readonly { path: string; status: number }[];
       readonly framePaths: readonly { host: string; path: string }[];
       readonly loadingObserved: boolean; readonly errorObserved: boolean };
@@ -514,6 +519,8 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
       const observed = await page.evaluate((wantedTitle) => {
         const body = document.body?.innerText ?? "";
         const anchors = Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"));
+        const targetTitleAnchorCount = wantedTitle ? anchors.filter((anchor) =>
+          (anchor.innerText ?? "").replace(/\s+/gu, " ").trim().normalize("NFC") === wantedTitle.replace(/\s+/gu, " ").trim().normalize("NFC")).length : 0;
         const rows: ToutiaoManagementRow[] = [];
         let visibleStructuredRows = 0;
         for (const anchor of anchors) {
@@ -543,6 +550,7 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
           bodyCharCount: body.length,
           articleHrefCount: anchors.filter((item) => /\/(?:article|item|w)\/\d+/u.test(item.getAttribute("href") ?? "")).length,
           candidateContainerCount: document.querySelectorAll('[class*="content-list"], [class*="article-list"], [class*="works-list"], table, [role="table"]').length,
+          targetTitleAnchorCount,
           loadingObserved: /加载中|正在加载|loading/u.test(body), errorObserved: /出错|错误|失败|重试|网络异常/u.test(body),
           rows };
       }, target?.title ?? null);
@@ -555,6 +563,7 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
           statusMarkerObserved: observed.statusMarkerObserved, dateMarkerObserved: observed.dateMarkerObserved,
           timeMarkerObserved: observed.timeMarkerObserved, chineseDateObserved: observed.chineseDateObserved,
           bodyCharCount: observed.bodyCharCount, articleHrefCount: observed.articleHrefCount,
+          targetTitleAnchorCount: observed.targetTitleAnchorCount,
           candidateContainerCount: observed.candidateContainerCount, readonlyResponseShapes,
           framePaths, loadingObserved: observed.loadingObserved, errorObserved: observed.errorObserved } };
     } finally {

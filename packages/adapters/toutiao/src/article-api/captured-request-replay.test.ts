@@ -151,6 +151,13 @@ describe("captured Toutiao request replay", () => {
     expect(changedSignature.requestHash).not.toBe(original.requestHash);
   });
 
+  it("rejects a captured hyperlink whose visible text matches the frozen plain text", () => {
+    const input = fixture();
+    const captured = captureAbortedPublishRequest({ ...input,
+      body: Buffer.from("title=%E6%B5%8B%E8%AF%95&content=%3Cp%3E%3Ca+href%3D%22https%3A%2F%2Fexample.invalid%22%3Ehello%3C%2Fa%3E%3C%2Fp%3E") }, Date.now());
+    expect(() => captured.assertArticleBinding({ title: "测试", body: "hello" })).toThrow("BODY_BINDING_MISMATCH");
+  });
+
   it("accepts duplicate cookie names from separate eligible domains only when each captured value is still current", () => {
     const captured = captureAbortedPublishRequest({ ...fixture(),
       headers: { ...fixture().headers, cookie: "sid=parent-value; sid=creator-value" } }, Date.now());

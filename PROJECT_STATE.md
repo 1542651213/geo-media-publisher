@@ -1,5 +1,12 @@
 # Project State
 
+## Toutiao MVP-5.3 successor capture preparation — 2026-09-25
+
+- The existing MVP-5 capture claim remains locked. No SubmissionIntent or PublishRecord existed in the read-only audit, and no Node publish request had been sent. The earlier browser request was recorded as aborted; the historical generic binding failure cannot identify one definitive failed assertion.
+- The experimental Main IPC now verifies the original self-test run, exact account/Job/Article/content binding, locked predecessor ticket, unused durable submit budget, current creator identity, and a guarded read-only management list before showing a native Owner confirmation dialog. Cancel is the default. Only a real affirmative dialog response permits the later editor flow; after title/body and required-control readback, an exclusive successor claim links the old ticket, original self-test authorization, and the same Job budget. The original claim is never modified.
+- The capture path continues to abort the browser publish request and uses the existing R1-A Intent/Record/final-submit claim for at most one Node send. A failed successor claim blocks the editor click. Linked or media-rich article content is rejected by this MVP's plain-text binding contract rather than silently reduced to visible text.
+- The Owner's new-capture authorization is still pending. This preparation has not created a successor ticket, clicked publish, captured a new request, or sent a Node publish request. The ordinary Toutiao Article API switch remains off.
+
 ## Toutiao MVP-5.2 capture binding readiness — 2026-09-25
 
 - Isolated runtime commit `e6c6c08ce5a6d67a249dbf8dfcce94b1df08aa63` adds sanitized binding reason codes, rejects Context replacement and credential version/generation changes after capture, and exposes a read-only Main preflight. The old generic `TOUTIAO_CAPTURE_BINDING_FAILED` swallowed the original exception; the exact assertion in the previous attempt cannot be recovered from safe persisted evidence.

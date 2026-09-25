@@ -73,7 +73,8 @@ export class AbortedPublishRequest {
     if (title.length !== 1 || normalize(title[0] ?? "") !== normalize(article.title))
       throw new ToutiaoCaptureBindingError("TITLE_BINDING_MISMATCH");
     if (content.length !== 1 || preparedContent.plainText !== expectedContent.plainText
-      || preparedContent.imageReferences.length !== 0)
+      || preparedContent.imageReferences.length !== 0
+      || /<\s*\/?\s*(?:a|img|video|iframe|audio|object|embed|table|ul|ol|li|h[1-6]|blockquote)\b|(?:href|src)\s*=/iu.test(content[0] ?? ""))
       throw new ToutiaoCaptureBindingError("BODY_BINDING_MISMATCH");
     if (covers && !["[]", "{}", "null"].includes(covers.trim())
       || timerStatus && !["0", "false"].includes(timerStatus.trim().toLowerCase())
