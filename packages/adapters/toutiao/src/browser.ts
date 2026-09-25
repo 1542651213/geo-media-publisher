@@ -453,7 +453,8 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
   /** Read-only management-list lookup. The route guard is installed before opening the operation page. */
   async inspectOwnedManagementList(ctx: AccountContext, expectedCreatorId: string, target: ToutiaoManagementTarget | null): Promise<{
     readonly listStructureVerified: boolean; readonly accountIdentityVerified: boolean;
-    readonly blockedMutationCount: number; readonly match: ToutiaoManagementMatch | null;
+    readonly blockedMutationCount: number; readonly blockedRequestShapes: readonly { host: string; path: string; method: string }[];
+    readonly match: ToutiaoManagementMatch | null;
     readonly structure: { readonly pagePath: string; readonly anchorCount: number;
       readonly structuredRowCount: number; readonly emptyStateObserved: boolean;
       readonly managementMarkerObserved: boolean; readonly statusMarkerObserved: boolean;
@@ -468,12 +469,20 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
       && preflight.identity.externalAccountId === expectedCreatorId);
     if (!accountIdentityVerified) throw new Error("TOUTIAO_MANAGEMENT_IDENTITY_UNVERIFIED");
     let blockedMutationCount = 0;
+    const blockedRequestShapes: Array<{ host: string; path: string; method: string }> = [];
     const guard = async (route: Route): Promise<void> => {
       const decision = classifyShadowRequest(route.request().method(), route.request().url());
       if (decision === "READ_ONLY" || decision === "NON_CONTENT_TELEMETRY" || decision === "AUTH_TOKEN_BOOTSTRAP") {
         await route.continue(); return;
       }
       blockedMutationCount += 1;
+      if (blockedRequestShapes.length < 20) {
+        try {
+          const url = new URL(route.request().url());
+          blockedRequestShapes.push({ host: url.hostname.slice(0, 100), path: url.pathname.slice(0, 180),
+            method: route.request().method().toUpperCase().slice(0, 10) });
+        } catch { /* malformed request remains blocked */ }
+      }
       await route.abort("blockedbyclient");
     };
     await owned.session.context.route("**/*", guard);
@@ -513,7 +522,7 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
           dateMarkerObserved: /(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2})\s+\d{1,2}:\d{2}/u.test(body), rows };
       }, target?.title ?? null);
       return { listStructureVerified: observed.listStructureVerified, accountIdentityVerified,
-        blockedMutationCount, match: target && observed.listStructureVerified
+        blockedMutationCount, blockedRequestShapes, match: target && observed.listStructureVerified
           ? matchToutiaoManagementRows(observed.rows, { ...target, accountIdentityVerified }) : null,
         structure: { pagePath: new URL(page.url()).pathname, anchorCount: observed.anchorCount,
           structuredRowCount: observed.visibleStructuredRows, emptyStateObserved: observed.emptyStateObserved,

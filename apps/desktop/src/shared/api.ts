@@ -177,7 +177,8 @@ export interface PublisherApi {
     publishRequestCapture(accountId: string): Promise<ControlledPublishCaptureResult>;
     oneShotBuildIdentity(): Promise<{ mainCodeSha256: string; packageVersion: string; packaged: boolean }>;
     oneShotManagementDiagnostic(accountId: string): Promise<{ listStructureVerified: boolean;
-      accountIdentityVerified: boolean; blockedMutationCount: number; match: null;
+      accountIdentityVerified: boolean; blockedMutationCount: number;
+      blockedRequestShapes: readonly { host: string; path: string; method: string }[]; match: null;
       structure: { pagePath: string; anchorCount: number; structuredRowCount: number; emptyStateObserved: boolean;
         managementMarkerObserved: boolean; statusMarkerObserved: boolean; dateMarkerObserved: boolean } }>;
     oneShotRuntimePreflight(accountId: string): Promise<{ sessionActive: boolean; accountIdentityMatch: boolean;
