@@ -62,10 +62,16 @@ export class ToutiaoCapturedRequestOneShot {
     const job = this.repository.getJob(jobId);
     const article = job ? this.repository.getArticle(job.articleId) : null;
     const metadata = job ? this.repository.getToutiaoCredentialMetadata(job.accountId) : null;
+    const preparation = job ? this.repository.getToutiaoArticlePreparation(jobId) : null;
     if (!job || job.platformKey !== "toutiao" || job.accountId !== ctx.accountId || !article
+      || job.status !== "AwaitingConfirmation" || job.finalPublishMode !== "CONFIRM_BEFORE_PUBLISH"
+      || this.repository.getSubmissionIntentByJob(jobId) || this.repository.getPublishRecordByJob(jobId)
+      || !preparedTextMatchesArticle(preparation?.canonicalPayloadJson ?? null, article, ctx.accountId)
       || !metadata || metadata.credentialState !== "VALID" || !metadata.validatedAt)
       return blocked(jobId, "", "TOUTIAO_CAPTURE_PRECONDITION_FAILED");
     if (!this.sessionBound(ctx.accountId)) return blocked(jobId, "", "TOUTIAO_RUNTIME_SESSION_UNBOUND");
+    try { this.credentials.assertBound(ctx.accountId, metadata.bundleVersion, metadata.loginGeneration, "pre_submit"); }
+    catch { return blocked(jobId, "", "TOUTIAO_CREDENTIAL_BUNDLE_MISMATCH"); }
     try { claimCapture(); }
     catch { return blocked(jobId, "", "TOUTIAO_ONE_SHOT_CAPTURE_ALREADY_CLAIMED"); }
     let captured: AbortedPublishRequest | null = null;

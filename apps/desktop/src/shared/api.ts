@@ -175,6 +175,13 @@ export interface ManagedVideoAsset extends VideoAsset {
 export interface PublisherApi {
   toutiaoDiagnostics: { protocolShadow(accountId: string, mode?: "HOME" | "EDITOR" | "SIGNER_CONTRACT" | "SIGNER_INPUT" | "BRIDGE" | "CONTROLLED_ARTICLE_NEW"): Promise<ToutiaoLiveShadowResult>;
     publishRequestCapture(accountId: string): Promise<ControlledPublishCaptureResult>;
+    oneShotBuildIdentity(): Promise<{ mainCodeSha256: string; packageVersion: string; packaged: boolean }>;
+    oneShotRuntimePreflight(accountId: string): Promise<{ sessionActive: boolean; accountIdentityMatch: boolean;
+      managementListStructureVerified: boolean; blockedReadOnlySmokeMutations: number; bundleVersion: number;
+      loginGeneration: number; credentialChanged: boolean; backupVerified: boolean }>;
+    oneShotPrepareTestJob(accountId: string): Promise<{ jobId: string; testRunId: string; articleId: string | null; reused: boolean }>;
+    oneShotReconcile(accountId: string, jobId: string): Promise<{ state: string; reasonCode: string;
+      externalId?: string | null; publicUrl?: string | null }>;
     oneShotCapturedReplay(accountId: string, jobId: string): Promise<CapturedOneShotResult> };
   dashboard: { get(): Promise<DashboardStats> };
   videoAssets: {

@@ -6,6 +6,10 @@ const invoke = <T>(channel: string, payload?: unknown): Promise<T> => ipcRendere
 const api: PublisherApi = {
   toutiaoDiagnostics: { protocolShadow: (accountId, mode) => invoke("toutiao:protocol-shadow", { accountId, mode }),
     publishRequestCapture: (accountId) => invoke("toutiao:publish-request-capture", { accountId }),
+    oneShotBuildIdentity: () => invoke("toutiao:mvp5-build-identity"),
+    oneShotRuntimePreflight: (accountId) => invoke("toutiao:mvp5-runtime-preflight", { accountId }),
+    oneShotPrepareTestJob: (accountId) => invoke("toutiao:mvp5-prepare-test-job", { accountId }),
+    oneShotReconcile: (accountId, jobId) => invoke("toutiao:mvp5-reconcile", { accountId, jobId }),
     oneShotCapturedReplay: (accountId, jobId) => invoke("toutiao:mvp5-one-shot", { accountId, jobId }) },
   dashboard: { get: () => invoke("dashboard:get") },
   videoAssets: { list: (filters) => invoke("video-assets:list", filters), pickVideo: () => invoke("video-assets:pick-video"), pickCover: () => invoke("video-assets:pick-cover"), create: (input) => invoke("video-assets:create", input), update: (id, input) => invoke("video-assets:update", { id, input }), preflight: (input) => invoke("video-assets:preflight", input) },

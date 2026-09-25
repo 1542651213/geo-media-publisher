@@ -40,7 +40,11 @@ export function claimControlledPublishRequestCapture(dataDirectory: string): str
 }
 
 /** Task-wide claim before the MVP5 editor click. Never delete this file to obtain another attempt. */
-export function claimMvp5OneShotCapture(dataDirectory: string): string {
+export function claimMvp5OneShotCapture(dataDirectory: string, binding: {
+  accountId: string; jobId: string; articleId: string; contentBindingHash: string
+}): string {
+  if (!binding.accountId || !binding.jobId || !binding.articleId
+    || !/^[a-f0-9]{64}$/u.test(binding.contentBindingHash)) throw new Error("TOUTIAO_MVP5_BINDING_REQUIRED");
   const directory = join(dataDirectory, "diagnostics");
   mkdirSync(directory, { recursive: true });
   const path = join(directory, "toutiao-mvp-5-one-shot.claim");
@@ -52,7 +56,8 @@ export function claimMvp5OneShotCapture(dataDirectory: string): string {
     throw new Error("TOUTIAO_MVP5_CLAIM_FAILED");
   }
   try {
-    writeSync(descriptor, JSON.stringify({ task: "TOUTIAO_MVP_5_CAPTURE_REPLAY_ONE_SHOT_REAL_PUBLISH", claimedAt: new Date().toISOString() }));
+    writeSync(descriptor, JSON.stringify({ task: "TOUTIAO_MVP_5_CAPTURE_REPLAY_ONE_SHOT_REAL_PUBLISH",
+      ...binding, claimedAt: new Date().toISOString() }));
     fsyncSync(descriptor);
   } finally { closeSync(descriptor); }
   return path;

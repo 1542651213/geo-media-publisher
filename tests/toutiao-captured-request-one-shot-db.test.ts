@@ -65,6 +65,12 @@ describe("Toutiao MVP5 durable one-shot boundary", () => {
     expect(repo.getPublishRecordByJob(job.id)).toMatchObject({ status: "Publishing", success: false, verificationStatus: "WaitingUser" });
     expect((await service.submit(job.id, captured)).state).toBe("BLOCKED_PRE_SUBMIT");
     expect(transport).toHaveBeenCalledOnce();
+    const confirmed = repo.reconcileJobAsPublished(job.id, { externalId: "123456",
+      publishedUrl: "https://www.toutiao.com/article/123456/",
+      response: { readOnly: true, verified: true, titleMatch: true, bodyMatch: true } });
+    expect(confirmed.job.status).toBe("Success");
+    expect(confirmed.record).toMatchObject({ status: "Published", success: true, verificationStatus: "Verified" });
+    expect(repo.getSubmissionIntentByJob(job.id)?.finalSubmitCount).toBe(1);
     const ordinaryRows = JSON.stringify({ intents: opened.db.prepare("SELECT * FROM submission_intents").all(),
       records: opened.db.prepare("SELECT * FROM publish_records").all(), bindings: opened.db.prepare("SELECT * FROM toutiao_article_final_bindings").all() });
     for (const secret of ["fake-secret", "fake-signature", "fake-token"]) expect(ordinaryRows).not.toContain(secret);

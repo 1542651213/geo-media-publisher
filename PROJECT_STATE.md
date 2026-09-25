@@ -1,5 +1,12 @@
 # Project State
 
+## Toutiao MVP-5.1 runtime binding and read-only reconciliation candidate — 2026-09-25
+
+- The isolated worktree now has a default-off Main diagnostic path for owner-account session activation, exact creator identity and read-only login-state checks, verified database backup, SafeStorage Credential Bundle synchronization, and a guarded management-list smoke check. Bundle first registration uses the real account-owned BrowserContext cookies; SQLite receives only version, generation and fingerprint. Existing secret/metadata mismatch still fails closed.
+- A dedicated transparent `source=test` self-test Job can be prepared without changing normal Toutiao routing. In the one-shot diagnostic process, the scheduler and ordinary publish IPC routes are paused. A durable task claim binds account, Job, Article and content hash before the editor click. A second context guard remains after the capture guard closes, blocking later content writes. The original browser publish request must be aborted before the existing R1-A Claim permits one Node POST.
+- Account-owned management-list parsing now classifies the unique target row as draft, reviewing, scheduled, published, rejected or unknown; public-page title and body verification is required before Published. Missing/ambiguous rows and network errors never authorize another POST. This is an offline implementation candidate, **not** live acceptance: runtime package, owner identity, real management-list shape and any one-shot send remain unverified.
+- Offline checks: 123 test files / 853 tests PASS, typecheck PASS, lint PASS, build PASS. No Toutiao network call or live publish was made in this implementation phase. Ordinary Article API remains disabled by default.
+
 ## Toutiao MVP-5 captured request replay foundation — 2026-09-25
 
 - An experimental, default-disabled Main-only path captures the browser-generated `article/publish` request after a context-wide guard aborts it, and can hand the exact URL, headers and body bytes to one Node transport call. The raw request stays in Main memory; persisted evidence contains hashes and field names only.

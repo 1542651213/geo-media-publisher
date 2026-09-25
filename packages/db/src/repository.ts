@@ -2634,8 +2634,9 @@ export class AppRepository {
 
   reconcileJobAsPublished(jobId: string, input: { externalId: string; publishedUrl: string; response: Record<string, unknown> }): { job: PublishJob; record: PublishRecord } {
     const job = this.getJob(jobId);
-    if (!job || !["NeedsReconciliation", "Submitted"].includes(job.status)) throw new Error("Only a NeedsReconciliation or Submitted Job can be closed by read-only publish reconciliation");
+    if (!job || !["NeedsReconciliation", "Submitted", "Publishing"].includes(job.status)) throw new Error("Only a claimed submission can be closed by read-only publish reconciliation");
     const intent = this.getSubmissionIntentByJob(jobId);
+    if (!intent || intent.finalSubmitCount < 1) throw new Error("Read-only publication confirmation requires a durable final submit claim");
     if (intent) this.db.prepare("UPDATE submission_intents SET state='Submitted',external_id=?,remote_status='PUBLISHED_CONFIRMED',reconciliation_required=0,updated_at=? WHERE id=?").run(input.externalId, now(), intent.id);
     const existing = this.getPublishRecordByJob(jobId);
     const record = existing

@@ -1,6 +1,6 @@
 import { app, dialog, ipcMain, shell } from "electron";
-import { copyFileSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import { basename, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
@@ -25,6 +25,7 @@ import { OAuthSessionManager } from "./oauth-session-manager";
 import { ToutiaoSessionActivation } from "./toutiao-session-activation";
 import { claimControlledArticleNewCapture, claimControlledPublishRequestCapture, claimMvp5OneShotCapture } from "./toutiao-article-new-once";
 import { ToutiaoCapturedRequestOneShot } from "./toutiao-captured-request-one-shot";
+import { synchronizeOwnedToutiaoCredential } from "./toutiao-owned-credential-binding";
 import { ToutiaoCredentialBundleService } from "@publisher/adapters-toutiao/article-api";
 import { writeAdvancedExcelTemplate, writeSimpleExcelTemplate } from "./excel-templates";
 import { buildExcelImportErrorReportCsv, readExcelArticleFile } from "./excel-import";
@@ -87,11 +88,16 @@ export interface IpcDependencies {
 }
 
 let processDiagnostics: ProcessDiagnostics | null = null;
+const mvp5PausedChannels = new Set(["articles:prepare-publish", "jobs:run", "jobs:confirm", "jobs:retry",
+  "platform-self-test:run-post-upload-discovery", "platform-self-test:continue", "platform-self-test:run-level",
+  "platform-self-test:request-publish", "platform-self-test:confirm-publish"]);
 
 function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent, payload: unknown) => unknown): void {
   ipcMain.removeHandler(channel);
   ipcMain.handle(channel, async (event, payload) => {
     try {
+      if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED === "true" && mvp5PausedChannels.has(channel))
+        throw new Error("TOUTIAO_MVP5_OTHER_PUBLISH_PATHS_PAUSED");
       return await handler(event, payload);
     } catch (error) {
       processDiagnostics?.recordIpcError(channel, error);
@@ -581,16 +587,118 @@ export function registerIpc(deps: IpcDependencies): void {
     claimControlledPublishRequestCapture(dataDirectory);
     return adapter.runGuardedPublishRequestCapture(accountContext(input.accountId, "toutiao"));
   });
+  register("toutiao:mvp5-build-identity", () => {
+    if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true") throw new Error("TOUTIAO_MVP5_ONE_SHOT_DISABLED");
+    return { mainCodeSha256: createHash("sha256").update(readFileSync(join(__dirname, "main.js"))).digest("hex"),
+      packageVersion: app.getVersion(), packaged: app.isPackaged };
+  });
+  register("toutiao:mvp5-runtime-preflight", async (_event, payload) => {
+    if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true" || !protocolShadowEnabled(process.env))
+      throw new Error("TOUTIAO_MVP5_ONE_SHOT_DISABLED");
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    const expectedAccountId = process.env.TOUTIAO_MVP5_ACCOUNT_ID;
+    const expectedCreatorId = process.env.TOUTIAO_MVP5_EXPECTED_CREATOR_ID;
+    if (!expectedAccountId || input.accountId !== expectedAccountId || !expectedCreatorId || !/^\d+$/u.test(expectedCreatorId))
+      throw new Error("TOUTIAO_MVP5_TARGET_IDENTITY_NOT_CONFIGURED");
+    if (existsSync(join(dataDirectory, "diagnostics", "toutiao-mvp-5-one-shot.claim")))
+      throw new Error("TOUTIAO_MVP5_CAPTURE_ALREADY_CLAIMED_READONLY_RECONCILIATION_ONLY");
+    const adapter = registry.getForConnection("toutiao");
+    if (!(adapter instanceof ToutiaoArticleBrowserAdapter) || !(credentials instanceof SafeStorageCredentialStore))
+      throw new Error("TOUTIAO_MVP5_RUNTIME_UNAVAILABLE");
+    const activation = await toutiaoSessionActivation.activate(input.accountId);
+    if (activation.runtimeState !== "ACTIVE" || !activation.contextOwnsPage || !activation.pageAlive
+      || activation.pageHost !== "mp.toutiao.com") throw new Error("TOUTIAO_MVP5_SESSION_NOT_ACTIVE");
+    const ctx = accountContext(input.accountId, "toutiao");
+    const remoteAuthState = await adapter.checkOwnedCreatorSession(ctx);
+    if (remoteAuthState !== "VALID") throw new Error("TOUTIAO_MVP5_REMOTE_AUTH_UNVERIFIED");
+    const creatorId = await adapter.inspectOwnedCreatorIdentity(ctx);
+    if (creatorId !== expectedCreatorId) throw new Error("TOUTIAO_MVP5_ACCOUNT_IDENTITY_MISMATCH");
+    const management = await adapter.inspectOwnedManagementList(ctx, expectedCreatorId, null);
+    if (!management.listStructureVerified || !management.accountIdentityVerified)
+      throw new Error("TOUTIAO_MVP5_READONLY_RECONCILIATION_UNAVAILABLE");
+    const backupDir = join(dataDirectory, "backups");
+    mkdirSync(backupDir, { recursive: true });
+    const backupPath = join(backupDir, `toutiao-mvp5-preflight-${new Date().toISOString().replace(/[:.]/gu, "-")}.db`);
+    await backupDatabase(repository.db, backupPath);
+    if (!validateDatabaseBackup(backupPath).valid) throw new Error("TOUTIAO_MVP5_BACKUP_FAILED");
+    const binding = synchronizeOwnedToutiaoCredential(repository,
+      new ToutiaoCredentialBundleService(credentials, repository), {
+        accountId: input.accountId, creatorId, remoteAuthState, runtimeActive: true,
+        contextOwnsPage: true, cookies: await adapter.snapshotOwnedCreatorCookies(ctx),
+        validatedAt: new Date().toISOString()
+      }, expectedCreatorId);
+    return { sessionActive: true, accountIdentityMatch: true, managementListStructureVerified: true,
+      blockedReadOnlySmokeMutations: management.blockedMutationCount,
+      bundleVersion: binding.bundleVersion, loginGeneration: binding.loginGeneration,
+      credentialChanged: binding.changed, backupVerified: true };
+  });
+  register("toutiao:mvp5-prepare-test-job", async (_event, payload) => {
+    if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true" || !protocolShadowEnabled(process.env))
+      throw new Error("TOUTIAO_MVP5_ONE_SHOT_DISABLED");
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    if (input.accountId !== process.env.TOUTIAO_MVP5_ACCOUNT_ID
+      || existsSync(join(dataDirectory, "diagnostics", "toutiao-mvp-5-one-shot.claim")))
+      throw new Error("TOUTIAO_MVP5_TARGET_OR_QUOTA_INVALID");
+    const expectedCreatorId = process.env.TOUTIAO_MVP5_EXPECTED_CREATOR_ID;
+    const account = repository.getAccountById(input.accountId, "toutiao");
+    const runtime = toutiaoSessionActivation.status(input.accountId);
+    const metadata = repository.getToutiaoCredentialMetadata(input.accountId);
+    const adapter = registry.getForConnection("toutiao");
+    const backups = existsSync(join(dataDirectory, "backups"))
+      ? readdirSync(join(dataDirectory, "backups")).filter((name) => name.startsWith("toutiao-mvp5-preflight-") && name.endsWith(".db")) : [];
+    if (!expectedCreatorId || account?.externalAccountId !== expectedCreatorId
+      || runtime.runtimeState !== "ACTIVE" || !runtime.contextOwnsPage || !runtime.pageAlive
+      || !metadata || metadata.credentialState !== "VALID" || !metadata.validatedAt
+      || !(adapter instanceof ToutiaoArticleBrowserAdapter)
+      || !(credentials instanceof SafeStorageCredentialStore) || backups.length === 0
+      || !validateDatabaseBackup(join(dataDirectory, "backups", backups.sort().at(-1)!)).valid)
+      throw new Error("TOUTIAO_MVP5_PREPARE_PRECONDITION_FAILED");
+    const ctx = accountContext(input.accountId, "toutiao");
+    if (await adapter.checkOwnedCreatorSession(ctx) !== "VALID"
+      || await adapter.inspectOwnedCreatorIdentity(ctx) !== expectedCreatorId)
+      throw new Error("TOUTIAO_MVP5_PREPARE_IDENTITY_UNVERIFIED");
+    new ToutiaoCredentialBundleService(credentials, repository).assertBound(input.accountId,
+      metadata.bundleVersion, metadata.loginGeneration, "pre_submit");
+    const existing = repository.listPlatformSelfTestRuns(account.platformAccountId ?? account.id)
+      .find((run) => run.publishJobId && repository.getArticle(repository.getJob(run.publishJobId)?.articleId ?? "")?.title
+        .startsWith("GMP头条单次测试"));
+    if (existing?.publishJobId) return { jobId: existing.publishJobId, testRunId: existing.testRunId,
+      articleId: repository.getJob(existing.publishJobId)?.articleId ?? null, reused: true };
+    const run = repository.createPlatformSelfTestRun({ platformAccountId: account.platformAccountId ?? account.id,
+      requestedLevel: "L5_PUBLISH" });
+    repository.confirmPlatformSelfTestPublish(run.testRunId);
+    const title = `GMP头条单次测试${new Date().toISOString().replace(/[-:.TZ]/gu, "").slice(2, 14)}`;
+    const body = "本文仅用于验证 GEO Media Publisher 的单次发布与只读确认流程。室内环境治理服务应先评估现场条件，再依据实际检测结果制定方案。";
+    const job = repository.createPlatformSelfTestPublishJob({ testRunId: run.testRunId, title, body, dryRun: false });
+    repository.freezeToutiaoArticleSettings(job.id, { version: 1, coverMode: "none", coverImages: [],
+      articleAdType: "none", remoteScheduledAt: null });
+    prepareToutiaoArticleJob(repository, job.id);
+    return { jobId: job.id, testRunId: run.testRunId, articleId: job.articleId, reused: false };
+  });
   register("toutiao:mvp5-one-shot", async (_event, payload) => {
     if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true" || !protocolShadowEnabled(process.env))
       throw new Error("TOUTIAO_MVP5_ONE_SHOT_DISABLED");
     const input = z.object({ accountId: idSchema, jobId: idSchema }).parse(payload);
+    const expectedCreatorId = process.env.TOUTIAO_MVP5_EXPECTED_CREATOR_ID;
+    if (process.env.TOUTIAO_MVP5_ACCOUNT_ID !== input.accountId || !expectedCreatorId || !/^\d+$/u.test(expectedCreatorId))
+      throw new Error("TOUTIAO_MVP5_TARGET_IDENTITY_NOT_CONFIGURED");
     const job = repository.getJob(input.jobId);
-    if (!job || job.accountId !== input.accountId || job.platformKey !== "toutiao")
+    if (!job || !job.articleId || job.accountId !== input.accountId || job.platformKey !== "toutiao")
       throw new Error("TOUTIAO_MVP5_JOB_ACCOUNT_MISMATCH");
+    const testArticle = repository.getArticle(job.articleId);
+    if (!testArticle || testArticle.source !== "test" || !testArticle.sourceNote?.startsWith("platform-self-test:")
+      || !testArticle.title.startsWith("GMP头条单次测试") || job.dryRun)
+      throw new Error("TOUTIAO_MVP5_TRANSPARENT_SELF_TEST_REQUIRED");
     const adapter = registry.getForConnection("toutiao");
     if (!(adapter instanceof ToutiaoArticleBrowserAdapter) || !(credentials instanceof SafeStorageCredentialStore))
       throw new Error("TOUTIAO_MVP5_RUNTIME_UNAVAILABLE");
+    if (repository.getAccountById(input.accountId, "toutiao")?.externalAccountId !== expectedCreatorId
+      || await adapter.checkOwnedCreatorSession(accountContext(input.accountId, "toutiao")) !== "VALID"
+      || await adapter.inspectOwnedCreatorIdentity(accountContext(input.accountId, "toutiao")) !== expectedCreatorId)
+      throw new Error("TOUTIAO_MVP5_RUNTIME_IDENTITY_UNVERIFIED");
+    const managementSmoke = await adapter.inspectOwnedManagementList(accountContext(input.accountId, "toutiao"), expectedCreatorId, null);
+    if (!managementSmoke.listStructureVerified || !managementSmoke.accountIdentityVerified)
+      throw new Error("TOUTIAO_MVP5_READONLY_RECONCILIATION_UNAVAILABLE");
     const sessionBound = (accountId: string): boolean => {
       const status = toutiaoSessionActivation.status(accountId);
       return status.accountId === accountId && status.storedAuthorization === "AUTHORIZED_SAVED"
@@ -601,10 +709,76 @@ export function registerIpc(deps: IpcDependencies): void {
       new ToutiaoCredentialBundleService(credentials, repository), undefined, undefined, sessionBound,
       async (accountId) => {
         if (accountId !== input.accountId || !sessionBound(accountId)) throw new Error("TOUTIAO_MVP5_SESSION_CHANGED");
-        return adapter.snapshotOwnedCreatorCookies(accountContext(accountId, "toutiao"));
+        const currentCtx = accountContext(accountId, "toutiao");
+        if (await adapter.checkOwnedCreatorSession(currentCtx) !== "VALID"
+          || await adapter.inspectOwnedCreatorIdentity(currentCtx) !== expectedCreatorId)
+          throw new Error("TOUTIAO_MVP5_SESSION_IDENTITY_CHANGED");
+        return adapter.snapshotOwnedCreatorCookies(currentCtx);
       });
+    const preparation = repository.getToutiaoArticlePreparation(input.jobId);
+    if (!preparation?.contentBindingHash) throw new Error("TOUTIAO_MVP5_PREPARATION_MISSING");
+    const articleId = job.articleId;
+    if (!articleId) throw new Error("TOUTIAO_MVP5_ARTICLE_MISSING");
+    const contentBindingHash = preparation.contentBindingHash;
+    if (!contentBindingHash) throw new Error("TOUTIAO_MVP5_PREPARATION_MISSING");
+    await adapter.installMvp5PublishQuarantine(accountContext(input.accountId, "toutiao"));
     return service.captureAndSubmit(input.jobId, accountContext(input.accountId, "toutiao"), adapter,
-      () => { claimMvp5OneShotCapture(dataDirectory); });
+      () => { claimMvp5OneShotCapture(dataDirectory, { accountId: input.accountId, jobId: input.jobId,
+        articleId, contentBindingHash }); });
+  });
+  register("toutiao:mvp5-reconcile", async (_event, payload) => {
+    if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true") throw new Error("TOUTIAO_MVP5_ONE_SHOT_DISABLED");
+    const input = z.object({ accountId: idSchema, jobId: idSchema }).parse(payload);
+    const expectedCreatorId = process.env.TOUTIAO_MVP5_EXPECTED_CREATOR_ID;
+    if (input.accountId !== process.env.TOUTIAO_MVP5_ACCOUNT_ID || !expectedCreatorId)
+      throw new Error("TOUTIAO_MVP5_TARGET_IDENTITY_NOT_CONFIGURED");
+    const job = repository.getJob(input.jobId);
+    const article = job ? repository.getArticle(job.articleId) : null;
+    const intent = repository.getSubmissionIntentByJob(input.jobId);
+    const record = repository.getPublishRecordByJob(input.jobId);
+    if (!job || job.platformKey !== "toutiao" || job.accountId !== input.accountId || !article
+      || !intent || intent.finalSubmitCount !== 1 || !record)
+      throw new Error("TOUTIAO_MVP5_RECONCILIATION_TARGET_INVALID");
+    const adapter = registry.getForConnection("toutiao");
+    if (!(adapter instanceof ToutiaoArticleBrowserAdapter)) throw new Error("TOUTIAO_MVP5_RUNTIME_UNAVAILABLE");
+    const activation = await toutiaoSessionActivation.activate(input.accountId);
+    if (activation.runtimeState !== "ACTIVE" || !activation.contextOwnsPage || !activation.pageAlive)
+      return { state: "UNKNOWN" as const, reasonCode: "SESSION_UNAVAILABLE" };
+    const ctx = accountContext(input.accountId, "toutiao");
+    if (await adapter.checkOwnedCreatorSession(ctx) !== "VALID"
+      || await adapter.inspectOwnedCreatorIdentity(ctx) !== expectedCreatorId)
+      return { state: "UNKNOWN" as const, reasonCode: "IDENTITY_UNVERIFIED" };
+    try {
+      const observed = await adapter.inspectOwnedManagementList(ctx, expectedCreatorId, {
+        title: article.title, submittedAt: intent.submitBoundaryEnteredAt ?? intent.updatedAt,
+        remoteId: intent.externalId, accountIdentityVerified: true
+      });
+      if (!observed.listStructureVerified || !observed.match)
+        return { state: "UNKNOWN" as const, reasonCode: "MANAGEMENT_LIST_UNAVAILABLE" };
+      const match = observed.match;
+      if (match.state === "REVIEWING" && job.status === "NeedsReconciliation") {
+        repository.reconcileJobAsSubmitted(job.id, { response: { readOnly: true, platformStatus: "REVIEWING",
+          externalId: match.externalId, matchedRowCount: match.matchedRowCount } });
+      }
+      if (match.state === "PUBLISHED" && match.externalId && match.publicUrl) {
+        const verification = await adapter.verifyOwnedPublicArticle(ctx, article,
+          match.externalId, match.publicUrl);
+        if (verification.verified) {
+          repository.reconcileJobAsPublished(job.id, { externalId: match.externalId,
+            publishedUrl: match.publicUrl, response: { readOnly: true, verified: true,
+              urlReachable: true, titleMatch: true, bodyMatch: true } });
+          return { state: "PUBLISHED_CONFIRMED" as const, reasonCode: "PUBLIC_PAGE_VERIFIED",
+            externalId: match.externalId, publicUrl: match.publicUrl };
+        }
+        return { state: "UNKNOWN" as const, reasonCode: "PUBLIC_PAGE_UNVERIFIED",
+          externalId: match.externalId, publicUrl: match.publicUrl };
+      }
+      return { state: match.state, reasonCode: match.state === "NOT_FOUND" ? "NO_MATCH_NOT_NEGATIVE_PROOF"
+        : match.state === "AMBIGUOUS" ? "MULTIPLE_TARGET_ROWS" : "TARGET_ROW_CLASSIFIED",
+        externalId: match.externalId, publicUrl: match.publicUrl };
+    } catch {
+      return { state: "UNKNOWN" as const, reasonCode: "READONLY_RECONCILIATION_ERROR" };
+    }
   });
   register("accounts:pre-submit-gate", async (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);

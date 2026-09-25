@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { captureAbortedPublishRequest, CapturedRequestReplay } from "./captured-request-replay";
+import { captureAbortedPublishRequest, CapturedRequestReplay, nodeFetchReplayTransport } from "./captured-request-replay";
 
 const fixture = () => ({
   method: "POST",
@@ -86,6 +86,23 @@ describe("captured Toutiao request replay", () => {
     await expect(replay.sendOnce(captured, permit)).rejects.toThrow("timeout");
     await expect(replay.sendOnce(captured, permit)).rejects.toThrow("TOUTIAO_REPLAY_ALREADY_CONSUMED");
     expect(transport).toHaveBeenCalledOnce();
+  });
+
+  it.each([307, 308])("does not follow a %i redirect or issue a second POST", async (status) => {
+    const captured = captureAbortedPublishRequest(fixture(), Date.now());
+    const send = vi.fn(async (_url: string, init: RequestInit) => {
+      expect(init.redirect).toBe("manual");
+      expect(Buffer.from(init.body as Uint8Array).equals(fixture().body)).toBe(true);
+      return new Response("", { status, headers: { location: "https://mp.toutiao.com/mp/agw/article/publish" } });
+    });
+    vi.stubGlobal("fetch", send);
+    try {
+      const replay = new CapturedRequestReplay(nodeFetchReplayTransport);
+      const result = await replay.sendOnce(captured, { submissionAttemptId: `redirect-${status}`,
+        claimedRequestHash: captured.requestHash, claimedAt: Date.now() });
+      expect(result.status).toBe(status);
+      expect(send).toHaveBeenCalledOnce();
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it("rejects captured cookies from a different credential snapshot", () => {

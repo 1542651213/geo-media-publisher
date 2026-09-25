@@ -85,6 +85,28 @@ describe("Toutiao captured request one-shot coordinator", () => {
     expect(transport).not.toHaveBeenCalled();
   });
 
+  it("never reaches Node when the browser abort is uncertain or two publish attempts were observed", async () => {
+    for (const unsafeGuard of [{ guardAbortFailed: true, publishAttemptCount: 1, blockedPublishCount: 0 },
+      { guardAbortFailed: false, publishAttemptCount: 2, blockedPublishCount: 2 }]) {
+      const { captured, repo, credentials, currentCookies, gate } = fixture();
+      const transport = vi.fn(async () => ({ status: 200, responseShape: [], platformCode: 0 }));
+      const adapter = { captureAbortedPublishRequest: vi.fn(async (_ctx: AccountContext,
+        _article: { title: string; body: string }, onCapture?: (request: typeof captured) => void) => {
+        onCapture?.(captured);
+        return { status: "REQUEST_CAPTURED", remoteAuthState: "VALID", contentFilled: true, buttonTriggered: true,
+          guard: { ...unsafeGuard, publishSentCount: 0, draftSentCount: 0, uploadSentCount: 0 } };
+      }) };
+      const service = new ToutiaoCapturedRequestOneShot(repo as unknown as AppRepository,
+        credentials as unknown as ToutiaoCredentialBundleService, transport,
+        gate as unknown as Pick<GlobalPublishExecutionGate, "run">, () => true, currentCookies);
+      expect((await service.captureAndSubmit("job", { accountId: "account" } as AccountContext,
+        adapter as unknown as Pick<ToutiaoArticleBrowserAdapter, "captureAbortedPublishRequest">,
+        () => undefined)).state).toBe("BLOCKED_PRE_SUBMIT");
+      expect(repo.claimFinalSubmitAttempt).not.toHaveBeenCalled();
+      expect(transport).not.toHaveBeenCalled();
+    }
+  });
+
   it("blocks before any Job or Intent mutation when credential metadata is absent", async () => {
     const { captured, repo, credentials, currentCookies, gate, setMetadataPresent } = fixture();
     setMetadataPresent(false);

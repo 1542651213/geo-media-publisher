@@ -56,7 +56,8 @@ async function createWindow(): Promise<void> {
   const publisher = new PublisherService(database.repository, registry, logger, { resolveSecrets: resolveAccountSecrets });
   scheduler = new PersistentScheduler(database.repository, publisher, logger);
   registerIpc({ repository: database.repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir: join(dataDirectory, "covers"), logger, credentials, aiCredentials: credentials, appLogPath, databasePath, processDiagnostics, restoreDatabase: (backupPath) => { scheduler?.stop(); restoreDatabaseSafely(database.db, databasePath, backupPath); app.relaunch(); app.exit(0); } });
-  scheduler.start();
+  // The one-shot diagnostic process owns the sole publish lane; existing queued jobs remain untouched.
+  if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true") scheduler.start();
 
   const window = new BrowserWindow({
     width: 1480,
