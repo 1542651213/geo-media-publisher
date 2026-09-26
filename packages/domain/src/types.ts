@@ -141,6 +141,8 @@ export interface AdapterManifest {
   transport: AdapterTransport;
   /** Primary integration capability; kept separate from content capabilities. */
   integrationMode?: PlatformCapability;
+  /** Explicit account UI choice when a platform has different content adapters. */
+  preferredForAccountConnection?: boolean;
   supportsArticle: boolean;
   supportsVideo: boolean;
   officialWebsite: string;

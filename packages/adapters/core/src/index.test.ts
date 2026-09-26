@@ -130,4 +130,18 @@ describe("AdapterRegistry manifest gate", () => {
 
     expect(() => registry.getForConnection("dual")).toThrow(/multiple account connection adapters/i);
   });
+
+  it("keeps a preferred official video account connection while routing image-text to browser", () => {
+    const registry = new AdapterRegistry();
+    const video = stub({ platformKey: "douyin", capabilities: { article: false, video: true },
+      manifest: { supportsArticle: false, supportsVideo: true, preferredForAccountConnection: true } });
+    const imageText = { ...browserConnectionStub("article"), platformKey: "douyin",
+      manifest: { ...browserConnectionStub("article").manifest, platformKey: "douyin" } };
+    registry.register(video);
+    registry.register(imageText);
+    expect(registry.getForConnection("douyin")).toBe(video);
+    expect(registry.getForContent("douyin", "video")).toBe(video);
+    expect(registry.getForContent("douyin", "article")).toBe(imageText);
+    expect(registry.getAccountConnectionMode("douyin")).toBeNull();
+  });
 });

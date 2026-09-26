@@ -118,6 +118,8 @@ export class AdapterRegistry {
     if (new Set(credentialKeys).size !== credentialKeys.length) throw new Error(`Adapter credential schema contains duplicate keys: ${adapter.platformKey}`);
     if (adapter.manifest.transport !== "manual" && adapter.manifest.officialSources.length === 0) throw new Error(`Adapter official sources are required: ${adapter.platformKey}`);
     const registered = this.adapters.get(adapter.platformKey) ?? [];
+    if (adapter.manifest.preferredForAccountConnection && registered.some((candidate) => candidate.manifest.preferredForAccountConnection))
+      throw new Error(`Multiple preferred account connection adapters registered for platform: ${adapter.platformKey}`);
     const overlaps = registered.some((candidate) =>
       (candidate.manifest.supportsArticle && adapter.manifest.supportsArticle)
       || (candidate.manifest.supportsVideo && adapter.manifest.supportsVideo)
@@ -137,12 +139,16 @@ export class AdapterRegistry {
   }
 
   getForConnection(platformKey: string): PlatformAdapter {
+    const preferred = this.preferredConnectionAdapter(platformKey);
+    if (preferred) return preferred;
     const connectionAdapters = this.connectionAdapters(platformKey);
     if (connectionAdapters.length > 1) throw new Error(`Multiple account connection adapters registered for platform: ${platformKey}`);
     return connectionAdapters[0] ?? this.get(platformKey);
   }
 
   tryGetForConnection(platformKey: string): PlatformAdapter | null {
+    const preferred = this.preferredConnectionAdapter(platformKey);
+    if (preferred) return preferred;
     const connectionAdapters = this.connectionAdapters(platformKey);
     if (connectionAdapters.length > 1) throw new Error(`Multiple account connection adapters registered for platform: ${platformKey}`);
     return connectionAdapters[0] ?? this.tryGet(platformKey);
@@ -182,6 +188,10 @@ export class AdapterRegistry {
 
   private connectionAdapters(platformKey: string): AutomationAdapter[] {
     return (this.adapters.get(platformKey) ?? []).filter(isAutomationAdapter);
+  }
+
+  private preferredConnectionAdapter(platformKey: string): PlatformAdapter | null {
+    return (this.adapters.get(platformKey) ?? []).find((adapter) => adapter.manifest.preferredForAccountConnection) ?? null;
   }
 }
 

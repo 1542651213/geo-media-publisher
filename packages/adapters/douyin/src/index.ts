@@ -168,6 +168,7 @@ export class DouyinOfficialAdapter implements PlatformAdapter {
     status: "WaitingForUser",
     researchStatus: "verified",
     transport: "official_api",
+    preferredForAccountConnection: true,
     supportsArticle: false,
     supportsVideo: true,
     officialWebsite: "https://www.douyin.com/",
