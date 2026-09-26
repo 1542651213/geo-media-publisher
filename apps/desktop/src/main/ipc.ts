@@ -36,6 +36,7 @@ import { PlatformSelfTestService } from "./platform-self-test";
 import type { ProcessDiagnostics } from "./process-diagnostics";
 import { addAccountConnectionModes, browserAccountConnectionResult, browserAccountDisconnectResult } from "./account-connection";
 import { recordRuntimeHeartbeat } from "./runtime-observability";
+import { assertDouyinAcceptanceChannel } from "./douyin-acceptance-gate";
 
 const idSchema = z.string().min(1);
 function safeErrorCode(error: unknown): string {
@@ -91,6 +92,7 @@ export interface IpcDependencies {
 }
 
 let processDiagnostics: ProcessDiagnostics | null = null;
+let acceptanceRepository: AppRepository | null = null;
 const mvp5PausedChannels = new Set(["articles:prepare-publish", "jobs:run", "jobs:confirm", "jobs:retry",
   "platform-self-test:run-post-upload-discovery", "platform-self-test:continue", "platform-self-test:run-level",
   "platform-self-test:request-publish", "platform-self-test:confirm-publish"]);
@@ -104,6 +106,19 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
       if (process.env.TOUTIAO_NATIVE_ACCEPTANCE_ACCOUNT_ID?.trim() && mvp5PausedChannels.has(channel)
         && !["platform-self-test:request-publish", "platform-self-test:confirm-publish", "platform-self-test:continue"].includes(channel))
         throw new Error("TOUTIAO_NATIVE_ACCEPTANCE_OTHER_PUBLISH_PATHS_PAUSED");
+      const douyinAcceptanceAccountId = process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim();
+      if (douyinAcceptanceAccountId && mvp5PausedChannels.has(channel)) {
+        const douyinAcceptanceArticleId = process.env.DOUYIN_R1_ACCEPTANCE_ARTICLE_ID?.trim();
+        if (!douyinAcceptanceArticleId) throw new Error("DOUYIN_ACCEPTANCE_ARTICLE_BINDING_REQUIRED");
+        if (!acceptanceRepository) throw new Error("DOUYIN_ACCEPTANCE_REPOSITORY_UNAVAILABLE");
+        assertDouyinAcceptanceChannel(channel, payload,
+          { accountId: douyinAcceptanceAccountId, articleId: douyinAcceptanceArticleId },
+          (id) => {
+            const job = acceptanceRepository?.getJob(id);
+            return job ? { id: job.id, accountId: job.accountId, articleId: job.articleId,
+              platformKey: job.platformKey, contentKind: job.contentKind ?? null } : null;
+          });
+      }
       return await handler(event, payload);
     } catch (error) {
       processDiagnostics?.recordIpcError(channel, error);
@@ -114,6 +129,7 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
 
 export function registerIpc(deps: IpcDependencies): void {
   processDiagnostics = deps.processDiagnostics ?? null;
+  acceptanceRepository = deps.repository;
   const { repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir, logger, credentials, aiCredentials } = deps;
   const listPlatformViews = (): ReturnType<AppRepository["listPlatforms"]> => addAccountConnectionModes(repository.listPlatforms(), registry).map((platform) =>
     platform.platformKey === "douyin" ? { ...platform,

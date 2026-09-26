@@ -318,6 +318,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
       await tab.goto("https://creator.douyin.com/creator-micro/content/manage", { waitUntil: "domcontentloaded", timeout: 20_000 });
       if (new URL(tab.url()).host !== "creator.douyin.com" || new URL(tab.url()).pathname !== "/creator-micro/content/manage")
         throw new Error("DOUYIN_MANAGEMENT_ROUTE_UNAVAILABLE");
+      await tab.locator('input[placeholder="搜索作品"]').waitFor({ state: "visible", timeout: 15_000 });
       const text = await tab.locator("body").innerText();
       if (await tab.locator('input[placeholder="搜索作品"]').count() !== 1
         || !/已发布|审核中|未通过/u.test(text))
@@ -374,6 +375,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     try {
       await tab.goto("https://creator.douyin.com/creator-micro/content/manage", { waitUntil: "domcontentloaded", timeout: 20_000 });
       if (new URL(tab.url()).pathname !== "/creator-micro/content/manage") return unknown("MANAGEMENT_ROUTE_UNAVAILABLE");
+      await tab.locator('input[placeholder="搜索作品"]').waitFor({ state: "visible", timeout: 15_000 });
       if (await tab.locator('input[placeholder="搜索作品"]').count() !== 1) return unknown("MANAGEMENT_SEARCH_UNAVAILABLE");
       const rows = await tab.evaluate(() => {
         const output: DouyinManagementRow[] = [];
