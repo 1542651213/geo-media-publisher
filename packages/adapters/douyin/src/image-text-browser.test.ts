@@ -52,7 +52,7 @@ describe("Douyin image/text BrowserNative adapter", () => {
     let path = "/creator-micro/home";
     let visible = "抖音号：72388977613";
     const page = { url: () => `https://creator.douyin.com${path}`, isClosed: () => false, context: () => context,
-      locator: () => ({ innerText: async () => visible }), evaluate: async () => ({ labels: ["已发布", "审核中", "未通过"],
+      locator: () => ({ innerText: async () => visible }), evaluate: async () => ({ labels: ["已发布"],
         searchControlCount: 1, visibleRowCount: 0 }) } as unknown as Page;
     const session = { context, page, executionMode: "VISIBLE", sessionIdHash: "session-1" };
     Object.defineProperty(adapter, "activeCanonicalPage", { value: async () => ({ page, session }) });

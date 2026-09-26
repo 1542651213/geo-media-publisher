@@ -99,7 +99,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
         .filter((link) => link.getBoundingClientRect().width > 0).length;
       return { labels, searchControlCount, visibleRowCount };
     });
-    return { ready: pageEvidence.searchControlCount === 1 && pageEvidence.labels.length === 3,
+    return { ready: pageEvidence.searchControlCount === 1 && pageEvidence.labels.length >= 1,
       creatorId, pageHost: url.host, pagePath: url.pathname, searchControlCount: pageEvidence.searchControlCount,
       stateLabels: pageEvidence.labels, visibleRowCount: pageEvidence.visibleRowCount };
   }
@@ -319,7 +319,8 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
       if (new URL(tab.url()).host !== "creator.douyin.com" || new URL(tab.url()).pathname !== "/creator-micro/content/manage")
         throw new Error("DOUYIN_MANAGEMENT_ROUTE_UNAVAILABLE");
       const text = await tab.locator("body").innerText();
-      if (!/搜索作品/u.test(text) || !/已发布/u.test(text) || !/审核中/u.test(text) || !/未通过/u.test(text))
+      if (await tab.locator('input[placeholder="搜索作品"]').count() !== 1
+        || !/已发布|审核中|未通过/u.test(text))
         throw new Error("DOUYIN_MANAGEMENT_STATES_UNVERIFIED");
     } finally { await tab.close().catch(() => undefined); }
   }
@@ -373,7 +374,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     try {
       await tab.goto("https://creator.douyin.com/creator-micro/content/manage", { waitUntil: "domcontentloaded", timeout: 20_000 });
       if (new URL(tab.url()).pathname !== "/creator-micro/content/manage") return unknown("MANAGEMENT_ROUTE_UNAVAILABLE");
-      if (!/搜索作品/u.test(await tab.locator("body").innerText())) return unknown("MANAGEMENT_SEARCH_UNAVAILABLE");
+      if (await tab.locator('input[placeholder="搜索作品"]').count() !== 1) return unknown("MANAGEMENT_SEARCH_UNAVAILABLE");
       const rows = await tab.evaluate(() => {
         const output: DouyinManagementRow[] = [];
         for (const link of document.querySelectorAll<HTMLAnchorElement>('a[href*="/video/"],a[href*="/note/"]')) {
