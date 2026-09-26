@@ -34,9 +34,14 @@ export async function inspectDouyinManagementReadOnlyNavigation(page: Page, cont
     throw new Error("DOUYIN_READONLY_CREATOR_IDENTITY_CHANGED");
   const search = page.locator('input[placeholder="搜索作品"]');
   await search.first().waitFor({ state: "visible", timeout: 15_000 }).catch(() => undefined);
+  await page.waitForFunction(() => ["已发布", "审核中", "未通过"].every((label) =>
+    [...document.querySelectorAll<HTMLElement>('button,[role="tab"],span,div')].some((element) =>
+      element.textContent?.trim() === label && element.getBoundingClientRect().width > 0)),
+  null, { timeout: 10_000 }).catch(() => undefined);
   const searchControlCount = await search.count();
-  const bodyText = await page.locator("body").innerText();
-  const stateLabels = ["已发布", "审核中", "未通过"].filter((label) => bodyText.includes(label));
+  const stateLabels = await page.evaluate(() => ["已发布", "审核中", "未通过"].filter((label) =>
+    [...document.querySelectorAll<HTMLElement>('button,[role="tab"],span,div')].some((element) =>
+      element.textContent?.trim() === label && element.getBoundingClientRect().width > 0)));
   const managementUrl = `${management.origin}${management.pathname}`;
 
   await page.goto(`${origin}${homePath}`, { waitUntil: "domcontentloaded", timeout: 20_000 });
@@ -45,6 +50,7 @@ export async function inspectDouyinManagementReadOnlyNavigation(page: Page, cont
   if (home.origin !== origin || home.pathname !== homePath || !await verifyIdentity())
     throw new Error("DOUYIN_READONLY_CREATOR_IDENTITY_CHANGED");
   const imageEntry = page.getByText("发布图文", { exact: true });
+  await imageEntry.first().waitFor({ state: "visible", timeout: 10_000 }).catch(() => undefined);
   const imageEntryCount = await imageEntry.count();
   const entryVisible = imageEntryCount === 1 && await imageEntry.isVisible();
   return { managementUrl, returnUrl: `${home.origin}${home.pathname}`,

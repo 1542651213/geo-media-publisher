@@ -9,7 +9,7 @@ const manage = "https://creator.douyin.com/creator-micro/content/manage";
 const browsers: Browser[] = [];
 afterEach(async () => { for (const browser of browsers.splice(0)) await browser.close(); });
 
-async function fixture(options: { labels?: string; managementId?: string } = {}) {
+async function fixture(options: { labels?: string; managementId?: string; delayedControls?: boolean } = {}) {
   const browser = await chromium.launch({ executablePath: chrome, headless: true });
   browsers.push(browser);
   const context = await browser.newContext();
@@ -20,9 +20,10 @@ async function fixture(options: { labels?: string; managementId?: string } = {})
     requests.push(`${request.method()} ${new URL(request.url()).pathname}`);
     const isManage = new URL(request.url()).pathname === "/creator-micro/content/manage";
     const id = isManage ? options.managementId ?? "72388977613" : "72388977613";
-    const body = isManage
-      ? `<input placeholder="搜索作品">${options.labels ?? "<button>已发布</button><button>审核中</button><button>未通过</button>"}`
+    const controls = isManage ? options.labels ?? "<button>已发布</button><button>审核中</button><button>未通过</button>"
       : "<div>发布图文</div>";
+    const body = `${isManage ? '<input placeholder="搜索作品">' : ""}<section id="controls">${options.delayedControls ? "" : controls}</section>`
+      + (options.delayedControls ? `<script>setTimeout(() => { document.querySelector('#controls').innerHTML = ${JSON.stringify(controls)}; }, 350)</script>` : "");
     await route.fulfill({ status: 200, contentType: "text/html; charset=utf-8",
       body: `<!doctype html><html><head><meta charset="UTF-8"></head><body>抖音号：${id}${body}</body></html>` });
   });
@@ -60,5 +61,12 @@ describe.skipIf(!existsSync(chrome))("Douyin app-owned read-only management pref
     expect(result.ready).toBe(false);
     expect(result.stateLabels).toEqual(["已发布"]);
     expect(result.returnUrl).toBe(home);
+  }, 15_000);
+
+  it("waits for management filters and the home image entry to hydrate", async () => {
+    const { page, context, verifyIdentity } = await fixture({ delayedControls: true });
+    const result = await inspectDouyinManagementReadOnlyNavigation(page, context, verifyIdentity);
+    expect(result.ready).toBe(true);
+    expect(result.imageEntryCount).toBe(1);
   });
 });
