@@ -596,20 +596,25 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
 
   async verifyOwnedPublicArticle(ctx: AccountContext, article: { title: string; body: string },
     externalId: string, publishedUrl: string): Promise<{ readonly verified: boolean; readonly urlReachable: boolean;
-      readonly titleMatch: boolean; readonly bodyMatch: boolean }> {
+      readonly titleMatch: boolean; readonly bodyMatch: boolean; readonly blockedContentMutationCount?: number;
+      readonly blockedUnknownRequestCount?: number; readonly domReadAttempts?: number }> {
     const empty = { verified: false, urlReachable: false, titleMatch: false, bodyMatch: false };
     const parsed = publicResultFromUrl(publishedUrl);
     if (!parsed || parsed.externalId !== externalId) return empty;
     const owned = this.sessionManager.getCanonicalPage({ platformKey: "toutiao", accountId: ctx.accountId });
     if (!owned || owned.page.isClosed() || owned.page.context() !== owned.session.context
       || owned.session.context.serviceWorkers().length > 0) return empty;
-    let blocked = false;
+    let blockedContentMutationCount = 0;
+    let blockedUnknownRequestCount = 0;
+    let domReadAttempts = 0;
+    const counts = () => ({ blockedContentMutationCount, blockedUnknownRequestCount, domReadAttempts });
     const guard = async (route: Route): Promise<void> => {
       const decision = classifyShadowRequest(route.request().method(), route.request().url());
       if (decision === "READ_ONLY" || decision === "NON_CONTENT_TELEMETRY" || decision === "AUTH_TOKEN_BOOTSTRAP") {
         await route.continue(); return;
       }
-      blocked = true;
+      if (decision === "DENY_ARTICLE_NEW" || decision === "DENY_CONTENT_MUTATION") blockedContentMutationCount += 1;
+      else blockedUnknownRequestCount += 1;
       await route.abort("blockedbyclient");
     };
     await owned.session.context.route("**/*", guard);
@@ -622,14 +627,24 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
           { requireIdentity: true, requireArticleEntry: false }));
       }
       const response = await page.goto(publishedUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-      const current = publicResultFromUrl(page.url());
-      const urlReachable = Boolean(response && response.status() >= 200 && response.status() < 400
-        && current?.externalId === externalId);
-      const pageText = await this.readPageText(page);
-      const titleMatch = containsNormalized(`${await page.title()} ${pageText}`, article.title);
-      const bodyMatch = containsNormalized(pageText, article.body);
-      return { verified: !blocked && urlReachable && titleMatch && bodyMatch, urlReachable, titleMatch, bodyMatch };
-    } catch { return empty; }
+      const httpReachable = Boolean(response && response.status() >= 200 && response.status() < 400);
+      let urlReachable = false;
+      let titleMatch = false;
+      let bodyMatch = false;
+      // Public content hydrates after domcontentloaded. Bound the readback wait, without navigation or retrying a submit.
+      for (let probe = 0; probe < 20; probe += 1) {
+        urlReachable = httpReachable && publicResultFromUrl(page.url())?.externalId === externalId;
+        if (!urlReachable || blockedContentMutationCount > 0) break;
+        domReadAttempts += 1;
+        const pageText = await this.readPageText(page);
+        titleMatch = containsNormalized(`${await page.title()} ${pageText}`, article.title);
+        bodyMatch = containsNormalized(pageText, article.body);
+        if (titleMatch && bodyMatch || probe === 19) break;
+        await waitForNextEditorProbe(page);
+      }
+      return { verified: blockedContentMutationCount === 0 && urlReachable && titleMatch && bodyMatch,
+        urlReachable, titleMatch, bodyMatch, ...counts() };
+    } catch { return { ...empty, ...counts() }; }
     finally {
       await page?.close().catch(() => undefined);
       await owned.session.context.unroute("**/*", guard);

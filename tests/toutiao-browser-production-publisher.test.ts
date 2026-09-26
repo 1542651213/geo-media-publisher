@@ -236,6 +236,53 @@ describe("Toutiao BrowserNative production publisher", () => {
     expect(scope.adapter.finalSubmit).toHaveBeenCalledTimes(1);
   });
 
+  it("retains the matched published candidate and safe failed public-verification evidence without success", async () => {
+    const scope = await prepared(); await scope.publisher.executeJob(scope.job.id); scope.adapter.remoteState = "PUBLISHED";
+    scope.adapter.verifyPublished.mockResolvedValue({ status: "publishing", externalId: "9001", publishedUrl: "https://www.toutiao.com/article/9001/",
+      response: { verified: false, urlReachable: true, titleMatch: true, bodyMatch: false, verificationStatus: "reconciliation_uncertain",
+        cookie: "fixture-private-cookie", token: "fixture-private-token", diagnosticText: "unreviewed arbitrary content" },
+      errorCode: "RECONCILIATION_UNCERTAIN" });
+    expect((await scope.publisher.pollPublishingJob(scope.job.id)).job.status).toBe("NeedsReconciliation");
+    const record = scope.repo.getPublishRecordByJob(scope.job.id)!;
+    expect(record).toMatchObject({ status: "Submitted", success: false, verificationStatus: "WaitingUser",
+      publishedExternalId: "9001", publishedUrl: "https://www.toutiao.com/article/9001/" });
+    expect(record.response).toMatchObject({ managementState: "PUBLISHED", publishedCandidateObserved: true,
+      verification: { status: "publishing", verified: false, urlReachable: true, titleMatch: true, bodyMatch: false,
+        errorCode: "RECONCILIATION_UNCERTAIN" } });
+    expect(JSON.stringify(record.response)).not.toContain("fixture-private");
+    expect(JSON.stringify(record.response)).not.toContain("unreviewed arbitrary content");
+    expect(scope.repo.getSubmissionIntentByJob(scope.job.id)).toMatchObject({ finalSubmitCount: 1, remoteStatus: "UNCERTAIN" });
+    expect(scope.adapter.finalSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the observed candidate ID on later reads but still requires matching public title and body", async () => {
+    const scope = await prepared(); await scope.publisher.executeJob(scope.job.id); scope.adapter.remoteState = "PUBLISHED";
+    scope.adapter.verified = false; await scope.publisher.pollPublishingJob(scope.job.id);
+    scope.adapter.reconcile.mockResolvedValue({ status: "FOUND_PUBLISHED", remoteState: "PUBLISHED", externalId: "9001",
+      publishedUrl: "https://www.toutiao.com/article/9001/", titleMatch: false, accountMatch: true, timeWindowMatch: false,
+      response: { matchedBy: "REMOTE_ID", readOnly: true }, message: "trusted observed id" });
+    scope.adapter.verifyPublished.mockResolvedValue({ status: "published", externalId: "9001", publishedUrl: "https://www.toutiao.com/article/9001/",
+      response: { urlReachable: true, titleMatch: true, bodyMatch: false } });
+    expect((await scope.publisher.reconcileBrowserJob(scope.job.id)).job.status).toBe("NeedsReconciliation");
+    expect(scope.adapter.reconcile).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ expectedExternalId: "9001",
+      expectedPublishedUrl: "https://www.toutiao.com/article/9001/" }));
+    expect(scope.repo.getPublishRecordByJob(scope.job.id)?.success).toBe(false);
+    scope.adapter.verifyPublished.mockResolvedValue({ status: "published", externalId: "9001", publishedUrl: "https://www.toutiao.com/article/9001/",
+      response: { urlReachable: true, titleMatch: true, bodyMatch: true } });
+    expect((await scope.publisher.reconcileBrowserJob(scope.job.id)).job.status).toBe("Success");
+    expect(scope.repo.getSubmissionIntentByJob(scope.job.id)?.finalSubmitCount).toBe(1);
+    expect(scope.adapter.finalSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retain a published ID from an unmatched management row", async () => {
+    const scope = await prepared(); await scope.publisher.executeJob(scope.job.id); scope.adapter.remoteState = "PUBLISHED"; scope.adapter.matched = false;
+    expect((await scope.publisher.pollPublishingJob(scope.job.id)).job.status).toBe("NeedsReconciliation");
+    expect(scope.repo.getPublishRecordByJob(scope.job.id)?.publishedExternalId).toBeNull();
+    expect(scope.repo.getPublishRecordByJob(scope.job.id)?.publishedUrl).toBeNull();
+    expect(scope.adapter.verifyPublished).not.toHaveBeenCalled();
+    expect(scope.repo.getSubmissionIntentByJob(scope.job.id)?.finalSubmitCount).toBe(1);
+  });
+
   it("requires a matched target row before classifying rejection", async () => {
     const scope = await prepared(); await scope.publisher.executeJob(scope.job.id); scope.adapter.remoteState = "REJECTED"; scope.adapter.matched = false;
     expect((await scope.publisher.pollPublishingJob(scope.job.id)).job.status).toBe("NeedsReconciliation");

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BrowserSession, BrowserSessionManager } from "@publisher/adapters-core";
 import type { PublishArticleInput } from "@publisher/domain";
+import type { Route } from "playwright-core";
 import { isToutiaoCreatorCenterPage, ToutiaoArticleBrowserAdapter } from "./browser";
 
 const article: PublishArticleInput = {
@@ -579,5 +580,43 @@ describe("Toutiao article browser adapter", () => {
     expect(result).toMatchObject({ verified: false, urlReachable: false });
     expect(order).toEqual(["guard", "close", "unguard"]);
     expect(fixture.page.goto).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["/bcs/notice/boxes/", 200, true, true],
+    ["/mp/agw/article/publish", 200, true, false],
+    ["/bcs/notice/boxes/", 404, true, false],
+    ["/bcs/notice/boxes/", 200, false, false]
+  ] as const)("keeps blocked %s separate from public HTTP %i and body evidence", async (requestPath, status, matchingBody, expectedVerified) => {
+    const fixture = setupPage();
+    const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
+    let guard: Parameters<BrowserSession["context"]["route"]>[1] | undefined;
+    let reads = 0;
+    const abort = vi.fn(); const continueRequest = vi.fn();
+    const request = { method: () => "POST", url: () => `https://mp.toutiao.com${requestPath}` };
+    const route = { request: () => request, abort, continue: continueRequest } as unknown as Route;
+    const publicPage = {
+      goto: vi.fn(async () => { await guard?.(route, route.request()); return { status: () => status }; }),
+      url: () => "https://www.toutiao.com/article/77/", title: async () => article.title,
+      frames: () => [], locator: () => ({ innerText: async () => ++reads === 1 ? "" : matchingBody ? `${article.title} ${article.body}` : "Other content" }),
+      waitForTimeout: vi.fn(async () => undefined), close: vi.fn(async () => undefined)
+    };
+    fixture.session.context.newPage = vi.fn(async () => publicPage) as unknown as BrowserSession["context"]["newPage"];
+    fixture.session.context.route = vi.fn(async (_url, handler) => { guard = handler;
+      return { dispose: async () => undefined, [Symbol.asyncDispose]: async () => undefined }; });
+    fixture.session.context.unroute = vi.fn(async () => undefined);
+    const result = await adapter.verifyOwnedPublicArticle({ accountId: "account-1", accountName: "test", platformKey: "toutiao", settings: {} },
+      article, "77", "https://www.toutiao.com/article/77/");
+    expect(result.verified).toBe(expectedVerified);
+    expect(abort).toHaveBeenCalledWith("blockedbyclient");
+    expect(continueRequest).not.toHaveBeenCalled();
+    expect(publicPage.close).toHaveBeenCalledOnce();
+    expect(fixture.page.goto).not.toHaveBeenCalled();
+    if (expectedVerified) {
+      expect(result).toMatchObject({ blockedContentMutationCount: 0, blockedUnknownRequestCount: 1,
+        domReadAttempts: 2, titleMatch: true, bodyMatch: true });
+      expect(publicPage.waitForTimeout).toHaveBeenCalledOnce();
+    }
+    expect(reads).toBeLessThanOrEqual(20);
   });
 });

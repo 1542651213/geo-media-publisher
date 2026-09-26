@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { isAutomationAdapter, withUserInitiatedActionSettings, type AdapterRegistry, type BrowserExecutionMode, type BrowserPublishAttemptContext, type BrowserPublishReconciliationResult, type PlatformAdapter, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
-import { canReuseArticle, decideFailure, validatePlatformArticle, type Account, type AdapterManifest, type ErrorCode, type PlatformCapability, type PublishArticleInput, type PublishJob, type PublishMode, type PublishResult, type PublishVideoInput } from "@publisher/domain";
+import { canReuseArticle, decideFailure, validatePlatformArticle, type Account, type AdapterManifest, type ErrorCode, type PlatformCapability, type PublishArticleInput, type PublishJob, type PublishMode, type PublishResult, type PublishStatusResult, type PublishVideoInput } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
 import { GlobalPublishExecutionGate } from "./global-publish-execution-gate";
 export { GlobalPublishExecutionGate } from "./global-publish-execution-gate";
@@ -59,6 +59,19 @@ function operationSettings(
 
 function publishInputHash(input: unknown): string {
   return createHash("sha256").update(JSON.stringify(input)).digest("hex");
+}
+
+/** Persist only reviewed public-read flags; never copy arbitrary adapter response text. */
+function publicVerificationEvidence(verification: PublishStatusResult): Record<string, unknown> {
+  const evidence: Record<string, unknown> = { status: verification.status,
+    errorCode: errorCode({ code: verification.errorCode ?? verification.response.errorCode }) };
+  for (const key of ["verified", "urlReachable", "titleMatch", "bodyMatch"] as const)
+    if (typeof verification.response[key] === "boolean") evidence[key] = verification.response[key];
+  for (const key of ["blockedContentMutationCount", "blockedUnknownRequestCount", "domReadAttempts"] as const) {
+    const value = verification.response[key];
+    if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) evidence[key] = value;
+  }
+  return evidence;
 }
 
 /** Shared by normal preparation and the explicitly approved self-test path. */
@@ -180,11 +193,14 @@ export class PublisherService {
       return { status: "STILL_UNCERTAIN" as const, remoteState: "UNKNOWN" as const, titleMatch: false, accountMatch: false, timeWindowMatch: false,
         response: { readOnly: true, errorCode: errorCode(error) }, message: "Management read failed; no submit was attempted" };
     });
-    const preserveUncertain = (message: string): PublishExecutionResult => {
+    const preserveUncertain = (message: string, observed?: { externalId: string; publishedUrl: string; verification: PublishStatusResult }): PublishExecutionResult => {
       if (managementReconciliation && intent) {
         const uncertain = this.repository.markSubmissionIntentUncertain(intent.id, "RECONCILIATION_UNCERTAIN");
         if (existingRecord) this.repository.updatePublishRecord(existingRecord.id, { status: "Submitted", success: false,
-          response: { ...existingRecord.response, reconciliation: result.response, managementState: result.remoteState ?? "UNKNOWN" }, verificationStatus: "WaitingUser" });
+          ...(observed ? { publishedExternalId: observed.externalId, publishedUrl: observed.publishedUrl } : {}),
+          response: { ...existingRecord.response, reconciliation: result.response, managementState: result.remoteState ?? "UNKNOWN",
+            ...(observed ? { publishedCandidateObserved: true, publishedCandidateSource: "MATCHED_MANAGEMENT_ROW",
+              verification: publicVerificationEvidence(observed.verification) } : {}) }, verificationStatus: "WaitingUser" });
         return { job: uncertain, message };
       }
       return { job, message };
@@ -212,7 +228,20 @@ export class PublisherService {
         if (!managementReconciliation) throw error;
         return { status: "failed" as const, response: { errorCode: errorCode(error) }, errorMessage: "Public read failed" };
       });
-      if (verification.status !== "published" || !verification.externalId || !verification.publishedUrl) return preserveUncertain(`STILL_UNCERTAIN: 回收结果验证未通过，保持 NeedsReconciliation（${verification.errorMessage ?? "external result verification failed"}）`);
+      if (verification.status !== "published" || !verification.externalId || !verification.publishedUrl
+        || managementReconciliation && (verification.externalId !== result.externalId || verification.response.urlReachable !== true
+          || verification.response.titleMatch !== true || verification.response.bodyMatch !== true)) {
+        let observed: { externalId: string; publishedUrl: string; verification: PublishStatusResult } | undefined;
+        if (managementReconciliation && /^[1-9]\d*$/u.test(result.externalId)) {
+          try {
+            const candidateUrl = new URL(result.publishedUrl);
+            if (["https:", "http:"].includes(candidateUrl.protocol) && !candidateUrl.username && !candidateUrl.password)
+              observed = { externalId: result.externalId, publishedUrl: `${candidateUrl.origin}${candidateUrl.pathname}`, verification };
+          } catch { /* Malformed public evidence is never promoted to a trusted ID. */ }
+        }
+        return preserveUncertain(`STILL_UNCERTAIN: 回收结果验证未通过，保持 NeedsReconciliation（${verification.errorMessage ?? "external result verification failed"}）`,
+          observed);
+      }
       const reconciled = this.repository.reconcileJobAsPublished(job.id, { externalId: verification.externalId, publishedUrl: verification.publishedUrl, response: { reconciliation: result.response, verification: verification.response } });
       this.logger.info("PUBLISHER", "BROWSER_RECONCILIATION_FOUND", "只读浏览器回查找到并验证了已发布内容", { jobId: job.id, platformKey: job.platformKey, externalId: verification.externalId, publishedUrl: verification.publishedUrl });
       return { job: reconciled.job, message: `FOUND_PUBLISHED: 已回收并保存真实 External ID/URL（PublishRecord ${reconciled.record.id}）` };
