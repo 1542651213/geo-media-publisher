@@ -1,4 +1,4 @@
-import type { Page } from "playwright-core";
+import type { Locator, Page } from "playwright-core";
 import { basename } from "node:path";
 import { type AccountContext, type AccountProfile, type LoginStatus,
   type PublishArticleInput, type PublishResult, type PublishStatusResult, type ValidationResult } from "@publisher/domain";
@@ -27,6 +27,15 @@ export async function dismissKnownDouyinHomeTour(page: Page): Promise<boolean> {
   await skip.click();
   await welcome.waitFor({ state: "hidden", timeout: 5_000 });
   return true;
+}
+
+/** URL transition can precede upload form hydration; wait for the exact image input. */
+export async function waitForUniqueDouyinImageInput(page: Page): Promise<Locator> {
+  const upload = page.locator('input[type="file"][accept*="image/"]');
+  await upload.first().waitFor({ state: "attached", timeout: 15_000 });
+  if (await upload.count() !== 1)
+    throw new BrowserAutomationError("PLATFORM_CHANGED", "DOUYIN_IMAGE_UPLOAD_CONTROL_AMBIGUOUS");
+  return upload;
 }
 
 /** Compatibility helper for diagnostics; only selected control state can pass. */
@@ -239,8 +248,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     await card.click();
     protectExistingDouyinDraft(await page.locator("body").innerText());
     await page.waitForURL((url) => url.origin === "https://creator.douyin.com" && url.pathname === "/creator-micro/content/upload", { timeout: 15_000 });
-    const upload = page.locator('input[type="file"][accept*="image/"]');
-    if (await upload.count() !== 1) throw new BrowserAutomationError("PLATFORM_CHANGED", "DOUYIN_IMAGE_UPLOAD_CONTROL_AMBIGUOUS");
+    const upload = await waitForUniqueDouyinImageInput(page);
     const uploadArea = await upload.evaluate((element) => (element.closest("label")?.textContent ?? element.parentElement?.textContent ?? "").slice(0, 120));
     if (!/图文|图片|上传/u.test(uploadArea)) throw new BrowserAutomationError("PLATFORM_CHANGED", "DOUYIN_IMAGE_UPLOAD_AREA_UNVERIFIED");
     const previewSelector = 'main img, [class*="upload"] img, [class*="image"] img';

@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { Page } from "playwright-core";
 import { vi } from "vitest";
 import type { CredentialStore } from "@publisher/security";
-import { DouyinImageTextBrowserAdapter, dismissKnownDouyinHomeTour, douyinRequiredSettingsPass, parseVisibleDouyinCreatorId } from "./image-text-browser";
+import { DouyinImageTextBrowserAdapter, dismissKnownDouyinHomeTour, douyinRequiredSettingsPass, parseVisibleDouyinCreatorId,
+  waitForUniqueDouyinImageInput } from "./image-text-browser";
 
 const store: CredentialStore = { get: () => null, set: () => undefined, delete: () => undefined, has: () => false };
 
@@ -20,6 +21,16 @@ describe("Douyin image/text BrowserNative adapter", () => {
     welcome.count.mockResolvedValue(0);
     await expect(dismissKnownDouyinHomeTour(page)).resolves.toBe(false);
     expect(skip.click).toHaveBeenCalledTimes(1);
+  });
+  it("waits for hydrated image input and rejects multiple image inputs", async () => {
+    let count = 0;
+    const upload = { count: vi.fn(async () => count), first: vi.fn(() => ({ waitFor: vi.fn(async () => { count = 1; }) })) };
+    const page = { locator: vi.fn(() => upload) } as unknown as Page;
+    await expect(waitForUniqueDouyinImageInput(page)).resolves.toBe(upload);
+    expect(page.locator).toHaveBeenCalledWith('input[type="file"][accept*="image/"]');
+    expect(upload.count).toHaveBeenCalledTimes(1);
+    upload.first.mockReturnValue({ waitFor: vi.fn(async () => { count = 2; }) });
+    await expect(waitForUniqueDouyinImageInput(page)).rejects.toThrow(/DOUYIN_IMAGE_UPLOAD_CONTROL_AMBIGUOUS/u);
   });
   it("requires a visible stable Douyin ID rather than accepting the home URL alone", () => {
     expect(parseVisibleDouyinCreatorId("抖音号：72388977613")).toBe("72388977613");
