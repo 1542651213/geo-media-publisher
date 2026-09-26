@@ -27,6 +27,7 @@ export interface DouyinUploadEvidence {
   preUploadImageCount: number;
   postUploadImageCount: number;
   selectedFileName: string;
+  inputSelectionCompleted: boolean;
   uploadInputFileName: string | null;
   imageVisible: boolean;
   imageLoaded: boolean;
@@ -39,7 +40,11 @@ export interface DouyinUploadEvidence {
 export function verifyDouyinUploadEvidence(evidence: DouyinUploadEvidence): void {
   if (!evidence.contextOwned || !evidence.currentEditorRoute) throw new Error("CONTEXT_MISMATCH");
   if (evidence.preUploadImageCount !== 0 || evidence.postUploadImageCount !== 1) throw new Error("IMAGE_COUNT_MISMATCH");
-  if (!evidence.selectedFileName || evidence.uploadInputFileName !== evidence.selectedFileName) throw new Error("FILE_ASSOCIATION_MISMATCH");
+  // Creator can unmount the file input during navigation. The completed setInputFiles call,
+  // zero-to-one new preview transition, loaded image and owned editor route bind this attempt.
+  if (!evidence.selectedFileName || !evidence.inputSelectionCompleted
+    || evidence.uploadInputFileName !== null && evidence.uploadInputFileName !== evidence.selectedFileName)
+    throw new Error("FILE_ASSOCIATION_MISMATCH");
   if (!evidence.imageVisible || !evidence.imageLoaded || evidence.processing || evidence.error) throw new Error("PROCESSING_INCOMPLETE");
 }
 

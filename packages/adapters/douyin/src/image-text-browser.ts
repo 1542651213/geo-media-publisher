@@ -264,6 +264,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     const imageLoaded = postUploadImageCount === 1 && await images.first().evaluate((image) => image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0);
     const editorText = await page.locator("body").innerText();
     verifyDouyinUploadEvidence({ preUploadImageCount, postUploadImageCount, selectedFileName: basename(initialFrozen.imagePaths[0]!),
+      inputSelectionCompleted: true,
       uploadInputFileName, imageVisible, imageLoaded, processing: /上传中|处理中|正在处理/u.test(editorText),
       error: /上传失败|图片处理失败/u.test(editorText), currentEditorRoute: new URL(page.url()).pathname === "/creator-micro/content/post/image",
       contextOwned: page.context() === owned.session.context });

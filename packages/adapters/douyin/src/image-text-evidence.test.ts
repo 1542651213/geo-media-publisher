@@ -10,10 +10,13 @@ describe("Douyin image/text BrowserNative evidence gates", () => {
   });
 
   it("requires one new processed image associated with this upload", () => {
-    const valid = { preUploadImageCount: 0, postUploadImageCount: 1, selectedFileName: "owner.png",
+    const valid = { preUploadImageCount: 0, postUploadImageCount: 1, selectedFileName: "owner.png", inputSelectionCompleted: true,
       uploadInputFileName: "owner.png", imageVisible: true, imageLoaded: true, processing: false, error: false,
       currentEditorRoute: true, contextOwned: true };
     expect(() => verifyDouyinUploadEvidence(valid)).not.toThrow();
+    // The upload input may unmount as soon as Creator navigates to the editor.
+    expect(() => verifyDouyinUploadEvidence({ ...valid, uploadInputFileName: null })).not.toThrow();
+    expect(() => verifyDouyinUploadEvidence({ ...valid, uploadInputFileName: null, inputSelectionCompleted: false })).toThrow("FILE_ASSOCIATION");
     expect(() => verifyDouyinUploadEvidence({ ...valid, postUploadImageCount: 2 })).toThrow("IMAGE_COUNT");
     expect(() => verifyDouyinUploadEvidence({ ...valid, uploadInputFileName: "other.png" })).toThrow("FILE_ASSOCIATION");
     expect(() => verifyDouyinUploadEvidence({ ...valid, imageLoaded: false })).toThrow("PROCESSING_INCOMPLETE");
