@@ -42,7 +42,7 @@ export interface KangyiWebsitePreparedContentV1 {
   accountId: string;
   snapshotId: string;
   contentBindingId: string;
-  siteId: "kangyi";
+  siteId: "kangyi" | "huiquan" | "shupai";
   environment: "staging" | "production" | "local";
   kind: KangyiWebsiteContentKind;
   slug: string;

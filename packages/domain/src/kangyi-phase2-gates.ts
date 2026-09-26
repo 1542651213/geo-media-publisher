@@ -41,16 +41,16 @@ export type KangyiStopCondition =
   | "RECOVERY_BINDING_MISMATCH"
   | "SECOND_LOGICAL_PUBLISH";
 
-export function assertKangyiPhase2Authorization(input: KangyiPhase2Authorization): void {
+export function assertKangyiPhase2Authorization(input: KangyiPhase2Authorization, expectedSiteId = "kangyi"): void {
   if (input.enabled !== true || !input.authorizationId.trim()) throw new Error("KANGYI_PHASE2_OWNER_AUTH_REQUIRED");
   if (!input.accountId.trim()) throw new Error("KANGYI_PHASE2_ACCOUNT_MISMATCH");
-  if (input.siteId !== "kangyi" || input.environment !== "staging") throw new Error("KANGYI_PHASE2_SCOPE_MISMATCH");
+  if (!["kangyi", "huiquan", "shupai"].includes(expectedSiteId) || input.siteId !== expectedSiteId || input.environment !== "staging") throw new Error("KANGYI_PHASE2_SCOPE_MISMATCH");
   if (input.capabilitiesHttpStatus !== 200 || input.protocolVersion !== "2" || !input.contentKinds.includes("article") || !input.contentKinds.includes("case")) throw new Error("KANGYI_PHASE2_CAPABILITIES_NOT_VERIFIED");
   if (input.writesEnabled !== true) throw new Error("KANGYI_PHASE2_WRITES_DISABLED");
 }
 
-export function assertKangyiAccountScope(input: { accountId: string; expectedAccountId: string; siteId: string; environment: string; writesEnabled: boolean }): void {
-  if (!input.accountId || input.accountId !== input.expectedAccountId || input.siteId !== "kangyi" || input.environment !== "staging") throw new Error("KANGYI_ACCOUNT_SCOPE_MISMATCH");
+export function assertKangyiAccountScope(input: { accountId: string; expectedAccountId: string; siteId: string; environment: string; writesEnabled: boolean }, expectedSiteId = "kangyi"): void {
+  if (!input.accountId || input.accountId !== input.expectedAccountId || !["kangyi", "huiquan", "shupai"].includes(expectedSiteId) || input.siteId !== expectedSiteId || input.environment !== "staging") throw new Error("KANGYI_ACCOUNT_SCOPE_MISMATCH");
   if (input.writesEnabled !== true) throw new Error("KANGYI_PHASE2_WRITES_DISABLED");
 }
 

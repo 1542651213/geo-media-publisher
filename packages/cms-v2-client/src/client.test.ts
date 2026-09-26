@@ -32,6 +32,27 @@ describe("Kangyi CmsV2 client boundary", () => {
     } finally { await instance.close(); }
   });
 
+  it("uses the shared active, published and deleted list filter contract", async () => {
+    const targets: string[] = [];
+    const instance = await server((request, response) => {
+      targets.push(request.url ?? "");
+      response.end(envelope({ items: [], page: 1, pageSize: 20, total: 0 }));
+    });
+    try {
+      const client = new CmsV2Client({ ...scope, origin: instance.origin });
+      await client.listContents();
+      await client.listContents({ status: "active", kind: "article" });
+      await client.listContents({ status: "published", kind: "case" });
+      await client.listContents({ status: "deleted" });
+      expect(targets).toEqual([
+        "/_publish-api/v2/contents",
+        "/_publish-api/v2/contents?status=active&kind=article",
+        "/_publish-api/v2/contents?status=published&kind=case",
+        "/_publish-api/v2/contents?status=deleted"
+      ]);
+    } finally { await instance.close(); }
+  });
+
   it("rejects writes without the contract idempotency key before transport", async () => {
     const instance = await server((_request, response) => { response.end(envelope({})); });
     try {
@@ -56,6 +77,23 @@ describe("Kangyi CmsV2 client boundary", () => {
       expect(observations[0]?.body).toBe(observations[1]?.body);
       expect(observations[0]?.key).toBe(observations[1]?.key);
       expect(observations[0]?.nonce).not.toBe(observations[1]?.nonce);
+    } finally { await instance.close(); }
+  });
+
+  it("sends the retained JSON bytes unchanged and exposes the actual HTTP acceptance status", async () => {
+    const exactJson = '{"draft": {"title":"retained"}}';
+    let observed = "";
+    const instance = await server(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      observed = Buffer.concat(chunks).toString("utf8");
+      response.statusCode = 202;
+      response.end(envelope({ jobId: "job-1" }));
+    });
+    try {
+      const result = await new CmsV2Client({ ...scope, origin: instance.origin }).request<{ jobId: string }>("POST", "/contents", { exactJson, idempotencyKey: "retained-operation-1" });
+      expect(observed).toBe(exactJson);
+      expect(result.httpStatus).toBe(202);
     } finally { await instance.close(); }
   });
 

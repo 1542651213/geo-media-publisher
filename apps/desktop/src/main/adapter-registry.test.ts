@@ -16,4 +16,14 @@ describe("runtime adapter registry", () => {
     expect(adapter.manifest).toMatchObject({ integrationMode: "API", transport: "official_api", supportsArticle: true, supportsVideo: false });
     expect(registry.getAccountConnectionMode("kangyi_website")).toBe("API");
   });
+
+  it("registers Huiquan and Shupai as isolated Official API website accounts", () => {
+    const registry = createRuntimeAdapterRegistry(credentials, false);
+    for (const siteId of ["huiquan", "shupai"] as const) {
+      const adapter = registry.get(`${siteId}_website`);
+      expect(adapter.manifest.platformKey).toBe(`${siteId}_website`);
+      expect(adapter.manifest.transport).toBe("official_api");
+      expect(registry.getAccountConnectionMode(`${siteId}_website`)).toBe("API");
+    }
+  });
 });

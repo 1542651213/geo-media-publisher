@@ -40,7 +40,7 @@ export interface KangyiDurableOperationTransport {
   validate(input: { contentId: string; exactRequestBody: string; idempotencyKey: string }): Promise<KangyiValidationTransportResult>;
   publish(input: { contentId: string; exactRequestBody: string; idempotencyKey: string }): Promise<{ httpStatus: number; jobId: string; contentId: string; revisionId: string; rowVersion: number; contentHash: string }>;
   getJob(jobId: string): Promise<KangyiJobTransportResult>;
-  verifyPublic(input: { contentId: string; publicUrl: string }): Promise<{ ok: boolean; contentId: string; publicUrl: string; response: Record<string, unknown> }>;
+  verifyPublic(input: { contentId: string; revisionId: string; contentHash: string; publicUrl: string; media: Array<{ mediaId: string; sha256: string }> }): Promise<{ ok: boolean; contentId: string; publicUrl: string; response: Record<string, unknown> }>;
 }
 
 export interface KangyiDurableMediaInput {
@@ -121,7 +121,7 @@ export class KangyiDurableOperationRunner {
     const boundJob = this.repository.getJob(metadata.jobId);
     const snapshot = this.repository.contentSnapshots.get(metadata.snapshotId);
     if (!boundJob) throw new Error("KANGYI_OPERATION_JOB_MISSING");
-    if (metadata.accountId !== boundJob.accountId || metadata.siteId !== "kangyi" || metadata.environment !== "staging") throw new Error("KANGYI_ACCOUNT_SCOPE_MISMATCH");
+    if (metadata.accountId !== boundJob.accountId || boundJob.platformKey !== `${metadata.siteId}_website` || !["kangyi", "huiquan", "shupai"].includes(metadata.siteId) || metadata.environment !== "staging") throw new Error("KANGYI_ACCOUNT_SCOPE_MISMATCH");
     if (input.binding.accountId !== metadata.accountId || input.binding.siteId !== metadata.siteId || input.binding.environment !== metadata.environment || input.binding.contentBindingId !== metadata.contentBindingId || input.binding.snapshotId !== metadata.snapshotId) throw new Error("KANGYI_RECOVERY_BINDING_MISMATCH");
     const immutableInput = this.repository.contentSnapshots.historicalInput(snapshot, boundJob.articleId);
     for (const media of input.media ?? []) {
@@ -238,7 +238,13 @@ export class KangyiDurableOperationRunner {
     if (cmsJob.status === "needs_attention") return { status: "needs_reconciliation", metadata, recordId: metadata.publishRecordId };
     if (cmsJob.status !== "succeeded") return { status: "polling", metadata, recordId: metadata.publishRecordId };
     if (!cmsJob.publicUrl) throw new Error("KANGYI_PUBLIC_URL_REQUIRED");
-    const verification = await this.transport.verifyPublic({ contentId: stringIdentity(metadata, "create", "contentId"), publicUrl: cmsJob.publicUrl });
+    const expectedRevisionId = metadata.draft?.responseIdentity?.revisionId ?? metadata.create?.responseIdentity?.revisionId;
+    const expectedContentHash = metadata.draft?.responseIdentity?.contentHash ?? metadata.create?.responseIdentity?.contentHash;
+    if (typeof expectedRevisionId !== "string" || typeof expectedContentHash !== "string") throw new Error("KANGYI_PUBLIC_IDENTITY_MISSING");
+    const verification = await this.transport.verifyPublic({ contentId: stringIdentity(metadata, "create", "contentId"), revisionId: expectedRevisionId, contentHash: expectedContentHash, publicUrl: cmsJob.publicUrl, media: metadata.media.map((item) => {
+      if (!item.mediaId || !item.serverSha256) throw new Error("KANGYI_PUBLIC_MEDIA_IDENTITY_MISSING");
+      return { mediaId: item.mediaId, sha256: item.serverSha256 };
+    }) });
     try { assertKangyiPublicVerification(verification, { contentId: stringIdentity(metadata, "create", "contentId"), publicUrl: cmsJob.publicUrl }); }
     catch {
       this.repository.markKangyiOperationOutcomeUnknown(input.binding.intentId, "publish", "PUBLIC_READBACK_MISMATCH");

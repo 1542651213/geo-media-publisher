@@ -41,3 +41,5 @@ other,其他账号,扩展,是,扩展占位不得实现万能Adapter,unverified,N
 lieju,列举网,分类信息/图文,是,用户自有账号 Browser Automation：逐账号独立 Session 并在官方表单等待用户确认,partial,WaitingForUser,browser,https://www.lieju.com/,分类地区联系方式拼图验证码和最终提交均由用户正常完成,2026-08-22,BrowserAutomation
 cnblogs,博客园,图文/技术,是,官方博客后台 Open API PAT：默认创建未发布草稿并回查审核状态,verified,WaitingForUser,official_api,https://www.cnblogs.com/,需用户配置 PAT 并完成真实连接与草稿验收,2026-08-22,API
 kangyi_website,江苏康一环保科技官网,企业官网图文,是,Official API Publishing API V2；Phase 1 仅 signed capabilities GET；写入由 Phase 2 单独授权,verified,WaitingForUser,official_api,https://www.kangyihb.com/,Phase 1 只允许 read-only capabilities；写入在 Phase 2 前 fail-closed,2026-09-20,API
+huiquan_website,苏州汇泉环保科技官网,企业官网图文,是,CMS V2 staging；站点 origin 与 HMAC 凭据由账号配置,verified,WaitingForUser,official_api,,官网写入须经持久化操作门禁且只限 staging,2026-09-26,API
+shupai_website,苏州树派环保科技官网,企业官网图文,是,CMS V2 staging；站点 origin 与 HMAC 凭据由账号配置,verified,WaitingForUser,official_api,,官网写入须经持久化操作门禁且只限 staging,2026-09-26,API

@@ -100,8 +100,8 @@ export function prepareKangyiWebsiteContent(input: {
   imageFacts?: KangyiImageFact[];
 }): KangyiPreparedContent {
   const { article, snapshot } = input;
-  if (input.account.siteId !== "kangyi") throw new Error("KANGYI_SITE_MISMATCH");
-  if (snapshot.sourceArticleId !== article.id || snapshot.accountId !== input.account.id || snapshot.platformKey !== "kangyi_website") throw new Error("KANGYI_IMMUTABLE_BINDING_MISMATCH");
+  if (!["kangyi", "huiquan", "shupai"].includes(input.account.siteId)) throw new Error("KANGYI_SITE_MISMATCH");
+  if (snapshot.sourceArticleId !== article.id || snapshot.accountId !== input.account.id || snapshot.platformKey !== `${input.account.siteId}_website`) throw new Error("KANGYI_IMMUTABLE_BINDING_MISMATCH");
   const kind = (input.kind ?? "article") as KangyiWebsiteContentKind;
   const title = required(snapshot.canonicalTitle, "KANGYI_TITLE_REQUIRED");
   const summary = required(snapshot.summary, "KANGYI_SUMMARY_REQUIRED");
@@ -132,7 +132,7 @@ export function prepareKangyiWebsiteContent(input: {
       detailIntro: required(snapshot.canonicalBody, "KANGYI_CASE_DETAIL_REQUIRED")
     } : {})
   };
-  return freezePrepared({ version: 1, articleId: article.id, brandId: article.brandId, accountId: input.account.id, snapshotId: snapshot.id, contentBindingId: snapshot.id, siteId: "kangyi", environment: input.account.environment, kind, slug: draftPreview.slug, draftPreview, imageBindings });
+  return freezePrepared({ version: 1, articleId: article.id, brandId: article.brandId, accountId: input.account.id, snapshotId: snapshot.id, contentBindingId: snapshot.id, siteId: input.account.siteId as KangyiPreparedContent["siteId"], environment: input.account.environment, kind, slug: draftPreview.slug, draftPreview, imageBindings });
 }
 
 export function buildKangyiCmsDraft(prepared: KangyiPreparedContent, mediaIds?: Record<string, string>): CmsDraft {

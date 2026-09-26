@@ -65,6 +65,13 @@ const image = (): { binding: NonNullable<Parameters<typeof prepareKangyiWebsiteC
 };
 
 describe("Kangyi Website mapping and prepare", () => {
+  it.each(["huiquan", "shupai"] as const)("binds %s content only to its own site snapshot", (siteId) => {
+    const targetSnapshot = snapshot({ platformKey: `${siteId}_website` });
+    const prepared = prepareKangyiWebsiteContent({ article: article(), snapshot: targetSnapshot, account: { id: "account-123", siteId, environment: "staging" } });
+    expect(prepared.siteId).toBe(siteId);
+    expect(prepared.environment).toBe("staging");
+    expect(() => prepareKangyiWebsiteContent({ article: article(), snapshot: targetSnapshot, account: { id: "account-123", siteId: "kangyi", environment: "staging" } })).toThrow("KANGYI_IMMUTABLE_BINDING_MISMATCH");
+  });
   it("maps an article to a stable prepared payload without inventing media IDs", () => {
     const prepared = prepareKangyiWebsiteContent({ article: article(), snapshot: snapshot(), account: { id: "account-123", siteId: "kangyi", environment: "staging" } });
     expect(prepared.kind).toBe("article");

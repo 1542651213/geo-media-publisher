@@ -17,6 +17,16 @@ const client = (data: Capabilities): KangyiCapabilitiesClient => ({ capabilities
 const configuredSecrets = { origin: "https://staging.kangyihb.com", siteId: "kangyi", environment: "staging", keyId: "staging-editor", secret: "fixture-secret" };
 
 describe("Kangyi Website Official API adapter", () => {
+  it.each(["huiquan", "shupai"] as const)("isolates %s account credentials and capabilities", async (siteId) => {
+    const observed: ClientConfig[] = [];
+    const adapter = new KangyiWebsiteAdapter({ siteId, clientFactory: (config) => { observed.push(config); return client(capabilities({ siteId })); } });
+    const scoped = { ...configuredSecrets, siteId, origin: `https://${siteId}.example.test` };
+    const scopedContext = { ...context(scoped), platformKey: `${siteId}_website` };
+    await expect(adapter.checkLogin(scopedContext)).resolves.toBe("logged_in");
+    expect(observed[0]).toMatchObject({ siteId, origin: scoped.origin });
+    await expect(adapter.readRemoteCapabilities({ ...scopedContext, secrets: { ...scoped, siteId: "kangyi" } })).rejects.toMatchObject({ providerCode: "WRONG_SITE" });
+    await expect(adapter.readRemoteCapabilities({ ...scopedContext, platformKey: "kangyi_website" })).rejects.toMatchObject({ providerCode: "WRONG_SITE" });
+  });
   it("declares the website manifest and credential schema without a secret-file path", () => {
     const adapter = new KangyiWebsiteAdapter();
     expect(adapter.manifest).toMatchObject({ platformKey: "kangyi_website", integrationMode: "API", transport: "official_api", status: "WaitingForUser", supportsArticle: true, supportsVideo: false });

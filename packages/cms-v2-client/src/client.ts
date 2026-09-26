@@ -13,7 +13,7 @@ export function signRequest(input: SigningInput, secret: string): string {
 }
 
 export interface ClientConfig { origin: string; siteId: string; environment: DeployEnvironment; keyId: string; secret: string; timeoutMs?: number; maxRetries?: number; retryDelayMs?: number }
-export interface RequestOptions { json?: unknown; bytes?: Uint8Array; contentType?: string; idempotencyKey?: string }
+export interface RequestOptions { json?: unknown; exactJson?: string; bytes?: Uint8Array; contentType?: string; idempotencyKey?: string }
 
 export class ClientError extends Error {
   constructor(readonly code: string, message: string, readonly status = 0, readonly requestId?: string, readonly fieldErrors?: FieldError[], readonly idempotencyKey?: string, readonly outcomeUnknown = false) { super(message); this.name = "ClientError"; }
@@ -34,16 +34,17 @@ export class CmsV2Client {
     this.config = { ...config, origin: url.origin, ...settings };
   }
 
-  async request<T>(method: "GET" | "POST" | "PUT", path: string, options: RequestOptions = {}): Promise<Success<T>> {
+  async request<T>(method: "GET" | "POST" | "PUT", path: string, options: RequestOptions = {}): Promise<Success<T> & { httpStatus: number }> {
     if (!( ["GET", "POST", "PUT"] as string[]).includes(method)) throw new Error("Unsupported method");
     if (!path.startsWith("/") || path.startsWith("//") || /[\r\n#]/u.test(path)) throw new Error("Invalid API path");
     const url = new URL(`${PREFIX}${path}`, this.config.origin);
     const target = url.pathname + url.search;
     if (url.origin !== this.config.origin || !url.pathname.startsWith(`${PREFIX}/`) || target.length > 1024) throw new Error("Invalid API target");
-    if (method === "GET" && (options.json !== undefined || options.bytes !== undefined || options.idempotencyKey)) throw new Error("GET must omit body and Idempotency-Key");
+    if (method === "GET" && (options.json !== undefined || options.exactJson !== undefined || options.bytes !== undefined || options.idempotencyKey)) throw new Error("GET must omit body and Idempotency-Key");
     if (method !== "GET" && !/^[A-Za-z0-9._~-]{8,128}$/u.test(options.idempotencyKey ?? "")) throw new Error("Idempotency-Key is required for writes");
-    if (options.json !== undefined && options.bytes !== undefined) throw new Error("Choose json or bytes");
-    const json = options.json === undefined ? undefined : JSON.stringify(options.json);
+    if ([options.json, options.exactJson, options.bytes].filter((value) => value !== undefined).length > 1) throw new Error("Choose one request body");
+    if (options.exactJson !== undefined) { try { JSON.parse(options.exactJson); } catch { throw new Error("Exact JSON body is invalid"); } }
+    const json = options.exactJson ?? (options.json === undefined ? undefined : JSON.stringify(options.json));
     if (options.json !== undefined && json === undefined) throw new Error("JSON body is not serializable");
     const body = options.bytes === undefined ? Buffer.from(json ?? "", "utf8") : Buffer.from(options.bytes);
     if (body.length > (options.bytes === undefined ? 1024 * 1024 : 8 * 1024 * 1024)) throw new Error("Request body exceeds API limit");
@@ -64,7 +65,7 @@ export class CmsV2Client {
         throw new ClientError(uncertain ? "TRANSPORT_UNCERTAIN" : "TRANSPORT_ERROR", uncertain ? "Write outcome unknown; reconcile with the retained operation key before another operation" : "HTTP request failed or timed out", 0, undefined, undefined, options.idempotencyKey, uncertain);
       }
       if (!value || typeof value !== "object" || !("ok" in value) || !("requestId" in value) || typeof value.requestId !== "string") throw new ClientError("UNEXPECTED_RESPONSE", "Expected a V2 JSON envelope; redirects are not followed", response.status, undefined, undefined, options.idempotencyKey, uncertain);
-      if (response.ok && value.ok === true && "data" in value) return value as Success<T>;
+      if (response.ok && value.ok === true && "data" in value) return { ...(value as Success<T>), httpStatus: response.status };
       if (value.ok !== false || !("error" in value) || !value.error || typeof value.error !== "object" || !("code" in value.error) || !("message" in value.error) || typeof value.error.code !== "string" || typeof value.error.message !== "string") throw new ClientError("UNEXPECTED_RESPONSE", "Invalid V2 response shape", response.status, value.requestId, undefined, options.idempotencyKey, uncertain);
       const failure = value as Failure;
       if ([429, 503].includes(response.status) && failure.error.retryable === true && attempt < this.config.maxRetries) { await pause(this.delay(attempt)); continue; }
@@ -78,7 +79,7 @@ export class CmsV2Client {
   capabilities() { return this.request<Capabilities>("GET", "/capabilities"); }
   uploadMedia(bytes: Uint8Array, mime: Media["mime"], idempotencyKey: string) { if (!["image/jpeg", "image/png", "image/webp"].includes(mime) || bytes.length === 0) throw new Error("Invalid media type or empty image"); return this.request<Media>("POST", "/media", { bytes, contentType: mime, idempotencyKey }); }
   createContent(json: CreateContent, idempotencyKey: string) { return this.request<CmsRecord>("POST", "/contents", { json, idempotencyKey }); }
-  listContents(filters: { kind?: "article" | "case"; externalId?: string; status?: "draft" | "published" | "deleted"; page?: number; pageSize?: number } = {}) { const query = new URLSearchParams(); for (const [key, value] of Object.entries(filters)) if (value !== undefined) query.append(key, String(value)); return this.request<ContentList>("GET", `/contents${query.size ? `?${query}` : ""}`); }
+  listContents(filters: { kind?: "article" | "case"; externalId?: string; status?: "active" | "published" | "deleted"; page?: number; pageSize?: number } = {}) { const query = new URLSearchParams(); for (const [key, value] of Object.entries(filters)) if (value !== undefined) query.append(key, String(value)); return this.request<ContentList>("GET", `/contents${query.size ? `?${query}` : ""}`); }
   getContent(id: string) { return this.request<CmsRecord>("GET", this.contentPath(id)); }
   saveDraft(id: string, json: SaveDraft, idempotencyKey: string) { return this.request<CmsRecord>("PUT", `${this.contentPath(id)}/draft`, { json, idempotencyKey }); }
   validate(id: string, revisionId: string, idempotencyKey: string) { return this.request<Validation>("POST", `${this.contentPath(id)}/validate`, { json: { revisionId }, idempotencyKey }); }

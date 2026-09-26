@@ -4,6 +4,12 @@ import { assertKangyiAccountScope, assertKangyiContentIdentity, assertKangyiJobI
 const authorization = () => ({ enabled: true as const, authorizationId: "owner-auth-1", accountId: "account-1", siteId: "kangyi", environment: "staging" as const, writesEnabled: true as const, capabilitiesHttpStatus: 200, protocolVersion: "2", contentKinds: ["article", "case"] });
 
 describe("Kangyi Phase 2 fail-closed gates", () => {
+  it.each(["huiquan", "shupai"] as const)("binds %s authorization to the exact staging site", (siteId) => {
+    expect(() => assertKangyiPhase2Authorization({ ...authorization(), siteId }, siteId)).not.toThrow();
+    expect(() => assertKangyiPhase2Authorization({ ...authorization(), siteId }, "kangyi")).toThrow("KANGYI_PHASE2_SCOPE_MISMATCH");
+    expect(() => assertKangyiPhase2Authorization({ ...authorization(), siteId, environment: "production" }, siteId)).toThrow("KANGYI_PHASE2_SCOPE_MISMATCH");
+    expect(() => assertKangyiAccountScope({ accountId: "account-1", expectedAccountId: "account-1", siteId, environment: "staging", writesEnabled: true }, siteId)).not.toThrow();
+  });
   it("keeps the owner gate closed unless an explicit authorization is supplied", () => {
     expect(() => assertKangyiPhase2Authorization({ ...authorization(), enabled: false, authorizationId: "" })).toThrow("KANGYI_PHASE2_OWNER_AUTH_REQUIRED");
     expect(() => assertKangyiPhase2Authorization({ ...authorization(), capabilitiesHttpStatus: 401 })).toThrow("KANGYI_PHASE2_CAPABILITIES_NOT_VERIFIED");

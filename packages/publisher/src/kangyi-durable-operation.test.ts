@@ -17,15 +17,15 @@ afterEach(() => {
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
-function fixture(withMedia = false): { repository: ReturnType<typeof openDatabase>["repository"]; intentId: string; jobId: string; article: NonNullable<ReturnType<ReturnType<typeof openDatabase>["repository"]["getArticle"]>>; input: KangyiDurableOperationInput } {
+function fixture(withMedia = false, siteId: "kangyi" | "huiquan" | "shupai" = "kangyi"): { repository: ReturnType<typeof openDatabase>["repository"]; intentId: string; jobId: string; article: NonNullable<ReturnType<ReturnType<typeof openDatabase>["repository"]["getArticle"]>>; input: KangyiDurableOperationInput } {
   const directory = mkdtempSync(join(tmpdir(), "kangyi-durable-"));
   directories.push(directory);
   const database = openDatabase(join(directory, "publisher.db"), migrationDir);
   databases.push(database.db);
   database.repository.seedDevelopment(join(process.cwd(), "PLATFORMS.csv"));
   const brand = database.repository.createBrand({ name: "康一 fixture", companyName: "康一 fixture" });
-  const account = database.repository.createAccount({ platformKey: "kangyi_website", name: "康一 staging" });
-  database.db.prepare("UPDATE accounts SET login_status='logged_in',connection_mode='OfficialAPI',authorization_status='Authorized',external_account_id='kangyi',publish_mode='manual',allow_auto_publish=0 WHERE id=?").run(account.id);
+  const account = database.repository.createAccount({ platformKey: `${siteId}_website`, name: `${siteId} staging` });
+  database.db.prepare("UPDATE accounts SET login_status='logged_in',connection_mode='OfficialAPI',authorization_status='Authorized',external_account_id=?,publish_mode='manual',allow_auto_publish=0 WHERE id=?").run(siteId, account.id);
   const article = database.repository.createArticle({ brandId: brand.id, topic: "fixture", keyword: "fixture", city: "", title: "Durable title", body: "Durable body", summary: "Durable summary", tags: ["fixture"], seoKeywords: ["fixture"], articleType: "科普", aiProvider: "test", aiModel: "test", generatedAt: "2026-09-20T00:00:00.000Z", contentHash: "fixture-content-hash", reusePolicy: "once", qualityStatus: "passed", qualityWarnings: [], source: "production" });
   if (!article) throw new Error("fixture article missing");
   database.db.prepare("UPDATE articles SET source='production' WHERE id=?").run(article.id);
@@ -34,7 +34,7 @@ function fixture(withMedia = false): { repository: ReturnType<typeof openDatabas
   const image = withMedia ? database.repository.createImageAsset({ brandId: brand.id, name: "fixture.png", filePath: imagePath, originalFileName: "fixture.png", mimeType: "image/png", size: 3 }) : null;
   const jobId = randomUUID();
   const timestamp = "2026-09-20T00:00:00.000Z";
-  database.db.prepare("INSERT INTO publish_jobs (id,plan_id,account_id,platform_account_id,platform_key,article_id,article_variant_id,scheduled_at,status,max_attempts,created_at,dry_run,manual_confirmation_required,selected_image_asset_id,image_selection_mode,final_publish_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(jobId, null, account.id, account.id, "kangyi_website", article.id, null, timestamp, "Scheduled", 3, timestamp, 0, 1, image?.id ?? null, image ? "manual" : "none", "CONFIRM_BEFORE_PUBLISH");
+  database.db.prepare("INSERT INTO publish_jobs (id,plan_id,account_id,platform_account_id,platform_key,article_id,article_variant_id,scheduled_at,status,max_attempts,created_at,dry_run,manual_confirmation_required,selected_image_asset_id,image_selection_mode,final_publish_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(jobId, null, account.id, account.id, `${siteId}_website`, article.id, null, timestamp, "Scheduled", 3, timestamp, 0, 1, image?.id ?? null, image ? "manual" : "none", "CONFIRM_BEFORE_PUBLISH");
   const job = database.repository.getJob(jobId);
   if (!job) throw new Error("fixture job missing");
   database.repository.confirmJob(job.id);
@@ -44,7 +44,7 @@ function fixture(withMedia = false): { repository: ReturnType<typeof openDatabas
   if (!contentBindingId) throw new Error("fixture content binding missing");
   const jsonBody = (value: unknown): { exactRequestBody: string; requestBodySha256: string } => { const exactRequestBody = JSON.stringify(value); return { exactRequestBody, requestBodySha256: kangyiSha256Utf8(exactRequestBody) }; };
   const input: KangyiDurableOperationInput = {
-    binding: { intentId: intent.id, accountId: account.id, siteId: "kangyi", environment: "staging", snapshotId: contentBindingId, contentBindingId },
+    binding: { intentId: intent.id, accountId: account.id, siteId, environment: "staging", snapshotId: contentBindingId, contentBindingId },
     ...(image ? { media: [{ assetId: image.id, idempotencyKey: "kangyi_media_fixture" }] } : {}),
     create: { ...jsonBody({ draft: { kind: "article", slug: "durable-title", title: "Durable title", blocks: [{ type: "paragraph", text: "Durable body" }] } }), idempotencyKey: "kangyi_create_fixture" },
     validate: { ...jsonBody({ revisionId: "revision-1" }), idempotencyKey: "kangyi_validate_fixture" },
@@ -94,6 +94,17 @@ class FakeTransport implements KangyiDurableOperationTransport {
 }
 
 describe("Kangyi durable operation recovery", () => {
+  it.each(["huiquan", "shupai"] as const)("retains %s staging identity through accepted job and public readback", async (siteId) => {
+    const { repository, input, intentId } = fixture(false, siteId);
+    const runner = new KangyiDurableOperationRunner(repository, new FakeTransport());
+    const first = await runner.run(input);
+    expect(first.status).toBe("polling");
+    const final = await runner.resume(intentId);
+    expect(final.status).toBe("complete");
+    expect(final.metadata.siteId).toBe(siteId);
+    expect(final.metadata.publish?.cmsJobId).toBe("cms-job-1");
+    expect(final.metadata.publish?.responseIdentity).toMatchObject({ contentId: "content-1", revisionId: "revision-1", rowVersion: 1, contentHash: "cms-content-hash" });
+  });
   it("uses immutable snapshot bytes, not a later source-path mutation, for media replay", async () => {
     const { repository, input } = fixture(true);
     const transport = new FakeTransport();

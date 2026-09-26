@@ -68,6 +68,16 @@ export interface KangyiOperationBindingInput {
   pilotAuthorizationId?: string;
 }
 
+const WEBSITE_SITE_BY_PLATFORM = {
+  kangyi_website: "kangyi",
+  huiquan_website: "huiquan",
+  shupai_website: "shupai"
+} as const;
+
+function websiteSiteForPlatform(platformKey: string): string | null {
+  return WEBSITE_SITE_BY_PLATFORM[platformKey as keyof typeof WEBSITE_SITE_BY_PLATFORM] ?? null;
+}
+
 export interface KangyiJsonOperationPreparation {
   idempotencyKey: string;
   exactRequestBody: string;
@@ -2983,11 +2993,11 @@ export class AppRepository {
   saveKangyiPreparedContent(jobId: string, prepared: KangyiWebsitePreparedContentV1): { prepared: KangyiWebsitePreparedContentV1; sha256: string } {
     return this.db.transaction(() => {
       const job = this.getJob(jobId);
-      if (!job || job.platformKey !== "kangyi_website" || job.finalPublishMode !== "PREPARE_ONLY") throw new Error("KANGYI_PREPARED_JOB_SCOPE_INVALID");
-      const account = this.getAccountById(job.accountId, "kangyi_website");
+      if (!job || websiteSiteForPlatform(job.platformKey) !== prepared.siteId || job.finalPublishMode !== "PREPARE_ONLY") throw new Error("KANGYI_PREPARED_JOB_SCOPE_INVALID");
+      const account = this.getAccountById(job.accountId, job.platformKey);
       const article = this.getArticle(job.articleId);
-      if (!account || !account.enabled || account.connectionMode !== "OfficialAPI" || account.authorizationStatus !== "Authorized" || account.externalAccountId !== "kangyi" || account.publishMode !== "manual" || account.allowAutoPublish || !article) throw new Error("KANGYI_PREPARED_ACCOUNT_OR_ARTICLE_INVALID");
-      if (prepared.version !== 1 || prepared.articleId !== job.articleId || prepared.brandId !== article.brandId || prepared.accountId !== job.accountId || prepared.snapshotId !== job.contentBindingId || prepared.contentBindingId !== job.contentBindingId || prepared.siteId !== "kangyi" || prepared.environment !== "staging" || prepared.kind !== prepared.draftPreview.kind || prepared.slug !== prepared.draftPreview.slug || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(prepared.slug)) throw new Error("KANGYI_PREPARED_BINDING_MISMATCH");
+      if (!account || !account.enabled || account.connectionMode !== "OfficialAPI" || account.authorizationStatus !== "Authorized" || account.externalAccountId !== prepared.siteId || account.publishMode !== "manual" || account.allowAutoPublish || !article) throw new Error("KANGYI_PREPARED_ACCOUNT_OR_ARTICLE_INVALID");
+      if (prepared.version !== 1 || prepared.articleId !== job.articleId || prepared.brandId !== article.brandId || prepared.accountId !== job.accountId || prepared.snapshotId !== job.contentBindingId || prepared.contentBindingId !== job.contentBindingId || websiteSiteForPlatform(job.platformKey) !== prepared.siteId || prepared.environment !== "staging" || prepared.kind !== prepared.draftPreview.kind || prepared.slug !== prepared.draftPreview.slug || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(prepared.slug)) throw new Error("KANGYI_PREPARED_BINDING_MISMATCH");
       assertKangyiPreparedContentHasNoCredentials(prepared);
       const snapshot = this.contentSnapshots.assertCurrent(jobId);
       if (snapshot.id !== prepared.snapshotId || snapshot.sourceArticleId !== prepared.articleId || snapshot.accountId !== prepared.accountId) throw new Error("KANGYI_PREPARED_SNAPSHOT_MISMATCH");
@@ -3016,7 +3026,7 @@ export class AppRepository {
 
   getKangyiPreparedContent(jobId: string): { prepared: KangyiWebsitePreparedContentV1; sha256: string } | null {
     const row = this.db.prepare("SELECT publish_payload_json,article_id,account_id,platform_key,content_binding_id FROM publish_jobs WHERE id=?").get(jobId) as Row | undefined;
-    if (!row || textValue(row.platform_key) !== "kangyi_website") return null;
+    if (!row || !websiteSiteForPlatform(textValue(row.platform_key))) return null;
     const payload = parseJson<Record<string, unknown>>(typeof row.publish_payload_json === "string" ? row.publish_payload_json : null, {});
     const value = payload.kangyiWebsitePreparedContent;
     if (value === undefined) return null;
@@ -3024,7 +3034,7 @@ export class AppRepository {
     const serialized = JSON.stringify(value.prepared);
     const sha256 = createHash("sha256").update(serialized, "utf8").digest("hex");
     const prepared = value.prepared as unknown as KangyiWebsitePreparedContentV1;
-    if (sha256 !== value.sha256 || prepared.version !== 1 || prepared.articleId !== row.article_id || prepared.accountId !== row.account_id || prepared.siteId !== "kangyi" || prepared.environment !== "staging" || prepared.contentBindingId !== row.content_binding_id || prepared.snapshotId !== row.content_binding_id || prepared.slug !== prepared.draftPreview?.slug) throw new Error("KANGYI_PREPARED_CONTENT_BINDING_INVALID");
+    if (sha256 !== value.sha256 || prepared.version !== 1 || prepared.articleId !== row.article_id || prepared.accountId !== row.account_id || websiteSiteForPlatform(textValue(row.platform_key)) !== prepared.siteId || prepared.environment !== "staging" || prepared.contentBindingId !== row.content_binding_id || prepared.snapshotId !== row.content_binding_id || prepared.slug !== prepared.draftPreview?.slug) throw new Error("KANGYI_PREPARED_CONTENT_BINDING_INVALID");
     return { prepared: JSON.parse(serialized) as KangyiWebsitePreparedContentV1, sha256 };
   }
 
@@ -3033,7 +3043,7 @@ export class AppRepository {
       const row = this.db.prepare("SELECT * FROM submission_intents WHERE id=?").get(input.intentId) as Row | undefined;
       if (!row) throw new Error("Submission intent not found");
       const job = this.getJob(textValue(row.job_id));
-      if (!job || job.platformKey !== "kangyi_website") throw new Error("KANGYI_OPERATION_PLATFORM_MISMATCH");
+      if (!job || websiteSiteForPlatform(job.platformKey) !== input.siteId || input.environment !== "staging") throw new Error("KANGYI_OPERATION_PLATFORM_MISMATCH");
       if (input.accountId !== job.accountId) throw new Error("KANGYI_OPERATION_ACCOUNT_MISMATCH");
       if (textValue(row.content_binding_id) !== input.contentBindingId || input.snapshotId !== input.contentBindingId) throw new Error("KANGYI_OPERATION_BINDING_MISMATCH");
       const existing = parseKangyiOperationMetadata(typeof row.operation_metadata_json === "string" ? row.operation_metadata_json : null);
@@ -3042,7 +3052,7 @@ export class AppRepository {
         return existing;
       }
       if (input.pilotAuthorizationId) {
-        const rows = this.db.prepare("SELECT operation_metadata_json FROM submission_intents WHERE operation_metadata_json IS NOT NULL AND id<>? AND account_id=? AND platform_key='kangyi_website'").all(input.intentId, job.accountId) as Row[];
+        const rows = this.db.prepare("SELECT operation_metadata_json FROM submission_intents WHERE operation_metadata_json IS NOT NULL AND id<>? AND account_id=? AND platform_key=?").all(input.intentId, job.accountId, job.platformKey) as Row[];
         const occupiedPilot = rows.map((candidate) => parseKangyiOperationMetadata(typeof candidate.operation_metadata_json === "string" ? candidate.operation_metadata_json : null)).find((candidate) => candidate?.pilotAuthorizationId);
         if (occupiedPilot?.pilotAuthorizationId === input.pilotAuthorizationId) throw new Error("KANGYI_PILOT_AUTHORIZATION_ALREADY_BOUND");
         if (occupiedPilot) throw new Error("KANGYI_PILOT_SLOT_ALREADY_CLAIMED");

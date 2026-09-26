@@ -6,6 +6,7 @@
   "exports": { ".": "./src/index.ts" },
   "dependencies": {
     "@publisher/adapters-core": "workspace:*",
+    "@publisher/cms-v2-client": "workspace:*",
     "@publisher/domain": "workspace:*",
     "@publisher/db": "workspace:*",
     "@publisher/logger": "workspace:*"
