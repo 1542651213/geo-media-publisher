@@ -236,6 +236,23 @@ export class PublisherService {
       if (!matchedTarget || result.remoteState !== "PUBLISHED") return preserveUncertain(`STILL_UNCERTAIN: ${result.remoteState ?? "UNKNOWN"}; no resubmission permitted`);
     }
     if (result.status === "FOUND_PUBLISHED") {
+      if (job.platformKey === "douyin" && matchedByTrustedId && result.remoteState === "PUBLISHED" && result.externalId) {
+        const verification = result.publishedUrl && adapter.verifyPublished
+          ? await withTimeout(adapter.verifyPublished(ctx, input, { externalId: result.externalId, publishedUrl: result.publishedUrl }),
+            this.options.operationTimeoutMs ?? 120_000, "Douyin public read-only verification").catch((error: unknown) => ({
+              status: "publishing" as const, response: { errorCode: errorCode(error), publicVerification: "LIMITED" } }))
+          : { status: "publishing" as const, response: { publicVerification: "LIMITED", reason: "PUBLIC_URL_UNAVAILABLE" } };
+        const publicVerified = verification.status === "published" && verification.externalId === result.externalId
+          && verification.response.urlReachable === true && verification.response.titleMatch === true
+          && verification.response.bodyMatch === true && verification.response.imageMatch === true;
+        const reconciled = this.repository.reconcileJobAsPublished(job.id, { externalId: result.externalId,
+          publishedUrl: result.publishedUrl ?? null, publicVerified,
+          response: { reconciliation: result.response, verification: verification.response,
+            publicVerification: publicVerified ? "CONFIRMED" : "LIMITED" } });
+        return { job: reconciled.job, message: publicVerified
+          ? `PUBLISHED_CONFIRMED: Douyin work and public page verified (PublishRecord ${reconciled.record.id})`
+          : `PUBLISHED: Douyin management row verified; public verification limited (PublishRecord ${reconciled.record.id})` };
+      }
       if (!result.externalId || !result.publishedUrl || !(matchedByTrustedId || result.titleMatch && result.accountMatch && result.timeWindowMatch) || !adapter.verifyPublished) return preserveUncertain("STILL_UNCERTAIN: 回查未同时取得真实 External ID、URL、目标身份和匹配证据，未写入成功");
       const verification = await withTimeout(adapter.verifyPublished(ctx, input, { externalId: result.externalId, publishedUrl: result.publishedUrl }), this.options.operationTimeoutMs ?? 120_000, "Browser publish result verification").catch((error: unknown) => {
         if (!managementReconciliation) throw error;

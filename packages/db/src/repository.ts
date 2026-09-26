@@ -2692,16 +2692,18 @@ export class AppRepository {
     return toRecord(row);
   }
 
-  reconcileJobAsPublished(jobId: string, input: { externalId: string; publishedUrl: string; response: Record<string, unknown> }): { job: PublishJob; record: PublishRecord } {
+  reconcileJobAsPublished(jobId: string, input: { externalId: string; publishedUrl: string | null; response: Record<string, unknown>; publicVerified?: boolean }): { job: PublishJob; record: PublishRecord } {
     const job = this.getJob(jobId);
     if (!job || !["NeedsReconciliation", "Submitted", "Publishing"].includes(job.status)) throw new Error("Only a claimed submission can be closed by read-only publish reconciliation");
     const intent = this.getSubmissionIntentByJob(jobId);
     if (!intent || intent.finalSubmitCount < 1) throw new Error("Read-only publication confirmation requires a durable final submit claim");
-    if (intent) this.db.prepare("UPDATE submission_intents SET state='Submitted',external_id=?,remote_status='PUBLISHED_CONFIRMED',reconciliation_required=0,updated_at=? WHERE id=?").run(input.externalId, now(), intent.id);
+    const remoteStatus = input.publicVerified === false ? "PUBLISHED_MANAGEMENT" : "PUBLISHED_CONFIRMED";
+    const verificationStatus = input.publicVerified === false ? "WaitingUser" : "Verified";
+    if (intent) this.db.prepare("UPDATE submission_intents SET state='Submitted',external_id=?,remote_status=?,reconciliation_required=0,updated_at=? WHERE id=?").run(input.externalId, remoteStatus, now(), intent.id);
     const existing = this.getPublishRecordByJob(jobId);
     const record = existing
-      ? this.updatePublishRecord(existing.id, { status: "Published", success: true, publishedExternalId: input.externalId, publishedUrl: input.publishedUrl, response: input.response, verificationStatus: "Verified" })
-      : this.insertPublishRecord({ jobId, accountId: job.accountId, platformAccountId: job.platformAccountId, platformKey: job.platformKey, articleId: job.articleId, publishedUrl: input.publishedUrl, publishedExternalId: input.externalId, success: true, response: input.response, dryRun: false, status: "Published", publishMode: "ASSISTED", automationType: "BrowserAutomation", operator: "desktop-user", verificationStatus: "Verified" });
+      ? this.updatePublishRecord(existing.id, { status: "Published", success: true, publishedExternalId: input.externalId, publishedUrl: input.publishedUrl, response: input.response, verificationStatus })
+      : this.insertPublishRecord({ jobId, accountId: job.accountId, platformAccountId: job.platformAccountId, platformKey: job.platformKey, articleId: job.articleId, publishedUrl: input.publishedUrl, publishedExternalId: input.externalId, success: true, response: input.response, dryRun: false, status: "Published", publishMode: "ASSISTED", automationType: "BrowserAutomation", operator: "desktop-user", verificationStatus });
     this.db.prepare("UPDATE publish_jobs SET status='Success',external_id=?,last_error_code=NULL,last_error_message=NULL,next_retry_at=NULL,finished_at=? WHERE id=?").run(input.externalId, now(), jobId);
     if (!existing?.success) {
       this.markArticlePublished(job.articleId);

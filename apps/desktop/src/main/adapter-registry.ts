@@ -42,7 +42,7 @@ export function createRuntimeAdapterRegistry(credentials: CredentialStore, inclu
     onSessionLifecycle: onBrowserSessionLifecycle,
     onOperationPageLifecycle,
     browserProfileRootDir,
-    blockServiceWorkersForPlatforms: ["toutiao"],
+    blockServiceWorkersForPlatforms: ["toutiao", "douyin"],
     persistentProfilePlatforms: ["xiaohongshu"],
     persistentProfileCredentialSnapshotPlatforms: [],
     platformPolicies: {

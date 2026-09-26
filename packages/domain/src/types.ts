@@ -101,7 +101,7 @@ export type ContentReviewMode = (typeof CONTENT_REVIEW_MODES)[number];
 export const normalizeContentReviewMode = (value: unknown): ContentReviewMode =>
   CONTENT_REVIEW_MODES.includes(value as ContentReviewMode) ? value as ContentReviewMode : "WarningOnly";
 export type PublishRecordVerificationStatus = "NotTested" | "WaitingUser" | "Verified" | "Failed";
-export type PublishRemoteStatus = "SUBMIT_NOT_STARTED" | "SUBMITTING" | "SUBMIT_ACCEPTED" | "SCHEDULED_ACCEPTED" | "CONFIRMING" | "PUBLISHED_CONFIRMED" | "FAILED_CONFIRMED" | "UNCERTAIN" | "SAFE_TO_RETRY";
+export type PublishRemoteStatus = "SUBMIT_NOT_STARTED" | "SUBMITTING" | "SUBMIT_ACCEPTED" | "SCHEDULED_ACCEPTED" | "CONFIRMING" | "PUBLISHED_MANAGEMENT" | "PUBLISHED_CONFIRMED" | "FAILED_CONFIRMED" | "UNCERTAIN" | "SAFE_TO_RETRY";
 export const PLATFORM_SELF_TEST_LEVELS = ["L1_LOGIN", "L2_EDITOR", "L3_CONTENT_FILL", "L4_DRAFT", "L5_PUBLISH"] as const;
 export type PlatformSelfTestLevel = (typeof PLATFORM_SELF_TEST_LEVELS)[number];
 export const PLATFORM_SELF_TEST_RESULTS = ["NOT_TESTED", "TESTING", "PASSED", "PARTIAL_PASSED", "WAITING_FOR_USER", "FAILED", "NOT_SUPPORTED"] as const;

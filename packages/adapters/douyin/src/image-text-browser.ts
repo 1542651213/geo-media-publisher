@@ -1,13 +1,14 @@
 import type { Page } from "playwright-core";
 import { basename } from "node:path";
 import { type AccountContext, type AccountProfile, type LoginStatus,
-  type PublishArticleInput, type PublishResult, type ValidationResult } from "@publisher/domain";
+  type PublishArticleInput, type PublishResult, type PublishStatusResult, type ValidationResult } from "@publisher/domain";
 import { assertDouyinImageTextReadback, freezeDouyinImageText, verifyDouyinImageTextImage,
   type FrozenDouyinImageText } from "@publisher/domain/douyin-image-text";
-import type { AutomationPrepareResult } from "@publisher/adapters-core";
+import type { AutomationPrepareResult, BrowserPublishAttemptContext, BrowserPublishReconciliationInput, BrowserPublishReconciliationResult } from "@publisher/adapters-core";
 import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomationAdapterOptions, type BrowserPlatformDefinition } from "@publisher/adapters-browser";
 import { assertDouyinEditorSettings, protectExistingDouyinDraft, verifyDouyinUploadEvidence,
-  type DouyinEditorSettingsSnapshot } from "./image-text-evidence";
+  matchDouyinManagementRows, type DouyinEditorSettingsSnapshot, type DouyinManagementRow } from "./image-text-evidence";
+import { DouyinImagePostObserver } from "./image-text-observer";
 
 const creatorHome = "https://creator.douyin.com/creator-micro/home";
 
@@ -44,7 +45,8 @@ const definition: BrowserPlatformDefinition = {
 /** Image/text route. The existing Douyin OAuth video adapter remains separate. */
 export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
   private readonly nativeSubmitEnabled: boolean;
-  private readonly prepared = new Map<string, { frozen: FrozenDouyinImageText; page: Page; context: ReturnType<Page["context"]> }>();
+  private readonly prepared = new Map<string, { frozen: FrozenDouyinImageText; page: Page; context: ReturnType<Page["context"]>; settings: DouyinEditorSettingsSnapshot }>();
+  private readonly finalSubmitUsed = new Set<string>();
 
   constructor(options: BrowserAutomationAdapterOptions & { nativeSubmitEnabled?: boolean } = {}) {
     super(definition, options);
@@ -222,7 +224,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
       pageHost: new URL(page.url()).host, title: titleReadback, body: bodyReadback, imageCount,
       requiredFieldsPresent: douyinRequiredSettingsPass(settings), finalSubmitControlCount: finalCount,
       securityChallenge: /captcha|security[-_/]?check|risk[-_/]?control/iu.test(page.url()) });
-    this.prepared.set(ctx.accountId, { frozen, page, context: owned.session.context });
+    this.prepared.set(ctx.accountId, { frozen, page, context: owned.session.context, settings });
     return { prepared: true, requiresUserAction: true, message: "Douyin image-text editor readback passed; waiting for one-shot authorization",
       sessionIdHash: owned.session.sessionIdHash, backendUrl: page.url(), editorOpenedAt: new Date().toISOString(),
       titleFilled: true, bodyFilled: true, response: { adapter: "douyin-image-text-browser", imageUploaded: true,
@@ -230,6 +232,169 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
         sourceContentHash: frozen.sourceContentHash, contentBindingHash: frozen.contentBindingHash,
         expectedCreatorId: creatorId, settingsSnapshot: settings, mandatorySelections: settings.selectedMandatory,
         finalSubmitCount: 0 } };
+  }
+
+  private async verifyPreparedEditor(ctx: AccountContext, article: PublishArticleInput): Promise<{ page: Page; frozen: FrozenDouyinImageText }> {
+    const prepared = this.prepared.get(ctx.accountId);
+    if (!prepared || prepared.page.isClosed() || prepared.page.context() !== prepared.context)
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_PREPARED_EDITOR_NOT_ACTIVE");
+    const owned = await this.activeCanonicalPage(ctx);
+    if (!owned || owned.page !== prepared.page || owned.session.context !== prepared.context || owned.session.executionMode !== "VISIBLE")
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_PREPARED_CONTEXT_MISMATCH");
+    const page = prepared.page;
+    if (new URL(page.url()).host !== "creator.douyin.com" || new URL(page.url()).pathname !== "/creator-micro/content/post/image")
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_EDITOR_ROUTE_CHANGED");
+    const expectedCreatorId = prepared.frozen.creatorId;
+    if (typeof ctx.settings.expectedCreatorId !== "string" || ctx.settings.expectedCreatorId !== expectedCreatorId
+      || await this.readVisibleCreatorId(page) !== expectedCreatorId)
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_CREATOR_IDENTITY_MISMATCH");
+    const title = page.locator('input[placeholder="添加作品标题"]');
+    const body = page.locator('[contenteditable="true"]');
+    const images = page.locator('main img, [class*="upload"] img, [class*="image"] img');
+    const finalControl = page.locator('button,[role="button"]').filter({ hasText: /^发布$/u });
+    if (await title.count() !== 1 || await body.count() !== 1)
+      throw new BrowserAutomationError("PLATFORM_CHANGED", "DOUYIN_EDITOR_FIELDS_AMBIGUOUS");
+    const currentSettings = await this.readEditorSettings(page);
+    assertDouyinEditorSettings(currentSettings, "public");
+    if (JSON.stringify(currentSettings) !== JSON.stringify(prepared.settings))
+      throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_EDITOR_SETTINGS_CHANGED");
+    if (article.title !== prepared.frozen.title || article.body !== prepared.frozen.body || article.images?.length !== 1
+      || article.images[0] !== prepared.frozen.imagePaths[0] || !await verifyDouyinImageTextImage(prepared.frozen, 0))
+      throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_PREPARED_CONTENT_OR_IMAGE_CHANGED");
+    assertDouyinImageTextReadback(prepared.frozen, { accountId: ctx.accountId, creatorId: expectedCreatorId,
+      contextOwned: true, sessionActive: true, pageHost: new URL(page.url()).host,
+      title: await title.inputValue(), body: await body.innerText(), imageCount: await images.count(),
+      requiredFieldsPresent: douyinRequiredSettingsPass(currentSettings), finalSubmitControlCount: await finalControl.count(),
+      securityChallenge: /captcha|security[-_/]?check|risk[-_/]?control/iu.test(page.url()) });
+    if (await finalControl.isDisabled()) throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_FINAL_CONTROL_DISABLED");
+    return { page, frozen: prepared.frozen };
+  }
+
+  /** A separate owned tab checks the real management route without leaving the prepared editor. */
+  private async managementSmoke(ctx: AccountContext): Promise<void> {
+    const prepared = this.prepared.get(ctx.accountId);
+    if (!prepared) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_PREPARED_EDITOR_NOT_ACTIVE");
+    const tab = await prepared.context.newPage();
+    try {
+      await tab.goto("https://creator.douyin.com/creator-micro/content/manage", { waitUntil: "domcontentloaded", timeout: 20_000 });
+      if (new URL(tab.url()).host !== "creator.douyin.com" || new URL(tab.url()).pathname !== "/creator-micro/content/manage")
+        throw new Error("DOUYIN_MANAGEMENT_ROUTE_UNAVAILABLE");
+      const text = await tab.locator("body").innerText();
+      if (!/搜索作品/u.test(text) || !/已发布/u.test(text) || !/审核中/u.test(text) || !/未通过/u.test(text))
+        throw new Error("DOUYIN_MANAGEMENT_STATES_UNVERIFIED");
+    } finally { await tab.close().catch(() => undefined); }
+  }
+
+  async prepareFinalSubmit(ctx: AccountContext, article: PublishArticleInput): Promise<{ response: Record<string, unknown> }> {
+    this.assertFormalSubmitAvailable();
+    const verified = await this.verifyPreparedEditor(ctx, article);
+    await this.managementSmoke(ctx);
+    await this.verifyPreparedEditor(ctx, article);
+    return { response: { adapter: "douyin-image-text-browser", stage: "final_submit_preflight", imageCount: 1,
+      titleReadback: true, bodyReadback: true, settingsReadback: true, managementReadOnlyReady: true,
+      contentBindingHash: verified.frozen.contentBindingHash, finalSubmitCount: 0 } };
+  }
+
+  async finalSubmit(ctx: AccountContext, article: PublishArticleInput, attempt: BrowserPublishAttemptContext): Promise<PublishResult> {
+    if (this.finalSubmitUsed.has(attempt.jobId)) throw new BrowserAutomationError("FINAL_SUBMIT_ALREADY_USED", "DOUYIN_FINAL_ACTION_ALREADY_USED");
+    if (!attempt.markSubmissionSideEffect) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_DURABLE_BOUNDARY_REQUIRED");
+    this.assertFormalSubmitAvailable();
+    const { page } = await this.verifyPreparedEditor(ctx, article);
+    const button = page.locator('button,[role="button"]').filter({ hasText: /^发布$/u });
+    const observer = new DouyinImagePostObserver(page);
+    await observer.installOneShotGuard();
+    this.finalSubmitUsed.add(attempt.jobId);
+    try {
+      attempt.markSubmissionSideEffect();
+      observer.markFinalClick();
+      try { await button.click({ timeout: 15_000 }); }
+      catch { throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "DOUYIN_FINAL_CLICK_RESULT_UNKNOWN"); }
+      const { evidence, classification } = await observer.collect();
+      if (classification.status !== "ACCEPTED") throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "DOUYIN_PUBLISH_RESPONSE_UNKNOWN");
+      return { success: true, status: "publishing", externalId: classification.remoteId ?? undefined,
+        response: { adapter: "douyin-image-text-browser", submissionAccepted: true, requiresManagementConfirmation: true,
+          imageUploaded: true, finalActionCount: evidence.finalClickCount, observedPublishRequestCount: evidence.requestCount,
+          httpStatus: evidence.httpStatus, platformStatusCode: evidence.statusCode, remoteId: classification.remoteId,
+          finalSubmitCount: 1, submissionIntentId: attempt.submissionIntentId } };
+    } finally { observer.stop(); await observer.removeUnusedGuard(); }
+  }
+
+  async reconcile(ctx: AccountContext, input: BrowserPublishReconciliationInput): Promise<BrowserPublishReconciliationResult> {
+    const unknown = (reason: string, remoteState: "UNKNOWN" | "AMBIGUOUS" = "UNKNOWN"): BrowserPublishReconciliationResult => ({
+      status: "STILL_UNCERTAIN", remoteState, titleMatch: false, accountMatch: false, timeWindowMatch: false,
+      response: { adapter: "douyin-image-text-browser", readOnly: true, reason }, message: "Douyin management evidence remains uncertain; no retry"
+    });
+    const expected = typeof ctx.settings.expectedCreatorId === "string" ? ctx.settings.expectedCreatorId : "";
+    if (!expected || input.expectedCreatorId !== expected || input.finalSubmitCount !== 1) return unknown("ACCOUNT_OR_BOUNDARY_MISMATCH");
+    const owned = await this.activeCanonicalPage(ctx);
+    if (!owned || owned.page.isClosed() || owned.page.context() !== owned.session.context || owned.session.executionMode !== "VISIBLE"
+      || await this.readVisibleCreatorId(owned.page) !== expected) return unknown("OWNED_CREATOR_IDENTITY_UNVERIFIED");
+    const tab = await owned.session.context.newPage();
+    try {
+      await tab.goto("https://creator.douyin.com/creator-micro/content/manage", { waitUntil: "domcontentloaded", timeout: 20_000 });
+      if (new URL(tab.url()).pathname !== "/creator-micro/content/manage") return unknown("MANAGEMENT_ROUTE_UNAVAILABLE");
+      if (!/搜索作品/u.test(await tab.locator("body").innerText())) return unknown("MANAGEMENT_SEARCH_UNAVAILABLE");
+      const rows = await tab.evaluate(() => {
+        const output: DouyinManagementRow[] = [];
+        for (const link of document.querySelectorAll<HTMLAnchorElement>('a[href*="/video/"],a[href*="/note/"]')) {
+          const href = link.href;
+          const remoteId = /\/(?:video|note)\/(\d{10,30})(?:[/?#]|$)/u.exec(href)?.[1] ?? null;
+          if (!remoteId) continue;
+          const row = link.closest('tr,li,[class*="item"],[class*="card"]');
+          if (!row || !(row instanceof HTMLElement) || row.getBoundingClientRect().width === 0) continue;
+          const text = row.innerText.replace(/\s+/gu, " ").trim();
+          const states = [/已发布/u, /审核中/u, /未通过/u].filter((pattern) => pattern.test(text));
+          if (states.length !== 1) continue;
+          const state: DouyinManagementRow["state"] = /已发布/u.test(text) ? "PUBLISHED" : /审核中/u.test(text) ? "REVIEWING" : "REJECTED";
+          const title = (link.innerText || link.getAttribute("title") || "").replace(/\s+/gu, " ").trim();
+          output.push({ remoteId, title, description: text, state, submittedAt: null, publicUrl: href,
+            imageCount: row.querySelectorAll("img").length });
+        }
+        return output;
+      });
+      const match = matchDouyinManagementRows(rows, { remoteId: input.expectedExternalId ?? null,
+        title: input.title, windowStart: input.windowStart, windowEnd: input.windowEnd, scopeComplete: false });
+      if (match.state === "AMBIGUOUS") return unknown("MULTIPLE_REMOTE_CANDIDATES", "AMBIGUOUS");
+      if (!match.remoteId || match.matchedBy !== "REMOTE_ID") return unknown("UNIQUE_REMOTE_ID_NOT_FOUND_IN_VISIBLE_SCOPE");
+      const selected = rows.find((row) => row.remoteId === match.remoteId);
+      const titleMatch = selected?.title.normalize("NFKC").trim() === input.title.normalize("NFKC").trim()
+        || selected?.description.includes(input.title) === true;
+      if (!titleMatch) return unknown("REMOTE_ID_TITLE_MISMATCH");
+      return { status: match.state === "PUBLISHED" ? "FOUND_PUBLISHED" : "STILL_UNCERTAIN", remoteState: match.state,
+        externalId: match.remoteId, publishedUrl: match.publicUrl ?? undefined, titleMatch: true, accountMatch: true,
+        timeWindowMatch: false, response: { adapter: "douyin-image-text-browser", readOnly: true,
+          matchedBy: "REMOTE_ID", remoteState: match.state, rowCount: rows.length, scopeComplete: false },
+        message: `Douyin unique management row: ${match.state}` };
+    } catch { return unknown("MANAGEMENT_READ_FAILED"); }
+    finally { await tab.close().catch(() => undefined); }
+  }
+
+  async verifyPublished(ctx: AccountContext, article: PublishArticleInput, result: Pick<PublishResult, "externalId" | "publishedUrl">): Promise<PublishStatusResult> {
+    const id = result.externalId;
+    const url = result.publishedUrl;
+    const limited = (reason: string): PublishStatusResult => ({ status: "publishing", externalId: id, publishedUrl: url,
+      response: { adapter: "douyin-image-text-browser", publicVerification: "LIMITED", reason },
+      errorCode: "RECONCILIATION_UNCERTAIN", errorMessage: "PUBLIC_VERIFICATION_LIMITED" });
+    if (!id || !url) return limited("PUBLIC_URL_UNAVAILABLE");
+    let parsed: URL;
+    try { parsed = new URL(url); } catch { return limited("PUBLIC_URL_INVALID"); }
+    if (parsed.protocol !== "https:" || !parsed.hostname.endsWith(".douyin.com") || !parsed.pathname.includes(id)) return limited("PUBLIC_ID_URL_MISMATCH");
+    const owned = await this.activeCanonicalPage(ctx);
+    if (!owned || owned.page.isClosed()) return limited("OWNED_SESSION_UNAVAILABLE");
+    const tab = await owned.session.context.newPage();
+    try {
+      await tab.goto(url, { waitUntil: "domcontentloaded", timeout: 20_000 });
+      const evidence = await tab.evaluate(() => ({ text: document.body.innerText, imageCount: [...document.images]
+        .filter((image) => image.complete && image.naturalWidth > 0).length }));
+      const titleMatch = evidence.text.includes(article.title);
+      const bodyMatch = evidence.text.includes(article.body);
+      const imageMatch = evidence.imageCount > 0;
+      if (!titleMatch || !bodyMatch || !imageMatch) return limited("PUBLIC_TEXT_OR_IMAGE_UNVERIFIED");
+      return { status: "published", externalId: id, publishedUrl: url,
+        response: { adapter: "douyin-image-text-browser", urlReachable: true, titleMatch, bodyMatch, imageMatch,
+          publicVerification: "CONFIRMED" } };
+    } catch { return limited("PUBLIC_READ_FAILED"); }
+    finally { await tab.close().catch(() => undefined); }
   }
 
   override async publishArticle(ctx: AccountContext, article: PublishArticleInput): Promise<PublishResult> {
