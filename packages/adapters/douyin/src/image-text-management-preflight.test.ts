@@ -9,7 +9,8 @@ const manage = "https://creator.douyin.com/creator-micro/content/manage";
 const browsers: Browser[] = [];
 afterEach(async () => { for (const browser of browsers.splice(0)) await browser.close(); });
 
-async function fixture(options: { labels?: string; managementId?: string; delayedControls?: boolean } = {}) {
+async function fixture(options: { labels?: string; managementId?: string; delayedControls?: boolean;
+  dropdownStates?: boolean } = {}) {
   const browser = await chromium.launch({ executablePath: chrome, headless: true });
   browsers.push(browser);
   const context = await browser.newContext();
@@ -20,7 +21,10 @@ async function fixture(options: { labels?: string; managementId?: string; delaye
     requests.push(`${request.method()} ${new URL(request.url()).pathname}`);
     const isManage = new URL(request.url()).pathname === "/creator-micro/content/manage";
     const id = isManage ? options.managementId ?? "72388977613" : "72388977613";
-    const controls = isManage ? options.labels ?? "<button>已发布</button><button>审核中</button><button>未通过</button>"
+    const controls = isManage ? options.labels ?? (options.dropdownStates
+      ? `<button>已发布</button><div role="button" onclick="document.querySelector('#review-options').hidden=false">审核状态</div>
+        <div id="review-options" hidden><button>审核中</button><button>未通过</button></div>`
+      : "<button>已发布</button><button>审核中</button><button>未通过</button>")
       : "<div>发布图文</div>";
     const body = `${isManage ? '<input placeholder="搜索作品">' : ""}<section id="controls">${options.delayedControls ? "" : controls}</section>`
       + (options.delayedControls ? `<script>setTimeout(() => { document.querySelector('#controls').innerHTML = ${JSON.stringify(controls)}; }, 350)</script>` : "");
@@ -80,4 +84,14 @@ describe.skipIf(!existsSync(chrome))("Douyin app-owned read-only management pref
     expect(result.filterControlTexts).toEqual(["已发布（3）", "审核中（2）", "未通过（1）"]);
     expect(result.managementControlHints).toContainEqual({ tag: "button", text: "审核中（2）", role: null });
   });
+
+  it("reads reviewing and rejected options from the current review-status filter", async () => {
+    const { page, context, requests, verifyIdentity } = await fixture({ dropdownStates: true });
+    const result = await inspectDouyinManagementReadOnlyNavigation(page, context, verifyIdentity);
+    expect(result.ready).toBe(true);
+    expect(result.stateLabels).toEqual(["已发布", "审核中", "未通过"]);
+    expect(result.filterControlTexts).toContain("审核中");
+    expect(requests.every((request) => request.startsWith("GET "))).toBe(true);
+    expect(page.url()).toBe(home);
+  }, 20_000);
 });

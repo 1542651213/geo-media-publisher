@@ -36,19 +36,31 @@ export async function inspectDouyinManagementReadOnlyNavigation(page: Page, cont
     throw new Error("DOUYIN_READONLY_CREATOR_IDENTITY_CHANGED");
   const search = page.locator('input[placeholder="搜索作品"]');
   await search.first().waitFor({ state: "visible", timeout: 15_000 }).catch(() => undefined);
-  await page.waitForFunction(() => ["已发布", "审核中", "未通过"].every((label) =>
-    [...document.querySelectorAll<HTMLElement>('button,[role="tab"],span,div')].some((element) => {
-      const value = element.textContent?.replace(/\s+/gu, " ").trim() ?? "";
-      return element.getBoundingClientRect().width > 0 && value.startsWith(label)
-        && /^(已发布|审核中|未通过)(?:\s*[（(]\s*\d+\s*[）)])?$/u.test(value);
-    })),
+  await page.waitForFunction(() => document.body.innerText.includes("审核状态")
+    || ["已发布", "审核中", "未通过"].every((label) => document.body.innerText.includes(label)),
   null, { timeout: 10_000 }).catch(() => undefined);
   const searchControlCount = await search.count();
-  const filterControlTexts = await page.evaluate(() => [...new Set(
+  const readFilterControlTexts = async (): Promise<string[]> => page.evaluate(() => [...new Set(
     [...document.querySelectorAll<HTMLElement>('button,[role="tab"],span,div')]
       .filter((element) => element.getBoundingClientRect().width > 0)
       .map((element) => element.textContent?.replace(/\s+/gu, " ").trim() ?? "")
       .filter((value) => /^(已发布|审核中|未通过)(?:\s*[（(]\s*\d+\s*[）)])?$/u.test(value)))]);
+  let filterControlTexts = await readFilterControlTexts();
+  if (!["审核中", "未通过"].every((label) => filterControlTexts.some((value) => value.startsWith(label)))) {
+    const reviewFilter = page.getByText("审核状态", { exact: true });
+    if (await reviewFilter.count() === 1 && await reviewFilter.isVisible()) {
+      await reviewFilter.click();
+      assertOwned(page, context);
+      if (new URL(page.url()).pathname !== managePath || !await verifyIdentity())
+        throw new Error("DOUYIN_READONLY_CREATOR_IDENTITY_CHANGED");
+      await page.waitForFunction(() => ["审核中", "未通过"].every((label) =>
+        [...document.querySelectorAll<HTMLElement>('button,[role="tab"],span,div')].some((element) =>
+          element.getBoundingClientRect().width > 0 && (element.textContent?.trim() ?? "") === label)),
+      null, { timeout: 6_000 }).catch(() => undefined);
+      filterControlTexts = await readFilterControlTexts();
+      await page.keyboard.press("Escape");
+    }
+  }
   const stateLabels = ["已发布", "审核中", "未通过"].filter((label) =>
     filterControlTexts.some((value) => value.startsWith(label)));
   const managementControlHints = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>(
