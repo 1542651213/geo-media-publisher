@@ -98,8 +98,10 @@ export async function readSelectedDouyinMusic(page: Page): Promise<DouyinMusicRe
   const title = await section.locator('[class*="title"], [data-title]').allTextContents();
   const artist = await section.locator('[class*="artist"], [data-artist]').allTextContents();
   const duration = await section.locator('[class*="duration"], time').allTextContents();
-  return { selected: !/点击添加合适作品风格音乐/u.test(text) && title.length === 1,
-    title: title.length === 1 ? title[0]!.trim() : null,
+  const selectedTitle = title.length === 1 ? title[0]!.trim() : null;
+  return { selected: !/点击添加合适作品风格音乐/u.test(text) && Boolean(selectedTitle && selectedTitle !== "选择音乐")
+      && (artist.length === 1 || duration.length === 1),
+    title: selectedTitle,
     artist: artist.length === 1 ? artist[0]!.trim() : null,
     duration: duration.length === 1 ? duration[0]!.trim() : null };
 }

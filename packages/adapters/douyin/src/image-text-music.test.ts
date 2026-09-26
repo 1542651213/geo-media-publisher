@@ -48,6 +48,8 @@ describe("Douyin optional recommended music policy", () => {
         expect(inspected.candidates).toMatchObject([{ trackId: "track-1", title: "舒缓纯音乐", artist: "音乐人", duration: "01:30", rowIndex: 0 }]);
         await page.setContent(`<div><span>选择音乐</span><span class="title">舒缓纯音乐</span><span class="artist">音乐人</span><time>01:30</time></div>`);
         expect(await readSelectedDouyinMusic(page)).toEqual({ selected: true, title: "舒缓纯音乐", artist: "音乐人", duration: "01:30" });
+        await page.setContent(`<div><span class="title">选择音乐</span></div>`);
+        expect((await readSelectedDouyinMusic(page)).selected).toBe(false);
       } finally { await browser.close(); }
     });
 });
