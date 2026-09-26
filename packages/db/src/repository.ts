@@ -2052,7 +2052,7 @@ export class AppRepository {
     const timestamp = now();
     const article = this.createArticle({
       brandId: brand.id, topic: `platform_self_test:${run.platformKey}`, keyword: "平台发布链路测试", city: "", title: input.title,
-      body: input.body, summary: "Geo Media Publisher 内部发布链路测试", tags: ["内部测试"], seoKeywords: [], articleType: "自测",
+      body: input.body, summary: "Geo Media Publisher 内部发布链路测试", tags: run.platformKey === "toutiao" ? [] : ["内部测试"], seoKeywords: [], articleType: "自测",
       aiProvider: "system", aiModel: "transparent-self-test-v1.1.3", generatedAt: timestamp, reusePolicy: "once",
       contentHash: createHash("sha256").update(`${run.testRunId}\n${input.title}\n${input.body}`).digest("hex"), qualityStatus: "passed",
       qualityWarnings: [], source: "test", sourceNote: `platform-self-test:${run.testRunId}`
@@ -2434,8 +2434,12 @@ export class AppRepository {
     this.db.prepare("INSERT INTO toutiao_article_job_preparations (job_id,account_id,article_id,settings_version,content_transport,settings_json,created_at) VALUES (?,?,?,?,'ARTICLE_WEB_API',?,?)").run(job.id, job.accountId, job.articleId, normalized.version, serialized, now());
   }
 
-  getFrozenContentTransport(jobId: string): "ARTICLE_WEB_API" | null {
+  getFrozenContentTransport(jobId: string): "ARTICLE_WEB_API" | "ARTICLE_BROWSER" | null {
     const row = this.db.prepare("SELECT content_transport FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
+    const job = this.getJob(jobId);
+    const native = job?.platformKey === "toutiao" && this.getPublishRecordByJob(jobId)?.response.contentTransport === "ARTICLE_BROWSER";
+    if (native && row?.content_transport === "ARTICLE_WEB_API") throw new Error("Conflicting frozen Toutiao content transport");
+    if (native) return "ARTICLE_BROWSER";
     return row?.content_transport === "ARTICLE_WEB_API" ? "ARTICLE_WEB_API" : null;
   }
 
@@ -2545,19 +2549,21 @@ export class AppRepository {
     this.db.prepare("UPDATE publish_jobs SET status='Submitted', external_id=? WHERE submission_intent_id=?").run(externalId, intentId);
   }
 
-  reconcileJobAsSubmitted(jobId: string, input: { response: Record<string, unknown> }): { job: PublishJob; record: PublishRecord } {
+  reconcileJobAsSubmitted(jobId: string, input: { response: Record<string, unknown>; externalId?: string | null; remoteStatus?: "SUBMIT_ACCEPTED" | "SCHEDULED_ACCEPTED" }): { job: PublishJob; record: PublishRecord } {
     const job = this.getJob(jobId);
-    if (!job || job.status !== "NeedsReconciliation") throw new Error("Only a NeedsReconciliation Job can be closed as an accepted submission");
+    if (!job || !["NeedsReconciliation", "Submitted", "Publishing"].includes(job.status)) throw new Error("Only an awaiting reconciliation Job can be closed as an accepted submission");
     const intent = this.getSubmissionIntentByJob(jobId);
     if (!intent || intent.finalSubmitCount < 1) throw new Error("An accepted submission reconciliation requires a persisted final submit attempt");
     const existing = this.getPublishRecordByJob(jobId);
     if (!existing) throw new Error("An accepted submission reconciliation requires the existing PublishRecord");
     const timestamp = now();
-    const response = { ...existing.response, reconciliation: input.response, reconciliationStatus: "PENDING_REVIEW" };
+    const remoteStatus = input.remoteStatus ?? "SUBMIT_ACCEPTED";
+    const externalId = input.externalId ?? intent.externalId ?? existing.publishedExternalId;
+    const response = { ...existing.response, reconciliation: input.response, reconciliationStatus: remoteStatus === "SCHEDULED_ACCEPTED" ? "SCHEDULED" : "PENDING_REVIEW" };
     const transaction = this.db.transaction(() => {
-      this.db.prepare("UPDATE publish_records SET status='Submitted', success=0, response_json=?, verification_status='WaitingUser' WHERE id=?").run(json(redactSecretValue(response)), existing.id);
-      this.db.prepare("UPDATE submission_intents SET state='Submitted', error_code=NULL, updated_at=? WHERE id=?").run(timestamp, intent.id);
-      this.db.prepare("UPDATE publish_jobs SET status='Submitted', external_id=NULL, publish_record_id=?, last_error_code=NULL, last_error_message=NULL, next_retry_at=NULL, finished_at=NULL WHERE id=? AND status='NeedsReconciliation'").run(existing.id, jobId);
+      this.db.prepare("UPDATE publish_records SET status='Submitted', success=0, response_json=?, verification_status='WaitingUser',remote_status=?,published_external_id=? WHERE id=?").run(json(redactSecretValue(response)), remoteStatus, externalId, existing.id);
+      this.db.prepare("UPDATE submission_intents SET state='Submitted', error_code=NULL,remote_status=?,reconciliation_required=1,external_id=?, updated_at=? WHERE id=?").run(remoteStatus, externalId, timestamp, intent.id);
+      this.db.prepare("UPDATE publish_jobs SET status='Submitted', external_id=?, publish_record_id=?, last_error_code=NULL,last_error_message=NULL,next_retry_at=NULL,finished_at=NULL WHERE id=?").run(externalId, existing.id, jobId);
     });
     transaction();
     return { job: this.getJob(jobId) as PublishJob, record: this.getPublishRecordByJob(jobId) as PublishRecord };

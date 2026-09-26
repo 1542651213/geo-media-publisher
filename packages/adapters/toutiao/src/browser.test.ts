@@ -200,6 +200,8 @@ function setupPage(options: { titleReadback?: string; bodyReadback?: string; dup
     })
   };
   const page = {
+    isClosed: vi.fn(() => false),
+    context: () => session.context,
     goto: vi.fn(async (url: string) => { currentUrl = options.loginPage ? "https://mp.toutiao.com/auth/page/login?redirect_url=JTJGcHJvZmlsZV92NCUyRg==" : url; }),
     url: vi.fn(() => currentUrl),
     frames: vi.fn(() => options.editorInFrame ? [frame] : []),
@@ -221,9 +223,10 @@ function setupPage(options: { titleReadback?: string; bodyReadback?: string; dup
       return currentUrl === "https://mp.toutiao.com/" ? entry : title;
     })
   };
-  const session = { page, executionMode: "VISIBLE", headless: false, sessionIdHash: "toutiao-browser-session", context: { pages: () => [page] } } as unknown as BrowserSession;
-  const manager = { hasStoredSession: vi.fn(() => true), open: vi.fn(async () => session), save: vi.fn(async () => undefined), close: vi.fn(async () => undefined), clear: vi.fn() } as unknown as BrowserSessionManager;
-  return { page, frame, title, body, required, fileInput, coverPreview, singleCover, coverAdd, assistantDrawer, drawerMask, submit, scheduledPublish, entry, manager };
+  const session = { page, executionMode: "VISIBLE", headless: false, sessionIdHash: "toutiao-browser-session", context: { pages: () => [page], serviceWorkers: () => [] } } as unknown as BrowserSession;
+  const manager = { hasStoredSession: vi.fn(() => true), open: vi.fn(async () => session), save: vi.fn(async () => undefined), close: vi.fn(async () => undefined), clear: vi.fn(),
+    getCanonicalPage: vi.fn(() => ({ page, session, pageDebugId: "page-1" })) } as unknown as BrowserSessionManager;
+  return { page, session, frame, title, body, required, fileInput, coverPreview, singleCover, coverAdd, assistantDrawer, drawerMask, submit, scheduledPublish, entry, manager };
 }
 
 describe("Toutiao article browser adapter", () => {
@@ -232,6 +235,8 @@ describe("Toutiao article browser adapter", () => {
     const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
     expect(adapter.platformKey).toBe("toutiao");
     expect(adapter.manifest).toMatchObject({ transport: "browser", integrationMode: "BrowserAutomation", supportsArticle: true, supportsVideo: false });
+    expect(adapter.getCapabilities()).toMatchObject({ contentTransport: "ARTICLE_BROWSER", richText: false,
+      draft: false, imagePost: false, maxImageCount: 1, tags: false, categories: false });
   });
 
   it("connects Toutiao through a visible manual-login session and persists it after completion", async () => {
@@ -265,7 +270,7 @@ describe("Toutiao article browser adapter", () => {
   it("passes login, discovers the article entry, fills title/body, checks required fields and uploads the cover without submit", async () => {
     const fixture = setupPage();
     const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
-    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE" } };
+    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
 
     await expect(adapter.checkLogin(context)).resolves.toBe("logged_in");
     const result = await adapter.preparePublish(context, article);
@@ -285,7 +290,7 @@ describe("Toutiao article browser adapter", () => {
       profileLabel: "new account"
     });
     const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
-    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE" } };
+    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
 
     await expect(adapter.inspectAccountPreflight(context)).resolves.toMatchObject({
       allowed: false,
@@ -303,7 +308,7 @@ describe("Toutiao article browser adapter", () => {
       profileLabel: "在沙滩作画的画家"
     });
     const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
-    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE" } };
+    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
 
     await expect(adapter.inspectAccountPreflight(context)).resolves.toMatchObject({
       allowed: true,
@@ -325,7 +330,7 @@ describe("Toutiao article browser adapter", () => {
       profileLabel: "在沙滩作画的画家"
     });
     const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
-    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE" } };
+    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
 
     await expect(adapter.inspectAccountPreflight(context)).resolves.toMatchObject({
       allowed: false,
@@ -339,7 +344,7 @@ describe("Toutiao article browser adapter", () => {
   it("fails when the final submit control is explicitly disabled for account permission", async () => {
     const fixture = setupPage({ finalSubmitDisabled: true, finalSubmitDisabledReason: "账号无发文权限" });
     const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
-    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE" } };
+    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
 
     await expect(adapter.preparePublish(context, article)).rejects.toMatchObject({ code: "PERMISSION_DENIED", message: expect.stringContaining("PUBLISH_PERMISSION_DENIED") });
     expect(fixture.submit.click).not.toHaveBeenCalled();
@@ -353,7 +358,7 @@ describe("Toutiao article browser adapter", () => {
   it("classifies a post-click account mute as a permission error without retrying", async () => {
     const fixture = setupPage({ afterSubmitPageText: "创作中心 账号已被禁言 无法发布文章" });
     const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
-    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE" } };
+    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
     const attempt = { jobId: "job-muted-after-click", submissionIntentId: "intent-muted-after-click", attempt: 1, markSubmissionSideEffect: vi.fn() };
 
     await adapter.preparePublish(context, article);
@@ -365,7 +370,7 @@ describe("Toutiao article browser adapter", () => {
   it("discovers the Toutiao article editor entry and fields inside the authenticated creator frame", async () => {
     const fixture = setupPage({ editorInFrame: true });
     const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
-    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE" } };
+    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
 
     await expect(adapter.preparePublish(context, article)).resolves.toMatchObject({ prepared: true, response: { articleEntry: "verified", titleReadback: true, bodyReadback: true } });
     expect(fixture.entry.click).toHaveBeenCalledTimes(1);
@@ -375,7 +380,7 @@ describe("Toutiao article browser adapter", () => {
   it("uses the exact article-editor href when dashboard history also contains publish wording", async () => {
     const fixture = setupPage({ noisyDashboard: true });
     const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
-    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE" } };
+    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
 
     await expect(adapter.preparePublish(context, article)).resolves.toMatchObject({ prepared: true, response: { articleEntry: "verified", finalSubmitClickCount: 0 } });
     expect(fixture.entry.click).toHaveBeenCalledTimes(1);
@@ -385,7 +390,7 @@ describe("Toutiao article browser adapter", () => {
   it("waits for editor fields that hydrate after the article route is ready", async () => {
     const fixture = setupPage({ editorFieldsDelayed: true });
     const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
-    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE" } };
+    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
 
     await expect(adapter.preparePublish(context, article)).resolves.toMatchObject({ prepared: true, response: { titleReadback: true, bodyReadback: true, finalSubmitClickCount: 0 } });
     expect(fixture.submit.click).not.toHaveBeenCalled();
@@ -394,7 +399,7 @@ describe("Toutiao article browser adapter", () => {
   it("selects the verified single-cover mode before uploading when Toutiao defers the file input", async () => {
     const fixture = setupPage({ coverModeSelectionRequired: true });
     const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
-    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE" } };
+    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
 
     await expect(adapter.preparePublish(context, article)).resolves.toMatchObject({ prepared: true, response: { imageRequirement: "cover_uploaded", coverInputVerified: true, finalSubmitClickCount: 0 } });
     expect(fixture.singleCover.click).toHaveBeenCalledTimes(1);
@@ -405,7 +410,7 @@ describe("Toutiao article browser adapter", () => {
   it("uses the verified cover-add control when the file input is created only after opening it", async () => {
     const fixture = setupPage({ coverModeSelectionRequired: true, coverAddRequired: true });
     const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
-    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE" } };
+    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
 
     await expect(adapter.preparePublish(context, article)).resolves.toMatchObject({ prepared: true, response: { imageRequirement: "cover_uploaded", coverInputVerified: true, coverUploadMethod: "file_input", finalSubmitClickCount: 0 } });
     expect(fixture.singleCover.click).toHaveBeenCalledTimes(1);
@@ -417,7 +422,7 @@ describe("Toutiao article browser adapter", () => {
   it("closes a uniquely verified assistant drawer before selecting the required cover mode", async () => {
     const fixture = setupPage({ coverModeSelectionRequired: true, assistantDrawerOpen: true });
     const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
-    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE" } };
+    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
 
     await expect(adapter.preparePublish(context, article)).resolves.toMatchObject({ prepared: true, response: { imageRequirement: "cover_uploaded", coverInputVerified: true, finalSubmitClickCount: 0 } });
     expect(fixture.drawerMask.click).toHaveBeenCalledTimes(1);
@@ -428,7 +433,7 @@ describe("Toutiao article browser adapter", () => {
   it("does not mistake the scheduled-publish control for the final submit control", async () => {
     const fixture = setupPage({ scheduledPublishFirst: true });
     const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
-    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE" } };
+    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
 
     const result = await adapter.preparePublish(context, article);
     expect(result.response).toMatchObject({ finalSubmitControl: { label: "Publish article", enabled: true, clickRequired: false }, finalSubmitClickCount: 0 });
@@ -439,7 +444,7 @@ describe("Toutiao article browser adapter", () => {
   it("fails closed when final submit discovery is not unique", async () => {
     const fixture = setupPage({ duplicateFinalSubmit: true });
     const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
-    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE" } };
+    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
 
     await expect(adapter.preparePublish(context, article)).rejects.toMatchObject({ code: "FINAL_SUBMIT_CONTROL_NOT_FOUND" });
     expect(fixture.submit.click).not.toHaveBeenCalled();
@@ -448,7 +453,7 @@ describe("Toutiao article browser adapter", () => {
   it("fails closed on ambiguous title candidates and specific readback failures", async () => {
     const ambiguous = setupPage({ duplicateTitle: true });
     const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: ambiguous.manager });
-    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE" } };
+    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
     await expect(adapter.preparePublish(context, article)).rejects.toMatchObject({ code: "CONTENT_REJECTED", message: expect.stringContaining("CONTENT_EDITOR_AMBIGUOUS") });
 
     const mismatch = setupPage({ titleReadback: "Other title" });
@@ -459,7 +464,7 @@ describe("Toutiao article browser adapter", () => {
   it("reports missing required fields and only inspects the final-submit control", async () => {
     const fixture = setupPage({ missingRequired: true });
     const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
-    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE" } };
+    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
     await expect(adapter.preparePublish(context, article)).rejects.toMatchObject({ code: "REQUIRED_FIELD_MISSING" });
 
     const ready = setupPage();
@@ -474,7 +479,7 @@ describe("Toutiao article browser adapter", () => {
   it("performs the Toutiao final submit once and rejects a second invocation", async () => {
     const fixture = setupPage({ publishedUrl: "https://www.toutiao.com/article/1234567890/" });
     const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
-    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE" } };
+    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
     const attempt = { jobId: "job-1", submissionIntentId: "intent-1", attempt: 1, markSubmissionSideEffect: vi.fn() };
 
     await adapter.preparePublish(context, article);
@@ -482,7 +487,7 @@ describe("Toutiao article browser adapter", () => {
 
     expect(attempt.markSubmissionSideEffect).toHaveBeenCalledTimes(1);
     expect(fixture.submit.click).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ success: true, externalId: "1234567890", publishedUrl: "https://www.toutiao.com/article/1234567890/", response: { finalSubmitCount: 1 } });
+    expect(result).toMatchObject({ success: true, status: "publishing", externalId: "1234567890", publishedUrl: "https://www.toutiao.com/article/1234567890/", response: { finalSubmitCount: 1, submissionAccepted: true, requiresManagementConfirmation: true } });
     await expect(adapter.finalSubmit(context, article, attempt)).rejects.toMatchObject({ code: "FINAL_SUBMIT_ALREADY_USED" });
     expect(fixture.submit.click).toHaveBeenCalledTimes(1);
   });
@@ -490,7 +495,7 @@ describe("Toutiao article browser adapter", () => {
   it("marks a clicked but unverifiable Toutiao submission as uncertain without retrying", async () => {
     const fixture = setupPage();
     const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
-    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE" } };
+    const context = { accountId: "account-1", accountName: "Toutiao test account", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
     const attempt = { jobId: "job-unknown", submissionIntentId: "intent-unknown", attempt: 1, markSubmissionSideEffect: vi.fn() };
 
     await adapter.preparePublish(context, article);
@@ -498,5 +503,81 @@ describe("Toutiao article browser adapter", () => {
 
     expect(attempt.markSubmissionSideEffect).toHaveBeenCalledTimes(1);
     expect(fixture.submit.click).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires the expected creator identity and a verified cover before opening the editor", async () => {
+    const fixture = setupPage();
+    const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
+    const context = { accountId: "account-1", accountName: "test", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "999" } };
+    await expect(adapter.preparePublish(context, article)).rejects.toMatchObject({ code: "USER_ACTION_REQUIRED" });
+    expect(fixture.entry.click).not.toHaveBeenCalled();
+    await expect(adapter.preparePublish({ ...context, settings: { ...context.settings, expectedCreatorId: "123456789" } },
+      { ...article, coverPath: undefined, images: [] })).rejects.toMatchObject({ code: "REQUIRED_FIELD_MISSING" });
+    expect(fixture.entry.click).not.toHaveBeenCalled();
+  });
+
+  it("never clicks without a durable boundary and refuses a replaced prepared context", async () => {
+    const fixture = setupPage();
+    const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
+    const context = { accountId: "account-1", accountName: "test", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
+    await adapter.preparePublish(context, article);
+    await expect(adapter.finalSubmit(context, article, { jobId: "missing", submissionIntentId: "i", attempt: 1 }))
+      .rejects.toMatchObject({ code: "USER_ACTION_REQUIRED" });
+    const claim = vi.fn(() => { throw new Error("CLAIM_REJECTED"); });
+    await expect(adapter.finalSubmit(context, article, { jobId: "claim", submissionIntentId: "i", attempt: 1,
+      markSubmissionSideEffect: claim })).rejects.toThrow("CLAIM_REJECTED");
+    expect(fixture.submit.click).not.toHaveBeenCalled();
+    await expect(adapter.prepareFinalSubmit(context, { ...article, coverPath: "C:/different-cover.jpg" }))
+      .rejects.toMatchObject({ code: "USER_ACTION_REQUIRED" });
+    fixture.page.context = () => ({ pages: () => [] }) as unknown as BrowserSession["context"];
+    await expect(adapter.prepareFinalSubmit(context, article)).rejects.toMatchObject({ code: "BROWSER_SESSION_PAGE_OWNERSHIP" });
+  });
+
+  it("reuses owned management reconciliation and preserves reviewing without claiming published", async () => {
+    const fixture = setupPage();
+    const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
+    const context = { accountId: "account-1", accountName: "test", platformKey: "toutiao", settings: { browserExecutionMode: "VISIBLE", expectedCreatorId: "123456789" } };
+    const scan = vi.spyOn(adapter, "deepReconcileOwnedManagement").mockResolvedValue({
+      match: { state: "REVIEWING", externalId: "77", publicUrl: null, matchedRowCount: 1,
+        titleMatch: true, timeWindowMatch: true, matchedBy: "TITLE_AND_TIME" },
+      scopeComplete: true, totalRows: 1, scans: [], blockedContentMutationCount: 0
+    } as unknown as Awaited<ReturnType<typeof adapter.deepReconcileOwnedManagement>>);
+    const result = await adapter.reconcile(context, { jobId: "job", articleId: article.articleId, title: article.title,
+      accountName: "test", windowStart: "2026-09-26T00:00:00Z", windowEnd: "2026-09-26T00:30:00Z", finalSubmitCount: 1 });
+    expect(scan).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ status: "STILL_UNCERTAIN", remoteState: "REVIEWING", accountMatch: true });
+    expect(fixture.submit.click).not.toHaveBeenCalled();
+    scan.mockResolvedValue({ ...await scan.mock.results[0]!.value, scopeComplete: false });
+    expect(await adapter.reconcile(context, { jobId: "job", articleId: article.articleId, title: article.title,
+      accountName: "test", windowStart: "2026-09-26T00:00:00Z", windowEnd: "2026-09-26T00:30:00Z", expectedExternalId: "0", finalSubmitCount: 1 }))
+      .toMatchObject({ status: "STILL_UNCERTAIN", remoteState: "UNKNOWN" });
+  });
+
+  it("delegates public verification to an isolated account-owned read-only page", async () => {
+    const fixture = setupPage();
+    const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
+    const context = { accountId: "account-1", accountName: "test", platformKey: "toutiao", settings: { expectedCreatorId: "123456789" } };
+    const check = vi.spyOn(adapter, "verifyOwnedPublicArticle").mockResolvedValue({ verified: false, urlReachable: false, titleMatch: false, bodyMatch: false });
+    expect(await adapter.verifyPublished(context, article, { externalId: "77", publishedUrl: "https://www.toutiao.com/article/77/" }))
+      .toMatchObject({ status: "publishing", errorCode: "RECONCILIATION_UNCERTAIN" });
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(fixture.page.goto).not.toHaveBeenCalled();
+  });
+
+  it("closes only the public verification page before removing its read-only guard", async () => {
+    const fixture = setupPage();
+    const adapter = new ToutiaoArticleBrowserAdapter({ sessionManager: fixture.manager });
+    const order: string[] = [];
+    const publicPage = { goto: vi.fn(async () => ({ status: () => 503 })),
+      url: () => "https://www.toutiao.com/article/77/", title: async () => article.title,
+      frames: () => [], locator: () => ({ innerText: async () => `${article.title} ${article.body}` }),
+      close: vi.fn(async () => { order.push("close"); }) };
+    fixture.session.context.newPage = vi.fn(async () => publicPage) as unknown as BrowserSession["context"]["newPage"];
+    fixture.session.context.route = vi.fn(async () => { order.push("guard"); return { dispose: async () => undefined, [Symbol.asyncDispose]: async () => undefined }; });
+    fixture.session.context.unroute = vi.fn(async () => { order.push("unguard"); });
+    const result = await adapter.verifyOwnedPublicArticle({ accountId: "account-1", accountName: "test", platformKey: "toutiao", settings: {} }, article, "77", "https://www.toutiao.com/article/77/");
+    expect(result).toMatchObject({ verified: false, urlReachable: false });
+    expect(order).toEqual(["guard", "close", "unguard"]);
+    expect(fixture.page.goto).not.toHaveBeenCalled();
   });
 });

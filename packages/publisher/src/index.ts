@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { isAutomationAdapter, withUserInitiatedActionSettings, type AdapterRegistry, type BrowserExecutionMode, type BrowserPublishAttemptContext, type UserInitiatedAction } from "@publisher/adapters-core";
+import { isAutomationAdapter, withUserInitiatedActionSettings, type AdapterRegistry, type BrowserExecutionMode, type BrowserPublishAttemptContext, type BrowserPublishReconciliationResult, type PlatformAdapter, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
-import { canReuseArticle, decideFailure, validatePlatformArticle, type Account, type AdapterManifest, type ErrorCode, type PlatformCapability, type PublishJob, type PublishMode, type PublishResult, type PublishVideoInput } from "@publisher/domain";
+import { canReuseArticle, decideFailure, validatePlatformArticle, type Account, type AdapterManifest, type ErrorCode, type PlatformCapability, type PublishArticleInput, type PublishJob, type PublishMode, type PublishResult, type PublishVideoInput } from "@publisher/domain";
 import type { Logger } from "@publisher/logger";
 import { GlobalPublishExecutionGate } from "./global-publish-execution-gate";
 export { GlobalPublishExecutionGate } from "./global-publish-execution-gate";
@@ -61,6 +61,26 @@ function publishInputHash(input: unknown): string {
   return createHash("sha256").update(JSON.stringify(input)).digest("hex");
 }
 
+/** Shared by normal preparation and the explicitly approved self-test path. */
+export function hashPreparedBrowserArticleInput(input: PublishArticleInput): string {
+  return publishInputHash({ articleId: input.articleId, title: input.title, body: input.body, summary: input.summary, tags: input.tags,
+    ...(input.coverPath !== undefined ? { coverPath: input.coverPath } : {}), ...(input.images !== undefined ? { images: input.images } : {}),
+    ...(input.variantId !== undefined ? { variantId: input.variantId } : {}), ...(input.category !== undefined ? { category: input.category } : {}),
+    ...(input.location !== undefined ? { location: input.location } : {}), ...(input.topic !== undefined ? { topic: input.topic } : {}) });
+}
+
+function usesBrowserManagementReconciliation(adapter: PlatformAdapter): boolean {
+  return adapter.platformKey === "toutiao" && adapter.getCapabilities().browserManagementReconciliation === true
+    && adapter.getCapabilities().contentTransport === "ARTICLE_BROWSER";
+}
+
+function browserIdentitySettings(account: Account, required: boolean): Record<string, string> {
+  if (!required) return {};
+  const expectedCreatorId = account.externalAccountId?.trim();
+  if (!expectedCreatorId) throw Object.assign(new Error("Toutiao requires a verified stable account identity before browser publishing"), { code: "USER_ACTION_REQUIRED" });
+  return { expectedCreatorId };
+}
+
 function publishRecordMetadata(manifest: AdapterManifest, job: PublishJob, account: Account, result: PublishResult): {
   publishMode: PublishMode;
   automationType: PlatformCapability;
@@ -114,41 +134,85 @@ export class PublisherService {
 
   async reconcileBrowserJob(jobId: string, action?: UserInitiatedAction): Promise<PublishExecutionResult> {
     const job = this.repository.getJob(jobId);
-    if (!job || job.status !== "NeedsReconciliation") throw new Error("只有 NeedsReconciliation Job 才能执行浏览器只读回查");
+    if (!job) throw new Error("Publish job not found");
+    const adapter = this.adapters.getForContent(job.platformKey, job.contentKind ?? "article");
+    const managementReconciliation = usesBrowserManagementReconciliation(adapter);
+    if (job.status !== "NeedsReconciliation" && !(managementReconciliation && ["Submitted", "Publishing"].includes(job.status))) throw new Error("只有已提交或 NeedsReconciliation Job 才能执行浏览器只读回查");
     const account = this.repository.listAccounts().find((item) => item.id === job.accountId);
     const article = this.repository.getArticle(job.articleId);
     if (!account || !article) throw new Error("关联账号或文章不存在");
-    const adapter = this.adapters.getForContent(job.platformKey, job.contentKind ?? "article");
     if (!adapter.reconcile) return { job, message: "STILL_UNCERTAIN: 当前平台没有经过审阅的只读内容列表回查契约，未重试" };
-    const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: false, manualConfirmationRequired: true }, action, "VISIBLE"), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
+    const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: false, manualConfirmationRequired: true, ...browserIdentitySettings(account, managementReconciliation) }, action, "VISIBLE"), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
     const variant = job.articleVariantId ? this.repository.getArticleVariant(job.articleVariantId) : null;
     const selectedImage = job.selectedImageAssetId ? this.repository.getImageAsset(job.selectedImageAssetId) : null;
     const input = { articleId: article.id, title: variant?.title ?? article.title, body: variant?.body ?? article.body, summary: variant?.summary ?? article.summary, tags: article.tags, ...(selectedImage ? { images: [selectedImage.filePath] } : {}) };
     const intent = this.repository.getSubmissionIntentByJob(job.id);
     const existingRecord = this.repository.getPublishRecordByJob(job.id);
-    const createdAt = Date.parse(job.startedAt ?? job.createdAt);
-    const windowStart = Number.isFinite(createdAt) ? new Date(createdAt - 5 * 60_000).toISOString() : job.createdAt;
+    if (managementReconciliation && (!intent || intent.finalSubmitCount !== 1)) throw new Error("Toutiao management reconciliation requires a persisted final submit claim");
+    if (managementReconciliation && typeof existingRecord?.response.expectedCreatorId === "string"
+      && existingRecord.response.expectedCreatorId !== account.externalAccountId) throw Object.assign(new Error("Toutiao reconciliation account identity differs from the prepared binding"), { code: "USER_ACTION_REQUIRED" });
+    const boundaryAt = intent?.submitBoundaryEnteredAt ?? job.startedAt ?? job.createdAt;
+    const createdAt = Date.parse(managementReconciliation ? boundaryAt : job.startedAt ?? job.createdAt);
+    const windowStart = Number.isFinite(createdAt) ? new Date(createdAt - (managementReconciliation ? 15 : 5) * 60_000).toISOString() : job.createdAt;
+    const windowEnd = managementReconciliation && Number.isFinite(createdAt) ? new Date(createdAt + 15 * 60_000).toISOString() : new Date().toISOString();
+    const expectedExternalId = managementReconciliation
+      ? [existingRecord?.publishedExternalId, intent?.externalId].find((value) => typeof value === "string" && /^[1-9]\d*$/u.test(value)) ?? null
+      : existingRecord?.publishedExternalId ?? intent?.externalId ?? null;
     const submittedAt = Date.parse(intent?.updatedAt ?? job.finishedAt ?? job.startedAt ?? job.createdAt);
     const waitWindowSatisfied = intent?.state === "Unknown"
       && Number.isFinite(submittedAt)
       && Date.now() >= submittedAt + (this.options.reconciliationWaitMs ?? 30_000);
-    const result = await withTimeout(adapter.reconcile(ctx, {
+    const result: BrowserPublishReconciliationResult = await withTimeout(adapter.reconcile(ctx, {
       jobId: job.id,
       articleId: article.id,
       title: input.title,
       accountName: account.name,
       windowStart,
-      windowEnd: new Date().toISOString(),
+      windowEnd,
       waitWindowSatisfied,
       submissionIntentState: intent?.state ?? null,
       finalSubmitCount: intent?.finalSubmitCount ?? 0,
-      expectedExternalId: existingRecord?.publishedExternalId ?? intent?.externalId ?? null,
-      expectedPublishedUrl: existingRecord?.publishedUrl ?? null
-    }), this.options.operationTimeoutMs ?? 120_000, "Browser publish reconciliation");
+      expectedExternalId,
+      expectedPublishedUrl: existingRecord?.publishedUrl ?? null,
+      ...(managementReconciliation ? { expectedCreatorId: account.externalAccountId!, submittedAt: boundaryAt } : {})
+    }), this.options.operationTimeoutMs ?? 120_000, "Browser publish reconciliation").catch((error: unknown) => {
+      if (!managementReconciliation) throw error;
+      return { status: "STILL_UNCERTAIN" as const, remoteState: "UNKNOWN" as const, titleMatch: false, accountMatch: false, timeWindowMatch: false,
+        response: { readOnly: true, errorCode: errorCode(error) }, message: "Management read failed; no submit was attempted" };
+    });
+    const preserveUncertain = (message: string): PublishExecutionResult => {
+      if (managementReconciliation && intent) {
+        const uncertain = this.repository.markSubmissionIntentUncertain(intent.id, "RECONCILIATION_UNCERTAIN");
+        if (existingRecord) this.repository.updatePublishRecord(existingRecord.id, { status: "Submitted", success: false,
+          response: { ...existingRecord.response, reconciliation: result.response, managementState: result.remoteState ?? "UNKNOWN" }, verificationStatus: "WaitingUser" });
+        return { job: uncertain, message };
+      }
+      return { job, message };
+    };
+    const matchedByTrustedId = managementReconciliation && Boolean(expectedExternalId && result.externalId === expectedExternalId
+      && result.response.matchedBy === "REMOTE_ID" && result.accountMatch);
+    if (managementReconciliation) {
+      const matchedTarget = matchedByTrustedId || result.titleMatch && result.accountMatch && result.timeWindowMatch;
+      if (matchedTarget && (result.remoteState === "REVIEWING" || result.remoteState === "SCHEDULED")) {
+        const accepted = this.repository.reconcileJobAsSubmitted(job.id, { response: { ...result.response, managementState: result.remoteState },
+          externalId: result.externalId ?? null, remoteStatus: result.remoteState === "SCHEDULED" ? "SCHEDULED_ACCEPTED" : "SUBMIT_ACCEPTED" });
+        return { job: accepted.job, message: result.remoteState === "REVIEWING" ? "SUBMITTED_REVIEWING: 目标作品审核中，未再次提交" : "SCHEDULED_ACCEPTED: 目标作品定时待发布，未再次提交" };
+      }
+      if (matchedTarget && result.remoteState === "REJECTED") {
+        this.repository.updateSubmissionRemoteStatus(job.id, "FAILED_CONFIRMED", false);
+        if (existingRecord) this.repository.updatePublishRecord(existingRecord.id, { status: "Failed", success: false,
+          response: { ...existingRecord.response, reconciliation: result.response, managementState: "REJECTED" }, verificationStatus: "Failed" });
+        return { job: this.repository.updateJobFailure(job.id, "Failed", "CONTENT_REJECTED", "The uniquely matched remote article was rejected", null), message: "REJECTED: 已确认目标作品未通过，提交计数保留，未重试" };
+      }
+      if (!matchedTarget || result.remoteState !== "PUBLISHED") return preserveUncertain(`STILL_UNCERTAIN: ${result.remoteState ?? "UNKNOWN"}; no resubmission permitted`);
+    }
     if (result.status === "FOUND_PUBLISHED") {
-      if (!result.externalId || !result.publishedUrl || !result.titleMatch || !result.accountMatch || !result.timeWindowMatch || !adapter.verifyPublished) return { job, message: "STILL_UNCERTAIN: 回查未同时取得真实 External ID、URL、标题、账号和时间窗口证据，未写入成功" };
-      const verification = await withTimeout(adapter.verifyPublished(ctx, input, { externalId: result.externalId, publishedUrl: result.publishedUrl }), this.options.operationTimeoutMs ?? 120_000, "Browser publish result verification");
-      if (verification.status !== "published" || !verification.externalId || !verification.publishedUrl) return { job, message: `STILL_UNCERTAIN: 回收结果验证未通过，保持 NeedsReconciliation（${verification.errorMessage ?? "external result verification failed"}）` };
+      if (!result.externalId || !result.publishedUrl || !(matchedByTrustedId || result.titleMatch && result.accountMatch && result.timeWindowMatch) || !adapter.verifyPublished) return preserveUncertain("STILL_UNCERTAIN: 回查未同时取得真实 External ID、URL、目标身份和匹配证据，未写入成功");
+      const verification = await withTimeout(adapter.verifyPublished(ctx, input, { externalId: result.externalId, publishedUrl: result.publishedUrl }), this.options.operationTimeoutMs ?? 120_000, "Browser publish result verification").catch((error: unknown) => {
+        if (!managementReconciliation) throw error;
+        return { status: "failed" as const, response: { errorCode: errorCode(error) }, errorMessage: "Public read failed" };
+      });
+      if (verification.status !== "published" || !verification.externalId || !verification.publishedUrl) return preserveUncertain(`STILL_UNCERTAIN: 回收结果验证未通过，保持 NeedsReconciliation（${verification.errorMessage ?? "external result verification failed"}）`);
       const reconciled = this.repository.reconcileJobAsPublished(job.id, { externalId: verification.externalId, publishedUrl: verification.publishedUrl, response: { reconciliation: result.response, verification: verification.response } });
       this.logger.info("PUBLISHER", "BROWSER_RECONCILIATION_FOUND", "只读浏览器回查找到并验证了已发布内容", { jobId: job.id, platformKey: job.platformKey, externalId: verification.externalId, publishedUrl: verification.publishedUrl });
       return { job: reconciled.job, message: `FOUND_PUBLISHED: 已回收并保存真实 External ID/URL（PublishRecord ${reconciled.record.id}）` };
@@ -163,6 +227,7 @@ export class PublisherService {
 
   private resolveBrowserExecutionMode(platformKey: string, requestedMode?: BrowserExecutionMode, contentKind?: string): BrowserExecutionMode {
     if (!this.isBrowserAutomationPlatform(platformKey, contentKind) || requestedMode === "VISIBLE") return "VISIBLE";
+    if (platformKey === "toutiao" && usesBrowserManagementReconciliation(this.adapters.getForContent(platformKey, contentKind ?? "article"))) return "VISIBLE";
     const preferenceAllowsBackground = this.repository.getSettings().browserPublishMode === "background";
     const platformAllowsBackground = this.repository.listPlatforms().find((platform) => platform.platformKey === platformKey)?.backgroundAutomationStatus === "PASSED";
     return preferenceAllowsBackground && platformAllowsBackground ? "BACKGROUND" : "VISIBLE";
@@ -185,22 +250,36 @@ export class PublisherService {
   async prepareArticle(jobId: string, action?: UserInitiatedAction, browserExecutionMode?: BrowserExecutionMode): Promise<AssistedPrepareResult> {
     const job = this.repository.getJob(jobId);
     if (!job) throw new Error("Publish job not found");
+    const adapter = this.adapters.getForContent(job.platformKey, job.contentKind ?? "article");
+    const managementReconciliation = usesBrowserManagementReconciliation(adapter);
+    const frozenTransport = this.repository.getFrozenContentTransport(job.id);
+    if (managementReconciliation && frozenTransport && frozenTransport !== "ARTICLE_BROWSER")
+      throw Object.assign(new Error("The Job is bound to another content transport; browser preparation is forbidden"), { code: "TRANSPORT_FALLBACK_FORBIDDEN" });
     const existing = this.repository.getPublishRecordByJob(job.id);
-    if (existing?.status === "Prepared") return { job, record: existing, message: "知乎编辑器准备记录已存在，未重复打开或写入" };
-    if (job.status !== "AwaitingConfirmation") throw new Error("文章发布任务当前不是 AwaitingConfirmation 状态");
+    const priorIntent = managementReconciliation ? this.repository.getSubmissionIntentByJob(job.id) : null;
+    if (managementReconciliation && (priorIntent && (priorIntent.finalSubmitCount >= 1 || priorIntent.submitBoundaryEnteredAt
+      || priorIntent.state === "Unknown" || priorIntent.remoteStatus === "UNCERTAIN")
+      || ["Submitted", "Publishing", "NeedsReconciliation", "Success"].includes(job.status)))
+      throw Object.assign(new Error("Toutiao final submission is already claimed or uncertain; editor preparation cannot be repeated"), { code: "FINAL_SUBMIT_ALREADY_USED" });
+    if (existing?.status === "Prepared" && !managementReconciliation) return { job, record: existing, message: "知乎编辑器准备记录已存在，未重复打开或写入" };
+    if (job.status !== "AwaitingConfirmation" && !(managementReconciliation && existing?.status === "Prepared" && job.status === "NeedsUserAction")) throw new Error("文章发布任务当前不是 AwaitingConfirmation 状态");
     const account = this.repository.listAccounts().find((item) => item.platformAccountId === job.platformAccountId && item.platformKey === job.platformKey);
     const article = this.repository.getArticle(job.articleId);
     if (!account || !article) throw new Error("关联账号或文章不存在");
     this.repository.assertArticlePublishAllowed(article.id);
-    const adapter = this.adapters.getForContent(job.platformKey, job.contentKind ?? "article");
     if (!isAutomationAdapter(adapter)) throw Object.assign(new Error("当前平台没有浏览器辅助发布能力"), { code: "PERMISSION_DENIED" });
     const effectiveBrowserExecutionMode = this.resolveBrowserExecutionMode(job.platformKey, browserExecutionMode, job.contentKind ?? "article");
-    const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: false, manualConfirmationRequired: true }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
+    const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: false, manualConfirmationRequired: true, ...browserIdentitySettings(account, managementReconciliation) }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
     const login = await withTimeout(adapter.checkLogin(ctx), this.options.loginCheckTimeoutMs ?? 30_000, "Platform login check");
-    if (login !== "logged_in") throw Object.assign(new Error("知乎账号 Session 未通过登录检查，请先完成正常登录验证"), { code: login === "expired" || login === "logged_out" ? "LOGIN_EXPIRED" : "USER_ACTION_REQUIRED" });
+    if (login !== "logged_in") throw Object.assign(new Error(`${managementReconciliation ? "头条" : "知乎"}账号 Session 未通过登录检查，请先完成正常登录验证`), { code: login === "expired" || login === "logged_out" ? "LOGIN_EXPIRED" : "USER_ACTION_REQUIRED" });
     const variant = job.articleVariantId ? this.repository.getArticleVariant(job.articleVariantId) : null;
     const selectedImage = job.selectedImageAssetId ? this.repository.getImageAsset(job.selectedImageAssetId) : null;
-    const input = { articleId: article.id, title: variant?.title ?? article.title, body: variant?.body ?? article.body, summary: variant?.summary ?? article.summary, tags: article.tags, ...(selectedImage ? { images: [selectedImage.filePath] } : {}) };
+    const coverId = managementReconciliation ? variant?.coverAssetId ?? article.coverAssetId : null;
+    const cover = coverId ? this.repository.getMediaAsset(coverId) : null;
+    const input = { articleId: article.id, title: variant?.title ?? article.title, body: variant?.body ?? article.body, summary: variant?.summary ?? article.summary, tags: article.tags, ...(cover ? { coverPath: cover.filePath } : {}), ...(selectedImage ? { images: [selectedImage.filePath] } : {}) };
+    if (managementReconciliation && existing && (existing.status !== "Prepared" || existing.response.contentTransport !== "ARTICLE_BROWSER"
+      || existing.response.preparedInputHash !== hashPreparedBrowserArticleInput(input) || existing.response.expectedCreatorId !== account.externalAccountId))
+      throw Object.assign(new Error("Toutiao preparation recovery must preserve the frozen content, transport and identity"), { code: "CONTENT_REJECTED" });
     const validation = await adapter.validateArticle(input);
     if (!validation.valid) throw Object.assign(new Error(validation.errors.join("；")), { code: "CONTENT_REJECTED" });
     if (selectedImage) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_STARTED", "开始向平台编辑器上传任务主图", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
@@ -215,9 +294,12 @@ export class PublisherService {
       throw Object.assign(new Error("平台编辑器未返回图片上传完成证据，不能声明图片已插入"), { code: "UPLOAD_FAILED" });
     }
     if (selectedImage) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_PASSED", "平台编辑器已返回图片 DOM 上传证据", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
-    const preparedResponse = { ...prepared.response, selectedImageAssetId: job.selectedImageAssetId ?? null, imageSelectionMode: job.imageSelectionMode ?? "none", imageInsertion: selectedImage ? "uploaded_verified" : "none" };
-    const record = this.repository.insertPublishRecord({ jobId: job.id, accountId: account.id, platformAccountId: account.platformAccountId, platformKey: job.platformKey, articleId: article.id, publishedUrl: null, publishedExternalId: null, success: false, response: preparedResponse, dryRun: false, status: "Prepared", publishMode: job.finalPublishMode === "PREPARE_ONLY" ? "MANUAL" : "ASSISTED", automationType: adapter.automationType, browserSessionIdHash: prepared.sessionIdHash ?? account.browserSessionId, operator: process.env.USERNAME?.trim() || process.env.USER?.trim() || "desktop-user", verificationStatus: "WaitingUser", editorOpenedAt: prepared.editorOpenedAt ?? null, titleFilled: prepared.titleFilled ?? false, bodyFilled: prepared.bodyFilled ?? false, selectedImageAssetId: job.selectedImageAssetId ?? null, imageSelectionMode: job.imageSelectionMode ?? "none" });
-    this.logger.info("PUBLISHER", "ZHihu_EDITOR_PREPARED", "知乎编辑器已打开并完成标题、正文实际输入校验；等待用户确认", { jobId: job.id, platformKey: job.platformKey, accountId: account.id, titleFilled: prepared.titleFilled ?? false, bodyFilled: prepared.bodyFilled ?? false });
+    const preparedResponse = { ...prepared.response, selectedImageAssetId: job.selectedImageAssetId ?? null, imageSelectionMode: job.imageSelectionMode ?? "none", imageInsertion: selectedImage ? "uploaded_verified" : "none",
+      ...(managementReconciliation ? { contentTransport: "ARTICLE_BROWSER", preparedInputHash: hashPreparedBrowserArticleInput(input), expectedCreatorId: account.externalAccountId } : {}) };
+    const record = managementReconciliation && existing
+      ? this.repository.updatePublishRecord(existing.id, { status: "Prepared", success: false, response: preparedResponse, verificationStatus: "WaitingUser" })
+      : this.repository.insertPublishRecord({ jobId: job.id, accountId: account.id, platformAccountId: account.platformAccountId, platformKey: job.platformKey, articleId: article.id, publishedUrl: null, publishedExternalId: null, success: false, response: preparedResponse, dryRun: false, status: "Prepared", publishMode: job.finalPublishMode === "PREPARE_ONLY" ? "MANUAL" : "ASSISTED", automationType: adapter.automationType, browserSessionIdHash: prepared.sessionIdHash ?? account.browserSessionId, operator: process.env.USERNAME?.trim() || process.env.USER?.trim() || "desktop-user", verificationStatus: "WaitingUser", editorOpenedAt: prepared.editorOpenedAt ?? null, titleFilled: prepared.titleFilled ?? false, bodyFilled: prepared.bodyFilled ?? false, selectedImageAssetId: job.selectedImageAssetId ?? null, imageSelectionMode: job.imageSelectionMode ?? "none" });
+    this.logger.info("PUBLISHER", managementReconciliation ? "TOUTIAO_EDITOR_PREPARED" : "ZHihu_EDITOR_PREPARED", `${managementReconciliation ? "头条" : "知乎"}编辑器已打开并完成标题、正文实际输入校验；等待用户确认`, { jobId: job.id, platformKey: job.platformKey, accountId: account.id, titleFilled: prepared.titleFilled ?? false, bodyFilled: prepared.bodyFilled ?? false });
     return { job: this.repository.getJob(job.id) as PublishJob, record, message: prepared.message };
   }
 
@@ -247,6 +329,7 @@ export class PublisherService {
     try {
       if (!job.dryRun) this.repository.updateGlobalFormalPublishExecution(job.id, "EXECUTING");
       const adapter = this.adapters.getForContent(job.platformKey, job.contentKind ?? "article");
+      const managementReconciliation = usesBrowserManagementReconciliation(adapter);
       const requiredTransport = this.repository.getFrozenContentTransport(job.id);
       if (requiredTransport && adapter.getCapabilities().contentTransport !== requiredTransport) throw Object.assign(new Error("Job content transport differs from its frozen preparation; automatic fallback is forbidden"), { code: "TRANSPORT_FALLBACK_FORBIDDEN" });
       if (!job.dryRun) adapter.assertFormalSubmitAvailable?.();
@@ -256,9 +339,10 @@ export class PublisherService {
         if (nextAllowedAt.getTime() > Date.now()) throw Object.assign(new Error("Account publish rate limit has not elapsed"), { code: "RATE_LIMITED" });
       }
       const effectiveBrowserExecutionMode = this.resolveBrowserExecutionMode(job.platformKey, browserExecutionMode, job.contentKind ?? "article");
-      const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: job.dryRun, manualConfirmationRequired: job.manualConfirmationRequired }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
+      const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: job.dryRun, manualConfirmationRequired: job.manualConfirmationRequired, ...browserIdentitySettings(account, managementReconciliation) }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
       const preparedRecord = this.repository.getPublishRecordByJob(job.id);
       const usePlatformFinalSubmit = !job.dryRun && typeof adapter.finalSubmit === "function" && preparedRecord?.status === "Prepared";
+      if (!job.dryRun && managementReconciliation && !usePlatformFinalSubmit) throw Object.assign(new Error("Toutiao BrowserNative requires a persisted prepared editor before final submission"), { code: "USER_ACTION_REQUIRED" });
       platformFinalSubmitPath = usePlatformFinalSubmit;
       if (!usePlatformFinalSubmit) {
         const login = await withTimeout(adapter.checkLogin(ctx), this.options.loginCheckTimeoutMs ?? 30_000, "Platform login check");
@@ -296,6 +380,9 @@ export class PublisherService {
         const selectedImage = job.selectedImageAssetId ? this.repository.getImageAsset(job.selectedImageAssetId) : null;
         if (job.selectedImageAssetId && !selectedImage) throw Object.assign(new Error("任务所选图片不存在，已停止发布"), { code: "UPLOAD_FAILED" });
         const input = { articleId: article.id, title: variant?.title ?? article.title, body: variant?.body ?? article.body, summary: variant?.summary ?? article.summary, tags: article.tags, ...(cover ? { coverPath: cover.filePath } : {}), ...(selectedImage ? { images: [selectedImage.filePath] } : {}) };
+        if (!job.dryRun && managementReconciliation && (preparedRecord?.response.contentTransport !== "ARTICLE_BROWSER"
+          || preparedRecord.response.preparedInputHash !== hashPreparedBrowserArticleInput(input)
+          || preparedRecord.response.expectedCreatorId !== account.externalAccountId)) throw Object.assign(new Error("Toutiao prepared content, transport or stable account binding changed; prepare and confirm again"), { code: "CONTENT_REJECTED" });
         if (adapter.validateArticle) {
           const validation = await adapter.validateArticle(input);
           if (!validation.valid) throw Object.assign(new Error(validation.errors.join("; ")), { code: "CONTENT_REJECTED" });
@@ -326,6 +413,11 @@ export class PublisherService {
           try {
             result = await withTimeout(adapter.finalSubmit(ctx, input, attempt), this.options.operationTimeoutMs ?? 120_000, "Platform final submit").then(async (submitted) => {
               if (!finalSubmitSideEffectTriggered) throw Object.assign(new Error("Platform final submit returned without a durable submit boundary"), { code: "RECONCILIATION_UNCERTAIN" });
+              if (managementReconciliation) {
+                if (!submitted.success || !["publishing", "scheduled"].includes(submitted.status ?? "") || submitted.response.submissionAccepted !== true)
+                  throw Object.assign(new Error("Toutiao submit has no explicit accepted evidence; management reconciliation is required"), { code: "SUBMISSION_UNCERTAIN" });
+                return submitted;
+              }
               let collected = submitted;
               if (adapter.collectPublishResult) collected = await withTimeout(adapter.collectPublishResult(ctx, input, attempt), this.options.operationTimeoutMs ?? 120_000, "Platform publish result collection");
               if (!collected.externalId || !collected.publishedUrl) throw Object.assign(new Error("Platform final submit did not return a verifiable External ID and URL"), { code: "EXTERNAL_EVIDENCE_INCOMPLETE" });
@@ -356,6 +448,8 @@ export class PublisherService {
         ...result,
         response: {
           ...result.response,
+          ...(managementReconciliation ? { contentTransport: "ARTICLE_BROWSER", preparedInputHash: preparedRecord?.response.preparedInputHash,
+            expectedCreatorId: preparedRecord?.response.expectedCreatorId } : {}),
           selectedImageAssetId: job.selectedImageAssetId ?? null,
           imageSelectionMode: job.imageSelectionMode ?? "none",
           imageInsertion: job.selectedImageAssetId ? result.response.imageUploaded === true ? "uploaded_verified" : "failed" : "none"
@@ -409,6 +503,9 @@ export class PublisherService {
 
   async pollPublishingJob(jobId: string, enforceDeadline = true, action?: UserInitiatedAction, browserExecutionMode?: BrowserExecutionMode): Promise<PublishExecutionResult> {
     const job = this.repository.getJob(jobId);
+    if (job && ["Publishing", "Submitted", "NeedsReconciliation"].includes(job.status)
+      && usesBrowserManagementReconciliation(this.adapters.getForContent(job.platformKey, job.contentKind ?? "article")))
+      return this.reconcileBrowserJob(jobId, action);
     if (!job || (job.status !== "Publishing" && job.status !== "NeedsReconciliation")) throw new Error("Job is not awaiting reconciliation");
     const pollingStartedAt = job.startedAt ? Date.parse(job.startedAt) : Date.parse(job.scheduledAt);
     const currentIntent = this.repository.getSubmissionIntentByJob(job.id);

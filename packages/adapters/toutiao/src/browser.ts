@@ -58,6 +58,11 @@ interface FinalSubmitControlEvidence {
 interface PreparedCoverEvidence {
   uploaded: boolean;
   editorUrl: string;
+  page: Page;
+  context: ReturnType<Page["context"]>;
+  articleId: string;
+  creatorId: string;
+  coverPath: string;
 }
 
 interface ToutiaoPublicResult {
@@ -108,19 +113,21 @@ const definition: BrowserPlatformDefinition = {
   researchStatus: "partial",
   blockingReason: "Article BrowserAutomation verifies the owned session, editor DOM and final-submit control without clicking; owner approval is still required for any real submit.",
   capabilities: {
+    contentTransport: "ARTICLE_BROWSER",
+    browserManagementReconciliation: true,
     article: true,
-    imagePost: true,
+    imagePost: false,
     video: false,
     coverImage: true,
-    tags: true,
-    categories: true,
+    tags: false,
+    categories: false,
     scheduledPublish: false,
-    draft: true,
+    draft: false,
     markdown: false,
-    richText: true,
+    richText: false,
     maxTitleLength: 100,
-    maxImageCount: 9,
-    maxTagCount: 10,
+    maxImageCount: 1,
+    maxTagCount: 0,
     supportsVideoCover: false,
     supportsVideoTags: false,
     videoPublishAsync: false
@@ -462,11 +469,11 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
     const owned = this.sessionManager.getCanonicalPage({ platformKey: "toutiao", accountId: ctx.accountId });
     if (!owned || owned.page.isClosed() || owned.page.context() !== owned.session.context)
       throw new Error("TOUTIAO_RECONCILIATION_SESSION_UNAVAILABLE");
-    const preflight = await this.inspectAccountPreflightOnPage(owned.page as Page,
-      { requireIdentity: true, requireArticleEntry: false });
-    if (!preflight.identity.externalAccountId || preflight.identity.externalAccountId !== expectedCreatorId)
-      throw new Error("TOUTIAO_RECONCILIATION_IDENTITY_UNVERIFIED");
-    return scanOwnedToutiaoManagement(owned.session.context, owned.page as Page, target);
+    return scanOwnedToutiaoManagement(owned.session.context, owned.page as Page, target, async (managementPage) => {
+      const preflight = await this.inspectAccountPreflightOnPage(managementPage,
+        { requireIdentity: true, requireArticleEntry: false });
+      return preflight.allowed && preflight.identity.externalAccountId === expectedCreatorId;
+    });
   }
 
   /** Read-only management-list lookup. The route guard is installed before opening the operation page. */
@@ -609,6 +616,11 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
     let page: Page | null = null;
     try {
       page = await owned.session.context.newPage();
+      if (typeof ctx.settings.expectedCreatorId === "string") {
+        await page.goto("https://mp.toutiao.com/profile_v4/manage/content/all", { waitUntil: "domcontentloaded", timeout: 30_000 });
+        this.assertExpectedIdentity(ctx, await this.inspectAccountPreflightOnPage(page,
+          { requireIdentity: true, requireArticleEntry: false }));
+      }
       const response = await page.goto(publishedUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
       const current = publicResultFromUrl(page.url());
       const urlReachable = Boolean(response && response.status() >= 200 && response.status() < 400
@@ -630,6 +642,24 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
   }
 
   private accountKey(ctx: AccountContext): string { return `${this.platformKey}:${ctx.accountId}`; }
+
+  private expectedCreatorId(ctx: AccountContext): string {
+    const value = ctx.settings.expectedCreatorId;
+    if (typeof value !== "string" || !/^[1-9]\d*$/u.test(value))
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "TOUTIAO_EXPECTED_ACCOUNT_IDENTITY_REQUIRED");
+    return value;
+  }
+
+  private assertExpectedIdentity(ctx: AccountContext, preflight: ToutiaoAccountPreflightResult): void {
+    this.assertAccountPreflightAllowed(preflight);
+    if (preflight.identity.externalAccountId !== this.expectedCreatorId(ctx))
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "TOUTIAO_ACCOUNT_IDENTITY_MISMATCH");
+  }
+
+  private assertOwnedPage(page: Page, context: ReturnType<Page["context"]>): void {
+    if (page.isClosed() || page.context() !== context || !context.pages().includes(page))
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "TOUTIAO_CONTEXT_OWNERSHIP_MISMATCH");
+  }
 
   private async readPageText(page: Page): Promise<string> {
     const documents: ToutiaoDocument[] = [page, ...page.frames()];
@@ -682,7 +712,8 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
         const displayName = normalize(await candidate.innerText().catch(() => "")) || null;
         try {
           const url = new URL(href, page.url());
-          const match = url.pathname.match(/\/c\/user\/([0-9]+)\/?$/iu);
+          const match = /^(?:www\.)?toutiao\.com$/iu.test(url.hostname)
+            ? url.pathname.match(/\/c\/user\/([0-9]+)\/?$/iu) : null;
           if (!match) {
             recordIdentityCandidate({ href, externalAccountId: null, displayName });
             continue;
@@ -769,9 +800,15 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
     const active = await this.activeBackendPage(ctx);
     if (!active) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "Toutiao final submit requires the prepared visible browser session");
     const page = active.page as unknown as Page;
+    this.assertOwnedPage(page, active.session.context);
+    const prepared = this.preparedCoverEvidence.get(this.accountKey(ctx));
+    if (!prepared || prepared.page !== page || prepared.context !== active.session.context
+      || prepared.articleId !== article.articleId || prepared.creatorId !== this.expectedCreatorId(ctx)
+      || prepared.coverPath !== (article.coverPath?.trim() || article.images?.[0]?.trim()))
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "TOUTIAO_PREPARED_SESSION_BINDING_CHANGED");
     await this.assertNoSecurityChallenge(page);
     const accountPreflight = await this.inspectAccountPreflightOnPage(page, { requireIdentity: true, requireArticleEntry: false });
-    this.assertAccountPreflightAllowed(accountPreflight);
+    this.assertExpectedIdentity(ctx, accountPreflight);
     const editor = await this.openArticleEditor(page);
     const title = await discover(editor, "title");
     const body = await discover(editor, "body");
@@ -971,26 +1008,24 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
     const current = publicResultFromUrl(page.url());
     if (current && containsNormalized(pageText, article.title) && containsNormalized(pageText, article.body)) return current;
 
-    const anchors = page.locator("a[href]");
-    const count = await locatorCount(anchors);
-    const matches = new Map<string, ToutiaoPublicResult>();
-    for (let index = 0; index < count; index += 1) {
-      const anchor = await itemAt(anchors, index);
-      const result = publicResultFromUrl(await attr(anchor, "href"));
-      if (!result) continue;
-      const context = `${await anchor.innerText().catch(() => "")} ${pageText}`;
-      if (containsNormalized(context, article.title) && containsNormalized(context, article.body)) matches.set(result.publishedUrl, result);
-    }
-    return matches.size === 1 ? [...matches.values()][0] : null;
+    // A public link elsewhere in the editor is not evidence that it belongs to this article.
+    return null;
   }
 
   private async prepareStrict(ctx: AccountContext, article: PublishArticleInput): Promise<AutomationPrepareResult> {
+    this.preparedCoverEvidence.delete(this.accountKey(ctx));
     const validation = await this.validateArticle(article);
     if (!validation.valid) throw new BrowserAutomationError("CONTENT_REJECTED", validation.errors.join(", "));
+    this.expectedCreatorId(ctx);
+    if (!article.coverPath?.trim() && !article.images?.[0]?.trim())
+      throw new BrowserAutomationError("REQUIRED_FIELD_MISSING", "TOUTIAO_VERIFIED_SINGLE_COVER_REQUIRED");
+    if (/<\/?[a-z][^>]*>/iu.test(article.body))
+      throw new BrowserAutomationError("CONTENT_REJECTED", "TOUTIAO_BROWSER_PLAIN_TEXT_BODY_REQUIRED");
     const opened = await this.openBackendPage(ctx, TOUTIAO_CREATOR_HOME);
     const page = opened.page as unknown as Page;
+    this.assertOwnedPage(page, opened.session.context);
     const accountPreflight = await this.inspectAccountPreflightOnPage(page, { requireIdentity: true, requireArticleEntry: true });
-    this.assertAccountPreflightAllowed(accountPreflight);
+    this.assertExpectedIdentity(ctx, accountPreflight);
     let editor: ToutiaoDocument;
     try {
       editor = await this.openArticleEditor(page);
@@ -1009,7 +1044,9 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
     const image = await this.inspectCover(page, editor, article);
     editor = image.editor;
     const finalSubmitControl = await this.inspectFinalSubmitControl(editor);
-    this.preparedCoverEvidence.set(this.accountKey(ctx), { uploaded: image.imageRequirement === "cover_uploaded" && image.coverInputVerified, editorUrl: page.url() });
+    this.preparedCoverEvidence.set(this.accountKey(ctx), { uploaded: image.imageRequirement === "cover_uploaded" && image.coverInputVerified,
+      editorUrl: page.url(), page, context: opened.session.context, articleId: article.articleId,
+      creatorId: this.expectedCreatorId(ctx), coverPath: article.coverPath?.trim() || article.images![0]!.trim() });
     return {
       prepared: true,
       requiresUserAction: true,
@@ -1034,6 +1071,7 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
         requiredFieldsVerified: requiredFields.verified,
         requiredFields: requiredFields.fields,
         imageRequirement: image.imageRequirement,
+        imageUploaded: image.imageRequirement === "cover_uploaded" && image.coverInputVerified,
         coverInputVerified: image.coverInputVerified,
         coverUploadMethod: image.coverUploadMethod,
         finalSubmitControl: finalSubmitControl.evidence,
@@ -1052,6 +1090,8 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
 
   async finalSubmit(ctx: AccountContext, article: PublishArticleInput, attempt: BrowserPublishAttemptContext): Promise<PublishResult> {
     if (this.finalSubmitUsed.has(attempt.jobId)) throw new BrowserAutomationError("FINAL_SUBMIT_ALREADY_USED", "Toutiao article final submit is limited to one attempt");
+    if (typeof attempt.markSubmissionSideEffect !== "function")
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "TOUTIAO_DURABLE_SUBMIT_BOUNDARY_REQUIRED");
     const readiness = await this.verifyFinalSubmitReadiness(ctx, article);
     const beforeUrl = readiness.page.url();
     let finalControl = readiness.control;
@@ -1069,8 +1109,11 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
       }
       if (!/(?:确认发布|confirm\s*publish)/iu.test(finalControl.evidence.label)) throw new BrowserAutomationError("FINAL_SUBMIT_CONTROL_NOT_FOUND", `Toutiao preview exposed an unexpected confirmation control: ${finalControl.evidence.label}`);
     }
+    this.assertOwnedPage(readiness.page, this.preparedCoverEvidence.get(this.accountKey(ctx))!.context);
+    this.assertExpectedIdentity(ctx, await this.inspectAccountPreflightOnPage(readiness.page,
+      { requireIdentity: true, requireArticleEntry: false }));
     this.finalSubmitUsed.add(attempt.jobId);
-    attempt.markSubmissionSideEffect?.();
+    attempt.markSubmissionSideEffect();
     const finalBeforeUrl = readiness.page.url();
     try {
       await finalControl.locator.click();
@@ -1082,7 +1125,8 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
     await this.assertNoAccountRestriction(readiness.page);
     const result = await this.findPublishedResult(readiness.page, article);
     if (!result) throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "Toutiao final submit was triggered but no reliable public article ID and URL were observed; retry is forbidden");
-    return { success: true, status: "published", ...result, response: { adapter: this.platformKey, stage: "final_submitted", beforeUrl, finalBeforeUrl, afterUrl: readiness.page.url(), previewNavigation, previewControlLabel: readiness.control.evidence.label, finalControlLabel: finalControl.evidence.label, finalSubmitCount: 1, submissionIntentId: attempt.submissionIntentId, titleMatch: true, bodyMatch: true, imageUploaded: this.preparedCoverEvidence.get(this.accountKey(ctx))?.uploaded === true } };
+    return { success: true, status: "publishing", ...result, response: { adapter: this.platformKey,
+      submissionAccepted: true, requiresManagementConfirmation: true, stage: "final_submitted", beforeUrl, finalBeforeUrl, afterUrl: readiness.page.url(), previewNavigation, previewControlLabel: readiness.control.evidence.label, finalControlLabel: finalControl.evidence.label, finalSubmitCount: 1, submissionIntentId: attempt.submissionIntentId, titleMatch: true, bodyMatch: true, imageUploaded: this.preparedCoverEvidence.get(this.accountKey(ctx))?.uploaded === true } };
   }
 
   async collectPublishResult(ctx: AccountContext, article: PublishArticleInput, _attempt: BrowserPublishAttemptContext): Promise<PublishResult> {
@@ -1091,48 +1135,58 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
     await this.assertNoSecurityChallenge(active.page as unknown as Page);
     const result = await this.findPublishedResult(active.page as unknown as Page, article);
     if (!result) throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "Toutiao submission result has no reliable public article ID and URL; retry is forbidden");
-    return { success: true, status: "published", ...result, response: { adapter: this.platformKey, stage: "result_collected", pageUrl: active.page.url(), titleMatch: true, bodyMatch: true, imageUploaded: this.preparedCoverEvidence.get(this.accountKey(ctx))?.uploaded === true } };
+    return { success: true, status: "publishing", ...result, response: { adapter: this.platformKey,
+      submissionAccepted: true, requiresManagementConfirmation: true, stage: "result_collected", pageUrl: active.page.url(), titleMatch: true, bodyMatch: true, imageUploaded: this.preparedCoverEvidence.get(this.accountKey(ctx))?.uploaded === true } };
   }
 
   async verifyPublished(ctx: AccountContext, article: PublishArticleInput, result: Pick<PublishResult, "externalId" | "publishedUrl">): Promise<PublishStatusResult> {
     const externalId = result.externalId?.trim() ?? "";
     const publishedUrl = result.publishedUrl?.trim() ?? "";
     const parsed = publicResultFromUrl(publishedUrl);
-    if (!externalId || !parsed || parsed.externalId !== externalId) return { status: "failed", externalId: externalId || undefined, publishedUrl: publishedUrl || undefined, response: { urlReachable: false, titleMatch: false, bodyMatch: false }, errorCode: "EXTERNAL_EVIDENCE_INCOMPLETE", errorMessage: "Toutiao External ID or public URL is incomplete or inconsistent" };
-    const active = await this.activeBackendPage(ctx);
-    if (!active) return { status: "failed", externalId, publishedUrl, response: { urlReachable: false, titleMatch: false, bodyMatch: false }, errorCode: "RECONCILIATION_UNCERTAIN", errorMessage: "Toutiao public result verification requires the application-owned browser session" };
-    const page = active.page as unknown as Page;
+    const unknown = (reason: string): PublishStatusResult => ({ status: "publishing", externalId: externalId || undefined,
+      publishedUrl: publishedUrl || undefined, response: { adapter: this.platformKey, verificationStatus: "reconciliation_uncertain" },
+      errorCode: "RECONCILIATION_UNCERTAIN", errorMessage: reason });
+    if (!externalId || !parsed || parsed.externalId !== externalId) return unknown("Toutiao public evidence is incomplete");
     try {
-      await page.goto(publishedUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-      await waitForNextEditorProbe(page);
-      await this.assertNoSecurityChallenge(page);
-      const pageTitle = await (page as unknown as { title?: () => Promise<string> }).title?.() ?? "";
-      const pageText = await this.readPageText(page);
-      const current = publicResultFromUrl(page.url());
-      const urlReachable = Boolean(current && current.externalId === externalId);
-      const titleMatch = containsNormalized(`${pageTitle} ${pageText}`, article.title);
-      const bodyMatch = containsNormalized(pageText, article.body);
-      const published = urlReachable && titleMatch && bodyMatch;
-      return { status: published ? "published" : "failed", externalId, publishedUrl: current?.publishedUrl ?? page.url(), response: { adapter: this.platformKey, verificationStatus: published ? "Verified" : "reconciliation_uncertain", urlReachable, titleMatch, bodyMatch, pageUrl: page.url() }, ...(published ? {} : { errorCode: "RECONCILIATION_UNCERTAIN" as const, errorMessage: "Toutiao public page did not prove the exact title, body and stable URL together" }) };
-    } catch (error) {
-      return { status: "failed", externalId, publishedUrl, response: { adapter: this.platformKey, urlReachable: false, titleMatch: false, bodyMatch: false }, errorCode: "RECONCILIATION_UNCERTAIN", errorMessage: error instanceof Error ? error.message : "Toutiao public result verification failed" };
-    }
+      this.expectedCreatorId(ctx);
+      const verification = await this.verifyOwnedPublicArticle(ctx, article, externalId, publishedUrl);
+      return { status: verification.verified ? "published" : "publishing", externalId, publishedUrl,
+        response: { adapter: this.platformKey, ...verification,
+          verificationStatus: verification.verified ? "Verified" : "reconciliation_uncertain" },
+        ...(verification.verified ? {} : { errorCode: "RECONCILIATION_UNCERTAIN" as const,
+          errorMessage: "Toutiao public page did not verify the exact title and body" }) };
+    } catch { return unknown("Toutiao public verification remains uncertain"); }
   }
 
   async reconcile(ctx: AccountContext, input: BrowserPublishReconciliationInput): Promise<BrowserPublishReconciliationResult> {
-    const active = await this.activeBackendPage(ctx);
-    if (!active) return { status: "STILL_UNCERTAIN", titleMatch: false, accountMatch: false, timeWindowMatch: false, response: { adapter: this.platformKey, readOnly: true, evidence: "no_active_owned_browser_session" }, message: "当前没有可用于只读回查的应用自建 Browser Session" };
-    const page = active.page as unknown as Page;
+    const unknown = (reason: string): BrowserPublishReconciliationResult => ({ status: "STILL_UNCERTAIN", remoteState: "UNKNOWN",
+      titleMatch: false, accountMatch: false, timeWindowMatch: false,
+      response: { adapter: this.platformKey, readOnly: true, evidence: reason }, message: "头条只读回查结果仍未知，禁止重投" });
     try {
-      await this.assertNoSecurityChallenge(page);
-      const pageText = await this.readPageText(page);
-      const current = publicResultFromUrl(page.url());
-      const titleMatch = containsNormalized(pageText, input.title);
-      const accountMatch = containsNormalized(pageText, input.accountName);
-      if (current && titleMatch) return { status: "FOUND_PUBLISHED", externalId: current.externalId, publishedUrl: current.publishedUrl, titleMatch: true, accountMatch, timeWindowMatch: true, response: { adapter: this.platformKey, readOnly: true, pageUrl: page.url(), titleMatch: true, accountMatch, timeWindowMatch: true }, message: "当前公开文章页包含唯一测试标题" };
-      return { status: "STILL_UNCERTAIN", titleMatch, accountMatch, timeWindowMatch: false, response: { adapter: this.platformKey, readOnly: true, pageUrl: page.url(), titleMatch, accountMatch, finalSubmitCount: input.finalSubmitCount ?? 0 }, message: "未在当前只读页面取得同时满足标题、账号和时间窗口的稳定文章证据" };
-    } catch (error) {
-      return { status: "STILL_UNCERTAIN", titleMatch: false, accountMatch: false, timeWindowMatch: false, response: { adapter: this.platformKey, readOnly: true, error: error instanceof Error ? error.message : String(error) }, message: "Toutiao 只读回查失败，结果保持未知" };
-    }
+      const expectedCreatorId = this.expectedCreatorId(ctx);
+      if (input.expectedCreatorId && input.expectedCreatorId !== expectedCreatorId) return unknown("ACCOUNT_IDENTITY_MISMATCH");
+      const trustedRemoteId = input.expectedExternalId && /^[1-9]\d*$/u.test(input.expectedExternalId)
+        ? input.expectedExternalId : null;
+      const scan = await this.deepReconcileOwnedManagement(ctx, expectedCreatorId, {
+        title: input.title, submittedAt: input.submittedAt ?? input.windowStart,
+        windowStart: input.windowStart, windowEnd: input.windowEnd,
+        remoteId: trustedRemoteId
+      });
+      const match = scan.match;
+      const uniquelyMatched = match.matchedRowCount === 1 && !["AMBIGUOUS", "NOT_FOUND", "UNKNOWN"].includes(match.state);
+      // Without a trusted ID, an incomplete scan cannot prove that the title candidate is unique.
+      const remoteState = uniquelyMatched && !trustedRemoteId && !scan.scopeComplete ? "UNKNOWN" : match.state;
+      const published = remoteState === "PUBLISHED" && Boolean(match.externalId && match.publicUrl);
+      return { status: published ? "FOUND_PUBLISHED" : "STILL_UNCERTAIN", remoteState,
+        externalId: match.externalId ?? undefined, publishedUrl: match.publicUrl ?? undefined,
+        titleMatch: uniquelyMatched && match.titleMatch, accountMatch: true,
+        timeWindowMatch: uniquelyMatched && match.timeWindowMatch,
+        response: { adapter: this.platformKey, readOnly: true, remoteState,
+          matchedBy: match.matchedBy,
+          sanitizedRejectReason: remoteState === "REJECTED" ? match.sanitizedRejectReason ?? null : null,
+          matchedRowCount: match.matchedRowCount, scanScopeComplete: scan.scopeComplete, totalRowsScanned: scan.totalRows,
+          statusScans: scan.scans, blockedContentMutationCount: scan.blockedContentMutationCount },
+        message: published ? "管理页已找到目标已发布作品，仍需公开页验证" : `管理页目标状态：${remoteState}；未触发提交` };
+    } catch { return unknown("READ_ONLY_MANAGEMENT_SCAN_UNAVAILABLE"); }
   }
 }

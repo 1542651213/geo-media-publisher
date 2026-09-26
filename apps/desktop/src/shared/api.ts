@@ -175,6 +175,13 @@ export interface ManagedVideoAsset extends VideoAsset {
 }
 
 export interface PublisherApi {
+  toutiaoProduction: { readiness(accountId: string): Promise<{
+    readOnly: boolean; ready: boolean; reasonCode: string | null; accountId: string | null;
+    transport: "BrowserNative"; finalSubmitCount: number; accountIdentityMatch: boolean;
+    sessionActive: boolean; contextOwnership: boolean; managementReady: boolean;
+    availableStatuses: readonly string[]; rowsObserved: number; mainCodeSha256: string;
+    formalSubmitEnabled: boolean; experimentalBrowserAssistedApiEnabled: boolean;
+  }> };
   toutiaoDiagnostics: { protocolShadow(accountId: string, mode?: "HOME" | "EDITOR" | "SIGNER_CONTRACT" | "SIGNER_INPUT" | "BRIDGE" | "CONTROLLED_ARTICLE_NEW"): Promise<ToutiaoLiveShadowResult>;
     publishRequestCapture(accountId: string): Promise<ControlledPublishCaptureResult>;
     oneShotBuildIdentity(): Promise<{ mainCodeSha256: string; packageVersion: string; packaged: boolean }>;

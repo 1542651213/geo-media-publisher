@@ -23,6 +23,7 @@ import { runQualityGate, runQualityGateForArticle, runQualityGateForVariant } fr
 import { runQualityBenchmark } from "./quality-benchmark";
 import { OAuthSessionManager } from "./oauth-session-manager";
 import { ToutiaoSessionActivation } from "./toutiao-session-activation";
+import { runToutiaoProductionPreflight } from "./toutiao-production-preflight";
 import { auditMvp5OneShotCapture, claimControlledArticleNewCapture, claimControlledPublishRequestCapture,
   claimMvp53OwnerRecapture, readMvp5LockedClaimEvidence } from "./toutiao-article-new-once";
 import { evaluateMvp5CaptureReadiness } from "./toutiao-capture-binding-readiness";
@@ -97,8 +98,11 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
   ipcMain.removeHandler(channel);
   ipcMain.handle(channel, async (event, payload) => {
     try {
-      if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED === "true" && mvp5PausedChannels.has(channel))
+      if ((process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED === "true" || process.env.TOUTIAO_READONLY_PREFLIGHT === "true") && mvp5PausedChannels.has(channel))
         throw new Error("TOUTIAO_MVP5_OTHER_PUBLISH_PATHS_PAUSED");
+      if (process.env.TOUTIAO_NATIVE_ACCEPTANCE_ACCOUNT_ID?.trim() && mvp5PausedChannels.has(channel)
+        && !["platform-self-test:request-publish", "platform-self-test:confirm-publish", "platform-self-test:continue"].includes(channel))
+        throw new Error("TOUTIAO_NATIVE_ACCEPTANCE_OTHER_PUBLISH_PATHS_PAUSED");
       return await handler(event, payload);
     } catch (error) {
       processDiagnostics?.recordIpcError(channel, error);
@@ -126,6 +130,7 @@ export function registerIpc(deps: IpcDependencies): void {
       platformKey,
       settings: {
         triggerSource: action?.triggerSource ?? "APP_STARTUP",
+        ...(platformKey === "toutiao" && account.externalAccountId ? { expectedCreatorId: account.externalAccountId } : {}),
         ...(action?.userActionId ? { userActionId: action.userActionId } : {})
       },
       secrets: resolveAccountSecrets(accountId, platformKey)
@@ -169,7 +174,8 @@ export function registerIpc(deps: IpcDependencies): void {
     },
     onHeartbeat: (status) => logger.info("ACCOUNT", "TOUTIAO_RUNTIME_HEARTBEAT", "头条 BrowserSession 运行时心跳", { accountId: status.accountId, sessionExists: status.sessionExists, contextExists: status.contextExists, canonicalPageExists: status.canonicalPageExists, contextOwnsPage: status.contextOwnsPage, pageAlive: status.pageAlive, pageHost: status.pageHost, runtimeState: status.runtimeState, lastHeartbeatAt: status.lastHeartbeatAt })
   });
-  const platformSelfTests = new PlatformSelfTestService({ repository, registry, publisher, resolveAccountSecrets, logger });
+  const platformSelfTests = new PlatformSelfTestService({ repository, registry, publisher, resolveAccountSecrets, logger,
+    toutiaoNativeAcceptanceAccountId: process.env.TOUTIAO_NATIVE_ACCEPTANCE_ACCOUNT_ID?.trim() });
   const validateVideoAsset = async (assetId: string, platformKey: string): Promise<{ asset: NonNullable<ReturnType<AppRepository["getManagedVideoAsset"]>>; validation: { valid: boolean; errors: string[]; warnings: string[] } }> => {
     const asset = repository.getManagedVideoAsset(assetId);
     if (!asset) throw new Error("视频素材不存在");
@@ -587,6 +593,25 @@ export function registerIpc(deps: IpcDependencies): void {
     if (!(adapter instanceof ToutiaoArticleBrowserAdapter)) throw new Error("TOUTIAO_CAPTURE_BROWSER_ADAPTER_REQUIRED");
     claimControlledPublishRequestCapture(dataDirectory);
     return adapter.runGuardedPublishRequestCapture(accountContext(input.accountId, "toutiao"));
+  });
+  register("toutiao:production-readiness", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    const account = repository.getAccountById(input.accountId, "toutiao");
+    const adapter = registry.getForContent("toutiao", "article");
+    if (!(adapter instanceof ToutiaoArticleBrowserAdapter)) throw new Error("TOUTIAO_NATIVE_ROUTE_REQUIRED");
+    const ctx = accountContext(input.accountId, "toutiao", createUserAction("OPEN_BACKEND"));
+    const result = await runToutiaoProductionPreflight({ account,
+      readonlyMode: process.env.TOUTIAO_READONLY_PREFLIGHT === "true",
+      formalExecutionActive: repository.getGlobalFormalPublishExecution() !== null,
+      activate: () => toutiaoSessionActivation.activate(input.accountId),
+      auth: () => adapter.checkOwnedCreatorSession(ctx),
+      identity: () => adapter.inspectOwnedCreatorIdentity(ctx),
+      smoke: () => adapter.deepReconcileOwnedManagement(ctx, account?.externalAccountId ?? "", {
+        title: "__read_only_readiness_no_submission__", submittedAt: new Date().toISOString(), remoteId: null })
+    });
+    return { ...result, mainCodeSha256: createHash("sha256").update(readFileSync(join(__dirname, "main.js"))).digest("hex"),
+      formalSubmitEnabled: process.env.TOUTIAO_BROWSER_NATIVE_SUBMIT_ENABLED === "true",
+      experimentalBrowserAssistedApiEnabled: process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED === "true" };
   });
   register("toutiao:mvp5-build-identity", () => {
     if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true") throw new Error("TOUTIAO_MVP5_ONE_SHOT_DISABLED");

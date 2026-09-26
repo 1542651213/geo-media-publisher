@@ -42,16 +42,25 @@ describe("runtime AdapterRegistry", () => {
     expect(() => registry.getForContent("toutiao", "image")).toThrow(/unsupported content kind/i);
   });
 
-  it("routes Toutiao article by the explicit API flag while video stays official API", () => {
+  it("keeps normal articles BrowserNative even when the legacy API experiment flag is set", () => {
     const credentials = new MemoryCredentialStore();
     const off = createRuntimeAdapterRegistry(credentials, false, undefined, undefined, undefined, { toutiaoArticleApiPublisherEnabled: false });
     const on = createRuntimeAdapterRegistry(credentials, false, undefined, undefined, undefined, { toutiaoArticleApiPublisherEnabled: true });
-    expect(off.getForContent("toutiao", "article").constructor.name).toBe("ToutiaoArticleBrowserAdapter");
-    expect(on.getForContent("toutiao", "article").constructor.name).toBe("ToutiaoArticleApiAdapter");
-    expect(on.getForContent("toutiao", "article").getCapabilities().contentTransport).toBe("ARTICLE_WEB_API");
+    expect(off.getForContent("toutiao", "article").constructor.name).toBe("ToutiaoArticlePublisher");
+    expect(on.getForContent("toutiao", "article").constructor.name).toBe("ToutiaoArticlePublisher");
+    expect(on.getForContent("toutiao", "article").getCapabilities().contentTransport).toBe("ARTICLE_BROWSER");
+    expect(() => on.getForContent("toutiao", "article").assertFormalSubmitAvailable?.()).toThrow(/disabled/i);
     expect(on.getForContent("toutiao", "video").constructor.name).toBe("ToutiaoAdapter");
     expect(on.getForContent("toutiao", "video").manifest.transport).toBe("official_api");
     expect(on.get("toutiao").manifest.supportsVideo).toBe(true);
+  });
+
+  it("requires an explicit native-submit enable while keeping the platform-specific durable boundary", () => {
+    const registry = createRuntimeAdapterRegistry(new MemoryCredentialStore(), false, undefined, undefined, undefined,
+      { toutiaoBrowserNativeSubmitEnabled: true });
+    const article = registry.getForContent("toutiao", "article");
+    expect(() => article.assertFormalSubmitAvailable?.()).not.toThrow();
+    expect(article.getCapabilities()).toMatchObject({ contentTransport: "ARTICLE_BROWSER", browserManagementReconciliation: true });
   });
 
   it("routes Xiaohongshu article content to BrowserAutomation and rejects video", () => {

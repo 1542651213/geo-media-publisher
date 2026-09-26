@@ -33,4 +33,34 @@ describe("Toutiao account-owned management list reconciliation", () => {
     expect(matchToutiaoManagementRows([], target).state).toBe("NOT_FOUND");
     expect(matchToutiaoManagementRows([row("已发布")], { ...target, submittedAt: "2026-09-24T00:30:00.000Z" }).state).toBe("NOT_FOUND");
   });
+
+  it("prefers a trusted remote id over same-title candidates and title normalization", () => {
+    expect(matchToutiaoManagementRows([
+      { ...row("已发布"), title: "平台显示的规范标题" }, row("审核中", "8888888888888888888")
+    ], { ...target, remoteId: "7777777777777777777" })).toMatchObject({ state: "PUBLISHED", matchedRowCount: 1 });
+  });
+
+  it("deduplicates the same remote row across status pages but retains conflicting state as unknown", () => {
+    expect(matchToutiaoManagementRows([row("已发布"), row("已发布")], target).state).toBe("PUBLISHED");
+    expect(matchToutiaoManagementRows([row("已发布"), row("审核中")], target).state).toBe("UNKNOWN");
+    expect(matchToutiaoManagementRows([row("未通过")], target).state).toBe("REJECTED");
+  });
+
+  it("retains only an explicit sanitized reason from the uniquely rejected target row", () => {
+    const rejected = { ...row("未通过"), rowText: `${title} 2026-09-25 08:31 未通过 原因：标题与正文不一致` };
+    expect(matchToutiaoManagementRows([rejected, { ...row("未通过", "888"), title: "另一篇",
+      rowText: "另一篇 未通过 原因：不同原因" }], target).sanitizedRejectReason).toBe("标题与正文不一致");
+    expect(matchToutiaoManagementRows([row("未通过")], target).sanitizedRejectReason).toBeNull();
+    expect(matchToutiaoManagementRows([{ ...rejected, rowText: `${rejected.rowText} token=PRIVATE` }], target)
+      .sanitizedRejectReason).toBeNull();
+    for (const reason of ["cookie: PRIVATE", "联系 13800138000", "联系 １３８００１３８０００", "signature: PRIVATE", "微信：privateuser"]) {
+      const result = matchToutiaoManagementRows([{ ...rejected, rowText: `${title} 2026-09-25 08:31 未通过 原因：${reason}` }], target);
+      expect(result.sanitizedRejectReason).toBeNull();
+      expect(JSON.stringify(result)).not.toContain(reason);
+    }
+    expect(matchToutiaoManagementRows([{ ...rejected, rowText: `${title} 2026-09-25 08:31 已发布 原因：标题与正文不一致` }], target)
+      .sanitizedRejectReason).toBeNull();
+    expect(matchToutiaoManagementRows([rejected, { ...rejected, href: "/article/888", dataId: "888" }], target)
+      .sanitizedRejectReason).toBeNull();
+  });
 });

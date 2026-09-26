@@ -565,6 +565,8 @@ export interface PlatformCapabilities {
   article: boolean;
   /** Content-specific transport; platform-level integrationMode remains account-facing metadata. */
   contentTransport?: ContentTransport;
+  /** Submission is confirmed by an account-owned management scan, not an immediate editor URL. */
+  browserManagementReconciliation?: boolean;
   titleConstraint?: TitleConstraint;
   remoteScheduleConstraint?: RemoteScheduleConstraint;
   coverConstraint?: CoverConstraint;

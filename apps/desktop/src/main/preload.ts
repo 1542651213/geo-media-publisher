@@ -4,6 +4,7 @@ import type { PublisherApi } from "../shared/api";
 const invoke = <T>(channel: string, payload?: unknown): Promise<T> => ipcRenderer.invoke(channel, payload) as Promise<T>;
 
 const api: PublisherApi = {
+  toutiaoProduction: { readiness: (accountId) => invoke("toutiao:production-readiness", { accountId }) },
   toutiaoDiagnostics: { protocolShadow: (accountId, mode) => invoke("toutiao:protocol-shadow", { accountId, mode }),
     publishRequestCapture: (accountId) => invoke("toutiao:publish-request-capture", { accountId }),
     oneShotBuildIdentity: () => invoke("toutiao:mvp5-build-identity"),

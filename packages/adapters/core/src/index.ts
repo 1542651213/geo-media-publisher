@@ -44,10 +44,16 @@ export interface BrowserPublishReconciliationInput {
   finalSubmitCount?: number;
   expectedExternalId?: string | null;
   expectedPublishedUrl?: string | null;
+  /** Stable account identity persisted by the account connection flow. */
+  expectedCreatorId?: string;
+  /** Durable final-submit boundary time; never inferred from a title. */
+  submittedAt?: string;
 }
 
 export interface BrowserPublishReconciliationResult {
   status: BrowserPublishReconciliationStatus;
+  /** State of the uniquely matched account-owned management row, when available. */
+  remoteState?: "PUBLISHED" | "REVIEWING" | "REJECTED" | "DRAFT" | "SCHEDULED" | "NOT_FOUND" | "UNKNOWN" | "AMBIGUOUS";
   externalId?: string;
   publishedUrl?: string;
   titleMatch: boolean;

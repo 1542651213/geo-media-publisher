@@ -6,8 +6,8 @@ import type { AppRepository } from "@publisher/db";
 import { isAutomationAdapter, type AdapterRegistry, type AutomationAdapter, type ControlledSelfTestMode, type PlatformAdapter, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { AutomationPrepareResult, ControlledPostUploadDiscoveryResult } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
-import type { PublisherService } from "@publisher/publisher";
-import type { Account, AccountContext, BackgroundAutomationStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PublishArticleInput } from "@publisher/domain";
+import { hashPreparedBrowserArticleInput, type PublisherService } from "@publisher/publisher";
+import type { Account, AccountContext, BackgroundAutomationStatus, ImageAsset, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PublishArticleInput } from "@publisher/domain";
 
 const ARTICLE_TEST_TITLE = "Geo Media Publisher 发布链路测试";
 const ZHIHU_TEST_TITLE_PREFIX = "Geo Media Publisher 知乎发布测试";
@@ -60,9 +60,16 @@ export interface PlatformSelfTestServiceOptions {
   publisher: PublisherService;
   resolveAccountSecrets: (accountId: string, platformKey: string) => Record<string, string>;
   logger?: Logger;
+  /** Session-only scope for the explicitly authorized native acceptance run. */
+  toutiaoNativeAcceptanceAccountId?: string;
 }
 
 export function transparentSelfTestContent(platformKey: string, platformName: string, testedAt = new Date()): PublishArticleInput {
+  if (platformKey === "toutiao") {
+    const timestamp = testedAt.toISOString().replace(/[-:]/gu, "").replace("T", "-").replace(".000Z", "").replace("Z", "");
+    return { articleId: "platform-self-test-toutiao", title: `GMP头条发布验收 ${timestamp}`,
+      body: `${ARTICLE_TEST_BODY}\n\n测试时间：${testedAt.toISOString()}`, summary: "Geo Media Publisher 内部发布链路测试", tags: [] };
+  }
   if (platformKey === "zhihu") {
     const timestamp = testedAt.toLocaleString("sv-SE", { timeZone: "Asia/Shanghai", hour12: false }).replace("T", " ");
     return { articleId: `platform-self-test-${platformKey}`, title: `${ZHIHU_TEST_TITLE_PREFIX} ${timestamp}`, body: "这是一篇用于验证 Geo Media Publisher 知乎发布链路的内部测试内容。内容无商业推广用途。", summary: "内部测试", tags: ["内部测试"] };
@@ -76,6 +83,20 @@ export function transparentSelfTestContent(platformKey: string, platformName: st
   }
   if (SHORT_CONTENT_PLATFORMS.has(platformKey)) return { articleId, title: SHORT_TEST_BODY, body: SHORT_TEST_BODY, summary: "", tags: [] };
   return { articleId, title: ARTICLE_TEST_TITLE, body: `${ARTICLE_TEST_BODY}${suffix}`, summary: "内部发布链路测试", tags: ["内部测试"] };
+}
+
+/** Both explicit test purpose and owner-brand/general scope are required. */
+export function selectToutiaoNativeSelfTestImage(images: readonly ImageAsset[], brandId: string): ImageAsset | null {
+  return images.find((image) => image.enabled && existsSync(image.filePath)
+    && (image.platform.length === 0 || image.platform.includes("toutiao"))
+    && [...image.usage, ...image.tags].some((label) => /^(测试|安全测试|SAFE_TEST_FIXTURE|TEST_FIXTURE)$/iu.test(label.trim()))
+    && (image.universal || image.brandId === brandId)) ?? null;
+}
+
+function isToutiaoNativeSelfTest(adapter: PlatformAdapter): adapter is AutomationAdapter {
+  return adapter.platformKey === "toutiao" && isAutomationAdapter(adapter)
+    && adapter.getCapabilities().browserManagementReconciliation === true
+    && adapter.getCapabilities().contentTransport === "ARTICLE_BROWSER";
 }
 
 export function requiredSelfTestLevels(target: PlatformSelfTestLevel): PlatformSelfTestLevel[] {
@@ -183,6 +204,7 @@ export class PlatformSelfTestService {
     const run = this.options.repository.getPlatformSelfTestRun(testRunId);
     if (!run || run.overallResult !== "WAITING_FOR_USER") throw new Error("只有等待用户处理的自测才能继续");
     const account = this.account(run);
+    this.assertAcceptanceAccount(account);
     const adapter = this.options.registry.getForContent(run.platformKey, selfTestContentKind(run.platformKey));
     if (run.requestedLevel === "L5_PUBLISH") {
       if (run.publishJobId) return this.continueExistingPublishJob(run.testRunId, run.publishJobId);
@@ -273,6 +295,10 @@ export class PlatformSelfTestService {
   }
 
   requestPublish(platformAccountId: string): PlatformSelfTestRun {
+    if (this.options.toutiaoNativeAcceptanceAccountId !== undefined) {
+      const selectedAccount = this.options.repository.listAccounts().find((account) => account.id === platformAccountId || account.platformAccountId === platformAccountId);
+      this.assertAcceptanceAccount(selectedAccount);
+    }
     const run = this.options.repository.createPlatformSelfTestRun({ platformAccountId, requestedLevel: "L5_PUBLISH" });
     const account = this.account(run);
     const platformName = this.options.repository.listPlatforms().find((platform) => platform.platformKey === run.platformKey)?.displayName ?? run.platformKey;
@@ -292,6 +318,11 @@ export class PlatformSelfTestService {
 
   async confirmPublish(testRunId: string, testVideoPath?: string): Promise<PlatformSelfTestRun> {
     let run = this.mustRun(testRunId, "L5_PUBLISH");
+    this.assertAcceptanceAccount(this.account(run));
+    const selected = this.options.registry.getForContent(run.platformKey, selfTestContentKind(run.platformKey));
+    if (isToutiaoNativeSelfTest(selected) && this.controlledOperations.has(`toutiao-native:${run.testRunId}`))
+      throw new Error("TOUTIAO_SELF_TEST_ALREADY_RUNNING");
+    if (isToutiaoNativeSelfTest(selected) && run.publishJobId) return this.reconcileToutiaoNativeSelfTest(run, run.publishJobId);
     if (!realPublishTestBatchConfirmed()) {
       this.step(run, "L5_PUBLISH", "PUBLISH_CONFIRMATION", "WAITING_FOR_USER", "REAL_PUBLISH_TEST_BATCH_CONFIRMATION_REQUIRED", "REAL_PUBLISH_TEST_BATCH_CONFIRMED is not set; no real publish Job will be created.", "batch_confirmation:missing");
       return this.options.repository.finishPlatformSelfTestRun(run.testRunId, "WAITING_FOR_USER");
@@ -300,6 +331,13 @@ export class PlatformSelfTestService {
     this.step(run, "L5_PUBLISH", "PUBLISH_CONFIRMATION", "PASSED", null, "用户已明确确认本次单账号真实发布测试");
     const account = this.account(run);
     const adapter = this.options.registry.getForContent(run.platformKey, selfTestContentKind(run.platformKey));
+    if (isToutiaoNativeSelfTest(adapter)) {
+      const operationKey = `toutiao-native:${run.testRunId}`;
+      if (this.controlledOperations.has(operationKey)) throw new Error("TOUTIAO_SELF_TEST_ALREADY_RUNNING");
+      this.controlledOperations.add(operationKey);
+      try { return await this.confirmToutiaoNativeSelfTest(run, account, adapter); }
+      finally { this.controlledOperations.delete(operationKey); }
+    }
     if (!await this.runLogin(run, account, adapter, "VISIBLE")) return this.finish(run.testRunId);
     const preparedContent = await this.runEditorAndContent(run, account, adapter, "VISIBLE");
     if (isAutomationAdapter(adapter)) {
@@ -367,6 +405,7 @@ export class PlatformSelfTestService {
     let run = this.mustRun(testRunId, "L5_PUBLISH");
     const account = this.account(run);
     const adapter = this.options.registry.getForContent(run.platformKey, selfTestContentKind(run.platformKey));
+    if (isToutiaoNativeSelfTest(adapter)) return this.reconcileToutiaoNativeSelfTest(run, publishJobId);
     const execution = await this.options.publisher.executeJob(publishJobId, { userActionId: testRunId, triggerSource: "CONTINUE_PENDING_ACTION" }, "VISIBLE");
     const completedJob = this.options.repository.getJob(publishJobId);
     const record = this.options.repository.getPublishRecordByJob(publishJobId);
@@ -387,6 +426,83 @@ export class PlatformSelfTestService {
     await this.reconcile(run, account, adapter, record.publishedExternalId);
     if (isAutomationAdapter(adapter)) await this.closeAutomationSessions(adapter);
     return this.finish(run.testRunId);
+  }
+
+  private async confirmToutiaoNativeSelfTest(run: PlatformSelfTestRun, account: Account, adapter: AutomationAdapter): Promise<PlatformSelfTestRun> {
+    const brand = this.options.repository.listBrands()[0];
+    const image = brand ? selectToutiaoNativeSelfTestImage(this.options.repository.listImageAssets(undefined, true), brand.id) : null;
+    const expectedCreatorId = account.externalAccountId?.trim();
+    if (!run.publishConfirmedAt || !expectedCreatorId || !image || !adapter.getCapabilities().coverImage
+      || adapter.getCapabilities().maxImageCount < 1 || typeof adapter.finalSubmit !== "function") {
+      this.step(run, "L5_PUBLISH", "PUBLISH_SUBMIT", "WAITING_FOR_USER", !expectedCreatorId ? "ACCOUNT_IDENTITY_UNVERIFIED" : "TOUTIAO_TEST_COVER_REQUIRED",
+        "头条自测需要已确认的账号身份和一张明确通用或同品牌测试图片；未创建文章或发布任务");
+      return this.finishAs(run.testRunId, "WAITING_FOR_USER");
+    }
+    try { adapter.assertFormalSubmitAvailable?.(); }
+    catch (error) {
+      const failure = selfTestError(error);
+      this.step(run, "L5_PUBLISH", "PUBLISH_SUBMIT", "WAITING_FOR_USER", failure.errorCode, failure.message);
+      return this.finishAs(run.testRunId, "WAITING_FOR_USER");
+    }
+    if (!await this.runLogin(run, account, adapter, "VISIBLE")) return this.finish(run.testRunId);
+    const content = transparentSelfTestContent("toutiao", "今日头条", new Date(run.startedAt));
+    const job = this.options.repository.createPlatformSelfTestPublishJob({ testRunId: run.testRunId,
+      title: `${content.title} ${run.testRunId.slice(0, 6)}`, body: content.body, dryRun: false, selectedImageAssetId: image.id });
+    const article = this.options.repository.getArticle(job.articleId);
+    if (!article || article.source !== "test") throw new Error("TOUTIAO_SELF_TEST_ARTICLE_UNBOUND");
+    const input: PublishArticleInput = { articleId: article.id, title: article.title, body: article.body,
+      summary: article.summary, tags: article.tags, images: [image.filePath] };
+    const prepared = await this.runEditorAndContent(run, account, adapter, "VISIBLE", { input, imageAssetId: image.id });
+    const response = prepared.prepared?.response;
+    if (!prepared.prepared?.prepared || !prepared.prepared.titleFilled || !prepared.prepared.bodyFilled
+      || response?.requiredFieldsVerified !== true || response.imageUploaded !== true
+      || response.imageRequirement !== "cover_uploaded" || response.coverInputVerified !== true
+      || Array.isArray(response.requiredUserFields) && response.requiredUserFields.length > 0) {
+      this.step(run, "L5_PUBLISH", "PUBLISH_SUBMIT", "WAITING_FOR_USER", "TOUTIAO_PREPARED_EVIDENCE_INCOMPLETE",
+        "头条编辑器回读、封面或必填字段未通过；保留原任务，未触发最终提交");
+      return this.finishAs(run.testRunId, "WAITING_FOR_USER");
+    }
+    this.options.repository.insertPublishRecord({ jobId: job.id, accountId: account.id, platformAccountId: account.platformAccountId,
+      platformKey: account.platformKey, articleId: article.id, publishedUrl: null, publishedExternalId: null, success: false,
+      response: { ...response, contentTransport: "ARTICLE_BROWSER", preparedInputHash: hashPreparedBrowserArticleInput(input), expectedCreatorId },
+      dryRun: false, status: "Prepared", publishMode: "ASSISTED", automationType: "BrowserAutomation",
+      browserSessionIdHash: prepared.prepared.sessionIdHash ?? account.browserSessionId, operator: "desktop-user",
+      verificationStatus: "WaitingUser", editorOpenedAt: prepared.prepared.editorOpenedAt ?? null,
+      titleFilled: true, bodyFilled: true, selectedImageAssetId: image.id, imageSelectionMode: "manual" });
+    this.options.repository.confirmJob(job.id, false);
+    await this.options.publisher.executeJob(job.id, { userActionId: run.testRunId, triggerSource: "RUN_SELF_TEST" }, "VISIBLE");
+    return this.reconcileToutiaoNativeSelfTest(run, job.id);
+  }
+
+  /** Existing native self-tests are never re-prepared or re-submitted by Continue/Confirm. */
+  private async reconcileToutiaoNativeSelfTest(run: PlatformSelfTestRun, jobId: string): Promise<PlatformSelfTestRun> {
+    const job = this.options.repository.getJob(jobId);
+    if (!job || job.platformKey !== "toutiao" || job.accountId !== this.account(run).id || job.articleId !== this.options.repository.getPlatformSelfTestRun(run.testRunId)?.testArticleId)
+      throw new Error("TOUTIAO_SELF_TEST_JOB_UNBOUND");
+    const intent = this.options.repository.getSubmissionIntentByJob(jobId);
+    if (intent && intent.finalSubmitCount >= 1 && ["NeedsReconciliation", "Submitted", "Publishing"].includes(job.status)) {
+      try { await this.options.publisher.reconcileBrowserJob(jobId, { userActionId: run.testRunId, triggerSource: "CONTINUE_PENDING_ACTION" }); }
+      catch {
+        this.step(run, "L5_PUBLISH", "STATUS_RECONCILIATION", "WAITING_FOR_USER", "RECONCILIATION_UNCERTAIN",
+          "只读回查暂未完成；原提交预算保持已使用，不会再次提交");
+      }
+    }
+    const current = this.options.repository.getJob(jobId);
+    const record = this.options.repository.getPublishRecordByJob(jobId);
+    if (record) this.options.repository.linkPlatformSelfTestPublishEvidence(run.testRunId, record.id);
+    if (current?.status === "Success" && record?.status === "Published" && record.success
+      && record.verificationStatus === "Verified" && record.publishedExternalId && record.publishedUrl) {
+      for (const key of ["PUBLISH_SUBMIT", "EXTERNAL_EVIDENCE", "STATUS_RECONCILIATION"])
+        this.step(run, "L5_PUBLISH", key, "PASSED", null, "目标作品状态和公开页已完成只读验证", `publish_record:${record.id}`, record.publishedExternalId, record.publishedUrl);
+      return this.finishAs(run.testRunId, "PASSED");
+    }
+    const rejected = record?.response.remoteState === "REJECTED" || record?.response.managementState === "REJECTED";
+    this.step(run, "L5_PUBLISH", "PUBLISH_SUBMIT", rejected ? "FAILED" : "WAITING_FOR_USER",
+      rejected ? "REMOTE_REJECTED" : intent?.finalSubmitCount ? "NEEDS_RECONCILIATION" : "TOUTIAO_PRE_SUBMIT_STOPPED",
+      rejected ? "目标作品已明确被平台拒绝；本次不会再次提交" : "尚未确认公开发布；保留原任务与提交计数，只允许继续只读回查", `job:${jobId}`);
+    this.step(run, "L5_PUBLISH", "STATUS_RECONCILIATION", rejected ? "FAILED" : "WAITING_FOR_USER",
+      rejected ? "REMOTE_REJECTED" : "RECONCILIATION_PENDING", "未将审核中、未找到或未知结果当成发布成功");
+    return this.finishAs(run.testRunId, rejected ? "FAILED" : "WAITING_FOR_USER");
   }
 
   async confirmDelete(testRunId: string): Promise<PlatformSelfTestRun> {
@@ -437,7 +553,8 @@ export class PlatformSelfTestService {
     }
   }
 
-  private async runEditorAndContent(run: PlatformSelfTestRun, account: Account, adapter: PlatformAdapter, executionMode: BrowserSelfTestMode): Promise<PreparedEditorRun> {
+  private async runEditorAndContent(run: PlatformSelfTestRun, account: Account, adapter: PlatformAdapter, executionMode: BrowserSelfTestMode,
+    frozen?: { input: PublishArticleInput; imageAssetId: string }): Promise<PreparedEditorRun> {
     const startedAt = new Date().toISOString();
     if (!isAutomationAdapter(adapter)) {
       this.step(run, "L2_EDITOR", "EDITOR_OPEN", "NOT_SUPPORTED", "API_NO_BROWSER_EDITOR", "官方 API / OAuth 平台没有需要打开的浏览器编辑器", "adapter_transport_api", null, null, startedAt);
@@ -450,8 +567,9 @@ export class PlatformSelfTestService {
     const content = transparentSelfTestContent(run.platformKey, platform?.displayName ?? run.platformKey);
     // V1.1.8 Lieju acceptance starts without an image. The live adapter must
     // prove whether the platform actually requires one before submitting.
-    const image = run.requestedLevel === "L5_PUBLISH" && run.platformKey === "lieju" ? null : this.findTestImage();
-    const input: PublishArticleInput = { ...content, ...(image && adapter.getCapabilities().maxImageCount > 0 ? { images: [image.filePath] } : {}) };
+    const image = frozen ? this.options.repository.getImageAsset(frozen.imageAssetId)
+      : run.requestedLevel === "L5_PUBLISH" && run.platformKey === "lieju" ? null : this.findTestImage();
+    const input: PublishArticleInput = frozen?.input ?? { ...content, ...(image && adapter.getCapabilities().maxImageCount > 0 ? { images: [image.filePath] } : {}) };
     try {
       const prepared = await adapter.preparePublish(this.context(account, run, executionMode), input);
       const executionModeProved = prepared.response.browserExecutionMode === executionMode
@@ -549,7 +667,8 @@ export class PlatformSelfTestService {
       accountId: account.id,
       accountName: account.accountAlias || account.name,
       platformKey: account.platformKey,
-      settings: { userActionId: run.testRunId, triggerSource: "RUN_SELF_TEST", browserExecutionMode: executionMode },
+      settings: { userActionId: run.testRunId, triggerSource: "RUN_SELF_TEST", browserExecutionMode: executionMode,
+        ...(account.platformKey === "toutiao" && account.externalAccountId ? { expectedCreatorId: account.externalAccountId } : {}) },
       secrets: this.options.resolveAccountSecrets(account.id, account.platformKey)
     };
   }
@@ -598,6 +717,12 @@ export class PlatformSelfTestService {
     const account = this.options.repository.listAccounts().find((item) => (item.platformAccountId ?? item.id) === run.platformAccountId && item.platformKey === run.platformKey);
     if (!account) throw new Error("平台自测账号不存在");
     return account;
+  }
+
+  private assertAcceptanceAccount(account: Account | undefined): void {
+    const expected = this.options.toutiaoNativeAcceptanceAccountId;
+    if (expected !== undefined && (account?.platformKey !== "toutiao" || account.id !== expected))
+      throw new Error("TOUTIAO_NATIVE_ACCEPTANCE_ACCOUNT_MISMATCH");
   }
 
   private mustRun(testRunId: string, level: PlatformSelfTestLevel): PlatformSelfTestRun {

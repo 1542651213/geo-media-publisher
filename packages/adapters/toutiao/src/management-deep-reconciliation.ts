@@ -1,5 +1,5 @@
 import type { BrowserContext, Page, Response, Route } from "playwright-core";
-import { matchToutiaoManagementRows, type ToutiaoManagementMatch, type ToutiaoManagementRow } from "./management-reconciliation";
+import { matchToutiaoManagementRows, parseToutiaoRowTime, type ToutiaoManagementMatch, type ToutiaoManagementRow } from "./management-reconciliation";
 import { classifyReconciliationRequest, safeReconciliationRequestMetadata } from "./reconciliation-network-policy";
 
 const MANAGEMENT_URL = "https://mp.toutiao.com/profile_v4/manage/content/all";
@@ -11,6 +11,8 @@ export interface ToutiaoDeepScanTarget {
   readonly title: string;
   readonly submittedAt: string;
   readonly remoteId: string | null;
+  readonly windowStart?: string;
+  readonly windowEnd?: string;
 }
 export interface ToutiaoStatusScan {
   readonly status: string;
@@ -58,35 +60,15 @@ export function resolveOwnedToutiaoManagementPage(context: BrowserContext, canon
 }
 
 export function parseToutiaoManagementRowTime(text: string, submittedAt: string): number | null {
-  const full = text.match(/(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2})/u);
-  const short = full ? null : text.match(/(?:^|\s)(\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2})/u);
-  const year = full ? Number(full[1]) : new Date(submittedAt).getUTCFullYear();
-  const month = Number(full?.[2] ?? short?.[1]);
-  const day = Number(full?.[3] ?? short?.[2]);
-  const hour = Number(full?.[4] ?? short?.[3]);
-  const minute = Number(full?.[5] ?? short?.[4]);
-  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)
-    || !Number.isInteger(hour) || !Number.isInteger(minute)
-    || month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59) return null;
-  return Date.UTC(year, month - 1, day, hour - 8, minute);
+  return parseToutiaoRowTime(text, submittedAt);
 }
 
 export function matchDeepToutiaoRows(rows: readonly ToutiaoManagementRow[], target: ToutiaoDeepScanTarget): {
   readonly match: ToutiaoManagementMatch; readonly normalizedTargetMatch: boolean
 } {
-  const submittedAt = Date.parse(target.submittedAt);
-  const candidates = rows.filter((row) => normalized(row.title) === normalized(target.title)
-    && (target.remoteId || (Number.isFinite(submittedAt)
-      && Math.abs((parseToutiaoManagementRowTime(row.rowText, target.submittedAt) ?? Infinity) - submittedAt)
-        <= 48 * 60 * 60 * 1_000)));
-  if (candidates.length !== 1) return { match: { state: candidates.length ? "AMBIGUOUS" : "NOT_FOUND",
-    externalId: null, publicUrl: null, matchedRowCount: candidates.length }, normalizedTargetMatch: false };
-  const row = candidates[0]!;
-  const rowTime = parseToutiaoManagementRowTime(row.rowText, target.submittedAt);
-  const match = matchToutiaoManagementRows([row], { title: target.title,
-    submittedAt: rowTime === null ? target.submittedAt : new Date(rowTime).toISOString(),
-    accountIdentityVerified: true, remoteId: target.remoteId });
-  return { match, normalizedTargetMatch: row.title !== target.title };
+  const match = matchToutiaoManagementRows(rows, { ...target, accountIdentityVerified: true });
+  return { match, normalizedTargetMatch: match.matchedRowCount === 1
+    && rows.some((row) => row.title !== target.title && normalized(row.title) === normalized(target.title)) };
 }
 
 interface PageSnapshot { rows: ToutiaoManagementRow[]; statuses: string[]; nextExists: boolean; nextDisabled: boolean;
@@ -148,7 +130,8 @@ async function readPageSnapshot(page: Page): Promise<PageSnapshot> {
 
 /** All navigation is under a Context-wide guard; no captured request or publish transport is reachable here. */
 export async function scanOwnedToutiaoManagement(context: BrowserContext, canonicalPage: Page,
-  target: ToutiaoDeepScanTarget): Promise<ToutiaoDeepScanResult> {
+  target: ToutiaoDeepScanTarget,
+  verifyAccountIdentity?: (managementPage: Page) => Promise<boolean>): Promise<ToutiaoDeepScanResult> {
   const existing = resolveOwnedToutiaoManagementPage(context, canonicalPage);
   if (context.serviceWorkers().length > 0) throw new Error("TOUTIAO_RECONCILIATION_SERVICE_WORKER_UNGUARDED");
   const ownedPageCount = context.pages().length;
@@ -204,6 +187,8 @@ export async function scanOwnedToutiaoManagement(context: BrowserContext, canoni
       || !new URL(page.url()).pathname.startsWith("/profile_v4/manage/content/"))
       throw new Error("TOUTIAO_RECONCILIATION_REDIRECTED");
     await page.waitForTimeout(5_000);
+    if (verifyAccountIdentity && !await verifyAccountIdentity(page))
+      throw new Error("TOUTIAO_RECONCILIATION_IDENTITY_UNVERIFIED");
     const first = await readPageSnapshot(page);
     const availableStatuses = ["全部", ...first.statuses.filter((label) => label !== "全部" && label !== "全部作品"),
       "草稿箱"];
@@ -236,7 +221,7 @@ export async function scanOwnedToutiaoManagement(context: BrowserContext, canoni
       while (pages < MAX_PAGES_PER_STATUS) {
         if (blockedContentMutationCount > 0) throw new Error("TOUTIAO_RECONCILIATION_MUTATION_ATTEMPT_BLOCKED");
         const current = await readPageSnapshot(page);
-        const signature = JSON.stringify(current.rows.map((row) => [row.title, row.rowText]));
+        const signature = JSON.stringify(current.rows.map((row) => [row.title, row.rowText, row.href, row.dataId]));
         if (pages > 0 && signature === previousSignature) break;
         previousSignature = signature;
         pages += 1; rows += current.rows.length; allRows.push(...current.rows);
@@ -245,7 +230,9 @@ export async function scanOwnedToutiaoManagement(context: BrowserContext, canoni
           if (time !== null) { earliest = Math.min(earliest ?? time, time); latest = Math.max(latest ?? time, time); }
         }
         const candidate = matchDeepToutiaoRows(allRows, target);
-        if (candidate.match.state !== "NOT_FOUND" && candidate.match.state !== "UNKNOWN") { found = true; break; }
+        // A title candidate is not unique until its scan window is complete; never pick the first page.
+        if (target.remoteId && candidate.match.externalId === target.remoteId
+          && candidate.match.state !== "UNKNOWN") { found = true; break; }
         const submittedAt = Date.parse(target.submittedAt);
         if (earliest !== null && Number.isFinite(submittedAt)
           && earliest < submittedAt - 48 * 60 * 60 * 1_000) { scopeComplete = true; break; }
