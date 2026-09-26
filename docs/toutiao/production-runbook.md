@@ -1,4 +1,4 @@
-# Toutiao BrowserNative production candidate
+# Toutiao BrowserNative production MVP
 
 ## Scope and readiness
 
@@ -9,8 +9,8 @@ atomic final-submit claim. Node never replays the browser request on this route.
 The supported initial scope is one visible application instance, one formal task,
 plain-text article and one verified cover image. Rich HTML, image posts, tags,
 categories, platform scheduling and draft creation are not advertised capabilities.
-The historical Browser success supports this choice; it does not replace a fresh
-Owner-authorized acceptance of this package.
+The historical Browser success supported this choice. One fresh Owner-approved
+acceptance completed on 2026-09-26; its exact scope and runtime versions are below.
 
 Ordinary routing is `platform=toutiao + contentKind=article + ARTICLE_BROWSER`.
 Video and other platforms keep their routes. An old Job frozen to `ARTICLE_WEB_API`
@@ -103,3 +103,41 @@ new Owner authorization, one final action, remote ID/state/URL and public readba
 Only a successful one-shot closure can mark this transport production-ready. Even
 then, formal publishing remains explicitly configured; this runbook does not start
 batch work. Keep the experimental route off and preserve all historical evidence.
+
+## Accepted package and next launch
+
+- Final runtime: `80b7281916a8444ead3257a9b0b213ce96de65a3`.
+- Package: `C:\Users\Administrator\.codex\artifacts\toutiao-native-80b7281\win-unpacked\Geo Media Publisher.exe`.
+- EXE: `033fefa7204f414daa67761dac2fdc85c866fb5855f67b400991c2eebcdf1945`.
+- app.asar: `d1111e8a450c856498d833ee9b1b265f19af6b97eb510ab12131faed9d393a5e`.
+- Main: `683c6713f13ab6729bd9da957e483bc0cbaf713ca9b5f591fa524e4b55a190ce`.
+
+Native submit used `9ff2a18`. The later `80b7281` change affects only read-only
+public confirmation and safe evidence retention; it was tested and packaged before
+reconciling the same submitted Job. Both packages' manifests are retained.
+
+Acceptance Job `487827ce-a382-4491-b2d2-13274dfb3e78` is Success, Record
+`631000cc-1ca3-4fb3-a366-a7b10f716d73` Published/Verified, remote ID
+`7689658153499165194`, final count one. Public title/body/reachability passed at
+`2026-09-26T02:13:47.813Z`. The app and owned Context were normally closed afterward.
+Do not continue this completed test to obtain a new publish allowance.
+
+For an inspection-only launch, start this EXE from a process with
+`TOUTIAO_READONLY_PREFLIGHT=true` and `TOUTIAO_BROWSER_NATIVE_SUBMIT_ENABLED=false`.
+Keep the API, MVP-5 and protocol Shadow flags false. No debugging port is required
+for ordinary UI inspection. This mode pauses due publishing and permits read-only
+account activation and result queries.
+
+For later approved ordinary use, close the inspection instance normally and start
+one instance with `TOUTIAO_BROWSER_NATIVE_SUBMIT_ENABLED=true`, read-only mode off,
+and experimental/acceptance-only flags unset. Review existing due tasks first;
+ordinary mode resumes the normal scheduler. This manual configuration is explicit
+enablement, not permission to replay a completed/uncertain Job. Every new article
+still goes through the persisted queue, preparation, confirmation and single-submit
+boundary. No flag was persisted or globally enabled by the acceptance task.
+
+Public confirmation waits briefly for content hydration in a separate guarded
+Page. Unknown requests remain aborted and are counted separately. The same target
+must still have a Published management row, matching remote ID and verified public
+title/body. Failed public reads retain candidate evidence and NeedsReconciliation;
+they never permit another final action.

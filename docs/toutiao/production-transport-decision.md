@@ -12,8 +12,9 @@ Retain BrowserAssistedApi as an experiment, disabled by default. Its ability to
 capture and send a signed request is proven; successful remote article publication
 through that transport is not.
 
-This is an implementation direction, not a new real-publish authorization or a
-claim that the current platform has passed the new acceptance test.
+The initial decision preceded real acceptance. On 2026-09-26 the Owner separately
+approved the exact new candidate; one BrowserNative final action and subsequent
+read-only reconciliation completed successfully. See the acceptance result below.
 
 ## Historical Browser evidence and provenance
 
@@ -120,16 +121,16 @@ an empty scanned management scope do not prove absence of a remote side effect.
 
 | Criterion | BrowserAssistedApi | BrowserNative + Main boundary |
 | --- | --- | --- |
-| Real complete publish evidence | Not proven | One historical end-to-end success |
+| Real complete publish evidence | Not proven | Historical success plus one new Owner-approved acceptance |
 | Duplicate-send surface | Browser abort plus Node handoff | One Browser final action |
 | Confirmation | Reuses management/public evidence | Same evidence, historically successful |
 | Platform coupling | Editor, security runtime, raw request contract and cross-client transport | Editor and read-only management/public UI |
-| Remaining work | Unproven 7050 cause and publish transport acceptance | Connect retained submit and reconciliation paths safely |
+| Remaining work | Unproven 7050 cause and publish transport acceptance | Bounded initial scope accepted; explicit enablement remains required |
 | Maintenance | Two network environments and captured credential materials | Platform native request environment |
 
-BrowserNative still needs fresh, separately Owner-authorized one-shot acceptance.
-It is selected because it has stronger repository evidence and fewer unproven
-boundaries, not because Browser automation is assumed infallible.
+BrowserNative was selected because it had stronger repository evidence and fewer
+unproven boundaries. The fresh acceptance below verifies one current execution;
+it does not establish that Browser automation is infallible.
 
 ## Required production boundaries
 
@@ -159,3 +160,28 @@ pass before presenting the Owner with the exact new article, content hash,
 transport, account and cover/image scope. This task's implementation permission
 does not authorize that final publish. Production readiness is recorded only after
 the separately authorized single attempt and evidence-based reconciliation.
+
+## Completed acceptance, 2026-09-26
+
+The Owner's current-session approval bound the exact title, content hash, account
+and one generic test cover. Submission runtime `9ff2a18` created a new test
+Article/Job/Intent/Record and claimed the single native final action. Initial
+uncertainty caused reconciliation only. The management scan later found the
+uniquely matched target Published.
+
+Runtime `80b7281` fixed only read-only confirmation: unknown background requests
+remain blocked but their successful blocking does not invalidate verified public
+content; content-mutation attempts still fail verification. Bounded DOM hydration
+and safe candidate evidence retention improve recovery without any resubmission.
+
+The same Job `487827ce-a382-4491-b2d2-13274dfb3e78` is now Success; its existing
+Record is Published/Verified, Intent PUBLISHED_CONFIRMED, final count still one.
+Remote ID is `7689658153499165194`; the actual management-provided public URL is
+`https://www.toutiao.com/item/7689658153499165194/?enter_from=mp_group_management`.
+Public reachability, title and body were verified. No Node submit or fallback ran.
+The old 7050 experiment remains uncertain/count1 and was not touched.
+
+This establishes the bounded BrowserNative production MVP: plain text, one cover,
+owned visible browser, Main durable boundary, management/public confirmation.
+Formal submit remains default disabled, requires explicit configuration, and this
+completed acceptance authorizes no further content or batch publication.
