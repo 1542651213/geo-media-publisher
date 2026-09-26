@@ -1,4 +1,4 @@
-# Douyin image/text transport decision (R0)
+# Douyin image/text transport decision (R0 → R1)
 
 ## Evidence
 
@@ -15,6 +15,14 @@
 
 The transport identity is `(platform=douyin, contentKind=article/image_text, transport=DOUYIN_IMAGE_TEXT_BROWSER)`. Existing `(douyin, video)` remains the official OAuth adapter. No automatic transport fallback is allowed after preparation or final-submit claim.
 
+## R1 reference review and implementation
+
+Owner-supplied AI招财兔 v4.2.5 static review found an ordinary image-post path through browser upload, editing, and a browser final click, with passive observation of the `create_v2` response for an item ID. Its separate `long_article` API code does not establish an API route for `/creator-micro/content/post/image`. This sample is a route clue, not a current live success guarantee; no competitor binary, credentials, signer, or request replay was used here.
+
+R1 keeps BrowserNative. The adapter now freezes a one-image public/immediate candidate, selects only the image-accepting file input, checks a new processed image plus title/body and selected setting controls, rechecks the prepared editor, and reads the Creator management route before the boundary. Main retains the existing global concurrency-one Job, Intent, Prepared Record and atomic `final_submit_count` claim. The browser final action installs a Page-scoped response observer and a one-request guard for the observed image-post create path; it never replays through Node or falls back to video OAuth/API. A response only gives a provisional accepted state. A uniquely matched published management row with trusted remote ID gives `PUBLISHED_MANAGEMENT`; a separately verified public page gives `PUBLISHED_CONFIRMED`.
+
+The actual Creator response path/shape, setting DOM, image upload completion, management row ID layout, and public media layout still require this Owner account's live acceptance. If the platform uses a different create path or its request bypasses the Page route, the observer yields uncertainty; no alternate submit is attempted. The prior R0 diagnostic Session was memory-only. Current production storage has no encrypted Douyin BrowserSession key, so the normal application connection flow needs Owner login before live preparation. Existing OAuth `video.create` is not evidence of the official image/text `video.create.bind` permission.
+
 ## Acceptance boundary
 
-The production flag remains off, and the adapter deliberately has no final-submit implementation until the current editor settings and management rows are validated. No formal Douyin image/text publish may run until the current Creator page proves stable account identity, one-image upload completion, title/body readback, actual final action, and read-only work-management reconciliation. The Owner must then review the exact account, title, body, image SHA256, content hash, session, management readiness, and zero submit count before authorizing one final action.
+The ordinary production flag remains off. No formal Douyin image/text publish may run until the current Creator page proves stable account identity, one-image upload completion, title/body/selected-setting readback, management readiness, and the Owner approves the exact new candidate. Upload/edit permission and one-shot final-submit permission are separate. A successful offline suite or the static competitor sample cannot promote this route to live verified.
