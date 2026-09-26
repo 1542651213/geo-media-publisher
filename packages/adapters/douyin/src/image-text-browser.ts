@@ -17,6 +17,18 @@ export function parseVisibleDouyinCreatorId(pageText: string): string | null {
   return matches.length === 1 ? matches[0] ?? null : null;
 }
 
+/** The known Creator welcome tour covers the home cards; skipping it only closes onboarding UI. */
+export async function dismissKnownDouyinHomeTour(page: Page): Promise<boolean> {
+  const welcome = page.getByText("欢迎体验新版首页", { exact: false });
+  if (await welcome.count() !== 1 || !await welcome.isVisible()) return false;
+  const skip = page.getByText("跳过", { exact: true });
+  if (await skip.count() !== 1 || !await skip.isVisible())
+    throw new BrowserAutomationError("PLATFORM_CHANGED", "DOUYIN_HOME_TOUR_SKIP_AMBIGUOUS");
+  await skip.click();
+  await welcome.waitFor({ state: "hidden", timeout: 5_000 });
+  return true;
+}
+
 /** Compatibility helper for diagnostics; only selected control state can pass. */
 export function douyinRequiredSettingsPass(evidence: DouyinEditorSettingsSnapshot): boolean {
   try { assertDouyinEditorSettings(evidence, "public"); return true; }
@@ -216,12 +228,14 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     const visibility = ctx.settings.expectedVisibility;
     if (visibility !== "public") throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_OWNER_VISIBILITY_SELECTION_REQUIRED");
     protectExistingDouyinDraft(await page.locator("body").innerText());
+    await dismissKnownDouyinHomeTour(page);
     const source = { articleId: article.articleId, accountId: ctx.accountId, creatorId,
       title: article.title, body: article.body, imagePaths: article.images ?? [], topics: [], visibility, scheduledAt: null } as const;
     const initialFrozen = await freezeDouyinImageText(source);
-    const card = page.locator('[role="button"]').filter({ hasText: /发布图文/u });
-    if (await card.count() !== 1) throw new BrowserAutomationError("PLATFORM_CHANGED", "DOUYIN_IMAGE_TEXT_ENTRY_AMBIGUOUS");
     await page.keyboard.press("Escape");
+    const card = page.getByText("发布图文", { exact: true });
+    if (await card.count() !== 1 || !await card.isVisible())
+      throw new BrowserAutomationError("PLATFORM_CHANGED", "DOUYIN_IMAGE_TEXT_ENTRY_AMBIGUOUS");
     await card.click();
     protectExistingDouyinDraft(await page.locator("body").innerText());
     await page.waitForURL((url) => url.origin === "https://creator.douyin.com" && url.pathname === "/creator-micro/content/upload", { timeout: 15_000 });

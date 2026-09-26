@@ -1,11 +1,26 @@
 import { describe, expect, it } from "vitest";
 import type { Page } from "playwright-core";
+import { vi } from "vitest";
 import type { CredentialStore } from "@publisher/security";
-import { DouyinImageTextBrowserAdapter, douyinRequiredSettingsPass, parseVisibleDouyinCreatorId } from "./image-text-browser";
+import { DouyinImageTextBrowserAdapter, dismissKnownDouyinHomeTour, douyinRequiredSettingsPass, parseVisibleDouyinCreatorId } from "./image-text-browser";
 
 const store: CredentialStore = { get: () => null, set: () => undefined, delete: () => undefined, has: () => false };
 
 describe("Douyin image/text BrowserNative adapter", () => {
+  it("dismisses only the known Creator home tour before choosing the image-post entry", async () => {
+    const skip = { count: vi.fn(async () => 1), isVisible: vi.fn(async () => true), click: vi.fn(async () => undefined) };
+    const welcome = { count: vi.fn(async () => 1), isVisible: vi.fn(async () => true), waitFor: vi.fn(async () => undefined) };
+    const page = { getByText: vi.fn((text: string) => text === "跳过" ? skip : welcome) } as unknown as Page;
+    await expect(dismissKnownDouyinHomeTour(page)).resolves.toBe(true);
+    expect(skip.click).toHaveBeenCalledTimes(1);
+    expect(welcome.waitFor).toHaveBeenCalledWith({ state: "hidden", timeout: 5_000 });
+    skip.count.mockResolvedValue(2);
+    await expect(dismissKnownDouyinHomeTour(page)).rejects.toThrow(/DOUYIN_HOME_TOUR_SKIP_AMBIGUOUS/u);
+    expect(skip.click).toHaveBeenCalledTimes(1);
+    welcome.count.mockResolvedValue(0);
+    await expect(dismissKnownDouyinHomeTour(page)).resolves.toBe(false);
+    expect(skip.click).toHaveBeenCalledTimes(1);
+  });
   it("requires a visible stable Douyin ID rather than accepting the home URL alone", () => {
     expect(parseVisibleDouyinCreatorId("抖音号：72388977613")).toBe("72388977613");
     expect(parseVisibleDouyinCreatorId("欢迎来到创作者中心")).toBeNull();
