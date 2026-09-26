@@ -11,7 +11,7 @@ export function assertDouyinAcceptanceChannel(channel: string, payload: unknown,
       && data.imageSelectionMode === "manual") return;
     throw new Error("DOUYIN_ACCEPTANCE_EXACT_CANDIDATE_REQUIRED");
   }
-  if (channel === "jobs:confirm" || channel === "jobs:run") {
+  if (channel === "jobs:confirm" || channel === "jobs:run" || channel === "jobs:prepare-existing-douyin") {
     const job = typeof data.id === "string" ? findJob(data.id) : null;
     if (job && job.accountId === target.accountId && job.articleId === target.articleId
       && job.platformKey === "douyin" && job.contentKind !== "video"

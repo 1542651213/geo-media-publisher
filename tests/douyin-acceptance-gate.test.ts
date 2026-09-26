@@ -27,4 +27,14 @@ describe("Douyin R1 exact-candidate acceptance isolation", () => {
     expect(() => assertDouyinAcceptanceChannel("jobs:run", { id: job.id }, target,
       () => ({ ...job, contentKind: "video" }))).toThrow();
   });
+
+  it("prepares only the already created image-text Job with matching account and article", () => {
+    expect(() => assertDouyinAcceptanceChannel("jobs:prepare-existing-douyin", { id: job.id }, target, findJob)).not.toThrow();
+    expect(() => assertDouyinAcceptanceChannel("jobs:prepare-existing-douyin", { id: "old" }, target, findJob)).toThrow(/DOUYIN_ACCEPTANCE_JOB_MISMATCH/u);
+    for (const changed of [{ ...job, accountId: "other" }, { ...job, articleId: "other" },
+      { ...job, contentKind: "video" }, { ...job, platformKey: "toutiao" }]) {
+      expect(() => assertDouyinAcceptanceChannel("jobs:prepare-existing-douyin", { id: job.id }, target,
+        () => changed)).toThrow(/DOUYIN_ACCEPTANCE_JOB_MISMATCH/u);
+    }
+  });
 });

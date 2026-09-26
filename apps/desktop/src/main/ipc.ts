@@ -95,7 +95,7 @@ export interface IpcDependencies {
 
 let processDiagnostics: ProcessDiagnostics | null = null;
 let acceptanceRepository: AppRepository | null = null;
-const mvp5PausedChannels = new Set(["articles:prepare-publish", "jobs:run", "jobs:confirm", "jobs:retry",
+const mvp5PausedChannels = new Set(["articles:prepare-publish", "jobs:run", "jobs:confirm", "jobs:retry", "jobs:prepare-existing-douyin",
   "platform-self-test:run-post-upload-discovery", "platform-self-test:continue", "platform-self-test:run-level",
   "platform-self-test:request-publish", "platform-self-test:confirm-publish"]);
 
@@ -1387,6 +1387,23 @@ export function registerIpc(deps: IpcDependencies): void {
     return repository.createVideoPublishJob({ accountId: input.accountId, platformKey: input.platformKey, articleId: input.articleId, videoAssetId: input.videoAssetId, title: asset.title, description: asset.description, tags: asset.tags, coverPath: asset.coverPath ?? undefined, platformFields: asset.platformFields, scheduledAt: input.scheduledAt ?? new Date().toISOString(), dryRun: true, manualConfirmationRequired: true });
   });
   register("jobs:list", (_event, payload) => repository.listJobs(z.object({ status: z.string().optional() }).optional().parse(payload)));
+  register("jobs:prepare-existing-douyin", async (_event, payload) => {
+    const id = z.object({ id: idSchema }).parse(payload).id;
+    if (process.env.DOUYIN_BODY_DIAGNOSTIC_ENABLED !== "true"
+      || process.env.DOUYIN_BODY_DIAGNOSTIC_JOB_ID?.trim() !== id
+      || !process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim()
+      || !process.env.DOUYIN_R1_ACCEPTANCE_ARTICLE_ID?.trim())
+      throw new Error("DOUYIN_EXACT_DIAGNOSTIC_JOB_REQUIRED");
+    const job = repository.getJob(id);
+    if (!job || job.platformKey !== "douyin" || job.contentKind === "video"
+      || job.accountId !== process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim()
+      || job.articleId !== process.env.DOUYIN_R1_ACCEPTANCE_ARTICLE_ID?.trim()
+      || job.status !== "AwaitingConfirmation" || job.attemptCount !== 0
+      || repository.getSubmissionIntentByJob(id) || repository.getPublishRecordByJob(id)
+      || repository.getPublishPayload(id).douyinImageSelection)
+      throw new Error("DOUYIN_EXACT_PREBOUNDARY_JOB_REQUIRED");
+    return publisher.prepareArticle(id, createUserAction("START_PUBLISH"));
+  });
   register("jobs:run", async (_event, payload) => { const id = z.object({ id: idSchema }).parse(payload).id; const job = repository.getJob(id); const source = job && ["NeedsUserAction", "WaitingForUser"].includes(job.status) ? "CONTINUE_PENDING_ACTION" as const : "START_PUBLISH" as const; return publisher.executeJob(id, createUserAction(source)); });
   register("jobs:confirm", (_event, payload) => { const input = z.object({ id: idSchema, dryRun: z.boolean().default(false) }).parse(payload); return repository.confirmJob(input.id, input.dryRun); });
   register("jobs:reconcile", async (_event, payload) => publisher.reconcileJob(z.object({ id: idSchema }).parse(payload).id, createUserAction("CONTINUE_PENDING_ACTION")));
