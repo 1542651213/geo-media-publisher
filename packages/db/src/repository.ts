@@ -3095,6 +3095,7 @@ export class AppRepository {
       }
       if (operation === "create" && metadata.media.some((item) => item.state !== "SUCCEEDED")) throw new Error("KANGYI_MEDIA_NOT_COMPLETE");
       if (operation === "draft" && metadata.create?.state !== "SUCCEEDED") throw new Error("KANGYI_CREATE_NOT_COMPLETE");
+      if (operation === "draft" && (metadata.validate || metadata.publish)) throw new Error("KANGYI_DRAFT_AFTER_VALIDATION");
       if (operation === "validate" && (metadata.create?.state !== "SUCCEEDED" || (metadata.draft !== null && metadata.draft.state !== "SUCCEEDED"))) throw new Error("KANGYI_DRAFT_NOT_COMPLETE");
       if (operation === "publish" && metadata.validate?.state !== "SUCCEEDED") throw new Error("KANGYI_VALIDATE_NOT_COMPLETE");
       const phase: KangyiOperationPhase = operation === "create" ? "CREATE" : operation === "draft" ? "DRAFT" : operation === "validate" ? "VALIDATE" : "PUBLISH";

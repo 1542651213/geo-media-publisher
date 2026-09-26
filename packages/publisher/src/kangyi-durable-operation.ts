@@ -57,15 +57,15 @@ export interface KangyiDurableJsonInput {
 export interface KangyiDurableOperationInput {
   binding: KangyiOperationBindingInput;
   media?: KangyiDurableMediaInput[];
-  create: KangyiDurableJsonInput;
+  create?: KangyiDurableJsonInput;
   draft?: KangyiDurableJsonInput;
-  validate: KangyiDurableJsonInput;
-  publish: KangyiDurableJsonInput;
+  validate?: KangyiDurableJsonInput;
+  publish?: KangyiDurableJsonInput;
 }
 
 export type KangyiDurableContinuationInput = Omit<KangyiDurableOperationInput, "binding">;
 
-export type KangyiDurableRunStatus = "complete" | "polling" | "failed" | "needs_reconciliation";
+export type KangyiDurableRunStatus = "awaiting_input" | "complete" | "polling" | "failed" | "needs_reconciliation";
 
 export interface KangyiDurableRunResult {
   status: KangyiDurableRunStatus;
@@ -102,14 +102,13 @@ export class KangyiDurableOperationRunner {
     const create = metadata.create ?? continuation?.create;
     const validate = metadata.validate ?? continuation?.validate;
     const publish = metadata.publish ?? continuation?.publish;
-    if (!create || !validate || !publish) throw new Error("KANGYI_OPERATION_METADATA_INCOMPLETE");
     return this.run({
       binding: { intentId: metadata.intentId, accountId: metadata.accountId, siteId: metadata.siteId, environment: metadata.environment, snapshotId: metadata.snapshotId, contentBindingId: metadata.contentBindingId, ...(metadata.pilotAuthorizationId ? { pilotAuthorizationId: metadata.pilotAuthorizationId } : {}) },
       media: metadata.media.map((item) => ({ assetId: item.assetId, idempotencyKey: item.idempotencyKey })),
-      create,
+      ...(create ? { create } : {}),
       ...(metadata.draft ? { draft: metadata.draft } : continuation?.draft ? { draft: continuation.draft } : {}),
-      validate,
-      publish
+      ...(validate ? { validate } : {}),
+      ...(publish ? { publish } : {})
     });
   }
 
@@ -148,7 +147,9 @@ export class KangyiDurableOperationRunner {
       }
     }
 
-    metadata = this.repository.prepareKangyiJsonOperation(input.binding.intentId, "create", input.create);
+    const create = metadata.create ?? input.create;
+    if (!create) return { status: "awaiting_input", metadata, recordId: null };
+    metadata = this.repository.prepareKangyiJsonOperation(input.binding.intentId, "create", create);
     if (metadata.create?.state !== "SUCCEEDED") {
       let result: KangyiContentTransportResult;
       try {
@@ -159,8 +160,9 @@ export class KangyiDurableOperationRunner {
       metadata = this.repository.recordKangyiJsonOperationResult(input.binding.intentId, "create", { contentId: result.contentId, revisionId: result.revisionId, rowVersion: result.rowVersion, contentHash: result.contentHash });
     }
 
-    if (input.draft) {
-      metadata = this.repository.prepareKangyiJsonOperation(input.binding.intentId, "draft", input.draft);
+    const draft = metadata.draft ?? input.draft;
+    if (draft) {
+      metadata = this.repository.prepareKangyiJsonOperation(input.binding.intentId, "draft", draft);
       if (metadata.draft?.state !== "SUCCEEDED") {
         let result: KangyiContentTransportResult;
         try {
@@ -180,7 +182,9 @@ export class KangyiDurableOperationRunner {
       }
     }
 
-    metadata = this.repository.prepareKangyiJsonOperation(input.binding.intentId, "validate", input.validate);
+    const validate = metadata.validate ?? input.validate;
+    if (!validate) return { status: "awaiting_input", metadata, recordId: null };
+    metadata = this.repository.prepareKangyiJsonOperation(input.binding.intentId, "validate", validate);
     if (metadata.validate?.state !== "SUCCEEDED") {
       let result: KangyiValidationTransportResult;
       try {
@@ -199,7 +203,9 @@ export class KangyiDurableOperationRunner {
       metadata = this.repository.recordKangyiJsonOperationResult(input.binding.intentId, "validate", { valid: result.valid, revisionId: result.revisionId, contentHash: result.contentHash });
     }
 
-    metadata = this.repository.prepareKangyiJsonOperation(input.binding.intentId, "publish", input.publish);
+    const publish = metadata.publish ?? input.publish;
+    if (!publish) return { status: "awaiting_input", metadata, recordId: null };
+    metadata = this.repository.prepareKangyiJsonOperation(input.binding.intentId, "publish", publish);
     if (!metadata.publish?.cmsJobId) {
       const claim = this.repository.claimKangyiPublishDispatch(input.binding.intentId);
       let result: Awaited<ReturnType<KangyiDurableOperationTransport["publish"]>>;

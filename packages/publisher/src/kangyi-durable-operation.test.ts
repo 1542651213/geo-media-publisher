@@ -94,6 +94,24 @@ class FakeTransport implements KangyiDurableOperationTransport {
 }
 
 describe("Kangyi durable operation recovery", () => {
+  it("persists each stage before later server-generated identities are known", async () => {
+    const { repository, input, intentId } = fixture(true, "huiquan");
+    const transport = new FakeTransport();
+    const runner = new KangyiDurableOperationRunner(repository, transport);
+    const media = await runner.run({ binding: input.binding, media: input.media });
+    expect(media.status).toBe("awaiting_input");
+    expect(media.metadata.media[0]).toMatchObject({ state: "SUCCEEDED", mediaId: "media-1" });
+    const created = await runner.resume(intentId, { create: input.create });
+    expect(created.status).toBe("awaiting_input");
+    expect(created.metadata.create?.responseIdentity).toMatchObject({ contentId: "content-1", revisionId: "revision-1", rowVersion: 1, contentHash: "cms-content-hash" });
+    const validated = await runner.resume(intentId, { validate: input.validate });
+    expect(validated.status).toBe("awaiting_input");
+    expect(validated.metadata.validate?.responseIdentity).toMatchObject({ valid: true, revisionId: "revision-1" });
+    expect((await runner.resume(intentId, { publish: input.publish })).status).toBe("polling");
+    expect((await runner.resume(intentId)).status).toBe("complete");
+    expect(transport.calls.filter((call) => call.operation === "create")).toHaveLength(1);
+    expect(transport.calls.filter((call) => call.operation === "publish")).toHaveLength(1);
+  });
   it.each(["huiquan", "shupai"] as const)("retains %s staging identity through accepted job and public readback", async (siteId) => {
     const { repository, input, intentId } = fixture(false, siteId);
     const runner = new KangyiDurableOperationRunner(repository, new FakeTransport());
@@ -132,7 +150,7 @@ describe("Kangyi durable operation recovery", () => {
     const createCalls = transport.calls.filter((call) => call.operation === "create");
     expect(createCalls).toHaveLength(2);
     expect(createCalls[0]).toEqual(createCalls[1]);
-    expect(repository.getKangyiOperationMetadata(intentId)?.create?.exactRequestBody).toBe(input.create.exactRequestBody);
+    expect(repository.getKangyiOperationMetadata(intentId)?.create?.exactRequestBody).toBe(input.create!.exactRequestBody);
   });
 
   it("persists and replays the optional draft and validate payloads independently", async () => {
@@ -175,8 +193,8 @@ describe("Kangyi durable operation recovery", () => {
   it("rejects replacing a persisted exact payload after the source article changes", async () => {
     const { repository, intentId, input } = fixture();
     repository.initializeKangyiOperation(input.binding);
-    repository.prepareKangyiJsonOperation(intentId, "create", input.create);
-    const changed = { ...input.create, exactRequestBody: JSON.stringify({ changed: true }), requestBodySha256: kangyiSha256Utf8(JSON.stringify({ changed: true })) };
+    repository.prepareKangyiJsonOperation(intentId, "create", input.create!);
+    const changed = { ...input.create!, exactRequestBody: JSON.stringify({ changed: true }), requestBodySha256: kangyiSha256Utf8(JSON.stringify({ changed: true })) };
     expect(() => repository.prepareKangyiJsonOperation(intentId, "create", changed)).toThrow("KANGYI_OPERATION_PAYLOAD_IMMUTABLE");
   });
 
