@@ -18,12 +18,18 @@ describe("Douyin image/text BrowserNative adapter", () => {
       setting: "denied", origin: "https://creator.douyin.com" });
     expect(session.detach).toHaveBeenCalledTimes(1);
   });
-  it("allows an owner-confirmed editor resume only for the exact acceptance account and Article", () => {
-    const target = { accountId: "owner", articleId: "new-test", pagePath: "/creator-micro/content/post/image" };
-    expect(isAuthorizedDouyinDraftResume(target, { accountId: "owner", articleId: "new-test" })).toBe(true);
-    expect(isAuthorizedDouyinDraftResume({ ...target, accountId: "other" }, { accountId: "owner", articleId: "new-test" })).toBe(false);
-    expect(isAuthorizedDouyinDraftResume({ ...target, articleId: "old-test" }, { accountId: "owner", articleId: "new-test" })).toBe(false);
-    expect(isAuthorizedDouyinDraftResume({ ...target, pagePath: "/creator-micro/home" }, { accountId: "owner", articleId: "new-test" })).toBe(false);
+  it("allows an owner-confirmed editor resume only with exact existing candidate content", () => {
+    const target = { accountId: "owner", articleId: "new-test", pagePath: "/creator-micro/content/post/image",
+      title: "Unique test title", body: "Exact test body", imageCount: 1 };
+    const approved = { accountId: "owner", articleId: "new-test", title: "Unique test title", body: "Exact test body" };
+    expect(isAuthorizedDouyinDraftResume(target, approved)).toBe(true);
+    expect(isAuthorizedDouyinDraftResume({ ...target, title: "" }, approved)).toBe(false);
+    expect(isAuthorizedDouyinDraftResume({ ...target, body: "" }, approved)).toBe(false);
+    expect(isAuthorizedDouyinDraftResume({ ...target, imageCount: 0 }, approved)).toBe(false);
+    expect(isAuthorizedDouyinDraftResume({ ...target, title: "Old draft" }, approved)).toBe(false);
+    expect(isAuthorizedDouyinDraftResume({ ...target, accountId: "other" }, approved)).toBe(false);
+    expect(isAuthorizedDouyinDraftResume({ ...target, articleId: "old-test" }, approved)).toBe(false);
+    expect(isAuthorizedDouyinDraftResume({ ...target, pagePath: "/creator-micro/home" }, approved)).toBe(false);
     expect(isAuthorizedDouyinDraftResume(target, null)).toBe(false);
   });
   it("dismisses only the known Creator home tour before choosing the image-post entry", async () => {

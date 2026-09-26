@@ -53,10 +53,13 @@ export async function denyOptionalDouyinLocation(page: Page): Promise<void> {
   if (state !== "denied") throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_LOCATION_PERMISSION_NOT_DENIED");
 }
 
-export function isAuthorizedDouyinDraftResume(target: { accountId: string; articleId: string; pagePath: string },
-  approved: { accountId: string; articleId: string } | null): boolean {
+export function isAuthorizedDouyinDraftResume(target: { accountId: string; articleId: string; pagePath: string;
+  title: string; body: string; imageCount: number },
+  approved: { accountId: string; articleId: string; title: string; body: string } | null): boolean {
   return approved?.accountId === target.accountId && approved.articleId === target.articleId
-    && target.pagePath === "/creator-micro/content/post/image";
+    && target.pagePath === "/creator-micro/content/post/image" && target.imageCount === 1
+    && Boolean(approved.title.trim() && approved.body.trim())
+    && target.title === approved.title && target.body === approved.body;
 }
 
 /** Compatibility helper for diagnostics; only selected control state can pass. */
@@ -298,9 +301,16 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     await denyOptionalDouyinLocation(page);
     const pagePath = new URL(page.url()).pathname;
     const resumeApproved = this.approvedResume?.accountId === ctx.accountId && this.approvedResume.articleId === article.articleId;
-    const resumeDraft = isAuthorizedDouyinDraftResume({ accountId: ctx.accountId, articleId: article.articleId, pagePath }, this.approvedResume);
+    const previewSelector = 'main img, [class*="upload"] img, [class*="image"] img';
+    const resumeDraft = resumeApproved && isAuthorizedDouyinDraftResume({ accountId: ctx.accountId, articleId: article.articleId, pagePath,
+      title: pagePath === "/creator-micro/content/post/image"
+        ? await page.locator('input[placeholder="添加作品标题"]').inputValue().catch(() => "") : "",
+      body: pagePath === "/creator-micro/content/post/image"
+        ? await page.locator('[contenteditable="true"]').innerText().catch(() => "") : "",
+      imageCount: pagePath === "/creator-micro/content/post/image" ? await page.locator(previewSelector).count() : 0 },
+    { ...this.approvedResume!, title: article.title, body: article.body });
     if (resumeApproved && !resumeDraft)
-      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_OWNER_CONFIRMED_EDITOR_REQUIRED_NO_NEW_UPLOAD");
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_RESUMED_CONTENT_NOT_UNIQUELY_IDENTIFIED_NO_NEW_UPLOAD");
     if (!resumeDraft && pagePath !== "/creator-micro/home")
       throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_CREATOR_HOME_REQUIRED_FOR_NEW_IMAGE_TEXT");
     const visibility = ctx.settings.expectedVisibility;
@@ -312,7 +322,6 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     const source = { articleId: article.articleId, accountId: ctx.accountId, creatorId,
       title: article.title, body: article.body, imagePaths: article.images ?? [], topics: [], visibility, scheduledAt: null } as const;
     const initialFrozen = await freezeDouyinImageText(source);
-    const previewSelector = 'main img, [class*="upload"] img, [class*="image"] img';
     if (!await verifyDouyinImageTextImage(initialFrozen, 0)) throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_IMAGE_HASH_MISMATCH");
     if (!resumeDraft) {
       await page.keyboard.press("Escape");
