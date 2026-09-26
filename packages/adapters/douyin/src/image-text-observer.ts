@@ -20,10 +20,16 @@ export class DouyinImagePostObserver {
   private afterFinalAction = false;
   private readonly trackedRequests = new Set<Request>();
   private allowedDispatchCount = 0;
+  private blockedUnknownWriteCount = 0;
   private routeInstalled = false;
-  private readonly routePattern = "**/web/api/media/aweme/create_v2/**";
+  private readonly routePattern = "**/*";
   private readonly onRoute = async (route: Route): Promise<void> => {
-    if (!isPublishRequest(route.request())) { await route.continue(); return; }
+    const request = route.request();
+    if (!isPublishRequest(request)) {
+      if (["GET", "HEAD", "OPTIONS"].includes(request.method())) await route.continue();
+      else { this.blockedUnknownWriteCount += 1; await route.abort(); }
+      return;
+    }
     if (!this.afterFinalAction) { await route.abort(); return; }
     this.allowedDispatchCount += 1;
     if (this.allowedDispatchCount > 1) { await route.abort(); return; }
@@ -57,7 +63,7 @@ export class DouyinImagePostObserver {
     page.on("response", this.onResponse);
   }
 
-  /** Guard only this Page's known image-post create path. It remains until Page closure after the claim. */
+  /** During the final-action phase, only one known image-post write may leave this Page. */
   async installOneShotGuard(): Promise<void> {
     await this.page.route(this.routePattern, this.onRoute);
     this.routeInstalled = true;
@@ -72,14 +78,14 @@ export class DouyinImagePostObserver {
 
   markFinalClick(): void { this.finalClickCount += 1; this.afterFinalAction = true; }
 
-  async collect(timeoutMs = 20_000): Promise<{ evidence: DouyinPublishResponseEvidence; classification: ReturnType<typeof classifyDouyinPublishResponse> }> {
+  async collect(timeoutMs = 20_000): Promise<{ evidence: DouyinPublishResponseEvidence; classification: ReturnType<typeof classifyDouyinPublishResponse>; blockedUnknownWriteCount: number }> {
     const deadline = Date.now() + timeoutMs;
     while (!this.responseObserved && !this.page.isClosed() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
     await Promise.race([Promise.allSettled([...this.pending]), new Promise((resolve) => setTimeout(resolve, 2_000))]);
     const evidence: DouyinPublishResponseEvidence = { finalClickCount: this.finalClickCount, requestCount: this.requestCount,
       responseObserved: this.responseObserved, httpStatus: this.httpStatus, statusCode: this.statusCode, itemId: this.itemId,
       samePage: !this.page.isClosed(), afterFinalAction: this.afterFinalAction };
-    return { evidence, classification: classifyDouyinPublishResponse(evidence) };
+    return { evidence, classification: classifyDouyinPublishResponse(evidence), blockedUnknownWriteCount: this.blockedUnknownWriteCount };
   }
 
   stop(): void { this.page.off("request", this.onRequest); this.page.off("response", this.onResponse); }

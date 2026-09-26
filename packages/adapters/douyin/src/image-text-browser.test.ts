@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { Page } from "playwright-core";
 import type { CredentialStore } from "@publisher/security";
 import { DouyinImageTextBrowserAdapter, douyinRequiredSettingsPass, parseVisibleDouyinCreatorId } from "./image-text-browser";
 
@@ -43,5 +44,28 @@ describe("Douyin image/text BrowserNative adapter", () => {
       settings: { expectedCreatorId: "72388977613", browserExecutionMode: "VISIBLE" }, secrets: {} };
     await expect(adapter.checkSession(ctx)).resolves.toBe("needs_user_action");
     await expect(adapter.activateStoredCreatorSession(ctx)).rejects.toThrow(/尚未连接账号|DOUYIN_ACTIVE_OWNED_CONTEXT_REQUIRED/u);
+  });
+
+  it("keeps a recently verified identity bound to the same Page, Context and Session only", async () => {
+    const adapter = new DouyinImageTextBrowserAdapter({ credentialStore: store });
+    const context = {};
+    let path = "/creator-micro/home";
+    let visible = "抖音号：72388977613";
+    const page = { url: () => `https://creator.douyin.com${path}`, isClosed: () => false, context: () => context,
+      locator: () => ({ innerText: async () => visible }), evaluate: async () => ({ labels: ["已发布", "审核中", "未通过"],
+        searchControlCount: 1, visibleRowCount: 0 }) } as unknown as Page;
+    const session = { context, page, executionMode: "VISIBLE", sessionIdHash: "session-1" };
+    Object.defineProperty(adapter, "activeCanonicalPage", { value: async () => ({ page, session }) });
+    const ctx = { accountId: "owner-account", accountName: "Owner", platformKey: "douyin",
+      settings: { expectedCreatorId: "72388977613", browserExecutionMode: "VISIBLE" }, secrets: {} };
+    expect((await adapter.activateStoredCreatorSession(ctx)).status).toBe("ACTIVE");
+    visible = "作品管理";
+    path = "/creator-micro/content/manage";
+    expect(await adapter.inspectCurrentManagementPage(ctx)).toMatchObject({ ready: true, creatorId: "72388977613",
+      pagePath: "/creator-micro/content/manage", searchControlCount: 1 });
+    session.sessionIdHash = "session-2";
+    expect((await adapter.activateStoredCreatorSession(ctx)).status).toBe("WAITING_FOR_OWNER");
+    visible = "抖音号：12345678901";
+    expect((await adapter.activateStoredCreatorSession(ctx)).status).toBe("IDENTITY_MISMATCH");
   });
 });

@@ -586,6 +586,18 @@ export function registerIpc(deps: IpcDependencies): void {
       accountId: input.accountId, status: result.status, pageHost: result.pageHost, sessionIdHash: result.sessionIdHash });
     return result;
   });
+  register("accounts:inspect-douyin-management", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    const binding = repository.getDouyinImageTextConnection(input.accountId);
+    if (!binding?.active) throw new Error("Douyin Creator binding is unavailable");
+    const adapter = registry.getForContent("douyin", "article");
+    if (!(adapter instanceof DouyinImageTextBrowserAdapter)) throw new Error("Douyin image/text BrowserNative route is unavailable");
+    const result = await adapter.inspectCurrentManagementPage(accountContext(input.accountId, "douyin"));
+    logger.info("ACCOUNT", "DOUYIN_MANAGEMENT_READONLY_SMOKE", "抖音图文作品管理只读检查", {
+      accountId: input.accountId, ready: result.ready, pageHost: result.pageHost, pagePath: result.pagePath,
+      searchControlCount: result.searchControlCount, stateLabels: result.stateLabels, visibleRowCount: result.visibleRowCount });
+    return result;
+  });
   register("accounts:close-runtime-session", async (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: z.literal("toutiao") }).parse(payload);
     return toutiaoSessionActivation.close(input.accountId);

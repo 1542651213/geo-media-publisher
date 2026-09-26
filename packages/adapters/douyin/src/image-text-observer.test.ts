@@ -37,6 +37,20 @@ describe("Douyin one-shot page response observer", () => {
     expect(page.routeHandler).not.toBeNull();
   });
 
+  it("blocks unknown writes during final action without blocking reads", async () => {
+    const page = new MockPage();
+    const observer = new DouyinImagePostObserver(page as unknown as Page);
+    await observer.installOneShotGuard();
+    observer.markFinalClick();
+    const write = { request: () => request("https://creator.douyin.com/unrelated/write"), continue: vi.fn(), abort: vi.fn() } as unknown as Route;
+    const read = { request: () => request("https://creator.douyin.com/unrelated/read", "GET"), continue: vi.fn(), abort: vi.fn() } as unknown as Route;
+    await page.routeHandler!(write);
+    await page.routeHandler!(read);
+    expect(write.abort).toHaveBeenCalledOnce();
+    expect(read.continue).toHaveBeenCalledOnce();
+    observer.stop();
+  });
+
   it("accepts one correlated safe response and keeps duplicate observation uncertain", async () => {
     const page = new MockPage();
     const observer = new DouyinImagePostObserver(page as unknown as Page);

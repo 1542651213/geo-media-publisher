@@ -47,6 +47,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
   private readonly nativeSubmitEnabled: boolean;
   private readonly prepared = new Map<string, { frozen: FrozenDouyinImageText; page: Page; context: ReturnType<Page["context"]>; settings: DouyinEditorSettingsSnapshot }>();
   private readonly finalSubmitUsed = new Set<string>();
+  private readonly verifiedIdentity = new Map<string, { page: Page; context: ReturnType<Page["context"]>; sessionIdHash: string; creatorId: string; verifiedAt: number }>();
 
   constructor(options: BrowserAutomationAdapterOptions & { nativeSubmitEnabled?: boolean } = {}) {
     super(definition, options);
@@ -75,14 +76,52 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     const pageHost = new URL(owned.page.url()).host;
     if (pageHost !== "creator.douyin.com" || /login|passport|captcha|verify/iu.test(owned.page.url()))
       return { status: "WAITING_FOR_OWNER", creatorId: null, pageHost, sessionIdHash: owned.session.sessionIdHash };
-    const creatorId = await this.readVisibleCreatorId(owned.page);
+    const creatorId = await this.readOwnedCreatorId(ctx, owned);
     return { status: !creatorId ? "WAITING_FOR_OWNER" : creatorId === expected ? "ACTIVE" : "IDENTITY_MISMATCH",
       creatorId, pageHost, sessionIdHash: owned.session.sessionIdHash };
+  }
+
+  async inspectCurrentManagementPage(ctx: AccountContext): Promise<{ ready: boolean; creatorId: string | null; pageHost: string | null;
+    pagePath: string | null; searchControlCount: number; stateLabels: string[]; visibleRowCount: number }> {
+    const owned = await this.activeCanonicalPage(ctx);
+    const empty = { ready: false, creatorId: null, pageHost: null, pagePath: null, searchControlCount: 0,
+      stateLabels: [] as string[], visibleRowCount: 0 };
+    if (!owned || owned.page.isClosed() || owned.page.context() !== owned.session.context || owned.session.executionMode !== "VISIBLE") return empty;
+    const url = new URL(owned.page.url());
+    const creatorId = await this.readOwnedCreatorId(ctx, owned);
+    if (url.host !== "creator.douyin.com" || url.pathname !== "/creator-micro/content/manage"
+      || !creatorId || creatorId !== ctx.settings.expectedCreatorId) return { ...empty, creatorId, pageHost: url.host, pagePath: url.pathname };
+    const pageEvidence = await owned.page.evaluate(() => {
+      const text = document.body.innerText;
+      const labels = ["已发布", "审核中", "未通过"].filter((label) => text.includes(label));
+      const searchControlCount = document.querySelectorAll('input[placeholder="搜索作品"]').length;
+      const visibleRowCount = [...document.querySelectorAll('a[href*="/video/"],a[href*="/note/"]')]
+        .filter((link) => link.getBoundingClientRect().width > 0).length;
+      return { labels, searchControlCount, visibleRowCount };
+    });
+    return { ready: pageEvidence.searchControlCount === 1 && pageEvidence.labels.length === 3,
+      creatorId, pageHost: url.host, pagePath: url.pathname, searchControlCount: pageEvidence.searchControlCount,
+      stateLabels: pageEvidence.labels, visibleRowCount: pageEvidence.visibleRowCount };
   }
 
   private async readVisibleCreatorId(page: Page): Promise<string | null> {
     if (new URL(page.url()).host !== "creator.douyin.com") return null;
     return parseVisibleDouyinCreatorId(await page.locator("body").innerText().catch(() => ""));
+  }
+
+  private async readOwnedCreatorId(ctx: AccountContext, owned: NonNullable<Awaited<ReturnType<DouyinImageTextBrowserAdapter["activeCanonicalPage"]>>>): Promise<string | null> {
+    if (owned.page.isClosed() || owned.page.context() !== owned.session.context || new URL(owned.page.url()).host !== "creator.douyin.com"
+      || /login|passport|captcha|verify/iu.test(owned.page.url())) { this.verifiedIdentity.delete(ctx.accountId); return null; }
+    const visible = await this.readVisibleCreatorId(owned.page);
+    if (visible) {
+      this.verifiedIdentity.set(ctx.accountId, { page: owned.page, context: owned.session.context,
+        sessionIdHash: owned.session.sessionIdHash, creatorId: visible, verifiedAt: Date.now() });
+      return visible;
+    }
+    const previous = this.verifiedIdentity.get(ctx.accountId);
+    return previous && previous.page === owned.page && previous.context === owned.session.context
+      && previous.sessionIdHash === owned.session.sessionIdHash && Date.now() - previous.verifiedAt < 15 * 60_000
+      ? previous.creatorId : null;
   }
 
   protected override async inspectConnectionPage(_ctx: AccountContext, page: Page): Promise<LoginStatus> {
@@ -94,7 +133,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     const owned = await this.activeCanonicalPage(ctx);
     if (!owned || owned.page.isClosed() || owned.page.context() !== owned.session.context)
       throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_CREATOR_CONTEXT_UNAVAILABLE");
-    const creatorId = await this.readVisibleCreatorId(owned.page);
+    const creatorId = await this.readOwnedCreatorId(ctx, owned);
     if (!creatorId) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_STABLE_IDENTITY_NOT_VISIBLE");
     return { accountId: creatorId, accountName: ctx.accountName };
   }
@@ -103,7 +142,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     const owned = await this.activeCanonicalPage(ctx);
     if (!owned || owned.page.isClosed() || owned.page.context() !== owned.session.context) return "needs_user_action";
     if (/login|passport|captcha|verify/iu.test(owned.page.url())) return "needs_user_action";
-    const creatorId = await this.readVisibleCreatorId(owned.page);
+    const creatorId = await this.readOwnedCreatorId(ctx, owned);
     const expected = typeof ctx.settings.expectedCreatorId === "string" ? ctx.settings.expectedCreatorId : null;
     return creatorId && (!expected || creatorId === expected) ? "logged_in" : "needs_user_action";
   }
@@ -170,7 +209,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     if (!owned || owned.page.isClosed() || owned.page.context() !== owned.session.context || owned.session.executionMode !== "VISIBLE")
       throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_ACTIVE_OWNED_CONTEXT_REQUIRED");
     const page = owned.page;
-    if (new URL(page.url()).host !== "creator.douyin.com" || await this.readVisibleCreatorId(page) !== creatorId)
+    if (new URL(page.url()).host !== "creator.douyin.com" || await this.readOwnedCreatorId(ctx, owned) !== creatorId)
       throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_CREATOR_IDENTITY_MISMATCH");
     if (new URL(page.url()).pathname !== "/creator-micro/home")
       throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_CREATOR_HOME_REQUIRED_FOR_NEW_IMAGE_TEXT");
@@ -246,7 +285,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
       throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_EDITOR_ROUTE_CHANGED");
     const expectedCreatorId = prepared.frozen.creatorId;
     if (typeof ctx.settings.expectedCreatorId !== "string" || ctx.settings.expectedCreatorId !== expectedCreatorId
-      || await this.readVisibleCreatorId(page) !== expectedCreatorId)
+      || await this.readOwnedCreatorId(ctx, owned) !== expectedCreatorId)
       throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_CREATOR_IDENTITY_MISMATCH");
     const title = page.locator('input[placeholder="添加作品标题"]');
     const body = page.locator('[contenteditable="true"]');
@@ -309,12 +348,13 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
       observer.markFinalClick();
       try { await button.click({ timeout: 15_000 }); }
       catch { throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "DOUYIN_FINAL_CLICK_RESULT_UNKNOWN"); }
-      const { evidence, classification } = await observer.collect();
+      const { evidence, classification, blockedUnknownWriteCount } = await observer.collect();
       if (classification.status !== "ACCEPTED") throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "DOUYIN_PUBLISH_RESPONSE_UNKNOWN");
       return { success: true, status: "publishing", externalId: classification.remoteId ?? undefined,
         response: { adapter: "douyin-image-text-browser", submissionAccepted: true, requiresManagementConfirmation: true,
           imageUploaded: true, finalActionCount: evidence.finalClickCount, observedPublishRequestCount: evidence.requestCount,
           httpStatus: evidence.httpStatus, platformStatusCode: evidence.statusCode, remoteId: classification.remoteId,
+          blockedUnknownWriteCount,
           finalSubmitCount: 1, submissionIntentId: attempt.submissionIntentId } };
     } finally { observer.stop(); await observer.removeUnusedGuard(); }
   }
@@ -328,7 +368,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     if (!expected || input.expectedCreatorId !== expected || input.finalSubmitCount !== 1) return unknown("ACCOUNT_OR_BOUNDARY_MISMATCH");
     const owned = await this.activeCanonicalPage(ctx);
     if (!owned || owned.page.isClosed() || owned.page.context() !== owned.session.context || owned.session.executionMode !== "VISIBLE"
-      || await this.readVisibleCreatorId(owned.page) !== expected) return unknown("OWNED_CREATOR_IDENTITY_UNVERIFIED");
+      || await this.readOwnedCreatorId(ctx, owned) !== expected) return unknown("OWNED_CREATOR_IDENTITY_UNVERIFIED");
     const tab = await owned.session.context.newPage();
     try {
       await tab.goto("https://creator.douyin.com/creator-micro/content/manage", { waitUntil: "domcontentloaded", timeout: 20_000 });
