@@ -602,6 +602,29 @@ export function registerIpc(deps: IpcDependencies): void {
       accountId: input.accountId, status: result.status, pageHost: result.pageHost, sessionIdHash: result.sessionIdHash });
     return result;
   });
+  register("accounts:readiness-douyin-image-text", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    const account = repository.getAccountById(input.accountId, "douyin");
+    if (!account || account.archivedAt || !repository.getDouyinImageTextConnection(input.accountId)?.active)
+      throw new Error("Douyin Creator binding is unavailable");
+    const adapter = registry.getForContent("douyin", "article");
+    if (!(adapter instanceof DouyinImageTextBrowserAdapter)) throw new Error("Douyin image/text BrowserNative route is unavailable");
+    return adapter.inspectOwnedCreatorReadiness(accountContext(input.accountId, "douyin"));
+  });
+  register("accounts:preflight-douyin-management", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    const account = repository.getAccountById(input.accountId, "douyin");
+    if (!account || account.archivedAt || !repository.getDouyinImageTextConnection(input.accountId)?.active)
+      throw new Error("Douyin Creator binding is unavailable");
+    const adapter = registry.getForContent("douyin", "article");
+    if (!(adapter instanceof DouyinImageTextBrowserAdapter)) throw new Error("Douyin image/text BrowserNative route is unavailable");
+    const result = await adapter.preflightManagementReadOnly(accountContext(input.accountId, "douyin"));
+    logger.info("ACCOUNT", "DOUYIN_MANAGEMENT_OWNED_PAGE_PREFLIGHT", "抖音同一受控 Page 的作品管理只读预检", {
+      accountId: input.accountId, ready: result.ready, managementUrl: result.managementUrl,
+      returnUrl: result.returnUrl, stateLabels: result.stateLabels, searchControlCount: result.searchControlCount,
+      imageEntryCount: result.imageEntryCount });
+    return result;
+  });
   register("accounts:inspect-douyin-management", async (_event, payload) => {
     const input = z.object({ accountId: idSchema }).parse(payload);
     const binding = repository.getDouyinImageTextConnection(input.accountId);

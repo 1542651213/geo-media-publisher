@@ -12,6 +12,7 @@ import { assertDouyinEditorSettings, protectExistingDouyinDraft,
   matchDouyinManagementRows, type DouyinEditorSettingsSnapshot, type DouyinManagementRow } from "./image-text-evidence";
 import { DouyinImagePostObserver } from "./image-text-observer";
 import { observeDouyinImageEditor, selectAndObserveDouyinImage } from "./image-text-upload";
+import { inspectDouyinManagementReadOnlyNavigation } from "./image-text-management-preflight";
 export { selectAndObserveDouyinImage } from "./image-text-upload";
 
 const creatorHome = "https://creator.douyin.com/creator-micro/home";
@@ -158,6 +159,39 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     const creatorId = await this.readOwnedCreatorId(ctx, owned);
     return { status: !creatorId ? "WAITING_FOR_OWNER" : creatorId === expected ? "ACTIVE" : "IDENTITY_MISMATCH",
       creatorId, pageHost, sessionIdHash: owned.session.sessionIdHash };
+  }
+
+  /** Reports the actual account-owned BrowserSession and canonical Page without opening a new Context. */
+  async inspectOwnedCreatorReadiness(ctx: AccountContext): Promise<ReturnType<DouyinImageTextBrowserAdapter["getBrowserRuntimeSnapshot"]> &
+    { canonicalPageUrl: string | null; creatorId: string | null; identityVerified: boolean;
+      contextOwnership: boolean; loginGeneration: number | null }> {
+    const snapshot = this.getBrowserRuntimeSnapshot(ctx);
+    const owned = await this.activeCanonicalPage(ctx);
+    const contextOwnership = Boolean(owned && !owned.page.isClosed() && owned.page.context() === owned.session.context
+      && owned.session.context.pages().includes(owned.page));
+    const pageUrl = contextOwnership ? new URL(owned!.page.url()) : null;
+    const creatorId = contextOwnership && pageUrl?.origin === "https://creator.douyin.com"
+      ? await this.readOwnedCreatorId(ctx, owned!) : null;
+    const expected = typeof ctx.settings.expectedCreatorId === "string" ? ctx.settings.expectedCreatorId : null;
+    return { ...snapshot, canonicalPageUrl: pageUrl ? `${pageUrl.origin}${pageUrl.pathname}` : null,
+      creatorId, identityVerified: Boolean(creatorId && expected && creatorId === expected), contextOwnership,
+      loginGeneration: typeof ctx.settings.expectedLoginGeneration === "number" ? ctx.settings.expectedLoginGeneration : null };
+  }
+
+  /** GET-only smoke on the same Page; refuses to navigate away from an editor. */
+  async preflightManagementReadOnly(ctx: AccountContext): Promise<Awaited<ReturnType<typeof inspectDouyinManagementReadOnlyNavigation>> &
+    { creatorId: string; sessionIdHash: string; contextOwnership: true }> {
+    const readiness = await this.inspectOwnedCreatorReadiness(ctx);
+    if (!readiness.sessionExists || !readiness.contextOwnership || !readiness.identityVerified
+      || !readiness.canonicalPageExists || readiness.canonicalPageClosed || !readiness.browserConnected)
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_APP_OWNED_CREATOR_NOT_READY");
+    const owned = await this.activeCanonicalPage(ctx);
+    if (!owned) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_APP_OWNED_PAGE_MISSING");
+    const expectedCreatorId = readiness.creatorId!;
+    const result = await inspectDouyinManagementReadOnlyNavigation(owned.page, owned.session.context,
+      async () => await this.readOwnedCreatorId(ctx, owned) === expectedCreatorId);
+    return { ...result, creatorId: expectedCreatorId,
+      sessionIdHash: owned.session.sessionIdHash, contextOwnership: true };
   }
 
   async inspectCurrentManagementPage(ctx: AccountContext): Promise<{ ready: boolean; creatorId: string | null; pageHost: string | null;

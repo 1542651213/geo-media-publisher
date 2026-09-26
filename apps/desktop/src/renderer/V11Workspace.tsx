@@ -306,9 +306,9 @@ export function V11AccountsCenter({ refresh, refreshKey, onNavigate }: { refresh
   const inspectDouyinManagement = async (accountId: string): Promise<void> => {
     setBusy(accountId);
     try {
-      const result = await window.publisherAPI.accounts.inspectDouyinManagement(accountId);
-      setMessage(result.ready ? `作品管理只读检查通过：${result.stateLabels.join("、")}；没有执行上传或发布。`
-        : "作品管理尚未满足只读检查，请在同一受控 Creator 窗口打开作品管理并核对账号。 ");
+      const result = await window.publisherAPI.accounts.preflightDouyinManagement(accountId);
+      setMessage(result.ready ? `作品管理只读检查通过：${result.stateLabels.join("、")}；已回到图文入口，没有执行上传或发布。`
+        : `作品管理只读检查未通过：搜索控件 ${result.searchControlCount} 个，状态 ${result.stateLabels.join("、") || "未识别"}；已回到首页。`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "作品管理只读检查失败"); }
     finally { setBusy(""); }
   };
