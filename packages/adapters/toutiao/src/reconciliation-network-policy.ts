@@ -19,6 +19,7 @@ const CREATOR_READ_GET_PATHS = new Set([
   "/", "/profile_v4/index", "/profile_v4/manage/content/all", "/profile_v4/manage/draft",
   "/api/feed/mp_provider/v1/", "/api/msg/v1/list/", "/monitor_web/settings/browser-settings",
   "/mp/agw/creator_center/draft_count", "/mp/agw/creator_center/get_recommend_collection",
+  "/mp/agw/creator_center/draft_list",
   "/mp/agw/creator_center/user_info", "/mp/agw/creator_center/item/list",
   "/mp/agw/creator_project/get_benefit_page_info", "/mp/agw/deliver/get_unread_confirm_message",
   "/mp/agw/deliver/personal_panel", "/mp/agw/feedback/get_unread_feedback",

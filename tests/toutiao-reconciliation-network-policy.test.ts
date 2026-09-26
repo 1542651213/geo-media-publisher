@@ -15,6 +15,7 @@ describe("Toutiao reconciliation network policy", () => {
     expect(check("GET", "/profile_v4/manage/draft")).toBe("ALLOW_READ");
     expect(check("POST", "/profile_v4/manage/draft")).toBe("BLOCK_CONTENT_MUTATION");
     expect(check("GET", "/api/feed/mp_provider/v1/?page=1")).toBe("ALLOW_READ");
+    expect(check("GET", "/mp/agw/creator_center/draft_list?count=10")).toBe("ALLOW_READ");
     expect(check("GET", "/api/unknown/write-like")).toBe("BLOCK_UNKNOWN");
     expect(classifyReconciliationRequest({ method: "GET",
       url: "https://lf-content-ecology.toutiaostatic.com/obj/safe.js" })).toBe("ALLOW_READ");

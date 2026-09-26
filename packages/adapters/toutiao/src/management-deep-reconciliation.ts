@@ -34,6 +34,7 @@ export interface ToutiaoDeepScanResult {
   readonly blockedRequestCount: number;
   readonly blockedPostCount: number;
   readonly blockedUnknownGetCount: number;
+  readonly blockedGetPaths: readonly string[];
   readonly blockedContentMutationCount: number;
   readonly postCatalog: readonly ReturnType<typeof safeReconciliationRequestMetadata>[];
   readonly readRequestPaths: readonly string[];
@@ -159,6 +160,7 @@ export async function scanOwnedToutiaoManagement(context: BrowserContext, canoni
   let apiListObserved = false;
   let apiTargetObserved = false;
   const readRequestPaths = new Set<string>();
+  const blockedGetPaths = new Set<string>();
   const guard = async (route: Route): Promise<void> => {
     const request = route.request();
     const metadata = safeReconciliationRequestMetadata(request);
@@ -171,7 +173,10 @@ export async function scanOwnedToutiaoManagement(context: BrowserContext, canoni
     }
     blockedRequestCount += 1;
     if (request.method().toUpperCase() === "POST") blockedPostCount += 1;
-    if (decision === "BLOCK_UNKNOWN" && request.method().toUpperCase() === "GET") blockedUnknownGetCount += 1;
+    if (decision === "BLOCK_UNKNOWN" && request.method().toUpperCase() === "GET") {
+      blockedUnknownGetCount += 1;
+      if (blockedGetPaths.size < 30) blockedGetPaths.add(`${metadata.host}${metadata.path}`);
+    }
     if (decision === "BLOCK_CONTENT_MUTATION") blockedContentMutationCount += 1;
     if (request.method().toUpperCase() === "POST" && catalog.length < 100) catalog.push(metadata);
     await route.abort("blockedbyclient");
@@ -263,7 +268,7 @@ export async function scanOwnedToutiaoManagement(context: BrowserContext, canoni
       ...matched, scopeComplete: first.statuses.length > 1 && scans.length === availableStatuses.length
         && scans.every((scan) => scan.scopeComplete),
       apiListObserved, apiTargetObserved, blockedRequestCount, blockedPostCount,
-      blockedUnknownGetCount, blockedContentMutationCount,
+      blockedUnknownGetCount, blockedGetPaths: [...blockedGetPaths].sort(), blockedContentMutationCount,
       postCatalog: catalog, readRequestPaths: [...readRequestPaths].sort(),
       managementLinkPaths: first.managementLinkPaths, paginationControls: first.paginationControls,
       statusControlShape: first.statusControlShape };
