@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
+import { chromium } from "playwright-core";
 import type { Page } from "playwright-core";
 import { vi } from "vitest";
 import type { CredentialStore } from "@publisher/security";
@@ -9,15 +11,32 @@ const store: CredentialStore = { get: () => null, set: () => undefined, delete: 
 
 describe("Douyin image/text BrowserNative adapter", () => {
   it("denies only optional Creator geolocation in the owned browser context", async () => {
-    const session = { send: vi.fn(async () => undefined), detach: vi.fn(async () => undefined) };
+    const session = { send: vi.fn(async (method: string) => method === "Target.getTargetInfo"
+      ? { targetInfo: { browserContextId: "owned-context" } } : undefined), detach: vi.fn(async () => undefined) };
     const context = { newCDPSession: vi.fn(async () => session) };
     const page = { url: () => "https://creator.douyin.com/creator-micro/content/post/image", context: () => context,
       evaluate: vi.fn(async () => "denied") } as unknown as Page;
     await denyOptionalDouyinLocation(page);
     expect(session.send).toHaveBeenCalledWith("Browser.setPermission", { permission: { name: "geolocation" },
-      setting: "denied", origin: "https://creator.douyin.com" });
-    expect(session.detach).toHaveBeenCalledTimes(1);
+      setting: "denied", origin: "https://creator.douyin.com", browserContextId: "owned-context" });
+    expect(session.detach).not.toHaveBeenCalled();
   });
+  it.skipIf(!existsSync("C:/Program Files/Google/Chrome/Application/chrome.exe"))(
+    "denies Creator geolocation in a non-default owned Chrome context", async () => {
+      const browser = await chromium.launch({ executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe", headless: true });
+      try {
+        const context = await browser.newContext();
+        const page = await context.newPage();
+        await page.route("https://creator.douyin.com/**", (route) => route.fulfill({ status: 200, body: "<html></html>" }));
+        await page.goto("https://creator.douyin.com/creator-micro/home");
+        await denyOptionalDouyinLocation(page);
+        expect(await page.evaluate(async () => (await navigator.permissions.query({ name: "geolocation" })).state)).toBe("denied");
+        expect(await page.evaluate(async () => (await navigator.permissions.query({ name: "notifications" })).state)).toBe("prompt");
+        await page.reload();
+        await denyOptionalDouyinLocation(page);
+        expect(await page.evaluate(async () => (await navigator.permissions.query({ name: "geolocation" })).state)).toBe("denied");
+      } finally { await browser.close(); }
+    });
   it("allows an owner-confirmed editor resume only with exact existing candidate content", () => {
     const target = { accountId: "owner", articleId: "new-test", pagePath: "/creator-micro/content/post/image",
       title: "Unique test title", body: "Exact test body", imageCount: 1 };

@@ -1,4 +1,4 @@
-import type { Locator, Page } from "playwright-core";
+import type { CDPSession, Locator, Page } from "playwright-core";
 import { basename } from "node:path";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
@@ -16,6 +16,7 @@ import { inspectDouyinManagementReadOnlyNavigation } from "./image-text-manageme
 export { selectAndObserveDouyinImage } from "./image-text-upload";
 
 const creatorHome = "https://creator.douyin.com/creator-micro/home";
+const creatorLocationPermissionSessions = new WeakMap<Page, CDPSession>();
 
 export function parseVisibleDouyinCreatorId(pageText: string): string | null {
   const matches = [...pageText.matchAll(/抖音号\s*[:：]?\s*(\d{5,20})/gu)].map((match) => match[1]);
@@ -47,15 +48,25 @@ export async function waitForUniqueDouyinImageInput(page: Page): Promise<Locator
 export async function denyOptionalDouyinLocation(page: Page): Promise<void> {
   if (new URL(page.url()).origin !== "https://creator.douyin.com")
     throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_CREATOR_ORIGIN_REQUIRED_FOR_PERMISSION");
+  const existing = creatorLocationPermissionSessions.get(page);
+  if (existing && await page.evaluate(async () => (await navigator.permissions.query({ name: "geolocation" })).state) === "denied") return;
+  creatorLocationPermissionSessions.delete(page);
   const session = await page.context().newCDPSession(page);
   try {
+    const { targetInfo } = await session.send("Target.getTargetInfo");
+    const browserContextId = targetInfo.browserContextId;
+    if (!browserContextId)
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_OWNED_BROWSER_CONTEXT_ID_MISSING");
     await session.send("Browser.setPermission", { permission: { name: "geolocation" }, setting: "denied",
-      origin: "https://creator.douyin.com" });
-  } finally {
-    await session.detach();
+      origin: "https://creator.douyin.com", browserContextId });
+    const state = await page.evaluate(async () => (await navigator.permissions.query({ name: "geolocation" })).state);
+    if (state !== "denied") throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_LOCATION_PERMISSION_NOT_DENIED");
+    // Chromium removes this override when its CDP session detaches. Keep it for this owned Page's lifetime.
+    creatorLocationPermissionSessions.set(page, session);
+  } catch (error) {
+    await session.detach().catch(() => undefined);
+    throw error;
   }
-  const state = await page.evaluate(async () => (await navigator.permissions.query({ name: "geolocation" })).state);
-  if (state !== "denied") throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_LOCATION_PERMISSION_NOT_DENIED");
 }
 
 export function isAuthorizedDouyinDraftResume(target: { accountId: string; articleId: string; pagePath: string;
