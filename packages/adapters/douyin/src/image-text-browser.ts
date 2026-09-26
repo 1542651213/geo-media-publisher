@@ -13,6 +13,7 @@ import { assertDouyinEditorSettings, protectExistingDouyinDraft,
 import { DouyinImagePostObserver } from "./image-text-observer";
 import { observeDouyinImageEditor, selectAndObserveDouyinImage } from "./image-text-upload";
 import { inspectDouyinManagementReadOnlyNavigation } from "./image-text-management-preflight";
+import { inspectDouyinBodyPage, type DouyinBodyPageDiagnostic } from "./image-text-body-diagnostic";
 export { selectAndObserveDouyinImage } from "./image-text-upload";
 
 const creatorHome = "https://creator.douyin.com/creator-micro/home";
@@ -265,6 +266,41 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
         bodyLength: document.querySelector<HTMLElement>('[contenteditable="true"]')?.innerText.length ?? 0, controls };
     });
     return { pagePath: url.pathname, creatorId, ...dom, settings: await this.readEditorSettings(page) };
+  }
+
+  /** Main-only, read-only diagnosis of the exact existing image-post editor. Continuity is not renewed remote identity. */
+  async inspectCurrentImageTextBodyReadOnly(ctx: AccountContext, binding: {
+    accountId: string; articleId: string; jobId: string; creatorId: string; loginGeneration: number;
+    sessionIdHash: string; operationId: string; imageSha256: string
+  }, expectedBody: string): Promise<{ identityVerificationMode: "VISIBLE_CREATOR_ID" | "CONTINUITY_EVIDENCE";
+    identityVerified: boolean; identityEvidence: { creatorBindingId: string; sessionHashMatchesSelection: true;
+      loginGenerationMatchesSelection: true; contextOwnership: true; pagePath: string };
+    accountId: string; articleId: string; jobId: string; operationId: string; body: DouyinBodyPageDiagnostic }> {
+    if (ctx.platformKey !== "douyin" || ctx.accountId !== binding.accountId)
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_BODY_DIAGNOSTIC_ACCOUNT_MISMATCH");
+    if (!binding.articleId || !binding.jobId || !binding.operationId || !/^[a-f0-9]{64}$/u.test(binding.imageSha256)
+      || !expectedBody || ctx.settings.expectedCreatorId !== binding.creatorId)
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_BODY_DIAGNOSTIC_BINDING_MISSING");
+    if (ctx.settings.expectedLoginGeneration !== binding.loginGeneration)
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_BODY_DIAGNOSTIC_GENERATION_MISMATCH");
+    const owned = await this.activeCanonicalPage(ctx);
+    if (!owned || owned.page.isClosed() || owned.session.executionMode !== "VISIBLE"
+      || owned.page.context() !== owned.session.context || !owned.session.context.pages().includes(owned.page))
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_BODY_DIAGNOSTIC_CONTEXT_MISMATCH");
+    if (owned.session.sessionIdHash !== binding.sessionIdHash)
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_BODY_DIAGNOSTIC_SESSION_MISMATCH");
+    const pageUrl = new URL(owned.page.url());
+    if (pageUrl.origin !== "https://creator.douyin.com" || pageUrl.pathname !== "/creator-micro/content/post/image")
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_BODY_DIAGNOSTIC_EDITOR_ROUTE_REQUIRED");
+    const visibleCreatorId = await this.readVisibleCreatorId(owned.page);
+    if (visibleCreatorId && visibleCreatorId !== binding.creatorId)
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_BODY_DIAGNOSTIC_CREATOR_MISMATCH");
+    const body = await inspectDouyinBodyPage(owned.page, expectedBody);
+    return { identityVerificationMode: visibleCreatorId ? "VISIBLE_CREATOR_ID" : "CONTINUITY_EVIDENCE",
+      identityVerified: Boolean(visibleCreatorId),
+      identityEvidence: { creatorBindingId: binding.creatorId, sessionHashMatchesSelection: true,
+        loginGenerationMatchesSelection: true, contextOwnership: true, pagePath: pageUrl.pathname },
+      accountId: ctx.accountId, articleId: binding.articleId, jobId: binding.jobId, operationId: binding.operationId, body };
   }
 
   private async readVisibleCreatorId(page: Page): Promise<string | null> {

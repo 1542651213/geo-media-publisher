@@ -8,6 +8,7 @@ import { credentialFingerprint, prepareToutiaoArticleJob, ToutiaoCredentialBundl
 import { protocolShadowEnabled } from "@publisher/adapters-toutiao/article-api";
 import { ToutiaoArticleBrowserAdapter } from "@publisher/adapters-toutiao/browser";
 import { DouyinImageTextBrowserAdapter } from "@publisher/adapters-douyin/image-text-browser";
+import { freezeDouyinImageText } from "@publisher/domain/douyin-image-text";
 import { backupDatabase, validateDatabaseBackup, type AIBatchTarget, type AppRepository, type ContentStudioTaskPayload, type HumanReviewSubmitInput } from "@publisher/db";
 import type { AccountDisconnectResult, BatchGenerationInput, ContentStudioGenerationInput } from "../shared/api";
 import { AIProviderError, DeepSeekErrorMapper, DeepSeekProvider, FallbackAIProvider, MockAIProvider, OpenAICompatibleProvider, contentHash, type AIConnectionDiagnostic, type AIConnectionResult, type AIProvider } from "@publisher/ai";
@@ -37,6 +38,7 @@ import type { ProcessDiagnostics } from "./process-diagnostics";
 import { addAccountConnectionModes, browserAccountConnectionResult, browserAccountDisconnectResult } from "./account-connection";
 import { recordRuntimeHeartbeat } from "./runtime-observability";
 import { assertDouyinAcceptanceChannel } from "./douyin-acceptance-gate";
+import { selectDouyinBodyDiagnosticTarget } from "./douyin-body-diagnostic-gate";
 
 const idSchema = z.string().min(1);
 function safeErrorCode(error: unknown): string {
@@ -131,6 +133,7 @@ export function registerIpc(deps: IpcDependencies): void {
   processDiagnostics = deps.processDiagnostics ?? null;
   acceptanceRepository = deps.repository;
   const { repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir, logger, credentials, aiCredentials } = deps;
+  const capturedDouyinBodyDiagnosticJobs = new Set<string>();
   const listPlatformViews = (): ReturnType<AppRepository["listPlatforms"]> => addAccountConnectionModes(repository.listPlatforms(), registry).map((platform) =>
     platform.platformKey === "douyin" ? { ...platform,
       capabilities: { ...platform.capabilities, article: true, imagePost: true, maxImageCount: 1,
@@ -609,7 +612,41 @@ export function registerIpc(deps: IpcDependencies): void {
       throw new Error("Douyin Creator binding is unavailable");
     const adapter = registry.getForContent("douyin", "article");
     if (!(adapter instanceof DouyinImageTextBrowserAdapter)) throw new Error("Douyin image/text BrowserNative route is unavailable");
-    return adapter.inspectOwnedCreatorReadiness(accountContext(input.accountId, "douyin"));
+    const readiness = await adapter.inspectOwnedCreatorReadiness(accountContext(input.accountId, "douyin"));
+    if (process.env.DOUYIN_BODY_DIAGNOSTIC_ENABLED === "true") {
+      const configuredJobId = process.env.DOUYIN_BODY_DIAGNOSTIC_JOB_ID?.trim() ?? "";
+      if (!capturedDouyinBodyDiagnosticJobs.has(configuredJobId)) {
+        const job = configuredJobId ? repository.getJob(configuredJobId) : null;
+        const article = job ? repository.getArticle(job.articleId) : null;
+        const target = selectDouyinBodyDiagnosticTarget({ enabled: true,
+          configuredAccountId: process.env.DOUYIN_BODY_DIAGNOSTIC_ACCOUNT_ID?.trim() ?? null,
+          configuredJobId: configuredJobId || null, requestedAccountId: input.accountId,
+          job, article, connection: repository.getDouyinImageTextConnection(input.accountId),
+          payload: job ? repository.getPublishPayload(job.id) : {},
+          intentPresent: Boolean(job && repository.getSubmissionIntentByJob(job.id)),
+          recordPresent: Boolean(job && repository.getPublishRecordByJob(job.id)) });
+        if (!target || !article) throw new Error("DOUYIN_BODY_DIAGNOSTIC_TARGET_MISSING");
+        const image = repository.getImageAsset(target.imageAssetId);
+        if (!image || image.brandId !== article.brandId) throw new Error("DOUYIN_BODY_DIAGNOSTIC_IMAGE_BINDING_MISMATCH");
+        const frozen = await freezeDouyinImageText({ articleId: article.id, accountId: input.accountId,
+          creatorId: target.binding.creatorId, title: article.title, body: article.body,
+          imagePaths: [image.filePath], topics: [], visibility: "public", scheduledAt: null });
+        if (frozen.sourceContentHash !== target.sourceContentHash
+          || frozen.imageHashes[0] !== target.binding.imageSha256)
+          throw new Error("DOUYIN_BODY_DIAGNOSTIC_CONTENT_BINDING_MISMATCH");
+        const diagnostic = await adapter.inspectCurrentImageTextBodyReadOnly(
+          accountContext(input.accountId, "douyin"), target.binding, target.expectedBody);
+        const diagnosticDir = join(dataDirectory, "diagnostics");
+        mkdirSync(diagnosticDir, { recursive: true });
+        const evidencePath = join(diagnosticDir, `douyin-body-${job!.id}-${randomUUID()}.json`);
+        writeFileSync(evidencePath, JSON.stringify({ version: 1, capturedAt: new Date().toISOString(), diagnostic }), "utf8");
+        capturedDouyinBodyDiagnosticJobs.add(job!.id);
+        logger.info("ACCOUNT", "DOUYIN_BODY_DIAGNOSTIC_CAPTURED", "抖音图文只读正文诊断已保存", {
+          accountId: input.accountId, jobId: job!.id, artifactPath: evidencePath,
+          identityMode: diagnostic.identityVerificationMode, candidateCount: diagnostic.body.candidateCount });
+      }
+    }
+    return readiness;
   });
   register("accounts:preflight-douyin-management", async (_event, payload) => {
     const input = z.object({ accountId: idSchema }).parse(payload);
