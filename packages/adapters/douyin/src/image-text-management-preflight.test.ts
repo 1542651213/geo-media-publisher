@@ -69,4 +69,15 @@ describe.skipIf(!existsSync(chrome))("Douyin app-owned read-only management pref
     expect(result.ready).toBe(true);
     expect(result.imageEntryCount).toBe(1);
   });
+
+  it("recognizes visible filter labels with count suffixes", async () => {
+    const { page, context, verifyIdentity } = await fixture({
+      labels: "<button>已发布（3）</button><button>审核中（2）</button><button>未通过（1）</button>"
+    });
+    const result = await inspectDouyinManagementReadOnlyNavigation(page, context, verifyIdentity);
+    expect(result.ready).toBe(true);
+    expect(result.stateLabels).toEqual(["已发布", "审核中", "未通过"]);
+    expect(result.filterControlTexts).toEqual(["已发布（3）", "审核中（2）", "未通过（1）"]);
+    expect(result.managementControlHints).toContainEqual({ tag: "button", text: "审核中（2）", role: null });
+  });
 });
