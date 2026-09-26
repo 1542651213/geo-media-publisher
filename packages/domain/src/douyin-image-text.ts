@@ -20,6 +20,38 @@ export interface FrozenDouyinImageText extends DouyinImageTextSource {
   readonly contentBindingHash: string;
 }
 
+export interface DouyinImageTextEditorReadback {
+  accountId: string;
+  creatorId: string;
+  contextOwned: boolean;
+  sessionActive: boolean;
+  pageHost: string;
+  title: string;
+  body: string;
+  imageCount: number;
+  requiredFieldsPresent: boolean;
+  finalSubmitControlCount: number;
+  securityChallenge: boolean;
+}
+
+/** Validates browser evidence immediately before a durable final-submit claim. */
+export function assertDouyinImageTextReadback(frozen: FrozenDouyinImageText, observed: DouyinImageTextEditorReadback): {
+  imageReadback: "PASS"; titleReadback: "PASS"; bodyReadback: "PASS"; requiredFields: "PASS";
+} {
+  if (observed.accountId !== frozen.accountId) throw new Error("ACCOUNT_MISMATCH");
+  if (observed.creatorId !== frozen.creatorId) throw new Error("IDENTITY_MISMATCH");
+  if (!observed.contextOwned) throw new Error("CONTEXT_MISMATCH");
+  if (!observed.sessionActive) throw new Error("SESSION_EXPIRED");
+  if (observed.pageHost !== "creator.douyin.com") throw new Error("CREATOR_HOST_MISMATCH");
+  if (observed.securityChallenge) throw new Error("SECURITY_VERIFICATION_REQUIRED");
+  if (observed.imageCount !== frozen.imageHashes.length) throw new Error("IMAGE_COUNT_MISMATCH");
+  if (observed.title !== frozen.title) throw new Error("TITLE_MISMATCH");
+  if (observed.body !== frozen.body) throw new Error("BODY_MISMATCH");
+  if (!observed.requiredFieldsPresent) throw new Error("REQUIRED_FIELDS_MISSING");
+  if (observed.finalSubmitControlCount !== 1) throw new Error("FINAL_CONTROL_AMBIGUOUS");
+  return { imageReadback: "PASS", titleReadback: "PASS", bodyReadback: "PASS", requiredFields: "PASS" };
+}
+
 function sha256(value: Uint8Array | string): string {
   return createHash("sha256").update(value).digest("hex");
 }

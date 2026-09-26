@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { freezeDouyinImageText, verifyDouyinImageTextImage } from "./douyin-image-text";
+import { assertDouyinImageTextReadback, freezeDouyinImageText, verifyDouyinImageTextImage } from "./douyin-image-text";
 
 const folders: string[] = [];
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lWQAAAAASUVORK5CYII=", "base64");
@@ -50,5 +50,24 @@ describe("Douyin image-text content binding", () => {
     expect(a.contentBindingHash).not.toBe(b.contentBindingHash);
     const c = await freezeDouyinImageText({ ...base, body: "不同正文" });
     expect(a.sourceContentHash).not.toBe(c.sourceContentHash);
+  });
+
+  it("requires the same owned, active Creator session and exact editor readback", async () => {
+    const path = await imagePath();
+    const frozen = await freezeDouyinImageText({ articleId: "article-1", accountId: "account-1", creatorId: "72388977613", title: "测试标题", body: "测试正文", imagePaths: [path], topics: [], visibility: "public", scheduledAt: null });
+    const snapshot = { accountId: "account-1", creatorId: "72388977613", contextOwned: true, sessionActive: true,
+      pageHost: "creator.douyin.com", title: "测试标题", body: "测试正文", imageCount: 1,
+      requiredFieldsPresent: true, finalSubmitControlCount: 1, securityChallenge: false };
+    expect(assertDouyinImageTextReadback(frozen, snapshot)).toEqual({ imageReadback: "PASS", titleReadback: "PASS", bodyReadback: "PASS", requiredFields: "PASS" });
+    for (const [change, code] of [
+      [{ accountId: "other" }, "ACCOUNT_MISMATCH"], [{ creatorId: "other" }, "IDENTITY_MISMATCH"],
+      [{ contextOwned: false }, "CONTEXT_MISMATCH"], [{ sessionActive: false }, "SESSION_EXPIRED"],
+      [{ pageHost: "example.com" }, "CREATOR_HOST_MISMATCH"], [{ title: "wrong" }, "TITLE_MISMATCH"],
+      [{ body: "wrong" }, "BODY_MISMATCH"], [{ imageCount: 0 }, "IMAGE_COUNT_MISMATCH"],
+      [{ requiredFieldsPresent: false }, "REQUIRED_FIELDS_MISSING"], [{ finalSubmitControlCount: 2 }, "FINAL_CONTROL_AMBIGUOUS"],
+      [{ securityChallenge: true }, "SECURITY_VERIFICATION_REQUIRED"]
+    ] as const) {
+      expect(() => assertDouyinImageTextReadback(frozen, { ...snapshot, ...change })).toThrow(code);
+    }
   });
 });
