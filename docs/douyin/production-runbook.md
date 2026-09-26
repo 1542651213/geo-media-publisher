@@ -1,5 +1,15 @@
 # Douyin image/text R1 runbook
 
+## R1.4 body readback diagnostic handoff (source only, 2026-09-26)
+
+The installed `C:\d16` editor remains on runtime code `d74a52aba8f2e4025890f75002251b902a29e06b`. R1.4 adds a separate diagnostic package but does not deploy it, navigate the editor, refill content or change the strict body gate. The approved 61-code-point body versus a historical 62-UTF-16-unit `innerText` remains an **unclassified difference** until the actual app-owned DOM can be read with reviewed diagnostic code.
+
+The normal diagnostic state is OFF. In a later Owner-approved runtime switch, Main may be armed with `DOUYIN_BODY_DIAGNOSTIC_ENABLED=true` plus exact `DOUYIN_BODY_DIAGNOSTIC_ACCOUNT_ID` and `DOUYIN_BODY_DIAGNOSTIC_JOB_ID`. The existing account readiness action then checks the persisted original Job/Article/image/selection claim and current owned Session, Context and Page before writing one bounded artifact to `production-data/diagnostics`. It never opens or navigates another Page. A missing visible Creator ID is recorded as session **continuity** and never represented as renewed remote identity; a visible mismatch stops the read. No diagnostic UI is added to ordinary Renderer.
+
+The artifact stores candidate structure and bounded text metrics. Only a uniquely selected body candidate receives the code-point edit script; ambiguous candidates retain hashes and lengths without unrelated text. Compare `innerText`, `textContent`, actual Playwright `Locator.innerText()` output, structure and any applicable input value. A BR or paragraph-induced separator in a local fixture is **not proof** of the live mismatch. Do not add `trim`, whitespace stripping, length tolerance or a new publish path based on fixture results. Keep the original Job and selection count; no reupload or final action follows from a diagnostic artifact alone.
+
+Before any switch, the Owner must decide how to preserve or intentionally end the live editor. If normal shutdown loses the editor and its draft cannot be uniquely recovered, R1.4 must stop without replacing the candidate. Continue only with an approved handoff that proves same account, content and one-selection history; never hot-swap `app.asar` under the running instance.
+
 ## Scope and current gate
 
 The intended first release is one instance, one Owner-authorized Douyin account, one `article` job representing image/text, plain title and body, exactly one PNG/JPEG image, no topics, no schedule, and no deliberate draft creation. The Owner must select public visibility explicitly; timing is immediate. **Automatic draft side effect was observed:** after test-image upload and navigation home, the Creator home displayed `继续编辑`. The R1 code has offline gates, but live automated preparation and one-shot submit remain unverified. `DOUYIN_IMAGE_TEXT_NATIVE_SUBMIT_ENABLED` stays `false` for ordinary production.
