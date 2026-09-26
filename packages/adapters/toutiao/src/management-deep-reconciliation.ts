@@ -33,6 +33,9 @@ export interface ToutiaoDeepScanResult {
   readonly blockedRequestCount: number;
   readonly blockedContentMutationCount: number;
   readonly postCatalog: readonly ReturnType<typeof safeReconciliationRequestMetadata>[];
+  readonly readRequestPaths: readonly string[];
+  readonly managementLinkPaths: readonly string[];
+  readonly paginationControls: readonly string[];
 }
 
 const normalized = (value: string): string => value.normalize("NFC").replace(/\s+/gu, " ").trim();
@@ -80,7 +83,8 @@ export function matchDeepToutiaoRows(rows: readonly ToutiaoManagementRow[], targ
   return { match, normalizedTargetMatch: row.title !== target.title };
 }
 
-interface PageSnapshot { rows: ToutiaoManagementRow[]; statuses: string[]; nextExists: boolean; nextDisabled: boolean; }
+interface PageSnapshot { rows: ToutiaoManagementRow[]; statuses: string[]; nextExists: boolean; nextDisabled: boolean;
+  managementLinkPaths: string[]; paginationControls: string[]; }
 async function readPageSnapshot(page: Page): Promise<PageSnapshot> {
   return page.evaluate(() => {
     const rows: ToutiaoManagementRow[] = [];
@@ -103,12 +107,20 @@ async function readPageSnapshot(page: Page): Promise<PageSnapshot> {
         }
       }
     }
-    const statuses = [...new Set([...document.querySelectorAll<HTMLElement>("a,button,[role=tab],li")]
-      .map((item) => (item.innerText ?? "").trim()).filter((text) =>
+    const statuses = [...new Set([...document.querySelectorAll<HTMLElement>("a,button,[role=tab],li,span")]
+      .map((item) => (item.innerText ?? "").trim().replace(/[（(]\d+[）)]$/u, "").trim()).filter((text) =>
         /^(?:全部|全部作品|审核中|待审核|已发布|未通过|审核未通过|草稿|定时|定时发布|已撤回)$/u.test(text)))];
+    const managementLinkPaths = [...new Set([...document.querySelectorAll<HTMLAnchorElement>("a[href]")]
+      .map((anchor) => { try { const url = new URL(anchor.href); return url.hostname === "mp.toutiao.com"
+        && url.pathname.startsWith("/profile_v4/manage/content/") ? url.pathname : null; }
+      catch { return null; } }).filter((path): path is string => path !== null))].slice(0, 30);
+    const paginationControls = [...new Set([...document.querySelectorAll<HTMLElement>(
+      '[class*="pagination"], [class*="Pagination"], [aria-label*="页"], [title*="页"]')]
+      .map((item) => `${item.tagName.toLowerCase()}:${String(item.className).slice(0, 80)}`))].slice(0, 30);
     const next = document.querySelector<HTMLElement>(
       '.ant-pagination-next, .byte-pagination-next, [aria-label="下一页"], [title="下一页"]');
-    return { rows, statuses, nextExists: Boolean(next), nextDisabled: Boolean(next
+    return { rows, statuses, managementLinkPaths, paginationControls,
+      nextExists: Boolean(next), nextDisabled: Boolean(next
       && (next.hasAttribute("disabled") || next.getAttribute("aria-disabled") === "true"
         || /disabled/u.test(next.className))) };
   });
@@ -125,12 +137,17 @@ export async function scanOwnedToutiaoManagement(context: BrowserContext, canoni
   let blockedContentMutationCount = 0;
   let apiListObserved = false;
   let apiTargetObserved = false;
+  const readRequestPaths = new Set<string>();
   const guard = async (route: Route): Promise<void> => {
     const request = route.request();
     const metadata = safeReconciliationRequestMetadata(request);
     const decision = classifyReconciliationRequest({ method: request.method(), url: request.url(),
       bodyKeys: metadata.bodyKeys });
-    if (decision === "ALLOW_READ") { await route.continue(); return; }
+    if (decision === "ALLOW_READ") {
+      if (request.method().toUpperCase() === "GET" && readRequestPaths.size < 100)
+        readRequestPaths.add(`${metadata.host}${metadata.path}`);
+      await route.continue(); return;
+    }
     blockedRequestCount += 1;
     if (decision === "BLOCK_CONTENT_MUTATION") blockedContentMutationCount += 1;
     if (request.method().toUpperCase() === "POST" && catalog.length < 100) catalog.push(metadata);
@@ -206,9 +223,11 @@ export async function scanOwnedToutiaoManagement(context: BrowserContext, canoni
     const matched = matchDeepToutiaoRows(allRows, target);
     return { ownedPageCount, managementPageUrl: new URL(page.url()).origin + new URL(page.url()).pathname,
       availableStatuses, scans, totalRows: scans.reduce((sum, scan) => sum + scan.rows, 0),
-      ...matched, scopeComplete: scans.length === availableStatuses.length && scans.every((scan) => scan.scopeComplete),
+      ...matched, scopeComplete: first.statuses.length > 1 && scans.length === availableStatuses.length
+        && scans.every((scan) => scan.scopeComplete),
       apiListObserved, apiTargetObserved, blockedRequestCount, blockedContentMutationCount,
-      postCatalog: catalog };
+      postCatalog: catalog, readRequestPaths: [...readRequestPaths].sort(),
+      managementLinkPaths: first.managementLinkPaths, paginationControls: first.paginationControls };
     } finally { page.off("response", responseListener); }
   } finally {
     if (closePage) await page?.close().catch(() => undefined);
