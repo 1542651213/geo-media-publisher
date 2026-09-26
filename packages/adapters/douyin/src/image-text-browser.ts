@@ -12,7 +12,7 @@ import { assertDouyinEditorSettings, protectExistingDouyinDraft,
   matchDouyinManagementRows, type DouyinEditorSettingsSnapshot, type DouyinManagementRow } from "./image-text-evidence";
 import { DouyinImagePostObserver } from "./image-text-observer";
 import { observeDouyinImageEditor, selectAndObserveDouyinImage } from "./image-text-upload";
-import { inspectDouyinManagementReadOnlyNavigation } from "./image-text-management-preflight";
+import { inspectDouyinManagementControls, inspectDouyinManagementReadOnlyNavigation } from "./image-text-management-preflight";
 import { inspectDouyinBodyPage, type DouyinBodyPageDiagnostic } from "./image-text-body-diagnostic";
 import { readDouyinBodyText, type DouyinBodyReadback } from "./image-text-body-readback";
 export { selectAndObserveDouyinImage } from "./image-text-upload";
@@ -608,10 +608,8 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
       await tab.goto("https://creator.douyin.com/creator-micro/content/manage", { waitUntil: "domcontentloaded", timeout: 20_000 });
       if (new URL(tab.url()).host !== "creator.douyin.com" || new URL(tab.url()).pathname !== "/creator-micro/content/manage")
         throw new Error("DOUYIN_MANAGEMENT_ROUTE_UNAVAILABLE");
-      await tab.locator('input[placeholder="搜索作品"]').waitFor({ state: "visible", timeout: 15_000 });
-      const text = await tab.locator("body").innerText();
-      if (await tab.locator('input[placeholder="搜索作品"]').count() !== 1
-        || !/已发布|审核中|未通过/u.test(text))
+      const controls = await inspectDouyinManagementControls(tab, prepared.context);
+      if (controls.searchControlCount !== 1 || controls.stateLabels.length !== 3)
         throw new Error("DOUYIN_MANAGEMENT_STATES_UNVERIFIED");
     } finally { await tab.close().catch(() => undefined); }
   }

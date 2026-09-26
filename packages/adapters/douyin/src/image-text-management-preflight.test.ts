@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { chromium, type Browser } from "playwright-core";
-import { inspectDouyinManagementReadOnlyNavigation } from "./image-text-management-preflight";
+import { inspectDouyinManagementControls, inspectDouyinManagementReadOnlyNavigation } from "./image-text-management-preflight";
 
 const chrome = process.env.CHROME_PATH ?? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const home = "https://creator.douyin.com/creator-micro/home";
@@ -37,6 +37,14 @@ async function fixture(options: { labels?: string; managementId?: string; delaye
 }
 
 describe.skipIf(!existsSync(chrome))("Douyin app-owned read-only management preflight", () => {
+  it("recognizes review states inside the live management dropdown without leaving the page", async () => {
+    const { page, context, verifyIdentity } = await fixture({ dropdownStates: true });
+    await page.goto(manage);
+    const result = await inspectDouyinManagementControls(page, context);
+    expect(result).toMatchObject({ searchControlCount: 1, stateLabels: ["已发布", "审核中", "未通过"] });
+    expect(await verifyIdentity()).toBe(true);
+    expect(page.url()).toBe(manage);
+  });
   it("uses only the same owned Page and GET navigation, then returns home", async () => {
     const { page, context, requests, verifyIdentity } = await fixture();
     const result = await inspectDouyinManagementReadOnlyNavigation(page, context, verifyIdentity);
