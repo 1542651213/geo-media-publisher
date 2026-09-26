@@ -84,7 +84,12 @@ export function createRuntimeAdapterRegistry(credentials: CredentialStore, inclu
   registry.register(new DouyinOfficialAdapter({ credentialStore: credentials }));
   registry.register(new DouyinImageTextBrowserAdapter({ credentialStore: credentials, sessionManager: browserSessionManager, onBrowserRuntimeEvent,
     nativeSubmitEnabled: options.douyinImageTextNativeSubmitEnabled ?? (process.env.DOUYIN_IMAGE_TEXT_NATIVE_SUBMIT_ENABLED === "true"
-      && Boolean(process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim() && process.env.DOUYIN_R1_ACCEPTANCE_ARTICLE_ID?.trim())) }));
+      && Boolean(process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim() && process.env.DOUYIN_R1_ACCEPTANCE_ARTICLE_ID?.trim())),
+    approvedResume: process.env.DOUYIN_R1_RESUME_ARTICLE_ID?.trim()
+      && process.env.DOUYIN_R1_RESUME_ARTICLE_ID.trim() === process.env.DOUYIN_R1_ACCEPTANCE_ARTICLE_ID?.trim()
+      && process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim()
+      ? { accountId: process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID.trim(), articleId: process.env.DOUYIN_R1_RESUME_ARTICLE_ID.trim() }
+      : null }));
   registry.register(new KuaishouAdapter({ credentialStore: credentials }));
   registry.register(new BilibiliBrowserAdapter({ credentialStore: credentials, sessionManager: browserSessionManager, onBrowserRuntimeEvent }));
   registry.register(new YouTubeAdapter({ credentialStore: credentials }));

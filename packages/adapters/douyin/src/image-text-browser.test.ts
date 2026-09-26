@@ -2,12 +2,30 @@ import { describe, expect, it } from "vitest";
 import type { Page } from "playwright-core";
 import { vi } from "vitest";
 import type { CredentialStore } from "@publisher/security";
-import { DouyinImageTextBrowserAdapter, dismissKnownDouyinHomeTour, douyinRequiredSettingsPass, parseVisibleDouyinCreatorId,
+import { DouyinImageTextBrowserAdapter, denyOptionalDouyinLocation, dismissKnownDouyinHomeTour, douyinRequiredSettingsPass, isAuthorizedDouyinDraftResume, parseVisibleDouyinCreatorId,
   waitForUniqueDouyinImageInput } from "./image-text-browser";
 
 const store: CredentialStore = { get: () => null, set: () => undefined, delete: () => undefined, has: () => false };
 
 describe("Douyin image/text BrowserNative adapter", () => {
+  it("denies only optional Creator geolocation in the owned browser context", async () => {
+    const session = { send: vi.fn(async () => undefined), detach: vi.fn(async () => undefined) };
+    const context = { newCDPSession: vi.fn(async () => session) };
+    const page = { url: () => "https://creator.douyin.com/creator-micro/content/post/image", context: () => context,
+      evaluate: vi.fn(async () => "denied") } as unknown as Page;
+    await denyOptionalDouyinLocation(page);
+    expect(session.send).toHaveBeenCalledWith("Browser.setPermission", { permission: { name: "geolocation" },
+      setting: "denied", origin: "https://creator.douyin.com" });
+    expect(session.detach).toHaveBeenCalledTimes(1);
+  });
+  it("allows an owner-confirmed editor resume only for the exact acceptance account and Article", () => {
+    const target = { accountId: "owner", articleId: "new-test", pagePath: "/creator-micro/content/post/image" };
+    expect(isAuthorizedDouyinDraftResume(target, { accountId: "owner", articleId: "new-test" })).toBe(true);
+    expect(isAuthorizedDouyinDraftResume({ ...target, accountId: "other" }, { accountId: "owner", articleId: "new-test" })).toBe(false);
+    expect(isAuthorizedDouyinDraftResume({ ...target, articleId: "old-test" }, { accountId: "owner", articleId: "new-test" })).toBe(false);
+    expect(isAuthorizedDouyinDraftResume({ ...target, pagePath: "/creator-micro/home" }, { accountId: "owner", articleId: "new-test" })).toBe(false);
+    expect(isAuthorizedDouyinDraftResume(target, null)).toBe(false);
+  });
   it("dismisses only the known Creator home tour before choosing the image-post entry", async () => {
     const skip = { count: vi.fn(async () => 1), isVisible: vi.fn(async () => true), click: vi.fn(async () => undefined) };
     const welcome = { count: vi.fn(async () => 1), isVisible: vi.fn(async () => true), waitFor: vi.fn(async () => undefined) };

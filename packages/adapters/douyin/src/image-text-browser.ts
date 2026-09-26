@@ -38,6 +38,27 @@ export async function waitForUniqueDouyinImageInput(page: Page): Promise<Locator
   return upload;
 }
 
+/** Deny only the optional location prompt for a no-location image post. */
+export async function denyOptionalDouyinLocation(page: Page): Promise<void> {
+  if (new URL(page.url()).origin !== "https://creator.douyin.com")
+    throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_CREATOR_ORIGIN_REQUIRED_FOR_PERMISSION");
+  const session = await page.context().newCDPSession(page);
+  try {
+    await session.send("Browser.setPermission", { permission: { name: "geolocation" }, setting: "denied",
+      origin: "https://creator.douyin.com" });
+  } finally {
+    await session.detach();
+  }
+  const state = await page.evaluate(async () => (await navigator.permissions.query({ name: "geolocation" })).state);
+  if (state !== "denied") throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_LOCATION_PERMISSION_NOT_DENIED");
+}
+
+export function isAuthorizedDouyinDraftResume(target: { accountId: string; articleId: string; pagePath: string },
+  approved: { accountId: string; articleId: string } | null): boolean {
+  return approved?.accountId === target.accountId && approved.articleId === target.articleId
+    && target.pagePath === "/creator-micro/content/post/image";
+}
+
 /** Compatibility helper for diagnostics; only selected control state can pass. */
 export function douyinRequiredSettingsPass(evidence: DouyinEditorSettingsSnapshot): boolean {
   try { assertDouyinEditorSettings(evidence, "public"); return true; }
@@ -66,13 +87,16 @@ const definition: BrowserPlatformDefinition = {
 /** Image/text route. The existing Douyin OAuth video adapter remains separate. */
 export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
   private readonly nativeSubmitEnabled: boolean;
+  private readonly approvedResume: { accountId: string; articleId: string } | null;
   private readonly prepared = new Map<string, { frozen: FrozenDouyinImageText; page: Page; context: ReturnType<Page["context"]>; settings: DouyinEditorSettingsSnapshot }>();
   private readonly finalSubmitUsed = new Set<string>();
   private readonly verifiedIdentity = new Map<string, { page: Page; context: ReturnType<Page["context"]>; sessionIdHash: string; creatorId: string; verifiedAt: number }>();
 
-  constructor(options: BrowserAutomationAdapterOptions & { nativeSubmitEnabled?: boolean } = {}) {
+  constructor(options: BrowserAutomationAdapterOptions & { nativeSubmitEnabled?: boolean;
+    approvedResume?: { accountId: string; articleId: string } | null } = {}) {
     super(definition, options);
     this.nativeSubmitEnabled = options.nativeSubmitEnabled === true;
+    this.approvedResume = options.approvedResume ?? null;
   }
 
   assertFormalSubmitAvailable(): void {
@@ -123,6 +147,45 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     return { ready: pageEvidence.searchControlCount === 1 && pageEvidence.labels.length >= 1,
       creatorId, pageHost: url.host, pagePath: url.pathname, searchControlCount: pageEvidence.searchControlCount,
       stateLabels: pageEvidence.labels, visibleRowCount: pageEvidence.visibleRowCount };
+  }
+
+  /** Safe read-only evidence for this owned image editor; never returns text, cookies or signed URLs. */
+  async inspectCurrentImageEditor(ctx: AccountContext): Promise<{ pagePath: string | null; creatorId: string | null;
+    imageCount: number; imageLoaded: boolean; titleLength: number; bodyLength: number;
+    settings: DouyinEditorSettingsSnapshot | null;
+    controls: Array<{ label: string; tag: string; type: string | null; role: string | null;
+      checked: boolean | null; ariaChecked: string | null; className: string; parentClassName: string }> }> {
+    const empty = { pagePath: null, creatorId: null, imageCount: 0, imageLoaded: false, titleLength: 0,
+      bodyLength: 0, settings: null, controls: [] };
+    const owned = await this.activeCanonicalPage(ctx);
+    if (!owned || owned.page.isClosed() || owned.page.context() !== owned.session.context || owned.session.executionMode !== "VISIBLE") return empty;
+    const page = owned.page;
+    const url = new URL(page.url());
+    const creatorId = await this.readOwnedCreatorId(ctx, owned);
+    if (url.host !== "creator.douyin.com" || url.pathname !== "/creator-micro/content/post/image"
+      || creatorId !== ctx.settings.expectedCreatorId) return { ...empty, pagePath: url.pathname, creatorId };
+    const dom = await page.evaluate(() => {
+      const images = [...document.querySelectorAll<HTMLImageElement>('main img, [class*="upload"] img, [class*="image"] img')];
+      const inputControls = [...document.querySelectorAll<Element>('input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"],[role="switch"],[aria-pressed]')]
+        .map((element) => {
+          const label = (element.getAttribute("aria-label") ?? element.closest("label")?.textContent ?? element.parentElement?.textContent ?? "")
+            .replace(/\s+/gu, " ").trim().slice(0, 80);
+          return { label, tag: element.tagName.toLowerCase(), type: element.getAttribute("type"), role: element.getAttribute("role"),
+            checked: element instanceof HTMLInputElement ? element.checked : null, ariaChecked: element.getAttribute("aria-checked"),
+            className: String(element.className).slice(0, 120), parentClassName: String(element.parentElement?.className ?? "").slice(0, 120) };
+        }).filter((control) => /公开|可见|私密|允许|立即|定时|声明/u.test(control.label));
+      const visibleLabels = [...document.querySelectorAll<HTMLElement>('span,label,button,div')]
+        .filter((element) => /^(公开|好友可见|仅自己可见|允许|不允许|立即发布|定时发布)$/u.test(element.textContent?.trim() ?? "")
+          && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0)
+        .map((element) => ({ label: element.textContent!.trim(), tag: element.tagName.toLowerCase(), type: null, role: element.getAttribute("role"),
+          checked: null, ariaChecked: element.getAttribute("aria-checked") ?? element.parentElement?.getAttribute("aria-checked") ?? null,
+          className: String(element.className).slice(0, 120), parentClassName: String(element.parentElement?.className ?? "").slice(0, 120) }));
+      const controls = [...inputControls, ...visibleLabels].slice(0, 40);
+      return { imageCount: images.length, imageLoaded: images.length === 1 && images[0]!.complete && images[0]!.naturalWidth > 0,
+        titleLength: document.querySelector<HTMLInputElement>('input[placeholder="添加作品标题"]')?.value.length ?? 0,
+        bodyLength: document.querySelector<HTMLElement>('[contenteditable="true"]')?.innerText.length ?? 0, controls };
+    });
+    return { pagePath: url.pathname, creatorId, ...dom, settings: await this.readEditorSettings(page) };
   }
 
   private async readVisibleCreatorId(page: Page): Promise<string | null> {
@@ -232,45 +295,68 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     const page = owned.page;
     if (new URL(page.url()).host !== "creator.douyin.com" || await this.readOwnedCreatorId(ctx, owned) !== creatorId)
       throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_CREATOR_IDENTITY_MISMATCH");
-    if (new URL(page.url()).pathname !== "/creator-micro/home")
+    await denyOptionalDouyinLocation(page);
+    const pagePath = new URL(page.url()).pathname;
+    const resumeApproved = this.approvedResume?.accountId === ctx.accountId && this.approvedResume.articleId === article.articleId;
+    const resumeDraft = isAuthorizedDouyinDraftResume({ accountId: ctx.accountId, articleId: article.articleId, pagePath }, this.approvedResume);
+    if (resumeApproved && !resumeDraft)
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_OWNER_CONFIRMED_EDITOR_REQUIRED_NO_NEW_UPLOAD");
+    if (!resumeDraft && pagePath !== "/creator-micro/home")
       throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_CREATOR_HOME_REQUIRED_FOR_NEW_IMAGE_TEXT");
     const visibility = ctx.settings.expectedVisibility;
     if (visibility !== "public") throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_OWNER_VISIBILITY_SELECTION_REQUIRED");
-    protectExistingDouyinDraft(await page.locator("body").innerText());
-    await dismissKnownDouyinHomeTour(page);
+    if (!resumeDraft) {
+      protectExistingDouyinDraft(await page.locator("body").innerText());
+      await dismissKnownDouyinHomeTour(page);
+    }
     const source = { articleId: article.articleId, accountId: ctx.accountId, creatorId,
       title: article.title, body: article.body, imagePaths: article.images ?? [], topics: [], visibility, scheduledAt: null } as const;
     const initialFrozen = await freezeDouyinImageText(source);
-    await page.keyboard.press("Escape");
-    const card = page.getByText("发布图文", { exact: true });
-    if (await card.count() !== 1 || !await card.isVisible())
-      throw new BrowserAutomationError("PLATFORM_CHANGED", "DOUYIN_IMAGE_TEXT_ENTRY_AMBIGUOUS");
-    await card.click();
-    protectExistingDouyinDraft(await page.locator("body").innerText());
-    await page.waitForURL((url) => url.origin === "https://creator.douyin.com" && url.pathname === "/creator-micro/content/upload", { timeout: 15_000 });
-    const upload = await waitForUniqueDouyinImageInput(page);
-    const uploadArea = await upload.evaluate((element) => (element.closest("label")?.textContent ?? element.parentElement?.textContent ?? "").slice(0, 120));
-    if (!/图文|图片|上传/u.test(uploadArea)) throw new BrowserAutomationError("PLATFORM_CHANGED", "DOUYIN_IMAGE_UPLOAD_AREA_UNVERIFIED");
     const previewSelector = 'main img, [class*="upload"] img, [class*="image"] img';
-    const preUploadImageCount = await page.locator(previewSelector).count();
     if (!await verifyDouyinImageTextImage(initialFrozen, 0)) throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_IMAGE_HASH_MISMATCH");
-    await upload.setInputFiles(initialFrozen.imagePaths[0]!);
-    const uploadInputFileName = await upload.evaluate((element) => element instanceof HTMLInputElement ? element.files?.[0]?.name ?? null : null).catch(() => null);
-    await page.waitForURL((url) => url.origin === "https://creator.douyin.com" && url.pathname === "/creator-micro/content/post/image", { timeout: 30_000 });
+    if (!resumeDraft) {
+      await page.keyboard.press("Escape");
+      const card = page.getByText("发布图文", { exact: true });
+      if (await card.count() !== 1 || !await card.isVisible())
+        throw new BrowserAutomationError("PLATFORM_CHANGED", "DOUYIN_IMAGE_TEXT_ENTRY_AMBIGUOUS");
+      await card.click();
+      protectExistingDouyinDraft(await page.locator("body").innerText());
+      await page.waitForURL((url) => url.origin === "https://creator.douyin.com" && url.pathname === "/creator-micro/content/upload", { timeout: 15_000 });
+      const upload = await waitForUniqueDouyinImageInput(page);
+      const uploadArea = await upload.evaluate((element) => (element.closest("label")?.textContent ?? element.parentElement?.textContent ?? "").slice(0, 120));
+      if (!/图文|图片|上传/u.test(uploadArea)) throw new BrowserAutomationError("PLATFORM_CHANGED", "DOUYIN_IMAGE_UPLOAD_AREA_UNVERIFIED");
+      const preUploadImageCount = await page.locator(previewSelector).count();
+      await upload.setInputFiles(initialFrozen.imagePaths[0]!);
+      const uploadInputFileName = await upload.evaluate((element) => element instanceof HTMLInputElement ? element.files?.[0]?.name ?? null : null).catch(() => null);
+      await page.waitForURL((url) => url.origin === "https://creator.douyin.com" && url.pathname === "/creator-micro/content/post/image", { timeout: 30_000 });
+      const imagesAfterUpload = page.locator(previewSelector);
+      await imagesAfterUpload.first().waitFor({ state: "visible", timeout: 15_000 });
+      const postUploadImageCount = await imagesAfterUpload.count();
+      const imageVisible = postUploadImageCount === 1 && await imagesAfterUpload.first().isVisible();
+      const imageLoaded = postUploadImageCount === 1 && await imagesAfterUpload.first().evaluate((image) => image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0);
+      const editorText = await page.locator("body").innerText();
+      verifyDouyinUploadEvidence({ preUploadImageCount, postUploadImageCount, selectedFileName: basename(initialFrozen.imagePaths[0]!),
+        inputSelectionCompleted: true, uploadInputFileName, imageVisible, imageLoaded,
+        processing: /上传中|处理中|正在处理/u.test(editorText), error: /上传失败|图片处理失败/u.test(editorText),
+        currentEditorRoute: new URL(page.url()).pathname === "/creator-micro/content/post/image",
+        contextOwned: page.context() === owned.session.context });
+    }
     const images = page.locator(previewSelector);
     await images.first().waitFor({ state: "visible", timeout: 15_000 });
-    const postUploadImageCount = await images.count();
-    const imageVisible = postUploadImageCount === 1 && await images.first().isVisible();
-    const imageLoaded = postUploadImageCount === 1 && await images.first().evaluate((image) => image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0);
-    const editorText = await page.locator("body").innerText();
-    verifyDouyinUploadEvidence({ preUploadImageCount, postUploadImageCount, selectedFileName: basename(initialFrozen.imagePaths[0]!),
-      inputSelectionCompleted: true,
-      uploadInputFileName, imageVisible, imageLoaded, processing: /上传中|处理中|正在处理/u.test(editorText),
-      error: /上传失败|图片处理失败/u.test(editorText), currentEditorRoute: new URL(page.url()).pathname === "/creator-micro/content/post/image",
-      contextOwned: page.context() === owned.session.context });
+    if (resumeDraft) {
+      const imageCount = await images.count();
+      const loaded = imageCount === 1 && await images.first().isVisible()
+        && await images.first().evaluate((image) => image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0);
+      const editorText = await page.locator("body").innerText();
+      if (!loaded || /上传中|处理中|正在处理|上传失败|图片处理失败/u.test(editorText))
+        throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_RESUMED_IMAGE_NOT_VERIFIED");
+    }
     const title = page.locator('input[placeholder="添加作品标题"]');
     const body = page.locator('[contenteditable="true"]');
     if (await title.count() !== 1 || await body.count() !== 1) throw new BrowserAutomationError("PLATFORM_CHANGED", "DOUYIN_EDITOR_FIELDS_AMBIGUOUS");
+    if (resumeDraft && ((await title.inputValue()).trim() && await title.inputValue() !== initialFrozen.title
+      || (await body.innerText()).trim() && await body.innerText() !== initialFrozen.body))
+      throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_RESUMED_EDITOR_CONTENT_MISMATCH");
     await title.fill(initialFrozen.title);
     await body.fill(initialFrozen.body);
     const titleReadback = await title.inputValue();
@@ -290,6 +376,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     return { prepared: true, requiresUserAction: true, message: "Douyin image-text editor readback passed; waiting for one-shot authorization",
       sessionIdHash: owned.session.sessionIdHash, backendUrl: page.url(), editorOpenedAt: new Date().toISOString(),
       titleFilled: true, bodyFilled: true, response: { adapter: "douyin-image-text-browser", imageUploaded: true,
+        imageAssociation: resumeDraft ? "owner_confirmed_resume" : "new_upload_verified",
         contentTransport: "DOUYIN_IMAGE_TEXT_BROWSER", imageHashes: frozen.imageHashes,
         sourceContentHash: frozen.sourceContentHash, contentBindingHash: frozen.contentBindingHash,
         expectedCreatorId: creatorId, settingsSnapshot: settings, mandatorySelections: settings.selectedMandatory,
