@@ -10,6 +10,8 @@ import type { ToutiaoCookie } from "./article-api/auth/cookie-resolver";
 import { classifyShadowRequest } from "./article-api/protocol-live-shadow";
 import { matchToutiaoManagementRows, type ToutiaoManagementRow, type ToutiaoManagementTarget,
   type ToutiaoManagementMatch } from "./management-reconciliation";
+import { scanOwnedToutiaoManagement, type ToutiaoDeepScanResult, type ToutiaoDeepScanTarget } from "./management-deep-reconciliation";
+export type { ToutiaoDeepScanResult } from "./management-deep-reconciliation";
 
 const TOUTIAO_CREATOR_HOME = "https://mp.toutiao.com/";
 const TOUTIAO_ARTICLE_EDITOR_URL = TOUTIAO_GUARDED_EDITOR_URL;
@@ -452,6 +454,19 @@ export class ToutiaoArticleBrowserAdapter extends BrowserAutomationAdapter {
     const result = await this.inspectAccountPreflightOnPage(owned.page as Page,
       { requireIdentity: true, requireArticleEntry: false });
     return result.allowed ? result.identity.externalAccountId : null;
+  }
+
+  /** Read-only management-list lookup. The route guard is installed before opening the operation page. */
+  async deepReconcileOwnedManagement(ctx: AccountContext, expectedCreatorId: string,
+    target: ToutiaoDeepScanTarget): Promise<ToutiaoDeepScanResult> {
+    const owned = this.sessionManager.getCanonicalPage({ platformKey: "toutiao", accountId: ctx.accountId });
+    if (!owned || owned.page.isClosed() || owned.page.context() !== owned.session.context)
+      throw new Error("TOUTIAO_RECONCILIATION_SESSION_UNAVAILABLE");
+    const preflight = await this.inspectAccountPreflightOnPage(owned.page as Page,
+      { requireIdentity: true, requireArticleEntry: false });
+    if (!preflight.identity.externalAccountId || preflight.identity.externalAccountId !== expectedCreatorId)
+      throw new Error("TOUTIAO_RECONCILIATION_IDENTITY_UNVERIFIED");
+    return scanOwnedToutiaoManagement(owned.session.context, owned.page as Page, target);
   }
 
   /** Read-only management-list lookup. The route guard is installed before opening the operation page. */

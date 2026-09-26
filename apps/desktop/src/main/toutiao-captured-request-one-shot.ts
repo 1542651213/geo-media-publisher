@@ -244,6 +244,8 @@ export class ToutiaoCapturedRequestOneShot {
               bodyHash: captured.evidence.bodyHash,
               httpStatus: response.status, platformCode: response.platformCode,
               responseShape: response.responseShape, remoteId: response.remoteId ?? null,
+              errNo: response.errNo ?? null, sanitizedMessage: response.sanitizedMessage ?? null,
+              sanitizedReason: response.sanitizedReason ?? null,
               remoteState: "SUBMIT_ACCEPTED" }, verificationStatus: "WaitingUser" });
           this.repository.markJobPublishing(jobId, recordId!);
           return { state: "SUBMIT_ACCEPTED", reasonCode: "CONFIRMATION_REQUIRED", jobId,
@@ -254,6 +256,8 @@ export class ToutiaoCapturedRequestOneShot {
         this.repository.updatePublishRecord(recordId!, { status: "Submitted", success: false,
           response: { requestHash: captured.requestHash, finalPayloadHash: captured.finalPayloadHash, httpStatus: response.status,
             platformCode: response.platformCode ?? null, responseShape: response.responseShape,
+            errNo: response.errNo ?? null, sanitizedMessage: response.sanitizedMessage ?? null,
+            sanitizedReason: response.sanitizedReason ?? null,
             remoteState: "UNCERTAIN" }, verificationStatus: "WaitingUser" });
         return { state: "NEEDS_RECONCILIATION", reasonCode: "REMOTE_RESPONSE_UNCERTAIN", jobId,
           intentId, recordId, submissionAttemptId, requestHash: captured.requestHash,

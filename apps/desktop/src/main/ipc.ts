@@ -889,6 +889,42 @@ export function registerIpc(deps: IpcDependencies): void {
       return { state: "UNKNOWN" as const, reasonCode: "READONLY_RECONCILIATION_ERROR" };
     }
   });
+  /** Reconciliation-only: derives the target from the durable Job/Intent, never reaches capture or replay. */
+  register("toutiao:mvp5-deep-reconcile-only", async (_event, payload) => {
+    if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true") throw new Error("TOUTIAO_MVP5_ONE_SHOT_DISABLED");
+    const input = z.object({ accountId: idSchema, jobId: idSchema }).parse(payload);
+    const expectedCreatorId = process.env.TOUTIAO_MVP5_EXPECTED_CREATOR_ID;
+    if (input.accountId !== process.env.TOUTIAO_MVP5_ACCOUNT_ID || !expectedCreatorId)
+      throw new Error("TOUTIAO_RECONCILIATION_TARGET_IDENTITY_NOT_CONFIGURED");
+    const job = repository.getJob(input.jobId);
+    const article = job ? repository.getArticle(job.articleId) : null;
+    const intent = repository.getSubmissionIntentByJob(input.jobId);
+    if (!job || job.platformKey !== "toutiao" || job.accountId !== input.accountId || !article
+      || !intent || intent.finalSubmitCount !== 1)
+      throw new Error("TOUTIAO_RECONCILIATION_TARGET_INVALID");
+    const adapter = registry.getForConnection("toutiao");
+    if (!(adapter instanceof ToutiaoArticleBrowserAdapter)) throw new Error("TOUTIAO_RECONCILIATION_RUNTIME_UNAVAILABLE");
+    const activation = await toutiaoSessionActivation.activate(input.accountId);
+    if (activation.runtimeState !== "ACTIVE" || !activation.contextOwnsPage || !activation.pageAlive)
+      throw new Error("TOUTIAO_RECONCILIATION_SESSION_UNAVAILABLE");
+    const ctx = accountContext(input.accountId, "toutiao");
+    if (await adapter.checkOwnedCreatorSession(ctx) !== "VALID"
+      || await adapter.inspectOwnedCreatorIdentity(ctx) !== expectedCreatorId)
+      throw new Error("TOUTIAO_RECONCILIATION_IDENTITY_UNVERIFIED");
+    const result = await adapter.deepReconcileOwnedManagement(ctx, expectedCreatorId, {
+      title: article.title, submittedAt: intent.submitBoundaryEnteredAt ?? intent.updatedAt,
+      remoteId: intent.externalId && intent.externalId !== "0" ? intent.externalId : null
+    });
+    const match = result.match;
+    const publicVerification = match.state === "PUBLISHED" && match.externalId && match.publicUrl
+      ? await adapter.verifyOwnedPublicArticle(ctx, article, match.externalId, match.publicUrl) : null;
+    const finalState = publicVerification?.verified ? "PUBLISHED_CONFIRMED"
+      : match.state === "REVIEWING" ? "FOUND_REVIEWING"
+        : match.state === "REJECTED" ? "FOUND_REJECTED"
+          : match.state === "DRAFT" ? "FOUND_DRAFT"
+            : match.state !== "NOT_FOUND" ? "FOUND_OTHER_REMOTE_STATE" : "NEEDS_RECONCILIATION";
+    return { ...result, finalState, accountIdentityMatch: true, publicVerification };
+  });
   register("accounts:pre-submit-gate", async (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);
     const adapter = registry.getForConnection(input.platformKey);

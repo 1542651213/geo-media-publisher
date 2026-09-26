@@ -184,6 +184,19 @@ export interface ReplayResponseEvidence {
   readonly responseShape: readonly string[];
   readonly platformCode?: string | number | null;
   readonly remoteId?: string | null;
+  readonly errNo?: string | number | null;
+  readonly sanitizedMessage?: string | null;
+  readonly sanitizedReason?: string | null;
+}
+
+/** Conservative allowlist for future diagnostic text. Ambiguous or secret-shaped values are omitted. */
+export function sanitizeToutiaoResponseDiagnostic(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.normalize("NFC").replace(/\s+/gu, " ").trim();
+  if (!text || text.length > 160 || /(?:cookie|token|authorization|signature|a_bogus|csrf|sessionid|set-cookie|https?:\/\/|[?&][a-z_-]+=)/iu.test(text)
+    || /[A-Za-z0-9+/_-]{32,}={0,2}/u.test(text)
+    || !/^[\p{L}\p{N}\s，。！？、：:；;（）()【】[\].,_-]+$/u.test(text)) return null;
+  return text;
 }
 
 export type ReplayTransport = (request: RawPublishRequest) => Promise<ReplayResponseEvidence>;
@@ -235,6 +248,10 @@ export async function nodeFetchReplayTransport(request: RawPublishRequest): Prom
     return { status: response.status, responseShape: Object.keys(object).map(safeName).sort(),
       platformCode: typeof code === "number" && Number.isFinite(code) ? code
         : typeof code === "string" && /^[A-Z0-9_-]{1,32}$/iu.test(code) ? code : null,
+      errNo: typeof object.err_no === "number" && Number.isSafeInteger(object.err_no) ? object.err_no
+        : typeof object.err_no === "string" && /^\d{1,12}$/u.test(object.err_no) ? object.err_no : null,
+      sanitizedMessage: sanitizeToutiaoResponseDiagnostic(object.message),
+      sanitizedReason: sanitizeToutiaoResponseDiagnostic(object.reason),
       remoteId };
   } catch { return { status: response.status, responseShape: [] }; }
 }

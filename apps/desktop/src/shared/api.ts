@@ -6,6 +6,7 @@ import type { BrowserSessionRuntimeSnapshot, PreSubmitGateResult } from "@publis
 import type { ToutiaoActivationResult, ToutiaoSessionStatus } from "../main/toutiao-session-activation";
 import type { ToutiaoLiveShadowResult, ControlledPublishCaptureResult } from "@publisher/adapters-toutiao/article-api";
 import type { CapturedOneShotResult } from "../main/toutiao-captured-request-one-shot";
+import type { ToutiaoDeepScanResult } from "@publisher/adapters-toutiao/browser";
 import type { Mvp5ReadinessResult } from "../main/toutiao-capture-binding-readiness";
 import type { ContentGoal, ContentIntent, ContentQualityStatus, PromotionStrength, SearchIntent } from "@publisher/domain";
 
@@ -195,6 +196,10 @@ export interface PublisherApi {
     oneShotPrepareTestJob(accountId: string): Promise<{ jobId: string; testRunId: string; articleId: string | null; reused: boolean }>;
     oneShotReconcile(accountId: string, jobId: string): Promise<{ state: string; reasonCode: string;
       externalId?: string | null; publicUrl?: string | null }>;
+    oneShotDeepReconcileOnly(accountId: string, jobId: string): Promise<ToutiaoDeepScanResult & {
+      readonly finalState: string; readonly accountIdentityMatch: boolean;
+      readonly publicVerification: { readonly verified: boolean; readonly urlReachable: boolean;
+        readonly titleMatch: boolean; readonly bodyMatch: boolean } | null }>;
     oneShotCapturedReplay(accountId: string, jobId: string): Promise<CapturedOneShotResult> };
   dashboard: { get(): Promise<DashboardStats> };
   videoAssets: {
