@@ -14,7 +14,7 @@ export interface DouyinImageTextSource {
 }
 
 export interface FrozenDouyinImageText extends DouyinImageTextSource {
-  readonly transport: "DOUYIN_BROWSER_NATIVE";
+  readonly transport: "DOUYIN_IMAGE_TEXT_BROWSER";
   readonly imageHashes: readonly string[];
   readonly sourceContentHash: string;
   readonly contentBindingHash: string;
@@ -75,7 +75,7 @@ export async function freezeDouyinImageText(source: DouyinImageTextSource): Prom
   const imageHashes = [sha256(bytes)];
   const sourceContentHash = sha256(JSON.stringify({ version: 1, title: source.title, body: source.body,
     imageHashes, topics: source.topics, visibility: source.visibility, scheduledAt: source.scheduledAt }));
-  const transport = "DOUYIN_BROWSER_NATIVE" as const;
+  const transport = "DOUYIN_IMAGE_TEXT_BROWSER" as const;
   const contentBindingHash = sha256(JSON.stringify({ version: 1, articleId: source.articleId,
     accountId: source.accountId, creatorId: source.creatorId, transport, sourceContentHash }));
   return Object.freeze({ ...source, imagePaths: Object.freeze([...source.imagePaths]), topics: Object.freeze([...source.topics]),

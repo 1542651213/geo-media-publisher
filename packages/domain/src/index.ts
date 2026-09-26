@@ -1,6 +1,5 @@
 export * from "./types";
 export * from "./toutiao-article";
-export * from "./douyin-image-text";
 export * from "./secret-redaction";
 export * from "./keywords";
 export * from "./prompt";

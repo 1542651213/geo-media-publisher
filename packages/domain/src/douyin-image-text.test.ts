@@ -25,7 +25,7 @@ describe("Douyin image-text content binding", () => {
     expect(frozen.imageHashes).toEqual([createHash("sha256").update(png).digest("hex")]);
     expect(frozen.sourceContentHash).toMatch(/^[a-f0-9]{64}$/u);
     expect(frozen.contentBindingHash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(frozen.transport).toBe("DOUYIN_BROWSER_NATIVE");
+    expect(frozen.transport).toBe("DOUYIN_IMAGE_TEXT_BROWSER");
     expect(frozen.imagePaths).toEqual([path]);
     await expect(verifyDouyinImageTextImage(frozen, 0)).resolves.toBe(true);
     await writeFile(path, Buffer.concat([await readFile(path), Buffer.from([1])]));

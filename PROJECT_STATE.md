@@ -1893,3 +1893,10 @@ NotImplemented：3
 - 发布链路：视频素材 → 现有视频能力平台选择 → 账号与文章选择 → Adapter `validateVideo` 发布前检查 → 现有持久化 Job Queue。创建任务不会直接调用外部平台。
 - 平台适配字段以 JSON 保存并随视频素材保留；本轮不修改 Adapter，因此只有 Adapter 已支持的字段会参与真实发布，其余字段作为可审计素材配置保存。
 - 当前真实发布状态：未执行真实抖音上传；抖音仍为 `WaitingForUser`。微信公众号未修改，继续为 `WaitingForUser`。
+
+## Douyin image/text R0 (2026-09-26, isolated worktree)
+
+- Toutiao production baseline remains frozen at `55ba37cdb82e70764f213da8e249cf2ebdf682c8`; this R0 uses `codex/douyin-r0-final-integration` from that commit. The existing Douyin OAuth video adapter remains the video route.
+- Owner-assisted Creator audit confirmed owned home `/creator-micro/home`, image/text upload `/creator-micro/content/upload`, editor `/creator-micro/content/post/image`, and work management `/creator-micro/content/manage`. Account-menu DOM confirmed Douyin ID `72388977613`. The Owner authorized and manually uploaded one unbranded test image (SHA256 `12549e819791a4b06160e9eb38445ceb53da5e71b0dcadc4cc10f3876afe4872`); no final publish action occurred.
+- BrowserNative was selected for image/text. R0 source adds separate adapter routing, account Creator binding with login generation, manual one-image Job gate, file-hash/content binding and editor-readback checks. Production submit is disabled and final action/reconciliation are not implemented because current selected visibility/schedule settings, automated image upload, and unique management row/remote ID readback are unverified. The diagnostic Browser Session was memory-only and is closed. `READY_FOR_ONE_SHOT_ACCEPTANCE=NO`; no live test Article/Job/Intent/Record exists.
+- See `docs/douyin/production-transport-decision.md` and `docs/douyin/production-runbook.md`.

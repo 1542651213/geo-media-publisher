@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { isAutomationAdapter, withUserInitiatedActionSettings, type AdapterRegistry, type BrowserExecutionMode, type BrowserPublishAttemptContext, type BrowserPublishReconciliationResult, type PlatformAdapter, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
 import { canReuseArticle, decideFailure, validatePlatformArticle, type Account, type AdapterManifest, type ErrorCode, type PlatformCapability, type PublishArticleInput, type PublishJob, type PublishMode, type PublishResult, type PublishStatusResult, type PublishVideoInput } from "@publisher/domain";
+import { freezeDouyinImageText } from "@publisher/domain/douyin-image-text";
 import type { Logger } from "@publisher/logger";
 import { GlobalPublishExecutionGate } from "./global-publish-execution-gate";
 export { GlobalPublishExecutionGate } from "./global-publish-execution-gate";
@@ -83,15 +84,16 @@ export function hashPreparedBrowserArticleInput(input: PublishArticleInput): str
 }
 
 function usesBrowserManagementReconciliation(adapter: PlatformAdapter): boolean {
-  return adapter.platformKey === "toutiao" && adapter.getCapabilities().browserManagementReconciliation === true
-    && adapter.getCapabilities().contentTransport === "ARTICLE_BROWSER";
+  const capabilities = adapter.getCapabilities();
+  return capabilities.browserManagementReconciliation === true
+    && (capabilities.contentTransport === "ARTICLE_BROWSER" || capabilities.contentTransport === "DOUYIN_IMAGE_TEXT_BROWSER");
 }
 
-function browserIdentitySettings(account: Account, required: boolean): Record<string, string> {
+function browserIdentitySettings(account: Account, required: boolean, douyinConnection?: ReturnType<AppRepository["getDouyinImageTextConnection"]>): Record<string, string | number> {
   if (!required) return {};
-  const expectedCreatorId = account.externalAccountId?.trim();
-  if (!expectedCreatorId) throw Object.assign(new Error("Toutiao requires a verified stable account identity before browser publishing"), { code: "USER_ACTION_REQUIRED" });
-  return { expectedCreatorId };
+  const expectedCreatorId = account.platformKey === "douyin" ? (douyinConnection?.active ? douyinConnection.creatorId : null) : account.externalAccountId?.trim();
+  if (!expectedCreatorId) throw Object.assign(new Error("Browser publishing requires a verified stable account identity"), { code: "USER_ACTION_REQUIRED" });
+  return { expectedCreatorId, ...(account.platformKey === "douyin" ? { expectedLoginGeneration: douyinConnection!.loginGeneration } : {}) };
 }
 
 function publishRecordMetadata(manifest: AdapterManifest, job: PublishJob, account: Account, result: PublishResult): {
@@ -155,7 +157,9 @@ export class PublisherService {
     const article = this.repository.getArticle(job.articleId);
     if (!account || !article) throw new Error("关联账号或文章不存在");
     if (!adapter.reconcile) return { job, message: "STILL_UNCERTAIN: 当前平台没有经过审阅的只读内容列表回查契约，未重试" };
-    const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: false, manualConfirmationRequired: true, ...browserIdentitySettings(account, managementReconciliation) }, action, "VISIBLE"), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
+    const douyinConnection = job.platformKey === "douyin" ? this.repository.getDouyinImageTextConnection(account.id) : null;
+    const expectedCreatorId = job.platformKey === "douyin" ? douyinConnection?.creatorId : account.externalAccountId;
+    const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: false, manualConfirmationRequired: true, ...browserIdentitySettings(account, managementReconciliation, douyinConnection) }, action, "VISIBLE"), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
     const variant = job.articleVariantId ? this.repository.getArticleVariant(job.articleVariantId) : null;
     const selectedImage = job.selectedImageAssetId ? this.repository.getImageAsset(job.selectedImageAssetId) : null;
     const input = { articleId: article.id, title: variant?.title ?? article.title, body: variant?.body ?? article.body, summary: variant?.summary ?? article.summary, tags: article.tags, ...(selectedImage ? { images: [selectedImage.filePath] } : {}) };
@@ -163,7 +167,9 @@ export class PublisherService {
     const existingRecord = this.repository.getPublishRecordByJob(job.id);
     if (managementReconciliation && (!intent || intent.finalSubmitCount !== 1)) throw new Error("Toutiao management reconciliation requires a persisted final submit claim");
     if (managementReconciliation && typeof existingRecord?.response.expectedCreatorId === "string"
-      && existingRecord.response.expectedCreatorId !== account.externalAccountId) throw Object.assign(new Error("Toutiao reconciliation account identity differs from the prepared binding"), { code: "USER_ACTION_REQUIRED" });
+      && existingRecord.response.expectedCreatorId !== expectedCreatorId) throw Object.assign(new Error("Browser reconciliation account identity differs from the prepared binding"), { code: "USER_ACTION_REQUIRED" });
+    if (job.platformKey === "douyin" && existingRecord?.response.expectedLoginGeneration !== douyinConnection?.loginGeneration)
+      throw Object.assign(new Error("Douyin login generation changed after preparation"), { code: "USER_ACTION_REQUIRED" });
     const boundaryAt = intent?.submitBoundaryEnteredAt ?? job.startedAt ?? job.createdAt;
     const createdAt = Date.parse(managementReconciliation ? boundaryAt : job.startedAt ?? job.createdAt);
     const windowStart = Number.isFinite(createdAt) ? new Date(createdAt - (managementReconciliation ? 15 : 5) * 60_000).toISOString() : job.createdAt;
@@ -187,7 +193,7 @@ export class PublisherService {
       finalSubmitCount: intent?.finalSubmitCount ?? 0,
       expectedExternalId,
       expectedPublishedUrl: existingRecord?.publishedUrl ?? null,
-      ...(managementReconciliation ? { expectedCreatorId: account.externalAccountId!, submittedAt: boundaryAt } : {})
+      ...(managementReconciliation ? { expectedCreatorId: expectedCreatorId!, submittedAt: boundaryAt } : {})
     }), this.options.operationTimeoutMs ?? 120_000, "Browser publish reconciliation").catch((error: unknown) => {
       if (!managementReconciliation) throw error;
       return { status: "STILL_UNCERTAIN" as const, remoteState: "UNKNOWN" as const, titleMatch: false, accountMatch: false, timeWindowMatch: false,
@@ -256,7 +262,7 @@ export class PublisherService {
 
   private resolveBrowserExecutionMode(platformKey: string, requestedMode?: BrowserExecutionMode, contentKind?: string): BrowserExecutionMode {
     if (!this.isBrowserAutomationPlatform(platformKey, contentKind) || requestedMode === "VISIBLE") return "VISIBLE";
-    if (platformKey === "toutiao" && usesBrowserManagementReconciliation(this.adapters.getForContent(platformKey, contentKind ?? "article"))) return "VISIBLE";
+    if (usesBrowserManagementReconciliation(this.adapters.getForContent(platformKey, contentKind ?? "article"))) return "VISIBLE";
     const preferenceAllowsBackground = this.repository.getSettings().browserPublishMode === "background";
     const platformAllowsBackground = this.repository.listPlatforms().find((platform) => platform.platformKey === platformKey)?.backgroundAutomationStatus === "PASSED";
     return preferenceAllowsBackground && platformAllowsBackground ? "BACKGROUND" : "VISIBLE";
@@ -282,7 +288,7 @@ export class PublisherService {
     const adapter = this.adapters.getForContent(job.platformKey, job.contentKind ?? "article");
     const managementReconciliation = usesBrowserManagementReconciliation(adapter);
     const frozenTransport = this.repository.getFrozenContentTransport(job.id);
-    if (managementReconciliation && frozenTransport && frozenTransport !== "ARTICLE_BROWSER")
+    if (managementReconciliation && frozenTransport && frozenTransport !== adapter.getCapabilities().contentTransport)
       throw Object.assign(new Error("The Job is bound to another content transport; browser preparation is forbidden"), { code: "TRANSPORT_FALLBACK_FORBIDDEN" });
     const existing = this.repository.getPublishRecordByJob(job.id);
     const priorIntent = managementReconciliation ? this.repository.getSubmissionIntentByJob(job.id) : null;
@@ -298,16 +304,28 @@ export class PublisherService {
     this.repository.assertArticlePublishAllowed(article.id);
     if (!isAutomationAdapter(adapter)) throw Object.assign(new Error("当前平台没有浏览器辅助发布能力"), { code: "PERMISSION_DENIED" });
     const effectiveBrowserExecutionMode = this.resolveBrowserExecutionMode(job.platformKey, browserExecutionMode, job.contentKind ?? "article");
-    const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: false, manualConfirmationRequired: true, ...browserIdentitySettings(account, managementReconciliation) }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
+    const douyinConnection = job.platformKey === "douyin" ? this.repository.getDouyinImageTextConnection(account.id) : null;
+    const expectedCreatorId = job.platformKey === "douyin" ? douyinConnection?.creatorId : account.externalAccountId;
+    const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: false, manualConfirmationRequired: true, ...browserIdentitySettings(account, managementReconciliation, douyinConnection) }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
     const login = await withTimeout(adapter.checkLogin(ctx), this.options.loginCheckTimeoutMs ?? 30_000, "Platform login check");
     if (login !== "logged_in") throw Object.assign(new Error(`${managementReconciliation ? "头条" : "知乎"}账号 Session 未通过登录检查，请先完成正常登录验证`), { code: login === "expired" || login === "logged_out" ? "LOGIN_EXPIRED" : "USER_ACTION_REQUIRED" });
     const variant = job.articleVariantId ? this.repository.getArticleVariant(job.articleVariantId) : null;
     const selectedImage = job.selectedImageAssetId ? this.repository.getImageAsset(job.selectedImageAssetId) : null;
-    const coverId = managementReconciliation ? variant?.coverAssetId ?? article.coverAssetId : null;
+    const coverId = job.platformKey === "toutiao" && managementReconciliation ? variant?.coverAssetId ?? article.coverAssetId : null;
     const cover = coverId ? this.repository.getMediaAsset(coverId) : null;
     const input = { articleId: article.id, title: variant?.title ?? article.title, body: variant?.body ?? article.body, summary: variant?.summary ?? article.summary, tags: article.tags, ...(cover ? { coverPath: cover.filePath } : {}), ...(selectedImage ? { images: [selectedImage.filePath] } : {}) };
-    if (managementReconciliation && existing && (existing.status !== "Prepared" || existing.response.contentTransport !== "ARTICLE_BROWSER"
-      || existing.response.preparedInputHash !== hashPreparedBrowserArticleInput(input) || existing.response.expectedCreatorId !== account.externalAccountId))
+    const frozenDouyin = job.platformKey === "douyin" ? await (async () => {
+      if (!selectedImage || job.imageSelectionMode !== "manual" || selectedImage.brandId !== article.brandId)
+        throw Object.assign(new Error("Douyin image must be manually selected from the same Article brand"), { code: "CONTENT_REJECTED" });
+      return freezeDouyinImageText({ articleId: article.id, accountId: account.id, creatorId: expectedCreatorId ?? "",
+        title: input.title, body: input.body, imagePaths: [selectedImage.filePath], topics: [], visibility: "public", scheduledAt: null });
+    })() : null;
+    if (managementReconciliation && existing && (existing.status !== "Prepared" || existing.response.contentTransport !== adapter.getCapabilities().contentTransport
+      || existing.response.preparedInputHash !== hashPreparedBrowserArticleInput(input) || existing.response.expectedCreatorId !== expectedCreatorId
+      || job.platformKey === "douyin" && existing.response.expectedLoginGeneration !== douyinConnection?.loginGeneration
+      || frozenDouyin && (existing.response.sourceContentHash !== frozenDouyin.sourceContentHash
+        || existing.response.contentBindingHash !== frozenDouyin.contentBindingHash
+        || JSON.stringify(existing.response.imageHashes) !== JSON.stringify(frozenDouyin.imageHashes))))
       throw Object.assign(new Error("Toutiao preparation recovery must preserve the frozen content, transport and identity"), { code: "CONTENT_REJECTED" });
     const validation = await adapter.validateArticle(input);
     if (!validation.valid) throw Object.assign(new Error(validation.errors.join("；")), { code: "CONTENT_REJECTED" });
@@ -323,8 +341,13 @@ export class PublisherService {
       throw Object.assign(new Error("平台编辑器未返回图片上传完成证据，不能声明图片已插入"), { code: "UPLOAD_FAILED" });
     }
     if (selectedImage) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_PASSED", "平台编辑器已返回图片 DOM 上传证据", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
+    if (frozenDouyin && (prepared.response.sourceContentHash !== frozenDouyin.sourceContentHash
+      || prepared.response.contentBindingHash !== frozenDouyin.contentBindingHash
+      || JSON.stringify(prepared.response.imageHashes) !== JSON.stringify(frozenDouyin.imageHashes)))
+      throw Object.assign(new Error("Douyin editor preparation does not match the frozen image and content binding"), { code: "CONTENT_REJECTED" });
     const preparedResponse = { ...prepared.response, selectedImageAssetId: job.selectedImageAssetId ?? null, imageSelectionMode: job.imageSelectionMode ?? "none", imageInsertion: selectedImage ? "uploaded_verified" : "none",
-      ...(managementReconciliation ? { contentTransport: "ARTICLE_BROWSER", preparedInputHash: hashPreparedBrowserArticleInput(input), expectedCreatorId: account.externalAccountId } : {}) };
+      ...(managementReconciliation ? { contentTransport: adapter.getCapabilities().contentTransport, preparedInputHash: hashPreparedBrowserArticleInput(input), expectedCreatorId,
+        ...(job.platformKey === "douyin" ? { expectedLoginGeneration: douyinConnection?.loginGeneration } : {}) } : {}) };
     const record = managementReconciliation && existing
       ? this.repository.updatePublishRecord(existing.id, { status: "Prepared", success: false, response: preparedResponse, verificationStatus: "WaitingUser" })
       : this.repository.insertPublishRecord({ jobId: job.id, accountId: account.id, platformAccountId: account.platformAccountId, platformKey: job.platformKey, articleId: article.id, publishedUrl: null, publishedExternalId: null, success: false, response: preparedResponse, dryRun: false, status: "Prepared", publishMode: job.finalPublishMode === "PREPARE_ONLY" ? "MANUAL" : "ASSISTED", automationType: adapter.automationType, browserSessionIdHash: prepared.sessionIdHash ?? account.browserSessionId, operator: process.env.USERNAME?.trim() || process.env.USER?.trim() || "desktop-user", verificationStatus: "WaitingUser", editorOpenedAt: prepared.editorOpenedAt ?? null, titleFilled: prepared.titleFilled ?? false, bodyFilled: prepared.bodyFilled ?? false, selectedImageAssetId: job.selectedImageAssetId ?? null, imageSelectionMode: job.imageSelectionMode ?? "none" });
@@ -368,7 +391,9 @@ export class PublisherService {
         if (nextAllowedAt.getTime() > Date.now()) throw Object.assign(new Error("Account publish rate limit has not elapsed"), { code: "RATE_LIMITED" });
       }
       const effectiveBrowserExecutionMode = this.resolveBrowserExecutionMode(job.platformKey, browserExecutionMode, job.contentKind ?? "article");
-      const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: job.dryRun, manualConfirmationRequired: job.manualConfirmationRequired, ...browserIdentitySettings(account, managementReconciliation) }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
+      const douyinConnection = job.platformKey === "douyin" ? this.repository.getDouyinImageTextConnection(account.id) : null;
+      const expectedCreatorId = job.platformKey === "douyin" ? douyinConnection?.creatorId : account.externalAccountId;
+      const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: job.dryRun, manualConfirmationRequired: job.manualConfirmationRequired, ...browserIdentitySettings(account, managementReconciliation, douyinConnection) }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
       const preparedRecord = this.repository.getPublishRecordByJob(job.id);
       const usePlatformFinalSubmit = !job.dryRun && typeof adapter.finalSubmit === "function" && preparedRecord?.status === "Prepared";
       if (!job.dryRun && managementReconciliation && !usePlatformFinalSubmit) throw Object.assign(new Error("Toutiao BrowserNative requires a persisted prepared editor before final submission"), { code: "USER_ACTION_REQUIRED" });
@@ -405,19 +430,32 @@ export class PublisherService {
         });
       } else {
         const variant = job.articleVariantId ? this.repository.getArticleVariant(job.articleVariantId) : null;
-        const cover = (variant?.coverAssetId ?? article.coverAssetId) ? this.repository.getMediaAsset((variant?.coverAssetId ?? article.coverAssetId) as string) : null;
+        const cover = job.platformKey !== "douyin" && (variant?.coverAssetId ?? article.coverAssetId)
+          ? this.repository.getMediaAsset((variant?.coverAssetId ?? article.coverAssetId) as string) : null;
         const selectedImage = job.selectedImageAssetId ? this.repository.getImageAsset(job.selectedImageAssetId) : null;
         if (job.selectedImageAssetId && !selectedImage) throw Object.assign(new Error("任务所选图片不存在，已停止发布"), { code: "UPLOAD_FAILED" });
         const input = { articleId: article.id, title: variant?.title ?? article.title, body: variant?.body ?? article.body, summary: variant?.summary ?? article.summary, tags: article.tags, ...(cover ? { coverPath: cover.filePath } : {}), ...(selectedImage ? { images: [selectedImage.filePath] } : {}) };
-        if (!job.dryRun && managementReconciliation && (preparedRecord?.response.contentTransport !== "ARTICLE_BROWSER"
-          || preparedRecord.response.preparedInputHash !== hashPreparedBrowserArticleInput(input)
-          || preparedRecord.response.expectedCreatorId !== account.externalAccountId)) throw Object.assign(new Error("Toutiao prepared content, transport or stable account binding changed; prepare and confirm again"), { code: "CONTENT_REJECTED" });
+        if (!job.dryRun && job.platformKey === "douyin") {
+          if (!selectedImage || job.imageSelectionMode !== "manual" || selectedImage.brandId !== article.brandId)
+            throw Object.assign(new Error("Douyin image binding is missing or no longer belongs to this Article brand"), { code: "CONTENT_REJECTED" });
+          const frozen = await freezeDouyinImageText({ articleId: article.id, accountId: account.id,
+            creatorId: expectedCreatorId ?? "", title: input.title, body: input.body,
+            imagePaths: [selectedImage.filePath], topics: [], visibility: "public", scheduledAt: null });
+          if (preparedRecord?.response.sourceContentHash !== frozen.sourceContentHash
+            || preparedRecord?.response.contentBindingHash !== frozen.contentBindingHash
+            || JSON.stringify(preparedRecord?.response.imageHashes) !== JSON.stringify(frozen.imageHashes))
+            throw Object.assign(new Error("Douyin prepared title, body, account or image bytes changed"), { code: "CONTENT_REJECTED" });
+        }
+        if (!job.dryRun && managementReconciliation && (preparedRecord?.response.contentTransport !== adapter.getCapabilities().contentTransport
+          || preparedRecord?.response.preparedInputHash !== hashPreparedBrowserArticleInput(input)
+          || preparedRecord?.response.expectedCreatorId !== expectedCreatorId
+          || job.platformKey === "douyin" && preparedRecord?.response.expectedLoginGeneration !== douyinConnection?.loginGeneration)) throw Object.assign(new Error("Browser prepared content, transport or stable account binding changed; prepare and confirm again"), { code: "CONTENT_REJECTED" });
         if (adapter.validateArticle) {
           const validation = await adapter.validateArticle(input);
           if (!validation.valid) throw Object.assign(new Error(validation.errors.join("; ")), { code: "CONTENT_REJECTED" });
         }
         const profile = this.repository.getPlatformProfile(job.platformKey);
-        if (profile) {
+        if (profile && job.platformKey !== "douyin") {
           const validation = validatePlatformArticle(input, profile);
           if (!validation.valid) throw Object.assign(new Error(validation.errors.join("; ")), { code: "CONTENT_REJECTED" });
         }
@@ -477,7 +515,7 @@ export class PublisherService {
         ...result,
         response: {
           ...result.response,
-          ...(managementReconciliation ? { contentTransport: "ARTICLE_BROWSER", preparedInputHash: preparedRecord?.response.preparedInputHash,
+          ...(managementReconciliation ? { contentTransport: adapter.getCapabilities().contentTransport, preparedInputHash: preparedRecord?.response.preparedInputHash,
             expectedCreatorId: preparedRecord?.response.expectedCreatorId } : {}),
           selectedImageAssetId: job.selectedImageAssetId ?? null,
           imageSelectionMode: job.imageSelectionMode ?? "none",

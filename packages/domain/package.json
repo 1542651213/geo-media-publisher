@@ -3,5 +3,5 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts", "./toutiao-hash": "./src/toutiao-hash.ts" }
+  "exports": { ".": "./src/index.ts", "./toutiao-hash": "./src/toutiao-hash.ts", "./douyin-image-text": "./src/douyin-image-text.ts" }
 }

@@ -4,7 +4,7 @@ export type TextMeasurementStrategy = "js_length" | "weighted_cjk";
 export interface TitleConstraint { minimum?: number; maximum?: number; measurement: TextMeasurementStrategy; provenance: RuleProvenance }
 export interface RemoteScheduleConstraint { supportsRemoteScheduling: boolean; minimumLeadTimeMs?: number; maximumFutureWindowMs?: number; provenance: RuleProvenance }
 export interface CoverConstraint { supportedModes: readonly ToutiaoCoverMode[]; maximumImages?: number; provenance: RuleProvenance }
-export type ContentTransport = "ARTICLE_BROWSER" | "ARTICLE_WEB_API" | "VIDEO_OFFICIAL_API";
+export type ContentTransport = "ARTICLE_BROWSER" | "ARTICLE_WEB_API" | "VIDEO_OFFICIAL_API" | "DOUYIN_IMAGE_TEXT_BROWSER";
 
 /** Only fields that can change the remote article are part of this projection. */
 export interface ToutiaoContentBindingInput {

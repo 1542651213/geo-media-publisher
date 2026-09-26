@@ -114,7 +114,10 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
 export function registerIpc(deps: IpcDependencies): void {
   processDiagnostics = deps.processDiagnostics ?? null;
   const { repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir, logger, credentials, aiCredentials } = deps;
-  const listPlatformViews = (): ReturnType<AppRepository["listPlatforms"]> => addAccountConnectionModes(repository.listPlatforms(), registry);
+  const listPlatformViews = (): ReturnType<AppRepository["listPlatforms"]> => addAccountConnectionModes(repository.listPlatforms(), registry).map((platform) =>
+    platform.platformKey === "douyin" ? { ...platform,
+      capabilities: { ...platform.capabilities, article: true, imagePost: true, maxImageCount: 1,
+        scheduledPublish: false, draft: false, tags: false } } : platform);
   const createUserAction = (triggerSource: Exclude<ExternalLaunchTriggerSource, "APP_STARTUP">): UserInitiatedAction => {
     const action = { userActionId: randomUUID(), triggerSource } satisfies UserInitiatedAction;
     assertExternalLaunchAllowed(action);
@@ -131,6 +134,9 @@ export function registerIpc(deps: IpcDependencies): void {
       settings: {
         triggerSource: action?.triggerSource ?? "APP_STARTUP",
         ...(platformKey === "toutiao" && account.externalAccountId ? { expectedCreatorId: account.externalAccountId } : {}),
+        ...(platformKey === "douyin" && repository.getDouyinImageTextConnection(accountId)?.active
+          ? { expectedCreatorId: repository.getDouyinImageTextConnection(accountId)!.creatorId,
+            expectedLoginGeneration: repository.getDouyinImageTextConnection(accountId)!.loginGeneration } : {}),
         ...(action?.userActionId ? { userActionId: action.userActionId } : {})
       },
       secrets: resolveAccountSecrets(accountId, platformKey)
@@ -975,6 +981,10 @@ export function registerIpc(deps: IpcDependencies): void {
     }
     return repository.listAccounts().map((account) => {
       const registeredAdapter = registry.tryGetForConnection(account.platformKey);
+      const douyinImageTextAdapter = account.platformKey === "douyin" ? registry.getForContent("douyin", "article") : null;
+      const douyinImageTextConnection = account.platformKey === "douyin" ? repository.getDouyinImageTextConnection(account.id) : null;
+      const douyinImageTextRuntime = douyinImageTextAdapter && isAutomationAdapter(douyinImageTextAdapter)
+        ? douyinImageTextAdapter.getBrowserRuntimeState?.(accountContext(account.id, "douyin"))?.state : null;
       const toutiaoRuntime = account.platformKey === "toutiao" ? toutiaoSessionActivation.status(account.id) : null;
       const browserConnecting = registeredAdapter ? isAutomationAdapter(registeredAdapter) && registeredAdapter.isConnectionPending(accountContext(account.id, account.platformKey)) : false;
       const runtimeAuthState = account.platformKey === "xiaohongshu" && registeredAdapter && isAutomationAdapter(registeredAdapter)
@@ -993,6 +1003,7 @@ export function registerIpc(deps: IpcDependencies): void {
         : account.loginStatus === "logged_in" ? "Connected" : account.loginStatus === "expired" ? "Expired" : account.loginStatus === "needs_user_action" ? (browserConnecting || oauthSessions.isPending(account.id, account.platformKey)) ? "Connecting" : "NeedsLogin" : account.loginStatus === "unknown" ? "Error" : "NotConnected";
       return {
       account,
+      imageTextCreatorReady: Boolean(douyinImageTextConnection?.active && douyinImageTextRuntime === "AUTHENTICATED"),
       platform: platforms.find((item) => item.platformKey === account.platformKey) ?? null,
       credentialStatus: readCredentialStatus(account.id, account.platformKey),
       lastDryRunAt: lastDryRunAt.get(`${account.id}:${account.platformKey}`) ?? null,
@@ -1039,8 +1050,9 @@ export function registerIpc(deps: IpcDependencies): void {
     return readCredentialStatus(input.accountId, input.platformKey);
   });
   register("accounts:begin-login", async (_event, payload) => {
-    const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);
-    const adapter = registry.getForConnection(input.platformKey);
+    const input = z.object({ accountId: idSchema, platformKey: idSchema, contentKind: z.enum(["article", "video"]).optional() }).parse(payload);
+    if (input.contentKind && (input.platformKey !== "douyin" || input.contentKind !== "article")) throw new Error("Unsupported content-specific account login route");
+    const adapter = input.contentKind === "article" ? registry.getForContent("douyin", "article") : registry.getForConnection(input.platformKey);
     const action = createUserAction("CONNECT_ACCOUNT");
     if (input.platformKey === "cnblogs") {
       const status = await adapter.checkLogin(accountContext(input.accountId, input.platformKey, action));
@@ -1049,7 +1061,7 @@ export function registerIpc(deps: IpcDependencies): void {
       return { sessionId: `cnblogs-pat-${Date.now()}`, requiresUserAction: status !== "logged_in", opened: false, authStrategy: adapter.manifest.authStrategy, callbackStrategy: adapter.manifest.callbackStrategy, message: status === "logged_in" ? "博客园 PAT 连接验证通过" : "博客园 PAT 尚未通过连接验证" };
     }
     if (isAutomationAdapter(adapter)) {
-      repository.updateAccount(input.accountId, { loginStatus: "needs_user_action", pausedReason: "等待用户在官方浏览器完成登录和安全验证" });
+      if (input.contentKind !== "article") repository.updateAccount(input.accountId, { loginStatus: "needs_user_action", pausedReason: "等待用户在官方浏览器完成登录和安全验证" });
       try {
         return await adapter.connectAccount(accountContext(input.accountId, input.platformKey, action));
       } catch (error) {
@@ -1063,15 +1075,16 @@ export function registerIpc(deps: IpcDependencies): void {
     return oauthSessions.begin(input.accountId, input.platformKey, action);
   });
   register("accounts:complete-login", async (_event, payload) => {
-    const input = z.object({ accountId: idSchema, platformKey: idSchema, callbackUrl: z.string().max(8192), pendingLogin: z.object({ accountId: idSchema, platformKey: idSchema }).optional() }).parse(payload);
+    const input = z.object({ accountId: idSchema, platformKey: idSchema, contentKind: z.enum(["article", "video"]).optional(), callbackUrl: z.string().max(8192), pendingLogin: z.object({ accountId: idSchema, platformKey: idSchema, contentKind: z.enum(["article", "video"]).optional() }).optional() }).parse(payload);
+    if (input.contentKind && (input.platformKey !== "douyin" || input.contentKind !== "article")) throw new Error("Unsupported content-specific account login route");
     const action = createUserAction("CONNECT_ACCOUNT");
     logger.info("ACCOUNT", "COMPLETE_LOGIN_REQUEST", "收到 Renderer 完成登录请求", { platformKey: input.platformKey, accountId: input.accountId, userActionId: action.userActionId, pendingLogin: input.pendingLogin ?? null, timestamp: new Date().toISOString() });
-    if (input.pendingLogin && (input.pendingLogin.accountId !== input.accountId || input.pendingLogin.platformKey !== input.platformKey)) {
+    if (input.pendingLogin && (input.pendingLogin.accountId !== input.accountId || input.pendingLogin.platformKey !== input.platformKey || input.pendingLogin.contentKind !== input.contentKind)) {
       logger.warn("ACCOUNT", "COMPLETE_LOGIN_ACCOUNT_ID_MISMATCH", "Renderer pendingLogin 与 IPC 请求不一致，已停止 Adapter 调查", { requestedAccountId: input.accountId, requestedPlatformKey: input.platformKey, pendingLoginAccountId: input.pendingLogin.accountId, pendingLoginPlatformKey: input.pendingLogin.platformKey, userActionId: action.userActionId });
       logger.info("ACCOUNT", "COMPLETE_CONNECTION_ENTERED", "Adapter 未进入：Renderer accountId mismatch", { entered: false, accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId });
       throw new Error("COMPLETE_LOGIN_ACCOUNT_ID_MISMATCH: Renderer pendingLogin 与请求账号不一致");
     }
-    const adapter = registry.getForConnection(input.platformKey);
+    const adapter = input.contentKind === "article" ? registry.getForContent("douyin", "article") : registry.getForConnection(input.platformKey);
     if (isAutomationAdapter(adapter)) {
       const completedContext = accountContext(input.accountId, input.platformKey, action);
       const debugState = adapter.getBrowserConnectionDebugState?.(completedContext);
@@ -1085,12 +1098,29 @@ export function registerIpc(deps: IpcDependencies): void {
         throw error;
       }
       if (status !== "logged_in") {
-        repository.updateAccount(input.accountId, { loginStatus: "needs_user_action", pausedReason: "浏览器仍停留在登录或安全验证页面" });
+        if (input.contentKind !== "article") repository.updateAccount(input.accountId, { loginStatus: "needs_user_action", pausedReason: "浏览器仍停留在登录或安全验证页面" });
         const result = { configured: false, accountStatus: "NeedsLogin" as const, authorizationStatus: "Unknown" as const, accountId: null, accountName: null, scopes: [], expiresAt: null };
         logger.info("ACCOUNT", "COMPLETE_LOGIN_RESPONSE", "主进程完成登录结果", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, status, reason: "CHECK_LOGIN_NOT_PASSED", errorCode: null, resultContract: { configured: result.configured, accountStatus: result.accountStatus, authorizationStatus: result.authorizationStatus } });
         return result;
       }
       const profile = adapter.getAccountProfile ? await adapter.getAccountProfile(completedContext) : undefined;
+      if (input.platformKey === "douyin" && input.contentKind === "article") {
+        if (!profile?.accountId) throw new Error("Douyin Creator stable identity is required");
+        const prior = repository.getDouyinImageTextConnection(input.accountId);
+        if (prior?.active && prior.creatorId !== profile.accountId)
+          throw new Error("Douyin Creator identity changed; disconnect the old image-text binding before connecting another account");
+        await adapter.persistConnectionSession?.(completedContext);
+        const sessionEvidence = await adapter.getBrowserSessionEvidence?.(completedContext);
+        if (!sessionEvidence || sessionEvidence.accountId !== input.accountId || sessionEvidence.platformKey !== "douyin")
+          throw new Error("Douyin account-scoped Browser Session evidence is missing");
+        const binding = repository.saveDouyinImageTextConnection({ accountId: input.accountId,
+          creatorId: profile.accountId, browserSessionIdHash: sessionEvidence.sessionIdHash });
+        await adapter.releaseConnectionPage?.(completedContext);
+        logger.info("ACCOUNT", "DOUYIN_IMAGE_TEXT_LOGIN_VERIFIED", "抖音图文账号身份和受控浏览器会话已绑定", {
+          accountId: input.accountId, creatorId: profile.accountId, loginGeneration: binding.loginGeneration,
+          browserSessionIdHash: sessionEvidence.sessionIdHash });
+        return browserAccountConnectionResult(repository.getAccountById(input.accountId, "douyin")!);
+      }
       const archivedAccount = profile?.accountId ? repository.findArchivedAccountByExternalIdForConnection(input.accountId, input.platformKey, profile.accountId) : null;
       const effectiveAccountId = archivedAccount?.id ?? input.accountId;
       const effectiveContext = effectiveAccountId === input.accountId ? completedContext : accountContext(effectiveAccountId, input.platformKey, action, true);
@@ -1128,10 +1158,12 @@ export function registerIpc(deps: IpcDependencies): void {
     return oauthSessions.refresh(input.accountId, input.platformKey);
   });
   register("accounts:cancel-login", async (_event, payload) => {
-    const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);
-    const adapter = registry.getForConnection(input.platformKey);
+    const input = z.object({ accountId: idSchema, platformKey: idSchema, contentKind: z.literal("article").optional() }).parse(payload);
+    if (input.contentKind && input.platformKey !== "douyin") throw new Error("Unsupported content-specific account login route");
+    const adapter = input.contentKind === "article" ? registry.getForContent("douyin", "article") : registry.getForConnection(input.platformKey);
     if (!isAutomationAdapter(adapter) || !adapter.cancelConnection) throw new Error("该平台没有可取消的浏览器连接会话");
     await adapter.cancelConnection(accountContext(input.accountId, input.platformKey, createUserAction("CONNECT_ACCOUNT")));
+    if (input.contentKind === "article") return { loginStatus: repository.getAccountById(input.accountId, input.platformKey)?.loginStatus ?? "unknown" };
     repository.updateAccount(input.accountId, { loginStatus: "logged_out", pausedReason: "连接已取消" });
     return { loginStatus: "logged_out" as const };
   });
@@ -1141,6 +1173,11 @@ export function registerIpc(deps: IpcDependencies): void {
     if (!account) throw new Error("账号与平台不匹配");
     const adapter = registry.getForConnection(input.platformKey);
     const action = createUserAction("CONNECT_ACCOUNT");
+    if (input.platformKey === "douyin") {
+      const imageAdapter = registry.getForContent("douyin", "article");
+      if (isAutomationAdapter(imageAdapter)) await imageAdapter.logout(accountContext(input.accountId, "douyin", action, true));
+      repository.disconnectDouyinImageTextConnection(input.accountId);
+    }
     let result: AccountDisconnectResult;
     if (isAutomationAdapter(adapter)) {
       const context = accountContext(input.accountId, input.platformKey, action, true);

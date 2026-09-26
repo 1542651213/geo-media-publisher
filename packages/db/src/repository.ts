@@ -1910,6 +1910,36 @@ export class AppRepository {
     return toAccount(this.db.prepare("SELECT * FROM accounts WHERE id=?").get(input.accountId) as Row);
   }
 
+  getDouyinImageTextConnection(accountId: string): { creatorId: string; browserSessionIdHash: string; loginGeneration: number; active: boolean; verifiedAt: string } | null {
+    const row = this.db.prepare("SELECT creator_id,browser_session_id_hash,login_generation,active,verified_at FROM douyin_image_text_connections WHERE account_id=?").get(accountId) as Row | undefined;
+    return row ? { creatorId: textValue(row.creator_id), browserSessionIdHash: textValue(row.browser_session_id_hash),
+      loginGeneration: intValue(row.login_generation), active: intValue(row.active) === 1, verifiedAt: textValue(row.verified_at) } : null;
+  }
+
+  saveDouyinImageTextConnection(input: { accountId: string; creatorId: string; browserSessionIdHash: string }): { loginGeneration: number } {
+    const account = this.getAccountById(input.accountId, "douyin");
+    if (!account || !input.creatorId.trim() || !input.browserSessionIdHash.trim()) throw new Error("Douyin image-text account and identity are required");
+    return this.db.transaction(() => {
+      const duplicate = this.db.prepare("SELECT account_id FROM douyin_image_text_connections WHERE creator_id=? AND active=1 AND account_id<>?").get(input.creatorId, input.accountId) as Row | undefined;
+      if (duplicate) throw new Error("Douyin Creator identity is already bound to another active account");
+      const timestamp = now();
+      const prior = this.getDouyinImageTextConnection(input.accountId);
+      const loginGeneration = (prior?.loginGeneration ?? 0) + 1;
+      this.db.prepare(`INSERT INTO douyin_image_text_connections
+        (account_id,creator_id,browser_session_id_hash,login_generation,active,verified_at,updated_at)
+        VALUES (?,?,?,?,1,?,?) ON CONFLICT(account_id) DO UPDATE SET
+        creator_id=excluded.creator_id,browser_session_id_hash=excluded.browser_session_id_hash,
+        login_generation=excluded.login_generation,active=1,verified_at=excluded.verified_at,updated_at=excluded.updated_at`)
+        .run(input.accountId, input.creatorId, input.browserSessionIdHash, loginGeneration, timestamp, timestamp);
+      this.db.prepare("UPDATE accounts SET enabled=1,updated_at=? WHERE id=? AND platform_key='douyin'").run(timestamp, input.accountId);
+      return { loginGeneration };
+    })();
+  }
+
+  disconnectDouyinImageTextConnection(accountId: string): void {
+    this.db.prepare("UPDATE douyin_image_text_connections SET active=0,login_generation=login_generation+1,updated_at=? WHERE account_id=?").run(now(), accountId);
+  }
+
   markPlatformAccountDisconnected(accountId: string, platformKey: string, authorizationType = "BrowserAutomation"): Account {
     const current = this.db.prepare("SELECT * FROM accounts WHERE id=? AND platform_key=?").get(accountId, platformKey) as Row | undefined;
     if (!current) throw new Error("账号不存在");
@@ -2181,7 +2211,13 @@ export class AppRepository {
     this.assertArticlePublishAllowed(article.id);
     const account = this.listAccounts().find((item) => item.platformAccountId === input.platformAccountId && item.platformKey === input.platformKey);
     if (!account) throw new Error("目标平台账号不存在");
-    if (!account.enabled || account.loginStatus !== "logged_in") throw new Error("目标账号未连接，禁止创建发布任务");
+    if (input.platformKey === "douyin") {
+      const connection = this.getDouyinImageTextConnection(account.id);
+      if (!account.enabled || !connection?.active || !connection.creatorId)
+        throw new Error("抖音图文 Creator 账号未完成独立身份绑定，禁止创建发布任务");
+      if (input.imageSelectionMode !== "manual" || !input.selectedImageAssetId)
+        throw new Error("抖音图文必须手动选择一张属于当前文章品牌的图片");
+    } else if (!account.enabled || account.loginStatus !== "logged_in") throw new Error("目标账号未连接，禁止创建发布任务");
     const requestedImageMode = input.imageSelectionMode ?? "none";
     let selectedImageAssetId = input.selectedImageAssetId ?? null;
     if (selectedImageAssetId) {
@@ -2434,12 +2470,15 @@ export class AppRepository {
     this.db.prepare("INSERT INTO toutiao_article_job_preparations (job_id,account_id,article_id,settings_version,content_transport,settings_json,created_at) VALUES (?,?,?,?,'ARTICLE_WEB_API',?,?)").run(job.id, job.accountId, job.articleId, normalized.version, serialized, now());
   }
 
-  getFrozenContentTransport(jobId: string): "ARTICLE_WEB_API" | "ARTICLE_BROWSER" | null {
+  getFrozenContentTransport(jobId: string): "ARTICLE_WEB_API" | "ARTICLE_BROWSER" | "DOUYIN_IMAGE_TEXT_BROWSER" | null {
     const row = this.db.prepare("SELECT content_transport FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
     const job = this.getJob(jobId);
     const native = job?.platformKey === "toutiao" && this.getPublishRecordByJob(jobId)?.response.contentTransport === "ARTICLE_BROWSER";
     if (native && row?.content_transport === "ARTICLE_WEB_API") throw new Error("Conflicting frozen Toutiao content transport");
     if (native) return "ARTICLE_BROWSER";
+    const douyin = job?.platformKey === "douyin" && (job.contentKind ?? "article") === "article"
+      && this.getPublishRecordByJob(jobId)?.response.contentTransport === "DOUYIN_IMAGE_TEXT_BROWSER";
+    if (douyin) return "DOUYIN_IMAGE_TEXT_BROWSER";
     return row?.content_transport === "ARTICLE_WEB_API" ? "ARTICLE_WEB_API" : null;
   }
 
