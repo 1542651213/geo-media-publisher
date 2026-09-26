@@ -1,11 +1,11 @@
 import type { CDPSession, Locator, Page } from "playwright-core";
 import { basename } from "node:path";
 import { readFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { type AccountContext, type AccountProfile, type LoginStatus,
   type PublishArticleInput, type PublishResult, type PublishStatusResult, type ValidationResult } from "@publisher/domain";
 import { assertDouyinImageTextReadback, freezeDouyinImageText, verifyDouyinImageTextImage,
-  type FrozenDouyinImageText } from "@publisher/domain/douyin-image-text";
+  type FrozenDouyinImageText, type DouyinMusicBinding } from "@publisher/domain/douyin-image-text";
 import type { AutomationPrepareResult, BrowserPublishAttemptContext, BrowserPublishReconciliationInput, BrowserPublishReconciliationResult } from "@publisher/adapters-core";
 import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomationAdapterOptions, type BrowserPlatformDefinition } from "@publisher/adapters-browser";
 import { assertDouyinEditorSettings, protectExistingDouyinDraft,
@@ -15,6 +15,8 @@ import { observeDouyinImageEditor, selectAndObserveDouyinImage } from "./image-t
 import { inspectDouyinManagementControls, inspectDouyinManagementReadOnlyNavigation } from "./image-text-management-preflight";
 import { inspectDouyinBodyPage, type DouyinBodyPageDiagnostic } from "./image-text-body-diagnostic";
 import { readDouyinBodyText, type DouyinBodyReadback } from "./image-text-body-readback";
+import { chooseDouyinMusic, douyinMusicIdentityKey, douyinMusicRowSelector, inspectRecommendedDouyinMusic,
+  readSelectedDouyinMusic, type DouyinMusicIdentity } from "./image-text-music";
 export { selectAndObserveDouyinImage } from "./image-text-upload";
 
 const creatorHome = "https://creator.douyin.com/creator-micro/home";
@@ -136,6 +138,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     loginGeneration: number; sessionIdHash: string; imageSha256: string; sourceContentHash: string }) =>
     { operationId: string; stage: "FILE_SELECTION_DISPATCHED"; newlyClaimed: boolean };
   private readonly finalSubmitUsed = new Set<string>();
+  private readonly musicSelectionUsed = new Set<string>();
   private readonly verifiedIdentity = new Map<string, { page: Page; context: ReturnType<Page["context"]>; sessionIdHash: string; creatorId: string; verifiedAt: number }>();
 
   constructor(options: BrowserAutomationAdapterOptions & { nativeSubmitEnabled?: boolean;
@@ -533,7 +536,57 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     const finalCount = await finalControl.count();
     const settings = await this.readEditorSettings(page);
     assertDouyinEditorSettings(settings, visibility);
-    const frozen = await freezeDouyinImageText({ ...source, mandatorySelections: settings.selectedMandatory });
+    const musicMode = ctx.settings.expectedMusicMode === "AUTO_RECOMMENDED" ? "AUTO_RECOMMENDED" : "NONE";
+    let musicBinding: DouyinMusicBinding = { mode: "NONE" };
+    let musicResult = "SKIPPED_OPTIONAL";
+    let musicCandidateCount = 0;
+    let musicEligibleCount = 0;
+    let musicRecentExcludedCount = 0;
+    let musicSelectionOperationId: string | null = null;
+    if (musicMode === "AUTO_RECOMMENDED") {
+      let recent: DouyinMusicIdentity[] = [];
+      try {
+        const value: unknown = JSON.parse(String(ctx.settings.recentDouyinMusicJson ?? "[]"));
+        if (!Array.isArray(value)) throw new Error("DOUYIN_RECENT_MUSIC_INVALID");
+        recent = value.filter((item): item is DouyinMusicIdentity => item && typeof item === "object"
+          && typeof item.title === "string" && typeof item.artist === "string" && typeof item.duration === "string"
+          && (item.trackId === null || typeof item.trackId === "string")).slice(0, 10);
+      } catch { throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_RECENT_MUSIC_INVALID"); }
+      try {
+        const inspected = await inspectRecommendedDouyinMusic(page);
+        musicCandidateCount = inspected.candidates.length;
+        const decision = chooseDouyinMusic(inspected.candidates, recent);
+        musicEligibleCount = decision.eligibleCount;
+        musicRecentExcludedCount = decision.recentExcludedCount;
+        if (decision.selected) {
+          const selected = decision.selected;
+          const identity = douyinMusicIdentityKey(selected);
+          const row = selected.rowIndex === undefined ? null : page.locator(douyinMusicRowSelector).nth(selected.rowIndex);
+          if (!identity || !row || !await row.isVisible() || !((await row.innerText()).includes(selected.title)))
+            throw new BrowserAutomationError("PLATFORM_CHANGED", "DOUYIN_MUSIC_ROW_CHANGED_BEFORE_SELECTION");
+          if (!jobId || this.musicSelectionUsed.has(jobId))
+            throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_MUSIC_SELECTION_ALREADY_DISPATCHED");
+          musicSelectionOperationId = randomUUID();
+          this.musicSelectionUsed.add(jobId);
+          try { await row.click({ timeout: 10_000 }); }
+          catch { throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_MUSIC_SELECTION_RESULT_UNKNOWN"); }
+          await page.keyboard.press("Escape");
+          const observed = await readSelectedDouyinMusic(page);
+          if (!observed.selected || observed.title !== selected.title
+            || observed.artist !== null && observed.artist !== selected.artist
+            || observed.duration !== null && observed.duration !== selected.duration)
+            throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_MUSIC_READBACK_MISMATCH");
+          musicBinding = { mode: "AUTO_RECOMMENDED", identity, trackId: selected.trackId,
+            title: selected.title, artist: selected.artist, duration: selected.duration };
+          musicResult = "SELECTED_VERIFIED";
+        } else if (inspected.entryFound) await page.keyboard.press("Escape");
+      } catch (error) {
+        if (musicSelectionOperationId) throw error;
+        await page.keyboard.press("Escape").catch(() => undefined);
+        musicResult = "SKIPPED_OPTIONAL";
+      }
+    }
+    const frozen = await freezeDouyinImageText({ ...source, mandatorySelections: settings.selectedMandatory, musicBinding });
     assertDouyinImageTextReadback(frozen, { accountId: ctx.accountId, creatorId,
       contextOwned: page.context() === owned.session.context, sessionActive: !page.isClosed(),
       pageHost: new URL(page.url()).host, title: titleReadback, body: bodyReadback.semanticText, imageCount,
@@ -546,6 +599,8 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
         imageAssociation: resumeDraft ? "owner_confirmed_resume" : "new_upload_verified",
         contentTransport: "DOUYIN_IMAGE_TEXT_BROWSER", imageHashes: frozen.imageHashes,
         sourceContentHash: frozen.sourceContentHash, contentBindingHash: frozen.contentBindingHash,
+        musicModeRequested: musicMode, musicBinding, musicResult, musicCandidateCount,
+        musicEligibleCount, musicRecentExcludedCount, musicSelectionOperationId,
         expectedCreatorId: creatorId, settingsSnapshot: settings, mandatorySelections: settings.selectedMandatory,
         rawBodyUtf16Length: bodyReadback.rawInnerText.length,
         rawTextContentUtf16Length: bodyReadback.rawTextContent.length,
@@ -589,6 +644,14 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     if (article.title !== prepared.frozen.title || article.body !== prepared.frozen.body || article.images?.length !== 1
       || article.images[0] !== prepared.frozen.imagePaths[0] || !await verifyDouyinImageTextImage(prepared.frozen, 0))
       throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_PREPARED_CONTENT_OR_IMAGE_CHANGED");
+    const selectedMusic = await readSelectedDouyinMusic(page);
+    const expectedMusic = prepared.frozen.musicBinding;
+    if (expectedMusic?.mode === "AUTO_RECOMMENDED"
+      ? !selectedMusic.selected || selectedMusic.title !== expectedMusic.title
+        || selectedMusic.artist !== null && selectedMusic.artist !== expectedMusic.artist
+        || selectedMusic.duration !== null && selectedMusic.duration !== expectedMusic.duration
+      : selectedMusic.selected)
+      throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_MUSIC_READBACK_MISMATCH");
     const bodyReadback = await readDouyinBodyText(page);
     assertDouyinImageTextReadback(prepared.frozen, { accountId: ctx.accountId, creatorId: expectedCreatorId,
       contextOwned: true, sessionActive: true, pageHost: new URL(page.url()).host,

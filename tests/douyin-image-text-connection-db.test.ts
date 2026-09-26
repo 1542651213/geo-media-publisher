@@ -131,4 +131,34 @@ describe("Douyin image/text Creator binding", () => {
       externalId: "7361234567890123456" });
     expect({ jobs: repo.listJobs().length, records: repo.getPublishRecords().length }).toEqual(before);
   });
+
+  it("keeps a pre-claim management or body failure recoverable without classifying a remote submit", () => {
+    const repo = setup();
+    repo.setSetting("contentReviewMode", "Off");
+    const brand = repo.createBrand({ name: "Test", companyName: "Test" });
+    const account = repo.createAccount({ platformKey: "douyin", name: "Owner" });
+    repo.saveDouyinImageTextConnection({ accountId: account.id, creatorId: "72388977613", browserSessionIdHash: "hash-1" });
+    const article = repo.createArticle({ brandId: brand.id, title: "空气测试", body: "测试正文", summary: "", tags: [],
+      seoKeywords: [], topic: "test", keyword: "test", city: "", articleType: "科普", aiProvider: "fixture", aiModel: "fixture",
+      generatedAt: new Date().toISOString(), reusePolicy: "once", contentHash: "f".repeat(64), qualityStatus: "passed",
+      qualityWarnings: [], source: "production" });
+    if (!article) throw new Error("fixture Article unavailable");
+    const image = repo.createImageAsset({ brandId: brand.id, name: "Test", filePath: "C:/owner/test.png",
+      originalFileName: "test.png", mimeType: "image/png", size: 10 });
+    const job = repo.createArticlePublishJob({ articleId: article.id, platformKey: "douyin", platformAccountId: account.id,
+      imageSelectionMode: "manual", selectedImageAssetId: image.id,
+      douyinImageTextSettings: { version: 1, visibility: "public", timing: "immediate", musicMode: "AUTO_RECOMMENDED" } });
+    expect(repo.getDouyinImageTextJobSettings(job.id)?.musicMode).toBe("AUTO_RECOMMENDED");
+    repo.insertPublishRecord({ jobId: job.id, accountId: account.id, platformKey: "douyin", articleId: article.id,
+      publishedUrl: null, publishedExternalId: null, success: false, status: "Prepared", response: { musicBinding: { mode: "NONE" } } });
+    repo.confirmJob(job.id, false);
+    const intent = repo.prepareSubmissionIntent(job.id);
+    const waiting = repo.resetSubmissionIntentForUserAction(intent.id, "PLATFORM_CHANGED");
+    expect(waiting.status).toBe("NeedsUserAction");
+    expect(repo.getSubmissionIntentByJob(job.id)).toMatchObject({ state: "Prepared", finalSubmitCount: 0,
+      submitBoundaryEnteredAt: null, submissionAttemptId: null });
+    expect(repo.getRecentDouyinImageTextMusic(account.id)).toEqual([]);
+    repo.claimFinalSubmitAttempt(intent.id);
+    expect(() => repo.resetSubmissionIntentForUserAction(intent.id, "TIMEOUT")).toThrow("cannot be reset");
+  });
 });

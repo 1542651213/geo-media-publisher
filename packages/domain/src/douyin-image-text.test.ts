@@ -52,6 +52,17 @@ describe("Douyin image-text content binding", () => {
     expect(a.sourceContentHash).not.toBe(c.sourceContentHash);
   });
 
+  it("binds exact optional music and distinguishes it from no music", async () => {
+    const path = await imagePath();
+    const base = { articleId: "article-music", accountId: "account-1", creatorId: "creator-1", title: "科普", body: "正文", imagePaths: [path], topics: [], visibility: "public" as const, scheduledAt: null };
+    const none = await freezeDouyinImageText({ ...base, musicBinding: { mode: "NONE" } });
+    const first = await freezeDouyinImageText({ ...base, musicBinding: { mode: "AUTO_RECOMMENDED", identity: "id:1", trackId: "1", title: "舒缓纯音乐", artist: "甲", duration: "01:30" } });
+    const second = await freezeDouyinImageText({ ...base, musicBinding: { mode: "AUTO_RECOMMENDED", identity: "id:2", trackId: "2", title: "清新轻音乐", artist: "乙", duration: "02:00" } });
+    expect(first.contentBindingHash).not.toBe(none.contentBindingHash);
+    expect(first.contentBindingHash).not.toBe(second.contentBindingHash);
+    expect(first.sourceContentHash).not.toBe(second.sourceContentHash);
+  });
+
   it("requires the same owned, active Creator session and exact editor readback", async () => {
     const path = await imagePath();
     const frozen = await freezeDouyinImageText({ articleId: "article-1", accountId: "account-1", creatorId: "72388977613", title: "测试标题", body: "测试正文", imagePaths: [path], topics: [], visibility: "public", scheduledAt: null });

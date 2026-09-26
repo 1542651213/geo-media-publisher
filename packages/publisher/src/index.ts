@@ -2,13 +2,23 @@ import { createHash } from "node:crypto";
 import { isAutomationAdapter, withUserInitiatedActionSettings, type AdapterRegistry, type BrowserExecutionMode, type BrowserPublishAttemptContext, type BrowserPublishReconciliationResult, type PlatformAdapter, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { AppRepository } from "@publisher/db";
 import { canReuseArticle, decideFailure, validatePlatformArticle, type Account, type AdapterManifest, type ErrorCode, type PlatformCapability, type PublishArticleInput, type PublishJob, type PublishMode, type PublishResult, type PublishStatusResult, type PublishVideoInput } from "@publisher/domain";
-import { freezeDouyinImageText } from "@publisher/domain/douyin-image-text";
+import { freezeDouyinImageText, type DouyinMusicBinding } from "@publisher/domain/douyin-image-text";
 import type { Logger } from "@publisher/logger";
 import { GlobalPublishExecutionGate } from "./global-publish-execution-gate";
 export { GlobalPublishExecutionGate } from "./global-publish-execution-gate";
 
 export interface PublishExecutionResult { job: PublishJob; message: string; }
 export interface AssistedPrepareResult { job: PublishJob; record: ReturnType<AppRepository["getPublishRecordByJob"]>; message: string; }
+
+/** Only the Douyin image-post route can prove a failed preflight never reserved a final attempt. */
+export function douyinPreBoundaryFailure(input: { platformKey: string; platformFinalSubmitPath: boolean;
+  sideEffectTriggered: boolean; intent: { state: string; finalSubmitCount: number;
+    submitBoundaryEnteredAt: string | null; submissionAttemptId: string | null } | null }): boolean {
+  const { intent } = input;
+  return input.platformKey === "douyin" && input.platformFinalSubmitPath && !input.sideEffectTriggered
+    && intent?.state === "Prepared" && intent.finalSubmitCount === 0
+    && !intent.submitBoundaryEnteredAt && !intent.submissionAttemptId;
+}
 
 export interface PublisherOptions {
   resolveSecrets?: (accountId: string, platformKey: string) => Record<string, string>;
@@ -67,6 +77,19 @@ function douyinMandatorySelections(value: unknown): Array<{ key: string; value: 
   if (!Array.isArray(value) || value.some((item) => !item || typeof item !== "object" || typeof item.key !== "string" || typeof item.value !== "string"))
     throw Object.assign(new Error("Douyin mandatory settings snapshot is invalid"), { code: "CONTENT_REJECTED" });
   return value.map((item: { key: string; value: string }) => ({ key: item.key, value: item.value }));
+}
+
+function douyinMusicBinding(value: unknown): DouyinMusicBinding | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw Object.assign(new Error("Douyin music binding is invalid"), { code: "CONTENT_REJECTED" });
+  const item = value as Record<string, unknown>;
+  if (item.mode === "NONE") return { mode: "NONE" };
+  if (item.mode === "AUTO_RECOMMENDED" && typeof item.identity === "string" && typeof item.title === "string"
+    && typeof item.artist === "string" && typeof item.duration === "string"
+    && (item.trackId === null || typeof item.trackId === "string"))
+    return { mode: "AUTO_RECOMMENDED", identity: item.identity, trackId: item.trackId as string | null,
+      title: item.title, artist: item.artist, duration: item.duration };
+  throw Object.assign(new Error("Douyin music binding is invalid"), { code: "CONTENT_REJECTED" });
 }
 
 /** Persist only reviewed public-read flags; never copy arbitrary adapter response text. */
@@ -247,7 +270,7 @@ export class PublisherService {
           && verification.response.bodyMatch === true && verification.response.imageMatch === true;
         const reconciled = this.repository.reconcileJobAsPublished(job.id, { externalId: result.externalId,
           publishedUrl: result.publishedUrl ?? null, publicVerified,
-          response: { reconciliation: result.response, verification: verification.response,
+          response: { ...existingRecord?.response, reconciliation: result.response, verification: verification.response,
             publicVerification: publicVerified ? "CONFIRMED" : "LIMITED" } });
         return { job: reconciled.job, message: publicVerified
           ? `PUBLISHED_CONFIRMED: Douyin work and public page verified (PublishRecord ${reconciled.record.id})`
@@ -332,7 +355,7 @@ export class PublisherService {
     const effectiveBrowserExecutionMode = this.resolveBrowserExecutionMode(job.platformKey, browserExecutionMode, job.contentKind ?? "article");
     const douyinConnection = job.platformKey === "douyin" ? this.repository.getDouyinImageTextConnection(account.id) : null;
     const expectedCreatorId = job.platformKey === "douyin" ? douyinConnection?.creatorId : account.externalAccountId;
-    const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: false, manualConfirmationRequired: true, ...browserIdentitySettings(account, managementReconciliation, douyinConnection), ...(douyinSettings ? { expectedVisibility: douyinSettings.visibility, publishJobId: job.id } : {}) }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
+    const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: false, manualConfirmationRequired: true, ...browserIdentitySettings(account, managementReconciliation, douyinConnection), ...(douyinSettings ? { expectedVisibility: douyinSettings.visibility, expectedMusicMode: douyinSettings.musicMode ?? "NONE", recentDouyinMusicJson: JSON.stringify(this.repository.getRecentDouyinImageTextMusic(account.id)), publishJobId: job.id } : {}) }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
     const login = await withTimeout(adapter.checkLogin(ctx), this.options.loginCheckTimeoutMs ?? 30_000, "Platform login check");
     if (login !== "logged_in") throw Object.assign(new Error(`${managementReconciliation ? "头条" : "知乎"}账号 Session 未通过登录检查，请先完成正常登录验证`), { code: login === "expired" || login === "logged_out" ? "LOGIN_EXPIRED" : "USER_ACTION_REQUIRED" });
     const variant = job.articleVariantId ? this.repository.getArticleVariant(job.articleVariantId) : null;
@@ -347,7 +370,7 @@ export class PublisherService {
         title: input.title, body: input.body, imagePaths: [selectedImage.filePath], topics: [], visibility: douyinSettings!.visibility, scheduledAt: null });
     })() : null;
     const existingFrozenDouyin = frozenDouyin && existing
-      ? await freezeDouyinImageText({ ...frozenDouyin, mandatorySelections: douyinMandatorySelections(existing.response.mandatorySelections) }) : frozenDouyin;
+      ? await freezeDouyinImageText({ ...frozenDouyin, mandatorySelections: douyinMandatorySelections(existing.response.mandatorySelections), musicBinding: douyinMusicBinding(existing.response.musicBinding) }) : frozenDouyin;
     if (managementReconciliation && existing && (existing.status !== "Prepared" || existing.response.contentTransport !== adapter.getCapabilities().contentTransport
       || existing.response.preparedInputHash !== hashPreparedBrowserArticleInput(input) || existing.response.expectedCreatorId !== expectedCreatorId
       || job.platformKey === "douyin" && existing.response.expectedLoginGeneration !== douyinConnection?.loginGeneration
@@ -370,7 +393,7 @@ export class PublisherService {
     }
     if (selectedImage) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_PASSED", "平台编辑器已返回图片 DOM 上传证据", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
     const preparedFrozenDouyin = frozenDouyin
-      ? await freezeDouyinImageText({ ...frozenDouyin, mandatorySelections: douyinMandatorySelections(prepared.response.mandatorySelections) }) : null;
+      ? await freezeDouyinImageText({ ...frozenDouyin, mandatorySelections: douyinMandatorySelections(prepared.response.mandatorySelections), musicBinding: douyinMusicBinding(prepared.response.musicBinding) }) : null;
     if (preparedFrozenDouyin && (prepared.response.sourceContentHash !== preparedFrozenDouyin.sourceContentHash
       || prepared.response.contentBindingHash !== preparedFrozenDouyin.contentBindingHash
       || JSON.stringify(prepared.response.imageHashes) !== JSON.stringify(preparedFrozenDouyin.imageHashes)))
@@ -425,7 +448,7 @@ export class PublisherService {
       if (job.platformKey === "douyin" && !douyinSettings) throw Object.assign(new Error("Douyin Owner-selected image/text settings are missing"), { code: "CONTENT_REJECTED" });
       const douyinConnection = job.platformKey === "douyin" ? this.repository.getDouyinImageTextConnection(account.id) : null;
       const expectedCreatorId = job.platformKey === "douyin" ? douyinConnection?.creatorId : account.externalAccountId;
-      const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: job.dryRun, manualConfirmationRequired: job.manualConfirmationRequired, ...browserIdentitySettings(account, managementReconciliation, douyinConnection), ...(douyinSettings ? { expectedVisibility: douyinSettings.visibility } : {}) }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
+      const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: job.dryRun, manualConfirmationRequired: job.manualConfirmationRequired, ...browserIdentitySettings(account, managementReconciliation, douyinConnection), ...(douyinSettings ? { expectedVisibility: douyinSettings.visibility, expectedMusicMode: douyinSettings.musicMode ?? "NONE" } : {}) }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
       const preparedRecord = this.repository.getPublishRecordByJob(job.id);
       const usePlatformFinalSubmit = !job.dryRun && typeof adapter.finalSubmit === "function" && preparedRecord?.status === "Prepared";
       if (!job.dryRun && managementReconciliation && !usePlatformFinalSubmit) throw Object.assign(new Error("Toutiao BrowserNative requires a persisted prepared editor before final submission"), { code: "USER_ACTION_REQUIRED" });
@@ -473,7 +496,8 @@ export class PublisherService {
           const frozen = await freezeDouyinImageText({ articleId: article.id, accountId: account.id,
             creatorId: expectedCreatorId ?? "", title: input.title, body: input.body,
             imagePaths: [selectedImage.filePath], topics: [], visibility: douyinSettings!.visibility, scheduledAt: null,
-            mandatorySelections: douyinMandatorySelections(preparedRecord?.response.mandatorySelections) });
+            mandatorySelections: douyinMandatorySelections(preparedRecord?.response.mandatorySelections),
+            musicBinding: douyinMusicBinding(preparedRecord?.response.musicBinding) });
           if (preparedRecord?.response.sourceContentHash !== frozen.sourceContentHash
             || preparedRecord?.response.contentBindingHash !== frozen.contentBindingHash
             || JSON.stringify(preparedRecord?.response.imageHashes) !== JSON.stringify(frozen.imageHashes))
@@ -550,6 +574,7 @@ export class PublisherService {
           ...result.response,
           ...(managementReconciliation ? { contentTransport: adapter.getCapabilities().contentTransport, preparedInputHash: preparedRecord?.response.preparedInputHash,
             expectedCreatorId: preparedRecord?.response.expectedCreatorId } : {}),
+          ...(job.platformKey === "douyin" && preparedRecord ? { musicBinding: preparedRecord.response.musicBinding } : {}),
           selectedImageAssetId: job.selectedImageAssetId ?? null,
           imageSelectionMode: job.imageSelectionMode ?? "none",
           imageInsertion: job.selectedImageAssetId ? result.response.imageUploaded === true ? "uploaded_verified" : "failed" : "none"
@@ -578,7 +603,10 @@ export class PublisherService {
         if (intent?.state === "Submitted") return { job: this.repository.getJob(job.id) as PublishJob, message: "Submission accepted; record recovery is pending" };
         const code = errorCode(error);
         const preSubmitUserAction = platformFinalSubmitPath && ["FINAL_SUBMIT_CONTROL_NOT_FOUND", "REQUIRED_FIELD_MISSING", "USER_ACTION_REQUIRED"].includes(code);
-        if (preSubmitUserAction && !finalSubmitSideEffectTriggered && intent && intent.finalSubmitCount === 0) {
+        const douyinProvenPreBoundary = douyinPreBoundaryFailure({ platformKey: job.platformKey,
+          platformFinalSubmitPath, sideEffectTriggered: finalSubmitSideEffectTriggered, intent });
+        if ((preSubmitUserAction && !finalSubmitSideEffectTriggered && intent && intent.finalSubmitCount === 0
+          || douyinProvenPreBoundary) && intent) {
           const waiting = this.repository.resetSubmissionIntentForUserAction(intent.id, errorCode(error));
           this.logger.warn("PUBLISHER", "USER_ACTION_REQUIRED", error instanceof Error ? error.message : "Platform final submit is waiting for user action", { jobId: job.id, finalSubmitCount: intent.finalSubmitCount, submissionSideEffectTriggered: false });
           return { job: waiting, message: error instanceof Error ? error.message : "平台最终提交前仍需要用户完成字段或安全验证" };

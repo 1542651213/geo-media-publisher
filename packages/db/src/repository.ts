@@ -2249,7 +2249,28 @@ export class AppRepository {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const settings = value as Record<string, unknown>;
     return settings.version === 1 && settings.visibility === "public" && settings.timing === "immediate"
-      ? { version: 1, visibility: "public", timing: "immediate" } : null;
+      && (settings.musicMode === undefined || settings.musicMode === "NONE" || settings.musicMode === "AUTO_RECOMMENDED")
+      ? { version: 1, visibility: "public", timing: "immediate",
+        ...(settings.musicMode ? { musicMode: settings.musicMode } : {}) } : null;
+  }
+
+  /** Last ten actual or possibly submitted image posts; abandoned pre-boundary drafts do not count. */
+  getRecentDouyinImageTextMusic(accountId: string): Array<{ trackId: string | null; title: string; artist: string; duration: string }> {
+    const rows = this.db.prepare(`SELECT r.response_json FROM publish_records r
+      INNER JOIN publish_jobs j ON j.id=r.job_id
+      LEFT JOIN submission_intents i ON i.job_id=j.id
+      WHERE j.platform_key='douyin' AND j.content_kind='article' AND j.publish_payload_json LIKE '%douyinImageTextSettings%' AND j.account_id=?
+        AND (COALESCE(i.final_submit_count,0)>=1 OR r.status='Published')
+      ORDER BY r.published_at DESC LIMIT 10`).all(accountId) as Row[];
+    return rows.flatMap((row) => {
+      const response = parseJson<Record<string, unknown>>(row.response_json, {});
+      const music = response.musicBinding;
+      if (!music || typeof music !== "object" || Array.isArray(music)) return [];
+      const item = music as Record<string, unknown>;
+      return item.mode === "AUTO_RECOMMENDED" && typeof item.title === "string" && typeof item.artist === "string"
+        && typeof item.duration === "string" ? [{ trackId: typeof item.trackId === "string" ? item.trackId : null,
+          title: item.title, artist: item.artist, duration: item.duration }] : [];
+    });
   }
 
   previewExcelArticleImport(input: {

@@ -12,13 +12,19 @@ export interface DouyinImageTextSource {
   visibility: "public";
   scheduledAt: null;
   mandatorySelections?: readonly { key: string; value: string }[];
+  musicBinding?: DouyinMusicBinding;
 }
+
+export type DouyinMusicBinding = { mode: "NONE" } | {
+  mode: "AUTO_RECOMMENDED"; identity: string; trackId: string | null; title: string; artist: string; duration: string;
+};
 
 /** Owner-selected R1 candidate settings. No default is supplied by the Job factory. */
 export interface DouyinImageTextJobSettings {
   version: 1;
   visibility: "public";
   timing: "immediate";
+  musicMode?: "NONE" | "AUTO_RECOMMENDED";
 }
 
 export interface FrozenDouyinImageText extends DouyinImageTextSource {
@@ -84,8 +90,13 @@ export async function freezeDouyinImageText(source: DouyinImageTextSource): Prom
   const mandatorySelections = [...(source.mandatorySelections ?? [])].map(({ key, value }) => ({ key: key.trim(), value: value.trim() }))
     .sort((a, b) => a.key.localeCompare(b.key));
   if (mandatorySelections.some(({ key, value }) => !key || !value)) throw new Error("Douyin mandatory setting snapshot is incomplete");
+  const musicBinding = source.musicBinding;
+  if (musicBinding?.mode === "AUTO_RECOMMENDED" &&
+    (!musicBinding.identity.trim() || !musicBinding.title.trim() || !musicBinding.artist.trim() || !musicBinding.duration.trim()))
+    throw new Error("Douyin selected music identity is incomplete");
   const sourceContentHash = sha256(JSON.stringify({ version: 1, title: source.title, body: source.body,
-    imageHashes, topics: source.topics, visibility: source.visibility, scheduledAt: source.scheduledAt, mandatorySelections }));
+    imageHashes, topics: source.topics, visibility: source.visibility, scheduledAt: source.scheduledAt, mandatorySelections,
+    ...(musicBinding ? { musicBinding } : {}) }));
   const transport = "DOUYIN_IMAGE_TEXT_BROWSER" as const;
   const contentBindingHash = sha256(JSON.stringify({ version: 1, articleId: source.articleId,
     accountId: source.accountId, creatorId: source.creatorId, transport, sourceContentHash }));
