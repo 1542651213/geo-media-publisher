@@ -3,7 +3,8 @@ import { matchToutiaoManagementRows, type ToutiaoManagementMatch, type ToutiaoMa
 import { classifyReconciliationRequest, safeReconciliationRequestMetadata } from "./reconciliation-network-policy";
 
 const MANAGEMENT_URL = "https://mp.toutiao.com/profile_v4/manage/content/all";
-const NEXT_SELECTOR = '.ant-pagination-next, .byte-pagination-next, [aria-label="下一页"], [title="下一页"]';
+const DRAFT_URL = "https://mp.toutiao.com/profile_v4/manage/draft";
+const NEXT_SELECTOR = '.fake-pagination-list > li.fake-pagination-item-icon:last-child';
 const MAX_PAGES_PER_STATUS = 8;
 
 export interface ToutiaoDeepScanTarget {
@@ -36,6 +37,8 @@ export interface ToutiaoDeepScanResult {
   readonly readRequestPaths: readonly string[];
   readonly managementLinkPaths: readonly string[];
   readonly paginationControls: readonly string[];
+  readonly statusControlShape: readonly { label: string; className: string; parentClassName: string;
+    grandparentClassName: string; visible: boolean }[];
 }
 
 const normalized = (value: string): string => value.normalize("NFC").replace(/\s+/gu, " ").trim();
@@ -84,7 +87,10 @@ export function matchDeepToutiaoRows(rows: readonly ToutiaoManagementRow[], targ
 }
 
 interface PageSnapshot { rows: ToutiaoManagementRow[]; statuses: string[]; nextExists: boolean; nextDisabled: boolean;
-  managementLinkPaths: string[]; paginationControls: string[]; }
+  emptyState: boolean;
+  managementLinkPaths: string[]; paginationControls: string[];
+  statusControlShape: { label: string; className: string; parentClassName: string;
+    grandparentClassName: string; visible: boolean }[]; }
 async function readPageSnapshot(page: Page): Promise<PageSnapshot> {
   return page.evaluate(() => {
     const rows: ToutiaoManagementRow[] = [];
@@ -110,6 +116,15 @@ async function readPageSnapshot(page: Page): Promise<PageSnapshot> {
     const statuses = [...new Set([...document.querySelectorAll<HTMLElement>("a,button,[role=tab],li,span")]
       .map((item) => (item.innerText ?? "").trim().replace(/[（(]\d+[）)]$/u, "").trim()).filter((text) =>
         /^(?:全部|全部作品|审核中|待审核|已发布|未通过|审核未通过|草稿|定时|定时发布|已撤回)$/u.test(text)))];
+    const statusControlShape = [...document.querySelectorAll<HTMLElement>("a,button,[role=tab],li,span")]
+      .filter((item) => /^(?:全部|全部作品|审核中|待审核|已发布|未通过|审核未通过|草稿|定时|定时发布|已撤回)$/u
+        .test((item.innerText ?? "").trim()))
+      .slice(0, 30).map((item) => ({ label: item.innerText.trim(),
+        className: typeof item.className === "string" ? item.className.slice(0, 80) : "",
+        parentClassName: typeof item.parentElement?.className === "string" ? item.parentElement.className.slice(0, 80) : "",
+        grandparentClassName: typeof item.parentElement?.parentElement?.className === "string"
+          ? item.parentElement.parentElement.className.slice(0, 80) : "",
+        visible: Boolean(item.getClientRects().length) }));
     const managementLinkPaths = [...new Set([...document.querySelectorAll<HTMLAnchorElement>("a[href]")]
       .map((anchor) => { try { const url = new URL(anchor.href); return url.hostname === "mp.toutiao.com"
         && url.pathname.startsWith("/profile_v4/manage/content/") ? url.pathname : null; }
@@ -118,8 +133,10 @@ async function readPageSnapshot(page: Page): Promise<PageSnapshot> {
       '[class*="pagination"], [class*="Pagination"], [aria-label*="页"], [title*="页"]')]
       .map((item) => `${item.tagName.toLowerCase()}:${String(item.className).slice(0, 80)}`))].slice(0, 30);
     const next = document.querySelector<HTMLElement>(
-      '.ant-pagination-next, .byte-pagination-next, [aria-label="下一页"], [title="下一页"]');
-    return { rows, statuses, managementLinkPaths, paginationControls,
+      '.fake-pagination-list > li.fake-pagination-item-icon:last-child');
+    return { rows, statuses, statusControlShape, managementLinkPaths, paginationControls,
+      emptyState: /暂无(?:内容|作品|草稿|数据)|还没有(?:内容|作品|草稿)|没有符合条件的内容/u
+        .test(document.body.innerText),
       nextExists: Boolean(next), nextDisabled: Boolean(next
       && (next.hasAttribute("disabled") || next.getAttribute("aria-disabled") === "true"
         || /disabled/u.test(next.className))) };
@@ -162,7 +179,7 @@ export async function scanOwnedToutiaoManagement(context: BrowserContext, canoni
       try {
         const url = new URL(response.url());
         if (response.request().method() !== "GET" || url.hostname !== "mp.toutiao.com"
-          || url.pathname !== "/mp/agw/creator_center/item/list") return;
+          || !["/mp/agw/creator_center/item/list", "/api/feed/mp_provider/v1/"].includes(url.pathname)) return;
         apiListObserved = true;
         void response.json().then((value: unknown) => {
           if (JSON.stringify(value).includes(target.title)) apiTargetObserved = true;
@@ -177,14 +194,25 @@ export async function scanOwnedToutiaoManagement(context: BrowserContext, canoni
       throw new Error("TOUTIAO_RECONCILIATION_REDIRECTED");
     await page.waitForTimeout(5_000);
     const first = await readPageSnapshot(page);
-    const availableStatuses = ["全部", ...first.statuses.filter((label) => label !== "全部" && label !== "全部作品")];
+    const availableStatuses = ["全部", ...first.statuses.filter((label) => label !== "全部" && label !== "全部作品"),
+      "草稿箱"];
     const scans: ToutiaoStatusScan[] = [];
     const allRows: ToutiaoManagementRow[] = [];
     let found = false;
     for (const status of availableStatuses) {
-      if (status !== "全部") {
-        const control = page.getByText(status, { exact: true }).first();
-        if (!await control.count()) continue;
+      if (status === "草稿箱") {
+        await page.goto(DRAFT_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
+        if (new URL(page.url()).hostname !== "mp.toutiao.com"
+          || new URL(page.url()).pathname !== "/profile_v4/manage/draft")
+          throw new Error("TOUTIAO_RECONCILIATION_DRAFT_REDIRECTED");
+        await page.waitForTimeout(3_000);
+      } else if (status !== "全部") {
+        const trigger = page.locator(".status-filter-select .label-select:visible").first();
+        if (!await trigger.isVisible()) continue;
+        await trigger.hover({ timeout: 5_000 });
+        const control = page.locator(".status-filter-select .label-select-option:visible")
+          .filter({ hasText: status }).first();
+        if (!await control.count() || !await control.isVisible()) continue;
         await control.click({ timeout: 5_000 });
         await page.waitForTimeout(2_000);
       }
@@ -210,8 +238,11 @@ export async function scanOwnedToutiaoManagement(context: BrowserContext, canoni
         const submittedAt = Date.parse(target.submittedAt);
         if (earliest !== null && Number.isFinite(submittedAt)
           && earliest < submittedAt - 48 * 60 * 60 * 1_000) { scopeComplete = true; break; }
-        if (!current.nextExists || current.nextDisabled) { scopeComplete = current.nextExists || current.rows.length < 10; break; }
-        const next = page.locator(NEXT_SELECTOR).first();
+        if (!current.nextExists || current.nextDisabled) {
+          scopeComplete = current.nextExists || current.emptyState || current.rows.length > 0 && current.rows.length < 10;
+          break;
+        }
+        const next = page.locator(NEXT_SELECTOR);
         if (!await next.isVisible() || !await next.isEnabled()) { scopeComplete = true; break; }
         await next.click({ timeout: 5_000 });
         await page.waitForTimeout(1_500);
@@ -227,7 +258,8 @@ export async function scanOwnedToutiaoManagement(context: BrowserContext, canoni
         && scans.every((scan) => scan.scopeComplete),
       apiListObserved, apiTargetObserved, blockedRequestCount, blockedContentMutationCount,
       postCatalog: catalog, readRequestPaths: [...readRequestPaths].sort(),
-      managementLinkPaths: first.managementLinkPaths, paginationControls: first.paginationControls };
+      managementLinkPaths: first.managementLinkPaths, paginationControls: first.paginationControls,
+      statusControlShape: first.statusControlShape };
     } finally { page.off("response", responseListener); }
   } finally {
     if (closePage) await page?.close().catch(() => undefined);

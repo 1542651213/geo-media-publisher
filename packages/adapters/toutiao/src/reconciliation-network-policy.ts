@@ -12,7 +12,7 @@ export interface ProvenReadonlyPost {
 const MUTATION_PATH = /(?:^|\/)(?:article\/(?:new|publish|save|create|update|delete)|draft(?:\/|$)|upload(?:\/|$)|media\/create|image\/upload|schedule(?:\/|$)|delete(?:\/|$)|update(?:\/|$)|modify(?:\/|$))/iu;
 const MUTATION_KEY = /^(?:publish|save|delete|update|modify|create|draft|content|title|article_id|timer_time)$/iu;
 const TELEMETRY_PATHS = new Set([
-  "mcs.zijieapi.com/list", "mp.toutiao.com/monitor_browser/collect/batch/",
+  "mp.toutiao.com/monitor_browser/collect/batch/",
   "security.zijieapi.com/api/metrics/emit"
 ]);
 
@@ -22,8 +22,11 @@ export function classifyReconciliationRequest(input: {
 }, provenReadonlyPosts: readonly ProvenReadonlyPost[] = []): ReconciliationDecision {
   let url: URL;
   try { url = new URL(input.url); } catch { return "BLOCK_UNKNOWN"; }
-  if (url.protocol !== "https:" || MUTATION_PATH.test(url.pathname)) return "BLOCK_CONTENT_MUTATION";
   const method = input.method.toUpperCase();
+  if (url.protocol !== "https:") return "BLOCK_CONTENT_MUTATION";
+  if (method === "GET" && url.hostname === "mp.toutiao.com"
+    && url.pathname === "/profile_v4/manage/draft") return "ALLOW_READ";
+  if (MUTATION_PATH.test(url.pathname)) return "BLOCK_CONTENT_MUTATION";
   if (method === "GET" || method === "HEAD" || method === "OPTIONS") return "ALLOW_READ";
   if (method !== "POST") return "BLOCK_UNKNOWN";
   if (TELEMETRY_PATHS.has(`${url.hostname}${url.pathname}`)) return "BLOCK_TELEMETRY";

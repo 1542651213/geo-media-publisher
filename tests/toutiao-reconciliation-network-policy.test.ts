@@ -12,11 +12,15 @@ describe("Toutiao reconciliation network policy", () => {
     expect(check("OPTIONS", "/mp/agw/creator_center/item/list")).toBe("ALLOW_READ");
     expect(check("POST", "/mp/agw/creator_center/item/list?source=manage", ["page", "status"]))
       .toBe("ALLOW_READ");
+    expect(check("GET", "/profile_v4/manage/draft")).toBe("ALLOW_READ");
+    expect(check("POST", "/profile_v4/manage/draft")).toBe("BLOCK_CONTENT_MUTATION");
   });
 
   it("blocks telemetry by default and all unknown or deceptive POSTs", () => {
-    expect(classifyReconciliationRequest({ method: "POST", url: "https://mcs.zijieapi.com/list" }))
+    expect(classifyReconciliationRequest({ method: "POST", url: "https://mp.toutiao.com/monitor_browser/collect/batch/" }))
       .toBe("BLOCK_TELEMETRY");
+    expect(classifyReconciliationRequest({ method: "POST", url: "https://mcs.zijieapi.com/list" }))
+      .toBe("BLOCK_UNKNOWN");
     expect(check("POST", "/bcs/notice/boxes/")).toBe("BLOCK_UNKNOWN");
     expect(check("POST", "/mp/agw/creator_center/item/list-extra", ["page"]))
       .toBe("BLOCK_UNKNOWN");
