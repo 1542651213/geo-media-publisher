@@ -14,6 +14,7 @@ import { DouyinImagePostObserver } from "./image-text-observer";
 import { observeDouyinImageEditor, selectAndObserveDouyinImage } from "./image-text-upload";
 import { inspectDouyinManagementReadOnlyNavigation } from "./image-text-management-preflight";
 import { inspectDouyinBodyPage, type DouyinBodyPageDiagnostic } from "./image-text-body-diagnostic";
+import { readDouyinBodyText, type DouyinBodyReadback } from "./image-text-body-readback";
 export { selectAndObserveDouyinImage } from "./image-text-upload";
 
 const creatorHome = "https://creator.douyin.com/creator-micro/home";
@@ -526,7 +527,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     await title.fill(initialFrozen.title);
     await body.fill(initialFrozen.body);
     const titleReadback = await title.inputValue();
-    const bodyReadback = await body.innerText();
+    const bodyReadback = await readDouyinBodyText(page);
     const imageCount = await images.count();
     const finalControl = page.locator('button,[role="button"]').filter({ hasText: /^发布$/u });
     const finalCount = await finalControl.count();
@@ -535,7 +536,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     const frozen = await freezeDouyinImageText({ ...source, mandatorySelections: settings.selectedMandatory });
     assertDouyinImageTextReadback(frozen, { accountId: ctx.accountId, creatorId,
       contextOwned: page.context() === owned.session.context, sessionActive: !page.isClosed(),
-      pageHost: new URL(page.url()).host, title: titleReadback, body: bodyReadback, imageCount,
+      pageHost: new URL(page.url()).host, title: titleReadback, body: bodyReadback.semanticText, imageCount,
       requiredFieldsPresent: douyinRequiredSettingsPass(settings), finalSubmitControlCount: finalCount,
       securityChallenge: /captcha|security[-_/]?check|risk[-_/]?control/iu.test(page.url()) });
     this.prepared.set(ctx.accountId, { frozen, page, context: owned.session.context, settings, previewDigest });
@@ -546,10 +547,16 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
         contentTransport: "DOUYIN_IMAGE_TEXT_BROWSER", imageHashes: frozen.imageHashes,
         sourceContentHash: frozen.sourceContentHash, contentBindingHash: frozen.contentBindingHash,
         expectedCreatorId: creatorId, settingsSnapshot: settings, mandatorySelections: settings.selectedMandatory,
+        rawBodyUtf16Length: bodyReadback.rawInnerText.length,
+        rawTextContentUtf16Length: bodyReadback.rawTextContent.length,
+        semanticBodyUtf16Length: bodyReadback.semanticText.length,
+        terminalPlaceholderIgnored: bodyReadback.terminalPlaceholderIgnored,
+        bodyStructureClass: bodyReadback.structureClass,
         finalSubmitCount: 0 } };
   }
 
-  private async verifyPreparedEditor(ctx: AccountContext, article: PublishArticleInput): Promise<{ page: Page; frozen: FrozenDouyinImageText }> {
+  private async verifyPreparedEditor(ctx: AccountContext, article: PublishArticleInput): Promise<{
+    page: Page; frozen: FrozenDouyinImageText; bodyReadback: DouyinBodyReadback }> {
     const prepared = this.prepared.get(ctx.accountId);
     if (!prepared || prepared.page.isClosed() || prepared.page.context() !== prepared.context)
       throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_PREPARED_EDITOR_NOT_ACTIVE");
@@ -582,13 +589,14 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     if (article.title !== prepared.frozen.title || article.body !== prepared.frozen.body || article.images?.length !== 1
       || article.images[0] !== prepared.frozen.imagePaths[0] || !await verifyDouyinImageTextImage(prepared.frozen, 0))
       throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_PREPARED_CONTENT_OR_IMAGE_CHANGED");
+    const bodyReadback = await readDouyinBodyText(page);
     assertDouyinImageTextReadback(prepared.frozen, { accountId: ctx.accountId, creatorId: expectedCreatorId,
       contextOwned: true, sessionActive: true, pageHost: new URL(page.url()).host,
-      title: await title.inputValue(), body: await body.innerText(), imageCount: await images.count(),
+      title: await title.inputValue(), body: bodyReadback.semanticText, imageCount: await images.count(),
       requiredFieldsPresent: douyinRequiredSettingsPass(currentSettings), finalSubmitControlCount: await finalControl.count(),
       securityChallenge: /captcha|security[-_/]?check|risk[-_/]?control/iu.test(page.url()) });
     if (await finalControl.isDisabled()) throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_FINAL_CONTROL_DISABLED");
-    return { page, frozen: prepared.frozen };
+    return { page, frozen: prepared.frozen, bodyReadback };
   }
 
   /** A separate owned tab checks the real management route without leaving the prepared editor. */
@@ -615,6 +623,11 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     await this.verifyPreparedEditor(ctx, article);
     return { response: { adapter: "douyin-image-text-browser", stage: "final_submit_preflight", imageCount: 1,
       titleReadback: true, bodyReadback: true, settingsReadback: true, managementReadOnlyReady: true,
+      rawBodyUtf16Length: verified.bodyReadback.rawInnerText.length,
+      rawTextContentUtf16Length: verified.bodyReadback.rawTextContent.length,
+      semanticBodyUtf16Length: verified.bodyReadback.semanticText.length,
+      terminalPlaceholderIgnored: verified.bodyReadback.terminalPlaceholderIgnored,
+      bodyStructureClass: verified.bodyReadback.structureClass,
       contentBindingHash: verified.frozen.contentBindingHash, finalSubmitCount: 0 } };
   }
 

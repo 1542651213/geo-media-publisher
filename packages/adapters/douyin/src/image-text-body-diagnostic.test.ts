@@ -62,6 +62,17 @@ describe.skipIf(!existsSync(chrome))("Douyin bounded body DOM diagnosis", () => 
     expect(result.candidates[0]).toMatchObject({ tagName: "div", role: "textbox", ariaLabel: "作品描述",
       innerText: { diff: { insertions: 0, deletions: 0, substitutions: 0 } } });
     expect(result.candidates[0]?.structure.some((node) => node.kind === "text" && node.utf16Length === 5)).toBe(true);
+    expect(result.semanticReadback).toMatchObject({ utf16Length: 5, terminalPlaceholderIgnored: false });
+  });
+
+  it("reports the formal extractor's semantic readback on the proven Slate terminal node", async () => {
+    const body = "测试正文。";
+    const html = `<div contenteditable="true" data-slate-editor="true"><div><div><span><span>${body}</span></span><span><span>\u200B</span></span></div></div></div>`;
+    const result = await inspectDouyinBodyPage(await fixture(html), body);
+    expect(result.semanticReadback).toMatchObject({ utf16Length: body.length,
+      terminalPlaceholderIgnored: true, structureClass: "SLATE_TERMINAL_ZWSP",
+      diff: { insertions: 0, deletions: 0, substitutions: 0 } });
+    expect(result.candidates[0]?.innerText.utf16Length).toBe(body.length + 1);
   });
 
   it("distinguishes a terminal BR from text-node LF and an empty paragraph", async () => {

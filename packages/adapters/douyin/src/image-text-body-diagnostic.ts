@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Page } from "playwright-core";
+import { readDouyinBodyText } from "./image-text-body-readback";
 
 type CharacterEvidence = { index: number; codePoint: number; hex: string; escaped: string };
 type EditOperation = { type: "insert" | "delete" | "substitute"; expectedIndex: number; actualIndex: number;
@@ -90,7 +91,9 @@ export type DouyinBodyCandidateDiagnostic = Omit<RawCandidate, "innerText" | "te
   domGeneratedTextDifference: "YES" | "NO" | "UNKNOWN";
 };
 export type DouyinBodyPageDiagnostic = { locator: '[contenteditable="true"]'; candidateCount: number;
-  selectedCandidateIndex: number | null; candidates: DouyinBodyCandidateDiagnostic[] };
+  selectedCandidateIndex: number | null; candidates: DouyinBodyCandidateDiagnostic[];
+  semanticReadback: (TextRepresentation & { terminalPlaceholderIgnored: boolean;
+    structureClass: "SLATE_TERMINAL_ZWSP" | "SLATE_OTHER" | "NON_SLATE" }) | null };
 
 const sha256 = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
 
@@ -149,5 +152,10 @@ export async function inspectDouyinBodyPage(page: Page, expected: string): Promi
       domGeneratedTextDifference: innerText === textContent ? "NO"
         : textContent === expected && structuralSeparator ? "YES" : "UNKNOWN" });
   }
-  return { locator, candidateCount: count, selectedCandidateIndex, candidates };
+  const semantic = selectedCandidateIndex === null ? null : await readDouyinBodyText(page);
+  if (semantic && (semantic.rawInnerText !== raw[0]?.innerText || semantic.rawTextContent !== raw[0]?.textContent))
+    throw new Error("DOUYIN_BODY_DIAGNOSTIC_EDITOR_CHANGED");
+  return { locator, candidateCount: count, selectedCandidateIndex, candidates,
+    semanticReadback: semantic ? { ...representation(semantic.semanticText, true),
+      terminalPlaceholderIgnored: semantic.terminalPlaceholderIgnored, structureClass: semantic.structureClass } : null };
 }
