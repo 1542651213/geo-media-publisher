@@ -36,4 +36,12 @@ describe("Douyin image/text BrowserNative adapter", () => {
     await expect(adapter.validateArticle({ ...base, images: ["a.png", "b.png"] })).resolves.toMatchObject({ valid: false });
     await expect(adapter.validateArticle({ ...base, tags: ["话题"] })).resolves.toMatchObject({ valid: false });
   });
+
+  it("does not treat a stored account flag as an active Creator browser session", async () => {
+    const adapter = new DouyinImageTextBrowserAdapter({ credentialStore: store });
+    const ctx = { accountId: "owner-account", accountName: "Owner", platformKey: "douyin",
+      settings: { expectedCreatorId: "72388977613", browserExecutionMode: "VISIBLE" }, secrets: {} };
+    await expect(adapter.checkSession(ctx)).resolves.toBe("needs_user_action");
+    await expect(adapter.activateStoredCreatorSession(ctx)).rejects.toThrow(/尚未连接账号|DOUYIN_ACTIVE_OWNED_CONTEXT_REQUIRED/u);
+  });
 });

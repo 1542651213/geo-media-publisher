@@ -7,6 +7,7 @@ import { z } from "zod";
 import { credentialFingerprint, prepareToutiaoArticleJob, ToutiaoCredentialBundleService } from "@publisher/adapters-toutiao/article-api";
 import { protocolShadowEnabled } from "@publisher/adapters-toutiao/article-api";
 import { ToutiaoArticleBrowserAdapter } from "@publisher/adapters-toutiao/browser";
+import { DouyinImageTextBrowserAdapter } from "@publisher/adapters-douyin/image-text-browser";
 import { backupDatabase, validateDatabaseBackup, type AIBatchTarget, type AppRepository, type ContentStudioTaskPayload, type HumanReviewSubmitInput } from "@publisher/db";
 import type { AccountDisconnectResult, BatchGenerationInput, ContentStudioGenerationInput } from "../shared/api";
 import { AIProviderError, DeepSeekErrorMapper, DeepSeekProvider, FallbackAIProvider, MockAIProvider, OpenAICompatibleProvider, contentHash, type AIConnectionDiagnostic, type AIConnectionResult, type AIProvider } from "@publisher/ai";
@@ -568,6 +569,21 @@ export function registerIpc(deps: IpcDependencies): void {
     const input = z.object({ accountId: idSchema, platformKey: z.literal("toutiao") }).parse(payload);
     const result = await toutiaoSessionActivation.activate(input.accountId);
     logger.info("ACCOUNT", "TOUTIAO_SESSION_ACTIVATION", "头条账号 BrowserSession 激活结果", { accountId: input.accountId, outcome: result.outcome, runtimeState: result.runtimeState, reasonCode: result.reasonCode, sessionExists: result.sessionExists, contextExists: result.contextExists, canonicalPageExists: result.canonicalPageExists, contextOwnsPage: result.contextOwnsPage, pageAlive: result.pageAlive, pageHost: result.pageHost, lastHeartbeatAt: result.lastHeartbeatAt });
+    return result;
+  });
+  register("accounts:activate-douyin-image-text", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    const account = repository.getAccountById(input.accountId, "douyin");
+    if (!account || account.archivedAt) throw new Error("Douyin account is unavailable");
+    const binding = repository.getDouyinImageTextConnection(input.accountId);
+    if (!binding?.active) return { status: "BINDING_REQUIRED" as const, creatorId: null, pageHost: null, sessionIdHash: null };
+    if (!credentials.has(browserSessionCredentialKey({ platformKey: "douyin", accountId: input.accountId })))
+      return { status: "NO_STORED_AUTH" as const, creatorId: null, pageHost: null, sessionIdHash: null };
+    const adapter = registry.getForContent("douyin", "article");
+    if (!(adapter instanceof DouyinImageTextBrowserAdapter)) throw new Error("Douyin image/text BrowserNative route is unavailable");
+    const result = await adapter.activateStoredCreatorSession(accountContext(input.accountId, "douyin", createUserAction("OPEN_BACKEND")));
+    logger.info("ACCOUNT", "DOUYIN_IMAGE_TEXT_SESSION_ACTIVATION", "抖音图文受控会话激活检查", {
+      accountId: input.accountId, status: result.status, pageHost: result.pageHost, sessionIdHash: result.sessionIdHash });
     return result;
   });
   register("accounts:close-runtime-session", async (_event, payload) => {

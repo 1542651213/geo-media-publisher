@@ -61,6 +61,23 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
   /** Retain the Owner's verified canonical page for the single visible preparation task. */
   async releaseConnectionPage(_ctx: AccountContext): Promise<void> { /* retained until explicit logout or app shutdown */ }
 
+  /** Restores only this account's encrypted BrowserSession; a hidden identity stays unverified. */
+  async activateStoredCreatorSession(ctx: AccountContext): Promise<{ status: "ACTIVE" | "WAITING_FOR_OWNER" | "IDENTITY_MISMATCH"; creatorId: string | null; pageHost: string | null; sessionIdHash: string | null }> {
+    const expected = typeof ctx.settings.expectedCreatorId === "string" ? ctx.settings.expectedCreatorId.trim() : "";
+    if (!expected) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_CREATOR_BINDING_REQUIRED");
+    const existing = await this.activeCanonicalPage(ctx);
+    if (!existing) await this.openBackend(ctx);
+    const owned = await this.activeCanonicalPage(ctx);
+    if (!owned || owned.page.isClosed() || owned.page.context() !== owned.session.context || owned.session.executionMode !== "VISIBLE")
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_ACTIVE_OWNED_CONTEXT_REQUIRED");
+    const pageHost = new URL(owned.page.url()).host;
+    if (pageHost !== "creator.douyin.com" || /login|passport|captcha|verify/iu.test(owned.page.url()))
+      return { status: "WAITING_FOR_OWNER", creatorId: null, pageHost, sessionIdHash: owned.session.sessionIdHash };
+    const creatorId = await this.readVisibleCreatorId(owned.page);
+    return { status: !creatorId ? "WAITING_FOR_OWNER" : creatorId === expected ? "ACTIVE" : "IDENTITY_MISMATCH",
+      creatorId, pageHost, sessionIdHash: owned.session.sessionIdHash };
+  }
+
   private async readVisibleCreatorId(page: Page): Promise<string | null> {
     if (new URL(page.url()).host !== "creator.douyin.com") return null;
     return parseVisibleDouyinCreatorId(await page.locator("body").innerText().catch(() => ""));
