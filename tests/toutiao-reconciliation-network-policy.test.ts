@@ -14,6 +14,12 @@ describe("Toutiao reconciliation network policy", () => {
       .toBe("ALLOW_READ");
     expect(check("GET", "/profile_v4/manage/draft")).toBe("ALLOW_READ");
     expect(check("POST", "/profile_v4/manage/draft")).toBe("BLOCK_CONTENT_MUTATION");
+    expect(check("GET", "/api/feed/mp_provider/v1/?page=1")).toBe("ALLOW_READ");
+    expect(check("GET", "/api/unknown/write-like")).toBe("BLOCK_UNKNOWN");
+    expect(classifyReconciliationRequest({ method: "GET",
+      url: "https://lf-content-ecology.toutiaostatic.com/obj/safe.js" })).toBe("ALLOW_READ");
+    expect(classifyReconciliationRequest({ method: "GET",
+      url: "https://evil.example/obj/safe.js" })).toBe("BLOCK_UNKNOWN");
   });
 
   it("blocks telemetry by default and all unknown or deceptive POSTs", () => {

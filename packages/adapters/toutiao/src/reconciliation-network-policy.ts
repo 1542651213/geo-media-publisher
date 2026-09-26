@@ -15,6 +15,25 @@ const TELEMETRY_PATHS = new Set([
   "mp.toutiao.com/monitor_browser/collect/batch/",
   "security.zijieapi.com/api/metrics/emit"
 ]);
+const CREATOR_READ_GET_PATHS = new Set([
+  "/", "/profile_v4/index", "/profile_v4/manage/content/all", "/profile_v4/manage/draft",
+  "/api/feed/mp_provider/v1/", "/api/msg/v1/list/", "/monitor_web/settings/browser-settings",
+  "/mp/agw/creator_center/draft_count", "/mp/agw/creator_center/get_recommend_collection",
+  "/mp/agw/creator_center/user_info", "/mp/agw/creator_center/item/list",
+  "/mp/agw/creator_project/get_benefit_page_info", "/mp/agw/deliver/get_unread_confirm_message",
+  "/mp/agw/deliver/personal_panel", "/mp/agw/feedback/get_unread_feedback",
+  "/mp/agw/feedback/is_white", "/mp/agw/media/get_user_base_info",
+  "/mp/agw/media/user_login_status_api", "/tt-anti-token", "/ucd/agw/get_store_value",
+  "/user/profile/auth/info/v2/"
+]);
+const STATIC_HOSTS = new Set([
+  "image-tt-private.toutiao.com", "ipolyfill-polyfill.byte-gslb.com",
+  "lf-c-flwb.bytetos.com", "lf-cdn-tos.bytescm.com", "lf-content-ecology.toutiaostatic.com",
+  "lf-security.bytegoofy.com", "lf3-beecdn.bytetos.com", "lf3-short.ibytedapm.com",
+  "lf6-cdn2-tos.bytegoofy.com", "sf1-cdn-tos.toutiaostatic.com",
+  "sf3-cdn-tos.toutiaostatic.com"
+]);
+const STATIC_PATH = /(?:\.(?:js|css|json|html|png|jpg|jpeg|svg|ico|woff2?|image)(?:~[^/]*)?)$/iu;
 
 export function classifyReconciliationRequest(input: {
   readonly method: string; readonly url: string;
@@ -24,10 +43,12 @@ export function classifyReconciliationRequest(input: {
   try { url = new URL(input.url); } catch { return "BLOCK_UNKNOWN"; }
   const method = input.method.toUpperCase();
   if (url.protocol !== "https:") return "BLOCK_CONTENT_MUTATION";
-  if (method === "GET" && url.hostname === "mp.toutiao.com"
-    && url.pathname === "/profile_v4/manage/draft") return "ALLOW_READ";
-  if (MUTATION_PATH.test(url.pathname)) return "BLOCK_CONTENT_MUTATION";
-  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return "ALLOW_READ";
+  const knownCreatorRead = url.hostname === "mp.toutiao.com" && CREATOR_READ_GET_PATHS.has(url.pathname);
+  if (MUTATION_PATH.test(url.pathname) && !(["GET", "HEAD"].includes(method) && knownCreatorRead))
+    return "BLOCK_CONTENT_MUTATION";
+  if (method === "GET" || method === "HEAD") return knownCreatorRead
+    || STATIC_HOSTS.has(url.hostname) && STATIC_PATH.test(url.pathname) ? "ALLOW_READ" : "BLOCK_UNKNOWN";
+  if (method === "OPTIONS") return "ALLOW_READ";
   if (method !== "POST") return "BLOCK_UNKNOWN";
   if (TELEMETRY_PATHS.has(`${url.hostname}${url.pathname}`)) return "BLOCK_TELEMETRY";
   const rule = provenReadonlyPosts.find((item) => item.host === url.hostname && item.path === url.pathname);

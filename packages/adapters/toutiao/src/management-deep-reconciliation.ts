@@ -32,6 +32,8 @@ export interface ToutiaoDeepScanResult {
   readonly apiListObserved: boolean;
   readonly apiTargetObserved: boolean;
   readonly blockedRequestCount: number;
+  readonly blockedPostCount: number;
+  readonly blockedUnknownGetCount: number;
   readonly blockedContentMutationCount: number;
   readonly postCatalog: readonly ReturnType<typeof safeReconciliationRequestMetadata>[];
   readonly readRequestPaths: readonly string[];
@@ -151,6 +153,8 @@ export async function scanOwnedToutiaoManagement(context: BrowserContext, canoni
   const ownedPageCount = context.pages().length;
   const catalog: ReturnType<typeof safeReconciliationRequestMetadata>[] = [];
   let blockedRequestCount = 0;
+  let blockedPostCount = 0;
+  let blockedUnknownGetCount = 0;
   let blockedContentMutationCount = 0;
   let apiListObserved = false;
   let apiTargetObserved = false;
@@ -166,6 +170,8 @@ export async function scanOwnedToutiaoManagement(context: BrowserContext, canoni
       await route.continue(); return;
     }
     blockedRequestCount += 1;
+    if (request.method().toUpperCase() === "POST") blockedPostCount += 1;
+    if (decision === "BLOCK_UNKNOWN" && request.method().toUpperCase() === "GET") blockedUnknownGetCount += 1;
     if (decision === "BLOCK_CONTENT_MUTATION") blockedContentMutationCount += 1;
     if (request.method().toUpperCase() === "POST" && catalog.length < 100) catalog.push(metadata);
     await route.abort("blockedbyclient");
@@ -256,7 +262,8 @@ export async function scanOwnedToutiaoManagement(context: BrowserContext, canoni
       availableStatuses, scans, totalRows: scans.reduce((sum, scan) => sum + scan.rows, 0),
       ...matched, scopeComplete: first.statuses.length > 1 && scans.length === availableStatuses.length
         && scans.every((scan) => scan.scopeComplete),
-      apiListObserved, apiTargetObserved, blockedRequestCount, blockedContentMutationCount,
+      apiListObserved, apiTargetObserved, blockedRequestCount, blockedPostCount,
+      blockedUnknownGetCount, blockedContentMutationCount,
       postCatalog: catalog, readRequestPaths: [...readRequestPaths].sort(),
       managementLinkPaths: first.managementLinkPaths, paginationControls: first.paginationControls,
       statusControlShape: first.statusControlShape };
