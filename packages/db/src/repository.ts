@@ -2372,6 +2372,44 @@ export class AppRepository {
     return parseJson<Record<string, unknown>>(row?.publish_payload_json, {});
   }
 
+  /** A file selection may take effect even if the caller loses its response. Never issue it twice for this Job. */
+  claimDouyinImageTextFileSelection(input: { jobId: string; accountId: string; articleId: string;
+    loginGeneration: number; sessionIdHash: string; imageSha256: string; sourceContentHash: string }):
+    { operationId: string; stage: "FILE_SELECTION_DISPATCHED"; newlyClaimed: boolean } {
+    if (!/^[a-f0-9]{64}$/u.test(input.imageSha256) || !/^[a-f0-9]{64}$/u.test(input.sourceContentHash)
+      || !input.sessionIdHash.trim()) throw new Error("DOUYIN_IMAGE_SELECTION_BINDING_INVALID");
+    return this.db.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM publish_jobs WHERE id=?").get(input.jobId) as Row | undefined;
+      if (!row || row.platform_key !== "douyin" || row.account_id !== input.accountId || row.article_id !== input.articleId
+        || row.status !== "AwaitingConfirmation" || row.content_kind !== "article" || !row.selected_image_asset_id)
+        throw new Error("DOUYIN_IMAGE_SELECTION_JOB_MISMATCH");
+      const binding = this.getDouyinImageTextConnection(input.accountId);
+      if (!binding?.active || binding.loginGeneration !== input.loginGeneration)
+        throw new Error("DOUYIN_IMAGE_SELECTION_LOGIN_GENERATION_MISMATCH");
+      const raw = String(row.publish_payload_json ?? "{}");
+      const payload = parseJson<Record<string, unknown>>(raw, {});
+      const existing = payload.douyinImageSelection;
+      if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+        const selected = existing as Record<string, unknown>;
+        if (selected.accountId !== input.accountId || selected.articleId !== input.articleId
+          || selected.loginGeneration !== input.loginGeneration || selected.sessionIdHash !== input.sessionIdHash
+          || selected.imageSha256 !== input.imageSha256 || selected.sourceContentHash !== input.sourceContentHash
+          || typeof selected.operationId !== "string" || selected.stage !== "FILE_SELECTION_DISPATCHED")
+          throw new Error("DOUYIN_IMAGE_SELECTION_ALREADY_BOUND_TO_OTHER_CONTENT");
+        return { operationId: selected.operationId, stage: "FILE_SELECTION_DISPATCHED" as const, newlyClaimed: false };
+      }
+      const operationId = randomUUID();
+      const next = json({ ...payload, douyinImageSelection: { operationId, stage: "FILE_SELECTION_DISPATCHED",
+        accountId: input.accountId, articleId: input.articleId, loginGeneration: input.loginGeneration,
+        sessionIdHash: input.sessionIdHash, imageSha256: input.imageSha256,
+        sourceContentHash: input.sourceContentHash, claimedAt: now() } });
+      const updated = this.db.prepare("UPDATE publish_jobs SET publish_payload_json=? WHERE id=? AND publish_payload_json=? AND status='AwaitingConfirmation'")
+        .run(next, input.jobId, raw);
+      if (updated.changes !== 1) throw new Error("DOUYIN_IMAGE_SELECTION_CONCURRENT_CLAIM");
+      return { operationId, stage: "FILE_SELECTION_DISPATCHED" as const, newlyClaimed: true };
+    })();
+  }
+
   confirmJob(id: string, dryRun = false): PublishJob {
     const job = this.getJob(id);
     if (!job) throw new Error("任务不存在");

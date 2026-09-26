@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Page } from "playwright-core";
 import { vi } from "vitest";
 import type { CredentialStore } from "@publisher/security";
-import { DouyinImageTextBrowserAdapter, denyOptionalDouyinLocation, dismissKnownDouyinHomeTour, douyinRequiredSettingsPass, isAuthorizedDouyinDraftResume, parseVisibleDouyinCreatorId,
+import { DouyinImageTextBrowserAdapter, denyOptionalDouyinLocation, dismissKnownDouyinHomeTour, douyinRequiredSettingsPass, isAuthorizedDouyinDraftResume, isSameDouyinUploadOperation, parseVisibleDouyinCreatorId,
   waitForUniqueDouyinImageInput } from "./image-text-browser";
 
 const store: CredentialStore = { get: () => null, set: () => undefined, delete: () => undefined, has: () => false };
@@ -31,6 +31,23 @@ describe("Douyin image/text BrowserNative adapter", () => {
     expect(isAuthorizedDouyinDraftResume({ ...target, articleId: "old-test" }, approved)).toBe(false);
     expect(isAuthorizedDouyinDraftResume({ ...target, pagePath: "/creator-micro/home" }, approved)).toBe(false);
     expect(isAuthorizedDouyinDraftResume(target, null)).toBe(false);
+  });
+  it("continues an empty editor only within the same returned selection operation", () => {
+    const page = {} as Page;
+    const context = {};
+    const attempt = { accountId: "owner", articleId: "new-test", jobId: "new-job", operationId: "operation-1",
+      page, context, sessionIdHash: "session-1", loginGeneration: 1,
+      sourceContentHash: "a".repeat(64), imageSha256: "b".repeat(64),
+      previewDigest: "c".repeat(64), selectionStatus: "RETURNED" as const };
+    const current = { ...attempt, pagePath: "/creator-micro/content/post/image", title: "", body: "" };
+    expect(isSameDouyinUploadOperation(attempt, current)).toBe(true);
+    expect(isSameDouyinUploadOperation({ ...attempt, selectionStatus: "THREW" }, current)).toBe(false);
+    expect(isSameDouyinUploadOperation({ ...attempt, previewDigest: undefined }, current)).toBe(false);
+    expect(isSameDouyinUploadOperation(attempt, { ...current, context: {} })).toBe(false);
+    expect(isSameDouyinUploadOperation(attempt, { ...current, page: {} as Page })).toBe(false);
+    expect(isSameDouyinUploadOperation(attempt, { ...current, sessionIdHash: "new-session" })).toBe(false);
+    expect(isSameDouyinUploadOperation(attempt, { ...current, imageSha256: "c".repeat(64) })).toBe(false);
+    expect(isSameDouyinUploadOperation(attempt, { ...current, pagePath: "/creator-micro/home" })).toBe(false);
   });
   it("dismisses only the known Creator home tour before choosing the image-post entry", async () => {
     const skip = { count: vi.fn(async () => 1), isVisible: vi.fn(async () => true), click: vi.fn(async () => undefined) };

@@ -23,7 +23,8 @@ import type { Logger } from "@publisher/logger";
 import type { BrowserConnectionDiagnostic } from "@publisher/adapters-browser";
 import type { XiaohongshuAuthStateDiagnostic, XiaohongshuCanonicalPageOperationEvidence, XiaohongshuEditorEntryDiagnostic, XiaohongshuLoginEvaluation } from "@publisher/adapters-xiaohongshu/browser";
 
-export function createRuntimeAdapterRegistry(credentials: CredentialStore, includeTestPlatform: boolean, logger?: Logger, browserProfileRootDir?: string, credentialFilePath?: string, options: { toutiaoArticleApiPublisherEnabled?: boolean; toutiaoBrowserNativeSubmitEnabled?: boolean; douyinImageTextNativeSubmitEnabled?: boolean } = {}): AdapterRegistry {
+export function createRuntimeAdapterRegistry(credentials: CredentialStore, includeTestPlatform: boolean, logger?: Logger, browserProfileRootDir?: string, credentialFilePath?: string, options: { toutiaoArticleApiPublisherEnabled?: boolean; toutiaoBrowserNativeSubmitEnabled?: boolean; douyinImageTextNativeSubmitEnabled?: boolean;
+  claimDouyinImageTextFileSelection?: NonNullable<ConstructorParameters<typeof DouyinImageTextBrowserAdapter>[0]>["claimFileSelection"] } = {}): AdapterRegistry {
   const registry = new AdapterRegistry();
   const onBrowserRuntimeEvent = (event: BrowserRuntimeEvent): void => {
     if (event.code === "BROWSER_RUNTIME_SELECTED") logger?.info("BROWSER_RUNTIME", event.code, "已选择系统浏览器运行时", event);
@@ -83,6 +84,7 @@ export function createRuntimeAdapterRegistry(credentials: CredentialStore, inclu
   registry.register(new WeChatOfficialAdapter({ credentialStore: credentials }));
   registry.register(new DouyinOfficialAdapter({ credentialStore: credentials }));
   registry.register(new DouyinImageTextBrowserAdapter({ credentialStore: credentials, sessionManager: browserSessionManager, onBrowserRuntimeEvent,
+    claimFileSelection: options.claimDouyinImageTextFileSelection,
     nativeSubmitEnabled: options.douyinImageTextNativeSubmitEnabled ?? (process.env.DOUYIN_IMAGE_TEXT_NATIVE_SUBMIT_ENABLED === "true"
       && Boolean(process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim() && process.env.DOUYIN_R1_ACCEPTANCE_ARTICLE_ID?.trim())),
     approvedResume: process.env.DOUYIN_R1_RESUME_ARTICLE_ID?.trim()

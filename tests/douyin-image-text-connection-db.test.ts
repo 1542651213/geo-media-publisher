@@ -66,6 +66,39 @@ describe("Douyin image/text Creator binding", () => {
       imageSelectionMode: "manual", selectedImageAssetId: image.id })).toThrow("Owner");
   });
 
+  it("durably claims one image file-selection operation without replacing Job settings", () => {
+    const repo = setup();
+    repo.setSetting("contentReviewMode", "Off");
+    const brand = repo.createBrand({ name: "Test", companyName: "Test" });
+    const account = repo.createAccount({ platformKey: "douyin", name: "Owner" });
+    repo.saveDouyinImageTextConnection({ accountId: account.id, creatorId: "72388977613", browserSessionIdHash: "session-1" });
+    const article = repo.createArticle({ brandId: brand.id, title: "Unique R1.1", body: "Test body", summary: "", tags: [],
+      seoKeywords: [], topic: "test", keyword: "test", city: "", articleType: "科普", aiProvider: "fixture", aiModel: "fixture",
+      generatedAt: new Date().toISOString(), reusePolicy: "once", contentHash: "f".repeat(64), qualityStatus: "passed",
+      qualityWarnings: [], source: "production" });
+    if (!article) throw new Error("fixture Article unavailable");
+    const image = repo.createImageAsset({ brandId: brand.id, name: "Test", filePath: "C:/owner/test.png",
+      originalFileName: "test.png", mimeType: "image/png", size: 10 });
+    const settings = { version: 1 as const, visibility: "public" as const, timing: "immediate" as const };
+    const job = repo.createArticlePublishJob({ articleId: article.id, platformKey: "douyin", platformAccountId: account.id,
+      imageSelectionMode: "manual", selectedImageAssetId: image.id, douyinImageTextSettings: settings });
+    const claimInput = { jobId: job.id, accountId: account.id, articleId: article.id, loginGeneration: 1,
+      sessionIdHash: "session-1", imageSha256: "a".repeat(64), sourceContentHash: "b".repeat(64) };
+    expect(() => repo.claimDouyinImageTextFileSelection({ ...claimInput, accountId: "wrong" })).toThrow();
+    expect(() => repo.claimDouyinImageTextFileSelection({ ...claimInput, loginGeneration: 2 })).toThrow();
+    const first = repo.claimDouyinImageTextFileSelection(claimInput);
+    expect(first).toMatchObject({ newlyClaimed: true, stage: "FILE_SELECTION_DISPATCHED" });
+    expect(first.operationId).toEqual(expect.any(String));
+    expect(repo.getPublishPayload(job.id)).toMatchObject({ douyinImageTextSettings: settings,
+      douyinImageSelection: { operationId: first.operationId, stage: "FILE_SELECTION_DISPATCHED",
+        accountId: account.id, articleId: article.id, imageSha256: claimInput.imageSha256 } });
+    expect(repo.claimDouyinImageTextFileSelection(claimInput)).toEqual({ ...first, newlyClaimed: false });
+    expect(() => repo.claimDouyinImageTextFileSelection({ ...claimInput, imageSha256: "c".repeat(64) })).toThrow();
+    expect(repo.getPublishRecordByJob(job.id)).toBeNull();
+    expect(repo.getSubmissionIntentByJob(job.id)).toBeNull();
+    expect(repo.getJob(job.id)?.status).toBe("AwaitingConfirmation");
+  });
+
   it("closes a uniquely matched management publication without inventing public verification", () => {
     const repo = setup();
     repo.setSetting("contentReviewMode", "Off");
