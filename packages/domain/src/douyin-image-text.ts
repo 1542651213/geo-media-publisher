@@ -11,6 +11,14 @@ export interface DouyinImageTextSource {
   topics: readonly string[];
   visibility: "public";
   scheduledAt: null;
+  mandatorySelections?: readonly { key: string; value: string }[];
+}
+
+/** Owner-selected R1 candidate settings. No default is supplied by the Job factory. */
+export interface DouyinImageTextJobSettings {
+  version: 1;
+  visibility: "public";
+  timing: "immediate";
 }
 
 export interface FrozenDouyinImageText extends DouyinImageTextSource {
@@ -73,12 +81,15 @@ export async function freezeDouyinImageText(source: DouyinImageTextSource): Prom
   const bytes = await readFile(source.imagePaths[0]);
   if (!supportedImage(bytes)) throw new Error("Douyin image must be a nonempty PNG or JPEG");
   const imageHashes = [sha256(bytes)];
+  const mandatorySelections = [...(source.mandatorySelections ?? [])].map(({ key, value }) => ({ key: key.trim(), value: value.trim() }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+  if (mandatorySelections.some(({ key, value }) => !key || !value)) throw new Error("Douyin mandatory setting snapshot is incomplete");
   const sourceContentHash = sha256(JSON.stringify({ version: 1, title: source.title, body: source.body,
-    imageHashes, topics: source.topics, visibility: source.visibility, scheduledAt: source.scheduledAt }));
+    imageHashes, topics: source.topics, visibility: source.visibility, scheduledAt: source.scheduledAt, mandatorySelections }));
   const transport = "DOUYIN_IMAGE_TEXT_BROWSER" as const;
   const contentBindingHash = sha256(JSON.stringify({ version: 1, articleId: source.articleId,
     accountId: source.accountId, creatorId: source.creatorId, transport, sourceContentHash }));
-  return Object.freeze({ ...source, imagePaths: Object.freeze([...source.imagePaths]), topics: Object.freeze([...source.topics]),
+  return Object.freeze({ ...source, mandatorySelections: Object.freeze(mandatorySelections), imagePaths: Object.freeze([...source.imagePaths]), topics: Object.freeze([...source.topics]),
     transport, imageHashes: Object.freeze(imageHashes), sourceContentHash, contentBindingHash });
 }
 

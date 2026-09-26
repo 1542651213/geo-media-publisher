@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import type Database from "better-sqlite3";
 import { CONTENT_STUDIO_PLATFORM_KEYS, CORE_AI_FABRICATION_RULES, canonicalSerialize, conservativePlatformContentRules, expandKeywords, normalizeContentReviewMode, normalizeToutiaoSettings, redactSecretText, redactSecretValue } from "@publisher/domain";
 import { hashToutiaoContentBinding } from "@publisher/domain/toutiao-hash";
+import type { DouyinImageTextJobSettings } from "@publisher/domain/douyin-image-text";
 import type { Account, ActivityLog, AdapterManifest, AIProviderProfile, AIUsage, Article, ArticleVariant, BackgroundAutomationStatus, Brand, BrandAsset, BrandDifferentiationMetrics, BrandKnowledgeCategory, BrandKnowledgeEntry, CityRegion, ContentGoal, ContentIntent, ContentQualityCheckResult, ContentQualityContentType, ContentQualityIssue, ContentQualityStatus, ContentQualityTrigger, ContentReviewMode, ContentSource, ContentStudioContent, ContentStudioPlatformKey, ContentStudioTopicPlan, DashboardStats, ExcelArticleRowInput, ExcelImportDiagnostic, ExcelImportDiagnosticCode, ExcelImportPreview, ExcelImportPreviewRow, ExcelImportResult, ExcelImportSheetCandidate, FinalPublishMode, ImageAsset, ImageSelectionMode, KnowledgeSnapshot, KeywordItem, KeywordTemplate, LoginStatus, Notification, Platform, PlatformCapability, PlatformCapabilities, PlatformContentRules, PlatformProfile, PlatformSelfTestCleanupStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PlatformSelfTestStep, PromotionStrength, PublishJob, PublishPlan, PublishRecord, SearchIntent, VideoAsset } from "@publisher/domain";
 import type { PublishRemoteStatus, ToutiaoArticleSettingsSnapshot, ToutiaoContentBindingInput } from "@publisher/domain";
 
@@ -2205,13 +2206,15 @@ export class AppRepository {
     return this.getJob(id) as PublishJob;
   }
 
-  createArticlePublishJob(input: { articleId: string; platformKey: string; platformAccountId: string; publishMode?: "ASSISTED" | "MANUAL"; finalPublishMode?: FinalPublishMode; selectedImageAssetId?: string | null; imageSelectionMode?: ImageSelectionMode; articleTransport?: "browser" | "api" }): PublishJob {
+  createArticlePublishJob(input: { articleId: string; platformKey: string; platformAccountId: string; publishMode?: "ASSISTED" | "MANUAL"; finalPublishMode?: FinalPublishMode; selectedImageAssetId?: string | null; imageSelectionMode?: ImageSelectionMode; articleTransport?: "browser" | "api"; douyinImageTextSettings?: DouyinImageTextJobSettings }): PublishJob {
     const article = this.getArticle(input.articleId);
     if (!article) throw new Error("文章不存在");
     this.assertArticlePublishAllowed(article.id);
     const account = this.listAccounts().find((item) => item.platformAccountId === input.platformAccountId && item.platformKey === input.platformKey);
     if (!account) throw new Error("目标平台账号不存在");
     if (input.platformKey === "douyin") {
+      if (input.douyinImageTextSettings?.version !== 1 || input.douyinImageTextSettings.visibility !== "public"
+        || input.douyinImageTextSettings.timing !== "immediate") throw new Error("抖音图文需要 Owner 明确选择公开可见与立即发布");
       const connection = this.getDouyinImageTextConnection(account.id);
       if (!account.enabled || !connection?.active || !connection.creatorId)
         throw new Error("抖音图文 Creator 账号未完成独立身份绑定，禁止创建发布任务");
@@ -2225,7 +2228,11 @@ export class AppRepository {
       if (!image || !image.enabled || (image.brandId && image.brandId !== article.brandId)) throw new Error("所选配图不可用或与文章品牌不匹配");
     }
     const existing = this.db.prepare("SELECT id FROM publish_jobs WHERE platform_account_id=? AND platform_key=? AND article_id=? AND status NOT IN ('Failed','Cancelled','ReconciledNotPublished') ORDER BY created_at DESC LIMIT 1").get(account.platformAccountId, input.platformKey, input.articleId) as Row | undefined;
-    if (existing) return this.getJob(textValue(existing.id)) as PublishJob;
+    if (existing) {
+      if (input.platformKey === "douyin" && JSON.stringify(this.getDouyinImageTextJobSettings(textValue(existing.id))) !== JSON.stringify(input.douyinImageTextSettings))
+        throw new Error("Existing Douyin Job settings differ from the Owner-selected candidate");
+      return this.getJob(textValue(existing.id)) as PublishJob;
+    }
     if (requestedImageMode === "random" && !selectedImageAssetId) selectedImageAssetId = this.selectImageAssetForArticle(article.id, input.platformKey)?.id ?? null;
     if (selectedImageAssetId) this.markImageAssetUsed(selectedImageAssetId);
     const id = randomUUID();
@@ -2233,8 +2240,16 @@ export class AppRepository {
     const finalPublishMode = input.finalPublishMode ?? (input.publishMode === "MANUAL" ? "PREPARE_ONLY" : "CONFIRM_BEFORE_PUBLISH");
     const platform = this.listPlatforms().find((item) => item.platformKey === input.platformKey);
     const apiAutoPublish = finalPublishMode === "AUTO_PUBLISH" && (input.articleTransport ? input.articleTransport === "api" : input.platformKey === "toutiao" ? false : platform?.integrationMode === "API");
-    this.db.prepare("INSERT INTO publish_jobs (id,plan_id,account_id,platform_account_id,platform_key,article_id,article_variant_id,scheduled_at,status,max_attempts,created_at,dry_run,manual_confirmation_required,selected_image_asset_id,image_selection_mode,final_publish_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(id, null, account.id, account.platformAccountId, input.platformKey, input.articleId, null, timestamp, apiAutoPublish ? "Scheduled" : "AwaitingConfirmation", 3, timestamp, 0, apiAutoPublish ? 0 : 1, selectedImageAssetId, requestedImageMode, finalPublishMode);
+    this.db.prepare("INSERT INTO publish_jobs (id,plan_id,account_id,platform_account_id,platform_key,article_id,article_variant_id,scheduled_at,status,max_attempts,created_at,dry_run,manual_confirmation_required,selected_image_asset_id,image_selection_mode,final_publish_mode,publish_payload_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(id, null, account.id, account.platformAccountId, input.platformKey, input.articleId, null, timestamp, apiAutoPublish ? "Scheduled" : "AwaitingConfirmation", 3, timestamp, 0, apiAutoPublish ? 0 : 1, selectedImageAssetId, requestedImageMode, finalPublishMode, json(input.platformKey === "douyin" ? { douyinImageTextSettings: input.douyinImageTextSettings } : {}));
     return this.getJob(id) as PublishJob;
+  }
+
+  getDouyinImageTextJobSettings(jobId: string): DouyinImageTextJobSettings | null {
+    const value = this.getPublishPayload(jobId).douyinImageTextSettings;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const settings = value as Record<string, unknown>;
+    return settings.version === 1 && settings.visibility === "public" && settings.timing === "immediate"
+      ? { version: 1, visibility: "public", timing: "immediate" } : null;
   }
 
   previewExcelArticleImport(input: {

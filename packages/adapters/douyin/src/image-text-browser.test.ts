@@ -12,12 +12,13 @@ describe("Douyin image/text BrowserNative adapter", () => {
   });
 
   it("fails closed unless public visibility and schedule-off are explicit", () => {
-    const base = { selectedLabels: ["公开"], scheduleControlVisible: true, requiredEmptyCount: 0 };
+    const base = { visibility: "public" as const, visibilitySelected: true, timing: "immediate" as const,
+      timingSelected: true, requiredEmptyCount: 0, unknownMandatoryCount: 0, selectedMandatory: [] };
     expect(douyinRequiredSettingsPass(base)).toBe(true);
-    expect(douyinRequiredSettingsPass({ ...base, selectedLabels: [] })).toBe(false);
-    expect(douyinRequiredSettingsPass({ ...base, selectedLabels: ["仅自己可见"] })).toBe(false);
-    expect(douyinRequiredSettingsPass({ ...base, selectedLabels: ["公开", "定时发布"] })).toBe(false);
-    expect(douyinRequiredSettingsPass({ ...base, scheduleControlVisible: false })).toBe(false);
+    expect(douyinRequiredSettingsPass({ ...base, visibilitySelected: false })).toBe(false);
+    expect(douyinRequiredSettingsPass({ ...base, visibility: "private" })).toBe(false);
+    expect(douyinRequiredSettingsPass({ ...base, timing: "scheduled" })).toBe(false);
+    expect(douyinRequiredSettingsPass({ ...base, timingSelected: false })).toBe(false);
     expect(douyinRequiredSettingsPass({ ...base, requiredEmptyCount: 1 })).toBe(false);
   });
   it("advertises an article-only, one-image route with default-off formal submit", async () => {

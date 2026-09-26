@@ -52,11 +52,17 @@ describe("Douyin image/text Creator binding", () => {
     if (!article) throw new Error("fixture Article unavailable");
     const image = repo.createImageAsset({ brandId: brand.id, name: "Owner test image", filePath: "C:/owner/test.png",
       originalFileName: "test.png", mimeType: "image/png", size: 10 });
+    const settings = { version: 1 as const, visibility: "public" as const, timing: "immediate" as const };
     const create = () => repo.createArticlePublishJob({ articleId: article.id, platformKey: "douyin", platformAccountId: account.id,
-      imageSelectionMode: "manual", selectedImageAssetId: image.id });
+      imageSelectionMode: "manual", selectedImageAssetId: image.id, douyinImageTextSettings: settings });
     expect(create).toThrow("Creator");
     repo.saveDouyinImageTextConnection({ accountId: account.id, creatorId: "72388977613", browserSessionIdHash: "hash-1" });
-    expect(() => repo.createArticlePublishJob({ articleId: article.id, platformKey: "douyin", platformAccountId: account.id })).toThrow("手动选择");
-    expect(create().status).toBe("AwaitingConfirmation");
+    expect(() => repo.createArticlePublishJob({ articleId: article.id, platformKey: "douyin", platformAccountId: account.id,
+      douyinImageTextSettings: settings })).toThrow("手动选择");
+    const job = create();
+    expect(job.status).toBe("AwaitingConfirmation");
+    expect(repo.getDouyinImageTextJobSettings(job.id)).toEqual(settings);
+    expect(() => repo.createArticlePublishJob({ articleId: article.id, platformKey: "douyin", platformAccountId: account.id,
+      imageSelectionMode: "manual", selectedImageAssetId: image.id })).toThrow("Owner");
   });
 });

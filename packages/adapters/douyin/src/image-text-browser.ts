@@ -1,10 +1,13 @@
 import type { Page } from "playwright-core";
+import { basename } from "node:path";
 import { type AccountContext, type AccountProfile, type LoginStatus,
   type PublishArticleInput, type PublishResult, type ValidationResult } from "@publisher/domain";
 import { assertDouyinImageTextReadback, freezeDouyinImageText, verifyDouyinImageTextImage,
   type FrozenDouyinImageText } from "@publisher/domain/douyin-image-text";
 import type { AutomationPrepareResult } from "@publisher/adapters-core";
 import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomationAdapterOptions, type BrowserPlatformDefinition } from "@publisher/adapters-browser";
+import { assertDouyinEditorSettings, protectExistingDouyinDraft, verifyDouyinUploadEvidence,
+  type DouyinEditorSettingsSnapshot } from "./image-text-evidence";
 
 const creatorHome = "https://creator.douyin.com/creator-micro/home";
 
@@ -13,18 +16,10 @@ export function parseVisibleDouyinCreatorId(pageText: string): string | null {
   return matches.length === 1 ? matches[0] ?? null : null;
 }
 
-export interface DouyinRequiredSettingsEvidence {
-  selectedLabels: readonly string[];
-  scheduleControlVisible: boolean;
-  requiredEmptyCount: number;
-}
-
-/** Unknown custom controls fail closed; a visible, selected public option is required. */
-export function douyinRequiredSettingsPass(evidence: DouyinRequiredSettingsEvidence): boolean {
-  const selected = evidence.selectedLabels.join(" ");
-  return /公开|所有人可见/u.test(selected)
-    && !/仅自己可见|私密|定时/u.test(selected)
-    && evidence.scheduleControlVisible && evidence.requiredEmptyCount === 0;
+/** Compatibility helper for diagnostics; only selected control state can pass. */
+export function douyinRequiredSettingsPass(evidence: DouyinEditorSettingsSnapshot): boolean {
+  try { assertDouyinEditorSettings(evidence, "public"); return true; }
+  catch { return false; }
 }
 const definition: BrowserPlatformDefinition = {
   platformKey: "douyin",
@@ -96,6 +91,47 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
 
   override async checkLogin(ctx: AccountContext): Promise<LoginStatus> { return this.checkSession(ctx); }
 
+  private async readEditorSettings(page: Page): Promise<DouyinEditorSettingsSnapshot> {
+    return page.evaluate(() => {
+      const controls = [...document.querySelectorAll<Element>('input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"],[role="switch"],[aria-pressed]')]
+        .filter((element) => element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0)
+        .map((element) => {
+          const label = (element.getAttribute("aria-label") ?? element.closest("label")?.textContent ?? element.parentElement?.textContent ?? "")
+            .replace(/\s+/gu, " ").trim().slice(0, 80);
+          const selected = element instanceof HTMLInputElement ? element.checked
+            : element.getAttribute("aria-checked") === "true" || element.getAttribute("aria-pressed") === "true";
+          const explicit = element instanceof HTMLInputElement || element.hasAttribute("aria-checked") || element.hasAttribute("aria-pressed");
+          return { label, selected, explicit };
+        }).filter((item) => item.label && item.explicit);
+      const publicControls = controls.filter(({ label }) => /^(公开|所有人可见|公开可见)$/u.test(label));
+      const privateControls = controls.filter(({ label }) => /仅自己可见|私密/u.test(label));
+      const followerControls = controls.filter(({ label }) => /仅粉丝可见|粉丝可见/u.test(label));
+      const immediateControls = controls.filter(({ label }) => /立即发布|立即/u.test(label));
+      const scheduleControls = controls.filter(({ label }) => /定时发布|定时/u.test(label));
+      const publicSelected = publicControls.length === 1 && publicControls[0]?.selected === true;
+      const privateSelected = privateControls.length === 1 && privateControls[0]?.selected === true;
+      const followersSelected = followerControls.length === 1 && followerControls[0]?.selected === true;
+      const immediateSelected = immediateControls.length === 1 && immediateControls[0]?.selected === true;
+      const scheduleOff = scheduleControls.length === 1 && scheduleControls[0]?.selected === false;
+      const scheduled = scheduleControls.some((item) => item.selected);
+      const visibleRequired = [...document.querySelectorAll<HTMLElement>('[required],[aria-required="true"]')]
+        .filter((element) => element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0);
+      const requiredEmptyCount = visibleRequired.filter((element) => element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+        ? !element.value.trim() : element.getAttribute("aria-checked") !== "true" && !element.textContent?.trim()).length;
+      const unknownMandatoryCount = visibleRequired.filter((element) => !(
+        element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element.hasAttribute("aria-checked"))).length;
+      const selectedMandatory = controls.filter(({ label, selected }) => selected && !/公开|可见|私密|粉丝|立即|定时/u.test(label))
+        .map(({ label }) => ({ key: label, value: "selected" }));
+      return {
+        visibility: publicSelected ? "public" as const : followersSelected ? "followers" as const : privateSelected ? "private" as const : "unknown" as const,
+        visibilitySelected: publicSelected || privateSelected || followersSelected,
+        timing: scheduled ? "scheduled" as const : immediateSelected || scheduleOff ? "immediate" as const : "unknown" as const,
+        timingSelected: scheduled || immediateSelected || scheduleOff,
+        requiredEmptyCount, unknownMandatoryCount, selectedMandatory
+      };
+    });
+  }
+
   override async validateArticle(article: PublishArticleInput): Promise<ValidationResult> {
     const errors: string[] = [];
     if (!article.articleId.trim() || !article.title.trim() || !article.body.trim()) errors.push("DOUYIN_IMAGE_TEXT_REQUIRED_CONTENT");
@@ -119,37 +155,51 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
       throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_CREATOR_IDENTITY_MISMATCH");
     if (new URL(page.url()).pathname !== "/creator-micro/home")
       throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_CREATOR_HOME_REQUIRED_FOR_NEW_IMAGE_TEXT");
-    const frozen = await freezeDouyinImageText({ articleId: article.articleId, accountId: ctx.accountId, creatorId,
-      title: article.title, body: article.body, imagePaths: article.images ?? [], topics: [], visibility: "public", scheduledAt: null });
+    const visibility = ctx.settings.expectedVisibility;
+    if (visibility !== "public") throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_OWNER_VISIBILITY_SELECTION_REQUIRED");
+    protectExistingDouyinDraft(await page.locator("body").innerText());
+    const source = { articleId: article.articleId, accountId: ctx.accountId, creatorId,
+      title: article.title, body: article.body, imagePaths: article.images ?? [], topics: [], visibility, scheduledAt: null } as const;
+    const initialFrozen = await freezeDouyinImageText(source);
     const card = page.locator('[role="button"]').filter({ hasText: /发布图文/u });
     if (await card.count() !== 1) throw new BrowserAutomationError("PLATFORM_CHANGED", "DOUYIN_IMAGE_TEXT_ENTRY_AMBIGUOUS");
     await page.keyboard.press("Escape");
     await card.click();
+    protectExistingDouyinDraft(await page.locator("body").innerText());
     await page.waitForURL((url) => url.origin === "https://creator.douyin.com" && url.pathname === "/creator-micro/content/upload", { timeout: 15_000 });
     const upload = page.locator('input[type="file"][accept*="image/"]');
     if (await upload.count() !== 1) throw new BrowserAutomationError("PLATFORM_CHANGED", "DOUYIN_IMAGE_UPLOAD_CONTROL_AMBIGUOUS");
-    if (!await verifyDouyinImageTextImage(frozen, 0)) throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_IMAGE_HASH_MISMATCH");
-    await upload.setInputFiles(frozen.imagePaths[0]!);
+    const uploadArea = await upload.evaluate((element) => (element.closest("label")?.textContent ?? element.parentElement?.textContent ?? "").slice(0, 120));
+    if (!/图文|图片|上传/u.test(uploadArea)) throw new BrowserAutomationError("PLATFORM_CHANGED", "DOUYIN_IMAGE_UPLOAD_AREA_UNVERIFIED");
+    const previewSelector = 'main img, [class*="upload"] img, [class*="image"] img';
+    const preUploadImageCount = await page.locator(previewSelector).count();
+    if (!await verifyDouyinImageTextImage(initialFrozen, 0)) throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_IMAGE_HASH_MISMATCH");
+    await upload.setInputFiles(initialFrozen.imagePaths[0]!);
+    const uploadInputFileName = await upload.evaluate((element) => element instanceof HTMLInputElement ? element.files?.[0]?.name ?? null : null).catch(() => null);
     await page.waitForURL((url) => url.origin === "https://creator.douyin.com" && url.pathname === "/creator-micro/content/post/image", { timeout: 30_000 });
+    const images = page.locator(previewSelector);
+    await images.first().waitFor({ state: "visible", timeout: 15_000 });
+    const postUploadImageCount = await images.count();
+    const imageVisible = postUploadImageCount === 1 && await images.first().isVisible();
+    const imageLoaded = postUploadImageCount === 1 && await images.first().evaluate((image) => image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0);
+    const editorText = await page.locator("body").innerText();
+    verifyDouyinUploadEvidence({ preUploadImageCount, postUploadImageCount, selectedFileName: basename(initialFrozen.imagePaths[0]!),
+      uploadInputFileName, imageVisible, imageLoaded, processing: /上传中|处理中|正在处理/u.test(editorText),
+      error: /上传失败|图片处理失败/u.test(editorText), currentEditorRoute: new URL(page.url()).pathname === "/creator-micro/content/post/image",
+      contextOwned: page.context() === owned.session.context });
     const title = page.locator('input[placeholder="添加作品标题"]');
     const body = page.locator('[contenteditable="true"]');
     if (await title.count() !== 1 || await body.count() !== 1) throw new BrowserAutomationError("PLATFORM_CHANGED", "DOUYIN_EDITOR_FIELDS_AMBIGUOUS");
-    await title.fill(frozen.title);
-    await body.fill(frozen.body);
+    await title.fill(initialFrozen.title);
+    await body.fill(initialFrozen.body);
     const titleReadback = await title.inputValue();
     const bodyReadback = await body.innerText();
-    const imageCount = await page.locator('main img, [class*="upload"] img, [class*="image"] img').count();
+    const imageCount = await images.count();
     const finalControl = page.locator('button,[role="button"]').filter({ hasText: /^发布$/u });
     const finalCount = await finalControl.count();
-    const settings = await page.evaluate(() => {
-      const options = [...document.querySelectorAll<Element>('input[type="radio"], input[type="checkbox"], [role="radio"], [role="checkbox"]')];
-      const selectedLabels = options.filter((element) => element instanceof HTMLInputElement ? element.checked : element.getAttribute("aria-checked") === "true")
-        .map((element) => (element.closest("label")?.textContent ?? element.parentElement?.textContent ?? "").trim().slice(0, 80));
-      const visibleText = document.body?.innerText ?? "";
-      const requiredEmptyCount = [...document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input[required],textarea[required]')]
-        .filter((element) => element.getBoundingClientRect().width > 0 && !element.value.trim()).length;
-      return { selectedLabels, scheduleControlVisible: /定时/u.test(visibleText), requiredEmptyCount };
-    });
+    const settings = await this.readEditorSettings(page);
+    assertDouyinEditorSettings(settings, visibility);
+    const frozen = await freezeDouyinImageText({ ...source, mandatorySelections: settings.selectedMandatory });
     assertDouyinImageTextReadback(frozen, { accountId: ctx.accountId, creatorId,
       contextOwned: page.context() === owned.session.context, sessionActive: !page.isClosed(),
       pageHost: new URL(page.url()).host, title: titleReadback, body: bodyReadback, imageCount,
@@ -161,7 +211,8 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
       titleFilled: true, bodyFilled: true, response: { adapter: "douyin-image-text-browser", imageUploaded: true,
         contentTransport: "DOUYIN_IMAGE_TEXT_BROWSER", imageHashes: frozen.imageHashes,
         sourceContentHash: frozen.sourceContentHash, contentBindingHash: frozen.contentBindingHash,
-        expectedCreatorId: creatorId, finalSubmitCount: 0 } };
+        expectedCreatorId: creatorId, settingsSnapshot: settings, mandatorySelections: settings.selectedMandatory,
+        finalSubmitCount: 0 } };
   }
 
   override async publishArticle(ctx: AccountContext, article: PublishArticleInput): Promise<PublishResult> {

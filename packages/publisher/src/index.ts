@@ -62,6 +62,13 @@ function publishInputHash(input: unknown): string {
   return createHash("sha256").update(JSON.stringify(input)).digest("hex");
 }
 
+function douyinMandatorySelections(value: unknown): Array<{ key: string; value: string }> {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((item) => !item || typeof item !== "object" || typeof item.key !== "string" || typeof item.value !== "string"))
+    throw Object.assign(new Error("Douyin mandatory settings snapshot is invalid"), { code: "CONTENT_REJECTED" });
+  return value.map((item: { key: string; value: string }) => ({ key: item.key, value: item.value }));
+}
+
 /** Persist only reviewed public-read flags; never copy arbitrary adapter response text. */
 function publicVerificationEvidence(verification: PublishStatusResult): Record<string, unknown> {
   const evidence: Record<string, unknown> = { status: verification.status,
@@ -303,10 +310,12 @@ export class PublisherService {
     if (!account || !article) throw new Error("关联账号或文章不存在");
     this.repository.assertArticlePublishAllowed(article.id);
     if (!isAutomationAdapter(adapter)) throw Object.assign(new Error("当前平台没有浏览器辅助发布能力"), { code: "PERMISSION_DENIED" });
+    const douyinSettings = job.platformKey === "douyin" ? this.repository.getDouyinImageTextJobSettings(job.id) : null;
+    if (job.platformKey === "douyin" && !douyinSettings) throw Object.assign(new Error("Douyin Owner-selected image/text settings are missing"), { code: "CONTENT_REJECTED" });
     const effectiveBrowserExecutionMode = this.resolveBrowserExecutionMode(job.platformKey, browserExecutionMode, job.contentKind ?? "article");
     const douyinConnection = job.platformKey === "douyin" ? this.repository.getDouyinImageTextConnection(account.id) : null;
     const expectedCreatorId = job.platformKey === "douyin" ? douyinConnection?.creatorId : account.externalAccountId;
-    const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: false, manualConfirmationRequired: true, ...browserIdentitySettings(account, managementReconciliation, douyinConnection) }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
+    const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: false, manualConfirmationRequired: true, ...browserIdentitySettings(account, managementReconciliation, douyinConnection), ...(douyinSettings ? { expectedVisibility: douyinSettings.visibility } : {}) }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
     const login = await withTimeout(adapter.checkLogin(ctx), this.options.loginCheckTimeoutMs ?? 30_000, "Platform login check");
     if (login !== "logged_in") throw Object.assign(new Error(`${managementReconciliation ? "头条" : "知乎"}账号 Session 未通过登录检查，请先完成正常登录验证`), { code: login === "expired" || login === "logged_out" ? "LOGIN_EXPIRED" : "USER_ACTION_REQUIRED" });
     const variant = job.articleVariantId ? this.repository.getArticleVariant(job.articleVariantId) : null;
@@ -318,14 +327,16 @@ export class PublisherService {
       if (!selectedImage || job.imageSelectionMode !== "manual" || selectedImage.brandId !== article.brandId)
         throw Object.assign(new Error("Douyin image must be manually selected from the same Article brand"), { code: "CONTENT_REJECTED" });
       return freezeDouyinImageText({ articleId: article.id, accountId: account.id, creatorId: expectedCreatorId ?? "",
-        title: input.title, body: input.body, imagePaths: [selectedImage.filePath], topics: [], visibility: "public", scheduledAt: null });
+        title: input.title, body: input.body, imagePaths: [selectedImage.filePath], topics: [], visibility: douyinSettings!.visibility, scheduledAt: null });
     })() : null;
+    const existingFrozenDouyin = frozenDouyin && existing
+      ? await freezeDouyinImageText({ ...frozenDouyin, mandatorySelections: douyinMandatorySelections(existing.response.mandatorySelections) }) : frozenDouyin;
     if (managementReconciliation && existing && (existing.status !== "Prepared" || existing.response.contentTransport !== adapter.getCapabilities().contentTransport
       || existing.response.preparedInputHash !== hashPreparedBrowserArticleInput(input) || existing.response.expectedCreatorId !== expectedCreatorId
       || job.platformKey === "douyin" && existing.response.expectedLoginGeneration !== douyinConnection?.loginGeneration
-      || frozenDouyin && (existing.response.sourceContentHash !== frozenDouyin.sourceContentHash
-        || existing.response.contentBindingHash !== frozenDouyin.contentBindingHash
-        || JSON.stringify(existing.response.imageHashes) !== JSON.stringify(frozenDouyin.imageHashes))))
+      || existingFrozenDouyin && (existing.response.sourceContentHash !== existingFrozenDouyin.sourceContentHash
+        || existing.response.contentBindingHash !== existingFrozenDouyin.contentBindingHash
+        || JSON.stringify(existing.response.imageHashes) !== JSON.stringify(existingFrozenDouyin.imageHashes))))
       throw Object.assign(new Error("Toutiao preparation recovery must preserve the frozen content, transport and identity"), { code: "CONTENT_REJECTED" });
     const validation = await adapter.validateArticle(input);
     if (!validation.valid) throw Object.assign(new Error(validation.errors.join("；")), { code: "CONTENT_REJECTED" });
@@ -341,9 +352,11 @@ export class PublisherService {
       throw Object.assign(new Error("平台编辑器未返回图片上传完成证据，不能声明图片已插入"), { code: "UPLOAD_FAILED" });
     }
     if (selectedImage) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_PASSED", "平台编辑器已返回图片 DOM 上传证据", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
-    if (frozenDouyin && (prepared.response.sourceContentHash !== frozenDouyin.sourceContentHash
-      || prepared.response.contentBindingHash !== frozenDouyin.contentBindingHash
-      || JSON.stringify(prepared.response.imageHashes) !== JSON.stringify(frozenDouyin.imageHashes)))
+    const preparedFrozenDouyin = frozenDouyin
+      ? await freezeDouyinImageText({ ...frozenDouyin, mandatorySelections: douyinMandatorySelections(prepared.response.mandatorySelections) }) : null;
+    if (preparedFrozenDouyin && (prepared.response.sourceContentHash !== preparedFrozenDouyin.sourceContentHash
+      || prepared.response.contentBindingHash !== preparedFrozenDouyin.contentBindingHash
+      || JSON.stringify(prepared.response.imageHashes) !== JSON.stringify(preparedFrozenDouyin.imageHashes)))
       throw Object.assign(new Error("Douyin editor preparation does not match the frozen image and content binding"), { code: "CONTENT_REJECTED" });
     const preparedResponse = { ...prepared.response, selectedImageAssetId: job.selectedImageAssetId ?? null, imageSelectionMode: job.imageSelectionMode ?? "none", imageInsertion: selectedImage ? "uploaded_verified" : "none",
       ...(managementReconciliation ? { contentTransport: adapter.getCapabilities().contentTransport, preparedInputHash: hashPreparedBrowserArticleInput(input), expectedCreatorId,
@@ -391,9 +404,11 @@ export class PublisherService {
         if (nextAllowedAt.getTime() > Date.now()) throw Object.assign(new Error("Account publish rate limit has not elapsed"), { code: "RATE_LIMITED" });
       }
       const effectiveBrowserExecutionMode = this.resolveBrowserExecutionMode(job.platformKey, browserExecutionMode, job.contentKind ?? "article");
+      const douyinSettings = job.platformKey === "douyin" ? this.repository.getDouyinImageTextJobSettings(job.id) : null;
+      if (job.platformKey === "douyin" && !douyinSettings) throw Object.assign(new Error("Douyin Owner-selected image/text settings are missing"), { code: "CONTENT_REJECTED" });
       const douyinConnection = job.platformKey === "douyin" ? this.repository.getDouyinImageTextConnection(account.id) : null;
       const expectedCreatorId = job.platformKey === "douyin" ? douyinConnection?.creatorId : account.externalAccountId;
-      const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: job.dryRun, manualConfirmationRequired: job.manualConfirmationRequired, ...browserIdentitySettings(account, managementReconciliation, douyinConnection) }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
+      const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: job.dryRun, manualConfirmationRequired: job.manualConfirmationRequired, ...browserIdentitySettings(account, managementReconciliation, douyinConnection), ...(douyinSettings ? { expectedVisibility: douyinSettings.visibility } : {}) }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
       const preparedRecord = this.repository.getPublishRecordByJob(job.id);
       const usePlatformFinalSubmit = !job.dryRun && typeof adapter.finalSubmit === "function" && preparedRecord?.status === "Prepared";
       if (!job.dryRun && managementReconciliation && !usePlatformFinalSubmit) throw Object.assign(new Error("Toutiao BrowserNative requires a persisted prepared editor before final submission"), { code: "USER_ACTION_REQUIRED" });
@@ -440,7 +455,8 @@ export class PublisherService {
             throw Object.assign(new Error("Douyin image binding is missing or no longer belongs to this Article brand"), { code: "CONTENT_REJECTED" });
           const frozen = await freezeDouyinImageText({ articleId: article.id, accountId: account.id,
             creatorId: expectedCreatorId ?? "", title: input.title, body: input.body,
-            imagePaths: [selectedImage.filePath], topics: [], visibility: "public", scheduledAt: null });
+            imagePaths: [selectedImage.filePath], topics: [], visibility: douyinSettings!.visibility, scheduledAt: null,
+            mandatorySelections: douyinMandatorySelections(preparedRecord?.response.mandatorySelections) });
           if (preparedRecord?.response.sourceContentHash !== frozen.sourceContentHash
             || preparedRecord?.response.contentBindingHash !== frozen.contentBindingHash
             || JSON.stringify(preparedRecord?.response.imageHashes) !== JSON.stringify(frozen.imageHashes))
