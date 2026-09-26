@@ -1,5 +1,11 @@
 # Douyin image/text R1 runbook
 
+## R1.6 structure-specific Slate body readback handoff (source only, 2026-09-26)
+
+Runtime fix `ba038c9a77e1b220f58099dd526d118af16ad3b5` excludes only the separately nested, terminal single `U+200B` text node in the unique observed Slate body-leaf pair. It preserves real user zero-width characters and all normal whitespace, then compares the semantic result exactly with the frozen approved body. Ambiguous editors and unexplained Slate display/DOM differences fail closed. The same extractor supplies diagnostic and formal evidence; no fill or submission-state behavior changed. Focused tests 29/29, full tests 1009/1009, typecheck, lint, build and independent NSIS package passed. The package is `C:\Users\Administrator\.codex\artifacts\douyin-r1-6-ba038c9-short\Geo Media Publisher Setup 1.1.9.exe`; it is **not** the running 0926C runtime.
+
+Keep the current 0926C editor and one-selection claim untouched. Cross-restart recovery is not proven: the existing resume gate still compares raw body text and a restored one-image draft lacks a unique link to the original upload operation. Do not deploy over the running package, restart to test the old Job, select its image again, refill it or publish it. A later Owner decision is required for the runtime switch and any new test candidate; a new candidate needs its own upload and submit authorization. A passing offline fixture is not live body-readback acceptance.
+
 ## R1.4 body readback diagnostic handoff (source only, 2026-09-26)
 
 The installed `C:\d16` editor remains on runtime code `d74a52aba8f2e4025890f75002251b902a29e06b`. R1.4 adds a separate diagnostic package but does not deploy it, navigate the editor, refill content or change the strict body gate. The approved 61-code-point body versus a historical 62-UTF-16-unit `innerText` remains an **unclassified difference** until the actual app-owned DOM can be read with reviewed diagnostic code.
