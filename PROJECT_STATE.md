@@ -1,6 +1,14 @@
 # Project State
 
-## Douyin image/text R1 offline closure candidate — 2026-09-26
+## Douyin image/text R1 normal-app read-only gate — 2026-09-26
+
+- R1 implementation commits through `f7f885f34b62b993abffe3266db325bbf61efdc4` add exact-account/exact-Article acceptance isolation. With no accepted Article ID, the test package pauses all publication paths; the ordinary native submit flag remains OFF. It does not grant upload, editing, or final-submit authority.
+- In the normal packaged application, the Owner logged in through the app's Douyin image/text connection and showed Creator ID `72388977613`. Main verified that ID against account `8f245d8b-0a51-46fd-98c4-2a633a95c786`, the owned Page/Context, and the stored session generation. Owner activation returned verified. The earlier R0 diagnostic session was not reused as proof.
+- The Owner navigated the same owned Creator Page to `/creator-micro/content/manage` and the application read-only smoke returned PASS at 2026-09-26 04:41:21 UTC: one work-search input, current visible state label `已发布`, zero visible rows. Current tab visibility does not prove the full published/reviewing/rejected search scope or a target match. No target work has been submitted.
+- Final acceptance-isolated package: `C:\Users\Administrator\.codex\artifacts\douyin-r1-f7f885f`; installer SHA256 `8489685737bebc1ad3475b9742b11b8e7d26471948903425c34d3166473ae551`, EXE `b6131911d73c9c2f338dd2d37cc67890525827eaa0ac046ad4da09bd275e014d`, app.asar `5ab51cfb46203d082b7a682fc8ccc0680fd3f2d8b1b5ed9ba70181227ee1d7e8`, source/packaged Main `c5974c9be3d837d43b96905eabf98ef0e8b3fc62e21074e5467ca2e4c3783e59`. Final offline gates: 135 test files / 966 tests, typecheck, lint, build, package PASS. The package is running in read-only acceptance isolation with only the account ID configured, no Article ID and formal submit OFF.
+- No R1 upload/editor fill, Article/Job/Intent/Record, final action, or remote item exists. R0's old auto-saved unfinished item remains protected. Next gate is the Owner's explicit decision on one exact new test candidate; preparation and one final submit require separately clear scope. Keep generated R0/R1 build and log artifacts without cleanup, as previously directed.
+
+## Douyin image/text R1 earlier offline closure candidate — 2026-09-26
 
 - Base `9caa5dec20b6fe57d70e9b136205c77f531bfdea`; isolated branch `codex/douyin-r0-final-integration`. R1 commits `588fe60`, `7505827`, `27722a8`, `baff686`. The original R0 generated build/log artifacts remain untouched because their cleanup was rejected; only named source, test, and documentation files were staged. Toutiao, XHS, Website, and Douyin video adapter business code stayed unchanged.
 - AI招财兔 v4.2.5 Owner-supplied static review identifies browser upload/edit/final click with passive `create_v2` observation for ordinary photo posts. Its separate `long_article` API is not the `/post/image` route. No competitor code/credentials or signer work was used. BrowserNative remains selected; official image/text `video.create.bind` permission is not evidenced by the existing video OAuth `video.create` scope.
