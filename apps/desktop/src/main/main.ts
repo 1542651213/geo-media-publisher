@@ -29,6 +29,11 @@ function firstExisting(paths: string[]): string {
 }
 
 async function createWindow(): Promise<void> {
+  if (process.env.DOUYIN_R1_14_READONLY_JOB_ID?.trim()
+    && (!process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim()
+      || !process.env.DOUYIN_R1_ACCEPTANCE_ARTICLE_ID?.trim()
+      || process.env.DOUYIN_IMAGE_TEXT_NATIVE_SUBMIT_ENABLED === "true"))
+    throw new Error("DOUYIN_R14_READONLY_RUNTIME_BINDING_INVALID");
   const migrationsDir = firstExisting([join(app.getAppPath(), "packages", "db", "migrations"), join(process.resourcesPath, "packages", "db", "migrations"), join(process.cwd(), "packages", "db", "migrations"), join(__dirname, "../../packages/db/migrations")]);
   const csvPath = firstExisting([join(app.getAppPath(), "PLATFORMS.csv"), join(process.resourcesPath, "PLATFORMS.csv"), join(process.cwd(), "PLATFORMS.csv")]);
   const dataDirectory = join(app.getPath("userData"), app.isPackaged || process.env.PUBLISHER_DATA_MODE === "production" ? "production-data" : "development-data");
@@ -61,7 +66,8 @@ async function createWindow(): Promise<void> {
   // The one-shot diagnostic process owns the sole publish lane; existing queued jobs remain untouched.
   if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true" && process.env.TOUTIAO_READONLY_PREFLIGHT !== "true"
     && !process.env.TOUTIAO_NATIVE_ACCEPTANCE_ACCOUNT_ID?.trim()
-    && !process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim()) scheduler.start();
+    && !process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim()
+    && !process.env.DOUYIN_R1_14_READONLY_JOB_ID?.trim()) scheduler.start();
 
   const window = new BrowserWindow({
     width: 1480,

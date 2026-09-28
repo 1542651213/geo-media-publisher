@@ -40,6 +40,7 @@ import { recordRuntimeHeartbeat } from "./runtime-observability";
 import { assertDouyinAcceptanceChannel } from "./douyin-acceptance-gate";
 import { selectDouyinBodyDiagnosticTarget } from "./douyin-body-diagnostic-gate";
 import { selectDouyinMusicDiagnosticTarget } from "./douyin-music-diagnostic-gate";
+import { assertDouyinR14ReadOnlyChannel } from "./douyin-r14-readonly-gate";
 
 const idSchema = z.string().min(1);
 function safeErrorCode(error: unknown): string {
@@ -104,6 +105,13 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
   ipcMain.removeHandler(channel);
   ipcMain.handle(channel, async (event, payload) => {
     try {
+      const douyinR14JobId = process.env.DOUYIN_R1_14_READONLY_JOB_ID?.trim();
+      if (douyinR14JobId) assertDouyinR14ReadOnlyChannel(channel, payload, {
+        jobId: douyinR14JobId,
+        accountId: process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim() ?? "",
+        articleId: process.env.DOUYIN_R1_ACCEPTANCE_ARTICLE_ID?.trim() ?? "",
+        nativeSubmitEnabled: process.env.DOUYIN_IMAGE_TEXT_NATIVE_SUBMIT_ENABLED === "true"
+      });
       if ((process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED === "true" || process.env.TOUTIAO_READONLY_PREFLIGHT === "true") && mvp5PausedChannels.has(channel))
         throw new Error("TOUTIAO_MVP5_OTHER_PUBLISH_PATHS_PAUSED");
       if (process.env.TOUTIAO_NATIVE_ACCEPTANCE_ACCOUNT_ID?.trim() && mvp5PausedChannels.has(channel)
@@ -697,6 +705,35 @@ export function registerIpc(deps: IpcDependencies): void {
     logger.info("ACCOUNT", "DOUYIN_MANAGEMENT_READONLY_SMOKE", "抖音图文作品管理只读检查", {
       accountId: input.accountId, ready: result.ready, pageHost: result.pageHost, pagePath: result.pagePath,
       searchControlCount: result.searchControlCount, stateLabels: result.stateLabels, visibleRowCount: result.visibleRowCount });
+    return result;
+  });
+  register("accounts:inspect-douyin-management-topology", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema, jobId: idSchema }).parse(payload);
+    if (process.env.DOUYIN_R1_14_READONLY_JOB_ID?.trim() !== input.jobId
+      || process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim() !== input.accountId
+      || process.env.DOUYIN_IMAGE_TEXT_NATIVE_SUBMIT_ENABLED === "true")
+      throw new Error("DOUYIN_R14_READONLY_RUNTIME_REQUIRED");
+    const job = repository.getJob(input.jobId);
+    const article = job ? repository.getArticle(job.articleId) : null;
+    const intent = repository.getSubmissionIntentByJob(input.jobId);
+    const record = repository.getPublishRecordByJob(input.jobId);
+    const account = repository.getAccountById(input.accountId, "douyin");
+    const connection = repository.getDouyinImageTextConnection(input.accountId);
+    if (!job || job.platformKey !== "douyin" || job.contentKind === "video"
+      || job.accountId !== input.accountId || job.articleId !== process.env.DOUYIN_R1_ACCEPTANCE_ARTICLE_ID?.trim()
+      || !article || !account || account.archivedAt || !connection?.active
+      || !intent || intent.finalSubmitCount !== 1 || !intent.submitBoundaryEnteredAt
+      || !intent.externalId || !/^\d{10,30}$/u.test(intent.externalId)
+      || !record || record.jobId !== job.id || record.articleId !== article.id
+      || record.accountId !== input.accountId || record.publishedExternalId !== intent.externalId)
+      throw new Error("DOUYIN_R14_READONLY_TARGET_BINDING_INVALID");
+    const adapter = registry.getForContent("douyin", "article");
+    if (!(adapter instanceof DouyinImageTextBrowserAdapter)) throw new Error("DOUYIN_R14_READONLY_ADAPTER_UNAVAILABLE");
+    const result = await adapter.inspectManagementTopologyReadOnly(accountContext(input.accountId, "douyin"), intent.externalId);
+    logger.info("ACCOUNT", "DOUYIN_MANAGEMENT_TOPOLOGY_READONLY", "抖音作品管理受控页面结构只读检查", {
+      accountId: input.accountId, jobId: input.jobId, creatorId: result.creatorId, pagePath: result.pagePath,
+      visibleAnchorCount: result.visibleAnchorCount, rowCandidateCount: result.rowCandidateCount,
+      statusControlCount: result.statusControls.length, scrollContainerCount: result.scrollContainers.length });
     return result;
   });
   register("accounts:inspect-douyin-editor", async (_event, payload) => {
@@ -1432,7 +1469,21 @@ export function registerIpc(deps: IpcDependencies): void {
   register("jobs:run", async (_event, payload) => { const id = z.object({ id: idSchema }).parse(payload).id; const job = repository.getJob(id); const source = job && ["NeedsUserAction", "WaitingForUser"].includes(job.status) ? "CONTINUE_PENDING_ACTION" as const : "START_PUBLISH" as const; return publisher.executeJob(id, createUserAction(source)); });
   register("jobs:confirm", (_event, payload) => { const input = z.object({ id: idSchema, dryRun: z.boolean().default(false) }).parse(payload); return repository.confirmJob(input.id, input.dryRun); });
   register("jobs:reconcile", async (_event, payload) => publisher.reconcileJob(z.object({ id: idSchema }).parse(payload).id, createUserAction("CONTINUE_PENDING_ACTION")));
-  register("jobs:reconcile-browser", async (_event, payload) => publisher.reconcileBrowserJob(z.object({ id: idSchema }).parse(payload).id, createUserAction("CONTINUE_PENDING_ACTION")));
+  register("jobs:reconcile-browser", async (_event, payload) => {
+    const id = z.object({ id: idSchema }).parse(payload).id;
+    if (process.env.DOUYIN_R1_14_READONLY_JOB_ID?.trim()) {
+      const job = repository.getJob(id);
+      const intent = repository.getSubmissionIntentByJob(id);
+      const record = repository.getPublishRecordByJob(id);
+      if (id !== process.env.DOUYIN_R1_14_READONLY_JOB_ID?.trim() || !job || job.platformKey !== "douyin"
+        || job.accountId !== process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim()
+        || job.articleId !== process.env.DOUYIN_R1_ACCEPTANCE_ARTICLE_ID?.trim()
+        || !intent || intent.finalSubmitCount !== 1 || !intent.externalId
+        || !record || record.publishedExternalId !== intent.externalId)
+        throw new Error("DOUYIN_R14_READONLY_RECONCILIATION_TARGET_INVALID");
+    }
+    return publisher.reconcileBrowserJob(id, createUserAction("CONTINUE_PENDING_ACTION"));
+  });
   register("jobs:reconcile-not-submitted", (_event, payload) => repository.markJobReconciledNotSubmitted(z.object({ id: idSchema }).parse(payload).id));
   register("jobs:retry", (_event, payload) => { const id = z.object({ id: idSchema }).parse(payload).id; return repository.updateJobFailure(id, "Retry", "UNKNOWN", "用户手动重试", new Date().toISOString()); });
   register("jobs:recover", () => repository.recoverRunningJobs());

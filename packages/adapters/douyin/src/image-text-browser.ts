@@ -13,6 +13,7 @@ import { assertDouyinEditorSettings, protectExistingDouyinDraft,
 import { DouyinImagePostObserver } from "./image-text-observer";
 import { observeDouyinImageEditor, selectAndObserveDouyinImage } from "./image-text-upload";
 import { inspectDouyinManagementControls, inspectDouyinManagementReadOnlyNavigation } from "./image-text-management-preflight";
+import { inspectDouyinManagementTopology, type DouyinManagementTopology } from "./image-text-management-topology";
 import { inspectDouyinBodyPage, type DouyinBodyPageDiagnostic } from "./image-text-body-diagnostic";
 import { readDouyinBodyText, type DouyinBodyReadback } from "./image-text-body-readback";
 import { assertDouyinMusicReadback, chooseDouyinMusic, clickRecommendedDouyinMusicOnce, douyinMusicDrawerRows, douyinMusicIdentityKey,
@@ -240,6 +241,37 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     return { ready: pageEvidence.searchControlCount === 1 && pageEvidence.labels.length >= 1,
       creatorId, pageHost: url.host, pagePath: url.pathname, searchControlCount: pageEvidence.searchControlCount,
       stateLabels: pageEvidence.labels, visibleRowCount: pageEvidence.visibleRowCount };
+  }
+
+  /** Post-boundary, read-only topology on a temporary Page in the account-owned Context. */
+  async inspectManagementTopologyReadOnly(ctx: AccountContext, targetRemoteId: string): Promise<DouyinManagementTopology &
+    { creatorId: string; sessionIdHash: string; canonicalPagePath: string; contextOwnership: true }> {
+    if (this.nativeSubmitEnabled) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_READONLY_RUNTIME_REQUIRED");
+    const owned = await this.activeCanonicalPage(ctx);
+    const expectedCreatorId = typeof ctx.settings.expectedCreatorId === "string" ? ctx.settings.expectedCreatorId : "";
+    if (!owned || owned.page.isClosed() || owned.page.context() !== owned.session.context
+      || !owned.session.context.pages().includes(owned.page) || owned.session.executionMode !== "VISIBLE"
+      || !expectedCreatorId || await this.readOwnedCreatorId(ctx, owned) !== expectedCreatorId)
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_READONLY_CREATOR_IDENTITY_UNVERIFIED");
+    const canonicalPage = owned.page;
+    const canonicalPageUrl = new URL(canonicalPage.url());
+    if (canonicalPageUrl.origin !== "https://creator.douyin.com")
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_READONLY_CREATOR_ORIGIN_CHANGED");
+    const canonicalPagePath = canonicalPageUrl.pathname;
+    const sessionIdHash = owned.session.sessionIdHash;
+    const tab = await owned.session.context.newPage();
+    try {
+      await tab.goto("https://creator.douyin.com/creator-micro/content/manage", { waitUntil: "domcontentloaded", timeout: 20_000 });
+      const result = await inspectDouyinManagementTopology(tab, owned.session.context, targetRemoteId);
+      const latest = await this.activeCanonicalPage(ctx);
+      if (!latest || latest.page !== canonicalPage || latest.session.context !== owned.session.context
+        || latest.session.sessionIdHash !== sessionIdHash || canonicalPage.isClosed()
+        || new URL(canonicalPage.url()).origin !== canonicalPageUrl.origin
+        || new URL(canonicalPage.url()).pathname !== canonicalPagePath
+        || await this.readOwnedCreatorId(ctx, latest) !== expectedCreatorId)
+        throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_READONLY_CREATOR_CONTEXT_CHANGED");
+      return { ...result, creatorId: expectedCreatorId, sessionIdHash, canonicalPagePath, contextOwnership: true };
+    } finally { await tab.close().catch(() => undefined); }
   }
 
   /** Safe read-only evidence for this owned image editor; never returns text, cookies or signed URLs. */
