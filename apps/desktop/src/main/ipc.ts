@@ -39,6 +39,7 @@ import { addAccountConnectionModes, browserAccountConnectionResult, browserAccou
 import { recordRuntimeHeartbeat } from "./runtime-observability";
 import { assertDouyinAcceptanceChannel } from "./douyin-acceptance-gate";
 import { selectDouyinBodyDiagnosticTarget } from "./douyin-body-diagnostic-gate";
+import { selectDouyinMusicDiagnosticTarget } from "./douyin-music-diagnostic-gate";
 
 const idSchema = z.string().min(1);
 function safeErrorCode(error: unknown): string {
@@ -134,6 +135,7 @@ export function registerIpc(deps: IpcDependencies): void {
   acceptanceRepository = deps.repository;
   const { repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir, logger, credentials, aiCredentials } = deps;
   const capturedDouyinBodyDiagnosticJobs = new Set<string>();
+  const capturedDouyinMusicDiagnosticJobs = new Set<string>();
   const listPlatformViews = (): ReturnType<AppRepository["listPlatforms"]> => addAccountConnectionModes(repository.listPlatforms(), registry).map((platform) =>
     platform.platformKey === "douyin" ? { ...platform,
       capabilities: { ...platform.capabilities, article: true, imagePost: true, maxImageCount: 1,
@@ -644,6 +646,29 @@ export function registerIpc(deps: IpcDependencies): void {
         logger.info("ACCOUNT", "DOUYIN_BODY_DIAGNOSTIC_CAPTURED", "抖音图文只读正文诊断已保存", {
           accountId: input.accountId, jobId: job!.id, artifactPath: evidencePath,
           identityMode: diagnostic.identityVerificationMode, candidateCount: diagnostic.body.candidateCount });
+      }
+    }
+    if (process.env.DOUYIN_MUSIC_DIAGNOSTIC_ENABLED === "true") {
+      const configuredJobId = process.env.DOUYIN_MUSIC_DIAGNOSTIC_JOB_ID?.trim() ?? "";
+      if (!capturedDouyinMusicDiagnosticJobs.has(configuredJobId)) {
+        const job = configuredJobId ? repository.getJob(configuredJobId) : null;
+        const target = selectDouyinMusicDiagnosticTarget({
+          configuredAccountId: process.env.DOUYIN_MUSIC_DIAGNOSTIC_ACCOUNT_ID?.trim() ?? null,
+          configuredJobId: configuredJobId || null, requestedAccountId: input.accountId, job,
+          connection: repository.getDouyinImageTextConnection(input.accountId),
+          intent: job ? repository.getSubmissionIntentByJob(job.id) : null,
+          record: job ? repository.getPublishRecordByJob(job.id) : null
+        });
+        const diagnostic = await adapter.inspectCurrentImageTextMusicReadOnly(
+          accountContext(input.accountId, "douyin"), target);
+        const diagnosticDir = join(dataDirectory, "diagnostics");
+        mkdirSync(diagnosticDir, { recursive: true });
+        const evidencePath = join(diagnosticDir, `douyin-music-${target.jobId}-${randomUUID()}.json`);
+        writeFileSync(evidencePath, JSON.stringify({ version: 1, capturedAt: new Date().toISOString(), diagnostic }), "utf8");
+        capturedDouyinMusicDiagnosticJobs.add(target.jobId);
+        logger.info("ACCOUNT", "DOUYIN_MUSIC_DIAGNOSTIC_CAPTURED", "抖音图文只读音乐诊断已保存", {
+          accountId: input.accountId, jobId: target.jobId, artifactPath: evidencePath,
+          classification: diagnostic.music.classification });
       }
     }
     return readiness;

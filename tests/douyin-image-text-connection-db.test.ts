@@ -155,6 +155,7 @@ describe("Douyin image/text Creator binding", () => {
     const intent = repo.prepareSubmissionIntent(job.id);
     const waiting = repo.resetSubmissionIntentForUserAction(intent.id, "PLATFORM_CHANGED");
     expect(waiting.status).toBe("NeedsUserAction");
+    expect(repo.resetSubmissionIntentForUserAction(intent.id, "DOUYIN_MUSIC_READBACK_MISMATCH").status).toBe("NeedsUserAction");
     expect(repo.getSubmissionIntentByJob(job.id)).toMatchObject({ state: "Prepared", finalSubmitCount: 0,
       submitBoundaryEnteredAt: null, submissionAttemptId: null });
     expect(repo.getRecentDouyinImageTextMusic(account.id)).toEqual([]);

@@ -15,8 +15,8 @@ import { observeDouyinImageEditor, selectAndObserveDouyinImage } from "./image-t
 import { inspectDouyinManagementControls, inspectDouyinManagementReadOnlyNavigation } from "./image-text-management-preflight";
 import { inspectDouyinBodyPage, type DouyinBodyPageDiagnostic } from "./image-text-body-diagnostic";
 import { readDouyinBodyText, type DouyinBodyReadback } from "./image-text-body-readback";
-import { chooseDouyinMusic, douyinMusicIdentityKey, douyinMusicRowSelector, inspectRecommendedDouyinMusic,
-  readSelectedDouyinMusic, type DouyinMusicIdentity } from "./image-text-music";
+import { assertDouyinMusicReadback, chooseDouyinMusic, douyinMusicDrawerRows, douyinMusicIdentityKey,
+  inspectRecommendedDouyinMusic, readSelectedDouyinMusic, type DouyinMusicIdentity, type DouyinMusicReadback } from "./image-text-music";
 export { selectAndObserveDouyinImage } from "./image-text-upload";
 
 const creatorHome = "https://creator.douyin.com/creator-micro/home";
@@ -307,6 +307,34 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
       accountId: ctx.accountId, articleId: binding.articleId, jobId: binding.jobId, operationId: binding.operationId, body };
   }
 
+  /** Main's opt-in diagnostic reads only the owned image editor; it never opens the music drawer. */
+  async inspectCurrentImageTextMusicReadOnly(ctx: AccountContext, binding: {
+    accountId: string; articleId: string; jobId: string; creatorId: string;
+    loginGeneration: number; sessionIdHash: string
+  }): Promise<{ identityVerificationMode: "VISIBLE_CREATOR_ID" | "CONTINUITY_EVIDENCE";
+    identityVerified: boolean; accountId: string; articleId: string; jobId: string;
+    pagePath: string; contextOwnership: true; music: DouyinMusicReadback }> {
+    if (ctx.platformKey !== "douyin" || ctx.accountId !== binding.accountId
+      || ctx.settings.expectedCreatorId !== binding.creatorId
+      || ctx.settings.expectedLoginGeneration !== binding.loginGeneration)
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_MUSIC_DIAGNOSTIC_BINDING_MISMATCH");
+    const owned = await this.activeCanonicalPage(ctx);
+    if (!owned || owned.page.isClosed() || owned.session.executionMode !== "VISIBLE"
+      || owned.page.context() !== owned.session.context || !owned.session.context.pages().includes(owned.page)
+      || owned.session.sessionIdHash !== binding.sessionIdHash)
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_MUSIC_DIAGNOSTIC_CONTEXT_MISMATCH");
+    const pageUrl = new URL(owned.page.url());
+    if (pageUrl.origin !== "https://creator.douyin.com" || pageUrl.pathname !== "/creator-micro/content/post/image")
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_MUSIC_DIAGNOSTIC_EDITOR_ROUTE_REQUIRED");
+    const visibleCreatorId = await this.readVisibleCreatorId(owned.page);
+    if (visibleCreatorId && visibleCreatorId !== binding.creatorId)
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_MUSIC_DIAGNOSTIC_CREATOR_MISMATCH");
+    return { identityVerificationMode: visibleCreatorId ? "VISIBLE_CREATOR_ID" : "CONTINUITY_EVIDENCE",
+      identityVerified: Boolean(visibleCreatorId), accountId: binding.accountId, articleId: binding.articleId,
+      jobId: binding.jobId, pagePath: pageUrl.pathname, contextOwnership: true,
+      music: await readSelectedDouyinMusic(owned.page) };
+  }
+
   private async readVisibleCreatorId(page: Page): Promise<string | null> {
     if (new URL(page.url()).host !== "creator.douyin.com") return null;
     return parseVisibleDouyinCreatorId(await page.locator("body").innerText().catch(() => ""));
@@ -561,7 +589,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
         if (decision.selected) {
           const selected = decision.selected;
           const identity = douyinMusicIdentityKey(selected);
-          const row = selected.rowIndex === undefined ? null : page.locator(douyinMusicRowSelector).nth(selected.rowIndex);
+          const row = selected.rowIndex === undefined ? null : douyinMusicDrawerRows(page).nth(selected.rowIndex);
           if (!identity || !row || !await row.isVisible() || !((await row.innerText()).includes(selected.title)))
             throw new BrowserAutomationError("PLATFORM_CHANGED", "DOUYIN_MUSIC_ROW_CHANGED_BEFORE_SELECTION");
           if (!jobId || this.musicSelectionUsed.has(jobId))
@@ -572,12 +600,11 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
           catch { throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_MUSIC_SELECTION_RESULT_UNKNOWN"); }
           await page.keyboard.press("Escape");
           const observed = await readSelectedDouyinMusic(page);
-          if (!observed.selected || observed.title !== selected.title
-            || observed.artist !== null && observed.artist !== selected.artist
-            || observed.duration !== null && observed.duration !== selected.duration)
-            throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_MUSIC_READBACK_MISMATCH");
-          musicBinding = { mode: "AUTO_RECOMMENDED", identity, trackId: selected.trackId,
+          const selectedBinding: DouyinMusicBinding = { mode: "AUTO_RECOMMENDED", identity, trackId: selected.trackId,
             title: selected.title, artist: selected.artist, duration: selected.duration };
+          try { assertDouyinMusicReadback(selectedBinding, observed); }
+          catch { throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_MUSIC_READBACK_MISMATCH"); }
+          musicBinding = selectedBinding;
           musicResult = "SELECTED_VERIFIED";
         } else if (inspected.entryFound) await page.keyboard.press("Escape");
       } catch (error) {
@@ -646,12 +673,8 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
       throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_PREPARED_CONTENT_OR_IMAGE_CHANGED");
     const selectedMusic = await readSelectedDouyinMusic(page);
     const expectedMusic = prepared.frozen.musicBinding;
-    if (expectedMusic?.mode === "AUTO_RECOMMENDED"
-      ? !selectedMusic.selected || selectedMusic.title !== expectedMusic.title
-        || selectedMusic.artist !== null && selectedMusic.artist !== expectedMusic.artist
-        || selectedMusic.duration !== null && selectedMusic.duration !== expectedMusic.duration
-      : selectedMusic.selected)
-      throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_MUSIC_READBACK_MISMATCH");
+    try { assertDouyinMusicReadback(expectedMusic ?? { mode: "NONE" }, selectedMusic); }
+    catch { throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_MUSIC_READBACK_MISMATCH"); }
     const bodyReadback = await readDouyinBodyText(page);
     assertDouyinImageTextReadback(prepared.frozen, { accountId: ctx.accountId, creatorId: expectedCreatorId,
       contextOwned: true, sessionActive: true, pageHost: new URL(page.url()).host,

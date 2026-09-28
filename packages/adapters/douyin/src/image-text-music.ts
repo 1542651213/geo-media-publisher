@@ -1,5 +1,7 @@
 import { randomInt } from "node:crypto";
-import type { Page } from "playwright-core";
+import type { Locator, Page } from "playwright-core";
+import { inspectDouyinMusicDocument, type DouyinMusicDomState } from "./image-text-music-dom";
+import type { DouyinMusicBinding } from "@publisher/domain/douyin-image-text";
 
 export interface DouyinMusicIdentity {
   trackId: string | null;
@@ -60,14 +62,29 @@ export function chooseDouyinMusic(candidates: readonly DouyinMusicCandidate[], r
   return { selected: eligible[Math.floor(draw * eligible.length)]!, eligibleCount: eligible.length, recentExcludedCount };
 }
 
-export interface DouyinMusicReadback {
-  selected: boolean;
-  title: string | null;
-  artist: string | null;
-  duration: string | null;
+export type DouyinMusicReadback = DouyinMusicDomState;
+
+/** Compare the frozen effective remote content, never the requested recommendation policy. */
+export function assertDouyinMusicReadback(expected: DouyinMusicBinding, observed: DouyinMusicReadback): "PASS_NONE" | "PASS_TRACK" {
+  if (expected.mode === "NONE") {
+    if (observed.classification === "NONE") return "PASS_NONE";
+    throw new Error("DOUYIN_MUSIC_READBACK_MISMATCH");
+  }
+  const track = observed.selectedTrack;
+  if (observed.classification !== "TRACK" || !track || track.title !== expected.title
+    || track.artist !== expected.artist || track.duration !== expected.duration
+    || (expected.trackId && track.trackId !== expected.trackId)
+    || douyinMusicIdentityKey(track) !== expected.identity)
+    throw new Error("DOUYIN_MUSIC_READBACK_MISMATCH");
+  return "PASS_TRACK";
 }
 
 export const douyinMusicRowSelector = '[data-music-id], [data-track-id], [role="listitem"]';
+
+export function douyinMusicDrawerRows(page: Page): Locator {
+  return page.locator('[role="dialog"], [class*="music-drawer"], [class*="musicDrawer"], [class*="music-modal"], [class*="musicModal"]')
+    .filter({ has: page.getByPlaceholder("搜索音乐") }).locator(douyinMusicRowSelector);
+}
 
 /** Read a bounded first screen only. The DOM, not historical screenshots, supplies candidates. */
 export async function inspectRecommendedDouyinMusic(page: Page): Promise<{ candidates: DouyinMusicCandidate[]; entryFound: boolean }> {
@@ -79,7 +96,11 @@ export async function inspectRecommendedDouyinMusic(page: Page): Promise<{ candi
   const tab = page.getByText("推荐", { exact: true });
   if (await tab.count() !== 1 || !await tab.isVisible()) throw new Error("DOUYIN_MUSIC_RECOMMENDED_TAB_AMBIGUOUS");
   // Creator's current DOM must expose row-local track metadata. Unknown structure stays optional.
-  const candidates = await page.locator(douyinMusicRowSelector).evaluateAll((elements) => elements.slice(0, 30).map((element, rowIndex) => {
+  const drawer = page.locator('[role="dialog"], [class*="music-drawer"], [class*="musicDrawer"], [class*="music-modal"], [class*="musicModal"]')
+    .filter({ has: search });
+  // An unscoped row could belong to the editor or another page surface. Empty is a safe optional result.
+  if (await drawer.count() !== 1) return { candidates: [], entryFound: true };
+  const candidates = await drawer.locator(douyinMusicRowSelector).evaluateAll((elements) => elements.slice(0, 30).map((element, rowIndex) => {
     const text = (element.textContent ?? "").trim();
     const title = element.querySelector('[class*="title"], [data-title]')?.textContent?.trim() ?? "";
     const artist = element.querySelector('[class*="artist"], [data-artist]')?.textContent?.trim() ?? "";
@@ -92,16 +113,5 @@ export async function inspectRecommendedDouyinMusic(page: Page): Promise<{ candi
 }
 
 export async function readSelectedDouyinMusic(page: Page): Promise<DouyinMusicReadback> {
-  const section = page.getByText("选择音乐", { exact: true }).first().locator("xpath=ancestor::*[self::div or self::section][1]");
-  if (await section.count() !== 1) return { selected: false, title: null, artist: null, duration: null };
-  const text = await section.innerText();
-  const title = await section.locator('[class*="title"], [data-title]').allTextContents();
-  const artist = await section.locator('[class*="artist"], [data-artist]').allTextContents();
-  const duration = await section.locator('[class*="duration"], time').allTextContents();
-  const selectedTitle = title.length === 1 ? title[0]!.trim() : null;
-  return { selected: !/点击添加合适作品风格音乐/u.test(text) && Boolean(selectedTitle && selectedTitle !== "选择音乐")
-      && (artist.length === 1 || duration.length === 1),
-    title: selectedTitle,
-    artist: artist.length === 1 ? artist[0]!.trim() : null,
-    duration: duration.length === 1 ? duration[0]!.trim() : null };
+  return page.evaluate(inspectDouyinMusicDocument);
 }
