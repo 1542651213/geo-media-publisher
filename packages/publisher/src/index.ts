@@ -383,6 +383,27 @@ export class PublisherService {
     if (selectedImage) this.logger.info("PUBLISHER", "IMAGE_UPLOAD_STARTED", "开始向平台编辑器上传任务主图", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage.id });
     const prepared = await withTimeout(adapter.preparePublish(ctx, input), this.options.operationTimeoutMs ?? 120_000, "Platform assisted prepare").catch((error: unknown) => {
       if (errorCode(error) === "UPLOAD_FAILED") this.logger.error("PUBLISHER", "IMAGE_UPLOAD_FAILED", error instanceof Error ? error.message : "图片上传失败", { jobId: job.id, platformKey: job.platformKey, selectedImageAssetId: selectedImage?.id ?? null });
+      if (job.platformKey === "douyin" && job.contentKind === "article") {
+        const currentJob = this.repository.getJob(job.id);
+        const selection = this.repository.getPublishPayload(job.id).douyinImageSelection;
+        const claim = selection && typeof selection === "object" && !Array.isArray(selection)
+          ? selection as Record<string, unknown> : null;
+        if (currentJob?.status === "AwaitingConfirmation" && currentJob.accountId === account.id
+          && currentJob.articleId === article.id && claim?.stage === "FILE_SELECTION_DISPATCHED"
+          && typeof claim.operationId === "string" && claim.operationId.length > 0
+          && claim.accountId === account.id && claim.articleId === article.id
+          && frozenDouyin && claim.loginGeneration === douyinConnection?.loginGeneration
+          && claim.imageSha256 === frozenDouyin?.imageHashes[0]
+          && claim.sourceContentHash === frozenDouyin.sourceContentHash
+          && !this.repository.getSubmissionIntentByJob(job.id)
+          && !this.repository.getPublishRecordByJob(job.id)) {
+          this.repository.updateJobFailure(job.id, "NeedsUserAction", errorCode(error),
+            error instanceof Error ? error.message : "Douyin image-text editor preparation failed after image selection", null);
+          this.logger.warn("PUBLISHER", "DOUYIN_PREPARE_PRE_BOUNDARY_USER_ACTION", "Douyin image-text preparation stopped after one image-selection claim and before Prepared Record/Intent", {
+            jobId: job.id, articleId: article.id, accountId: account.id, operationId: claim.operationId,
+            errorCode: errorCode(error), finalSubmitCount: 0 });
+        }
+      }
       throw error;
     }).finally(async () => {
       await adapter.releaseOperationSession?.(ctx).catch(() => undefined);
