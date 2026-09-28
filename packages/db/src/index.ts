@@ -1,6 +1,5 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
-import { dirname } from "node:path";
-import { join } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { AppRepository } from "./repository";
 
@@ -9,7 +8,21 @@ export type { StoredVideoAsset, StoredVideoAssetStatus } from "./repository";
 export type { AIBatchItem, AIBatchTarget, ArticleInput, ArticlePage, AIProviderProfileInput, BrandInput, BrandKnowledgeEntryInput, ContentQualityAuditView, ContentQualityItemView, ContentQualityReviewView, ContentQualityStateView, ContentStudioMediaAssetView, ContentStudioTaskPayload, ContentStudioTaskView, ContentStudioVersionView, HumanReviewContentSnapshot, HumanReviewDatasetItemView, HumanReviewDatasetStatus, HumanReviewDatasetView, HumanReviewDecision, HumanReviewFinalStatus, HumanReviewIssueDecisionView, HumanReviewItemReviewView, HumanReviewItemStatus, HumanReviewMachineDecision, HumanReviewMachineIssueView, HumanReviewSubmitInput, JobInput, JobPage, QualityBenchmarkContentView, QualityBenchmarkItemAttemptStatus, QualityBenchmarkItemAttemptView, QualityBenchmarkItemStatus, QualityBenchmarkItemView, QualityBenchmarkMetrics, QualityBenchmarkRunStatus, QualityBenchmarkRunType, QualityBenchmarkRunView } from "./repository";
 export * from "./schema";
 
+/** Reject host-Node Repository access to the app's production database before any filesystem write. */
+export function assertProductionDatabaseRuntime(filePath: string, electronVersion: string | null = process.versions.electron ?? null): void {
+  const pathComponent = (value: string) => value.replace(/[. ]+$/u, "").toLowerCase();
+  const absolutePath = resolve(filePath);
+  if (pathComponent(basename(absolutePath)) !== "publisher.db") return;
+  const parent = dirname(absolutePath);
+  const canonicalParent = existsSync(parent) ? realpathSync(parent) : parent;
+  const productionDirectory = [parent, canonicalParent].some((path) => pathComponent(basename(path)) === "production-data");
+  if (productionDirectory && !electronVersion) {
+    throw Object.assign(new Error("PRODUCTION_DATABASE_ELECTRON_REQUIRED"), { code: "PRODUCTION_DATABASE_ELECTRON_REQUIRED" });
+  }
+}
+
 export function openDatabase(filePath: string, migrationsDir: string): { db: Database.Database; repository: AppRepository } {
+  assertProductionDatabaseRuntime(filePath);
   mkdirSync(join(filePath, ".."), { recursive: true });
   const db = new Database(filePath);
   db.pragma("journal_mode = WAL");
