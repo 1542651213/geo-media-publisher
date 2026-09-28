@@ -1,5 +1,11 @@
 # Douyin image/text R1 runbook
 
+## R1.10 pre-upload stop: diagnostic order (2026-09-28)
+
+The R1.9 package passed hash checks and app-owned read-only account/management readiness for Creator `72388977613`. The one new authorized local candidate is Article `40a8c738-417a-4460-bce3-63297eddf313` / Job `75bf2065-7ed8-46f1-8b58-bb2f5cc01a2d`, marker `R11095cf7999`. It remains `AwaitingConfirmation` with zero image selections, no Intent/Record and no final claim. No remote draft or publication was created by this attempt.
+
+R1.10 requires a read-only music classification on the owned editor before any optional music click. R1.9's Main diagnostic is gated on a Prepared Intent/Record; `prepareArticle` performs the optional music attempt before persisting those records. The diagnostic therefore cannot meet the required order in this runtime. Owner explicitly chose to keep the gate and stop before upload. Both task-owned app instances exited normally. Do not call `jobs.prepareExistingDouyin` or `jobs.run` for this candidate with the current package. A later implementation needs an exact account/Job-bound, read-only pre-music diagnostic stage that runs after editor entry and before the music selection operation, with focused and full gates before any live preparation. Preserve the current local candidate and all older histories; obtain a new Owner decision before any resumed live action.
+
 ## R1.9 scoped music DOM contract and next acceptance (2026-09-28)
 
 The R1.8 formaldehyde Job `d0df034c-c5e5-4a8d-a3fd-db63e9e461aa` is frozen as a pre-boundary historical attempt. Read-only DB inspection still showed `NeedsUserAction`, Prepared Intent/Record and `final_submit_count=0`. Do not run it again, reset its upload claim, select music, or publish. This task did not touch the prior runtime or editor, but its final process check found no Geo Media Publisher process; current editor liveness is unverified. Its exact live music-node mismatch was never captured. Source-level audit established that the former selected parser could inspect a generic `title` class near the `选择音乐` entry; an offline fixture proved that entry is not a selected track.
