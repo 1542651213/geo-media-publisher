@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
 import { chromium } from "playwright-core";
 import { chooseDouyinMusic, inspectRecommendedDouyinMusic, readSelectedDouyinMusic, type DouyinMusicCandidate } from "./image-text-music";
+import { hashDouyinPreMusicEditorObservation, inspectDouyinPreMusicReadOnly } from "./image-text-pre-music";
 
 const candidate = (title: string, overrides: Partial<DouyinMusicCandidate> = {}): DouyinMusicCandidate => ({
   title, artist: "平台音乐人", duration: "01:30", trackId: null, sourceTab: "推荐", selectable: true, usageText: "", ...overrides
@@ -38,13 +39,36 @@ describe("Douyin optional recommended music policy", () => {
   });
 
   it.skipIf(!existsSync("C:/Program Files/Google/Chrome/Application/chrome.exe"))(
+    "does not open the music drawer without pre-music evidence", async () => {
+      const browser = await chromium.launch({ executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe", headless: true });
+      try {
+        const page = await browser.newPage();
+        await page.setContent('<main><div data-douyin-music-region><button>选择音乐</button></div>'
+          + '<div role="dialog"><input placeholder="搜索音乐"><button>推荐</button></div></main>');
+        await expect(inspectRecommendedDouyinMusic(page)).rejects.toThrow("DOUYIN_PRE_MUSIC_EVIDENCE_REQUIRED");
+      } finally { await browser.close(); }
+    });
+
+  it.skipIf(!existsSync("C:/Program Files/Google/Chrome/Application/chrome.exe"))(
     "reads bounded current-page rows and verifies the selected music without network access", async () => {
       const browser = await chromium.launch({ executablePath: "C:/Program Files/Google/Chrome/Application/chrome.exe", headless: true });
       try {
         const page = await browser.newPage();
-        await page.setContent(`<main><button id="entry">选择音乐</button><div role="dialog"><input placeholder="搜索音乐"><button>推荐</button>
+        await page.route("https://creator.douyin.com/**", (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<html><body><main></main></body></html>" }));
+        await page.goto("https://creator.douyin.com/creator-micro/content/post/image");
+        await page.setContent(`<main><div data-douyin-music-region><button id="entry">选择音乐</button></div><div role="dialog" hidden><input placeholder="搜索音乐"><button>推荐</button>
           <div data-music-id="track-1"><span class="title">舒缓纯音乐</span><span class="artist">音乐人</span><time>01:30</time></div></div></main>`);
-        const inspected = await inspectRecommendedDouyinMusic(page);
+        await page.evaluate(() => document.getElementById("entry")!.addEventListener("click", () => {
+          (document.querySelector('[role="dialog"]') as HTMLElement).hidden = false;
+        }));
+        const binding = { accountId: "account", articleId: "article", jobId: "job", preparationId: "preparation",
+          uploadOperationId: "operation", sessionIdHash: "session", loginGeneration: 1,
+          sourceContentHash: "a".repeat(64), imageSha256: "b".repeat(64), previewDigest: "c".repeat(64),
+          editorObservationHash: hashDouyinPreMusicEditorObservation({ title: "标题", semanticBody: "正文",
+            previewDigest: "c".repeat(64), imageCount: 1, settings: { visibility: "public", timing: "immediate" } }),
+          editorUrl: page.url(), page, context: page.context(), musicSelectionCount: 0 };
+        const evidence = await inspectDouyinPreMusicReadOnly(binding);
+        const inspected = await inspectRecommendedDouyinMusic(page, evidence, async () => binding);
         expect(inspected.candidates).toMatchObject([{ trackId: "track-1", title: "舒缓纯音乐", artist: "音乐人", duration: "01:30", rowIndex: 0 }]);
         await page.setContent(`<main><div data-douyin-music-region><span>选择音乐</span><div data-selected-music="track-1"><span data-track-title>舒缓纯音乐</span><span data-track-artist>音乐人</span><time>01:30</time></div></div></main>`);
         expect((await readSelectedDouyinMusic(page)).classification).toBe("TRACK");

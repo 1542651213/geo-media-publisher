@@ -15,8 +15,10 @@ import { observeDouyinImageEditor, selectAndObserveDouyinImage } from "./image-t
 import { inspectDouyinManagementControls, inspectDouyinManagementReadOnlyNavigation } from "./image-text-management-preflight";
 import { inspectDouyinBodyPage, type DouyinBodyPageDiagnostic } from "./image-text-body-diagnostic";
 import { readDouyinBodyText, type DouyinBodyReadback } from "./image-text-body-readback";
-import { assertDouyinMusicReadback, chooseDouyinMusic, douyinMusicDrawerRows, douyinMusicIdentityKey,
+import { assertDouyinMusicReadback, chooseDouyinMusic, clickRecommendedDouyinMusicOnce, douyinMusicDrawerRows, douyinMusicIdentityKey,
   inspectRecommendedDouyinMusic, readSelectedDouyinMusic, type DouyinMusicIdentity, type DouyinMusicReadback } from "./image-text-music";
+import { DouyinPreMusicInvariantError, hashDouyinPreMusicEditorObservation, inspectDouyinPreMusicReadOnly,
+  type DouyinPreMusicBinding } from "./image-text-pre-music";
 export { selectAndObserveDouyinImage } from "./image-text-upload";
 
 const creatorHome = "https://creator.douyin.com/creator-micro/home";
@@ -432,6 +434,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
   }
 
   override async preparePublish(ctx: AccountContext, article: PublishArticleInput): Promise<AutomationPrepareResult> {
+    const preparationId = randomUUID();
     const validation = await this.validateArticle(article);
     if (!validation.valid) throw new BrowserAutomationError("CONTENT_REJECTED", validation.errors.join("; "));
     const creatorId = typeof ctx.settings.expectedCreatorId === "string" ? ctx.settings.expectedCreatorId.trim() : "";
@@ -564,6 +567,55 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     const finalCount = await finalControl.count();
     const settings = await this.readEditorSettings(page);
     assertDouyinEditorSettings(settings, visibility);
+    // The content gate precedes every music-surface action. Neither a drawer nor a track click
+    // can be used to make an incomplete editor look prepared.
+    assertDouyinImageTextReadback(initialFrozen, { accountId: ctx.accountId, creatorId,
+      contextOwned: page.context() === owned.session.context, sessionActive: !page.isClosed(),
+      pageHost: new URL(page.url()).host, title: titleReadback, body: bodyReadback.semanticText, imageCount,
+      requiredFieldsPresent: douyinRequiredSettingsPass(settings), finalSubmitControlCount: finalCount,
+      securityChallenge: /captcha|security[-_/]?check|risk[-_/]?control/iu.test(page.url()) });
+    const uploadOperation = this.uploadOperations.get(jobId);
+    if (!uploadOperation || !previewDigest || uploadOperation.selectionStatus !== "RETURNED"
+      || uploadOperation.accountId !== ctx.accountId || uploadOperation.articleId !== article.articleId
+      || uploadOperation.jobId !== jobId || uploadOperation.page !== page
+      || uploadOperation.context !== owned.session.context
+      || uploadOperation.sessionIdHash !== owned.session.sessionIdHash
+      || uploadOperation.loginGeneration !== loginGeneration
+      || uploadOperation.sourceContentHash !== initialFrozen.sourceContentHash
+      || uploadOperation.imageSha256 !== initialFrozen.imageHashes[0]
+      || uploadOperation.previewDigest !== previewDigest)
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_PRE_MUSIC_UPLOAD_OPERATION_UNVERIFIED");
+    const resolveCurrentPreMusicBinding = async (): Promise<DouyinPreMusicBinding> => {
+      const currentOwned = await this.activeCanonicalPage(ctx);
+      if (!currentOwned || currentOwned.page !== page || currentOwned.session.context !== owned.session.context
+        || currentOwned.session.sessionIdHash !== uploadOperation.sessionIdHash
+        || currentOwned.session.executionMode !== "VISIBLE" || page.isClosed()
+        || await this.readOwnedCreatorId(ctx, currentOwned) !== creatorId
+        || ctx.settings.expectedLoginGeneration !== uploadOperation.loginGeneration)
+        throw new DouyinPreMusicInvariantError("DOUYIN_PRE_MUSIC_EVIDENCE_STALE");
+      const currentTitle = await title.inputValue();
+      const currentBody = await readDouyinBodyText(page);
+      const currentSettings = await this.readEditorSettings(page);
+      assertDouyinEditorSettings(currentSettings, visibility);
+      const loadedPreviewSources = await images.evaluateAll((elements) => elements.filter((element) => {
+        if (!(element instanceof HTMLImageElement) || !element.complete || element.naturalWidth <= 0) return false;
+        return Boolean(element.currentSrc || element.src);
+      }).map((element) => element instanceof HTMLImageElement ? element.currentSrc || element.src : ""));
+      // These URLs remain ephemeral in Main; only the digest is retained in evidence.
+      const currentPreviewMatches = loadedPreviewSources.filter((src) => createHash("sha256").update(src).digest("hex") === previewDigest).length;
+      if (currentPreviewMatches !== 1 || currentTitle !== initialFrozen.title
+        || currentBody.semanticText !== initialFrozen.body || JSON.stringify(currentSettings) !== JSON.stringify(settings))
+        throw new DouyinPreMusicInvariantError("DOUYIN_PRE_MUSIC_EDITOR_CHANGED");
+      return { accountId: ctx.accountId, articleId: article.articleId, jobId, preparationId,
+        uploadOperationId: uploadOperation.operationId, sessionIdHash: uploadOperation.sessionIdHash,
+        loginGeneration: uploadOperation.loginGeneration, sourceContentHash: initialFrozen.sourceContentHash,
+        imageSha256: uploadOperation.imageSha256, previewDigest,
+        editorObservationHash: hashDouyinPreMusicEditorObservation({ title: currentTitle,
+          semanticBody: currentBody.semanticText, previewDigest, imageCount: currentPreviewMatches,
+          settings: currentSettings }), editorUrl: page.url(), page, context: owned.session.context,
+        musicSelectionCount: this.musicSelectionUsed.has(jobId) ? 1 : 0 };
+    };
+    const preMusicEvidence = await inspectDouyinPreMusicReadOnly(await resolveCurrentPreMusicBinding());
     const musicMode = ctx.settings.expectedMusicMode === "AUTO_RECOMMENDED" ? "AUTO_RECOMMENDED" : "NONE";
     let musicBinding: DouyinMusicBinding = { mode: "NONE" };
     let musicResult = "SKIPPED_OPTIONAL";
@@ -581,7 +633,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
           && (item.trackId === null || typeof item.trackId === "string")).slice(0, 10);
       } catch { throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_RECENT_MUSIC_INVALID"); }
       try {
-        const inspected = await inspectRecommendedDouyinMusic(page);
+        const inspected = await inspectRecommendedDouyinMusic(page, preMusicEvidence, resolveCurrentPreMusicBinding);
         musicCandidateCount = inspected.candidates.length;
         const decision = chooseDouyinMusic(inspected.candidates, recent);
         musicEligibleCount = decision.eligibleCount;
@@ -594,10 +646,12 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
             throw new BrowserAutomationError("PLATFORM_CHANGED", "DOUYIN_MUSIC_ROW_CHANGED_BEFORE_SELECTION");
           if (!jobId || this.musicSelectionUsed.has(jobId))
             throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_MUSIC_SELECTION_ALREADY_DISPATCHED");
-          musicSelectionOperationId = randomUUID();
-          this.musicSelectionUsed.add(jobId);
-          try { await row.click({ timeout: 10_000 }); }
-          catch { throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_MUSIC_SELECTION_RESULT_UNKNOWN"); }
+          try { await clickRecommendedDouyinMusicOnce(page, row, preMusicEvidence, resolveCurrentPreMusicBinding,
+            () => { musicSelectionOperationId = randomUUID(); this.musicSelectionUsed.add(jobId); }); }
+          catch (error) {
+            if (error instanceof DouyinPreMusicInvariantError) throw error;
+            throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_MUSIC_SELECTION_RESULT_UNKNOWN");
+          }
           await page.keyboard.press("Escape");
           const observed = await readSelectedDouyinMusic(page);
           const selectedBinding: DouyinMusicBinding = { mode: "AUTO_RECOMMENDED", identity, trackId: selected.trackId,
@@ -608,11 +662,17 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
           musicResult = "SELECTED_VERIFIED";
         } else if (inspected.entryFound) await page.keyboard.press("Escape");
       } catch (error) {
-        if (musicSelectionOperationId) throw error;
+        if (musicSelectionOperationId || error instanceof DouyinPreMusicInvariantError) throw error;
         await page.keyboard.press("Escape").catch(() => undefined);
         musicResult = "SKIPPED_OPTIONAL";
       }
     }
+    const postMusic = await readSelectedDouyinMusic(page);
+    if (postMusic.drawerPresent)
+      throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_POST_MUSIC_DRAWER_STILL_OPEN");
+    let postMusicReadback: "PASS_NONE" | "PASS_TRACK";
+    try { postMusicReadback = assertDouyinMusicReadback(musicBinding, postMusic); }
+    catch { throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_MUSIC_READBACK_MISMATCH"); }
     const frozen = await freezeDouyinImageText({ ...source, mandatorySelections: settings.selectedMandatory, musicBinding });
     assertDouyinImageTextReadback(frozen, { accountId: ctx.accountId, creatorId,
       contextOwned: page.context() === owned.session.context, sessionActive: !page.isClosed(),
@@ -628,6 +688,12 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
         sourceContentHash: frozen.sourceContentHash, contentBindingHash: frozen.contentBindingHash,
         musicModeRequested: musicMode, musicBinding, musicResult, musicCandidateCount,
         musicEligibleCount, musicRecentExcludedCount, musicSelectionOperationId,
+        preMusicDiagnosticRun: true, preMusicClassification: preMusicEvidence.classification,
+        preMusicEntryCount: preMusicEvidence.diagnostic.entryNodeCount,
+        preMusicSelectedContainerCount: preMusicEvidence.diagnostic.selectedContainerCount,
+        preMusicAmbiguousCount: preMusicEvidence.diagnostic.ambiguousNodes,
+        preMusicCorrelationHash: createHash("sha256").update(`${preMusicEvidence.sessionIdHash}:${preMusicEvidence.preparationId}:${preMusicEvidence.evidenceId}`).digest("hex"),
+        postMusicReadback,
         expectedCreatorId: creatorId, settingsSnapshot: settings, mandatorySelections: settings.selectedMandatory,
         rawBodyUtf16Length: bodyReadback.rawInnerText.length,
         rawTextContentUtf16Length: bodyReadback.rawTextContent.length,

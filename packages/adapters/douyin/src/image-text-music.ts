@@ -1,6 +1,8 @@
 import { randomInt } from "node:crypto";
 import type { Locator, Page } from "playwright-core";
 import { inspectDouyinMusicDocument, type DouyinMusicDomState } from "./image-text-music-dom";
+import { assertDouyinPreMusicEvidenceCurrent, DouyinPreMusicInvariantError,
+  type DouyinPreMusicBinding, type DouyinPreMusicEvidence } from "./image-text-pre-music";
 import type { DouyinMusicBinding } from "@publisher/domain/douyin-image-text";
 
 export interface DouyinMusicIdentity {
@@ -87,8 +89,19 @@ export function douyinMusicDrawerRows(page: Page): Locator {
     .filter({ has: page.getByPlaceholder("搜索音乐") }).locator(douyinMusicRowSelector);
 }
 
+async function requireCurrentPreMusicNone(page: Page, evidence?: DouyinPreMusicEvidence,
+  resolveCurrent?: () => Promise<DouyinPreMusicBinding>): Promise<void> {
+  if (!evidence || !resolveCurrent)
+    throw new DouyinPreMusicInvariantError("DOUYIN_PRE_MUSIC_EVIDENCE_REQUIRED");
+  assertDouyinPreMusicEvidenceCurrent(evidence, await resolveCurrent());
+  if (evidence.page !== page || (await readSelectedDouyinMusic(page)).classification !== "NONE")
+    throw new DouyinPreMusicInvariantError("DOUYIN_PRE_MUSIC_EVIDENCE_STALE");
+}
+
 /** Read a bounded first screen only. The DOM, not historical screenshots, supplies candidates. */
-export async function inspectRecommendedDouyinMusic(page: Page): Promise<{ candidates: DouyinMusicCandidate[]; entryFound: boolean }> {
+export async function inspectRecommendedDouyinMusic(page: Page, evidence?: DouyinPreMusicEvidence,
+  resolveCurrent?: () => Promise<DouyinPreMusicBinding>): Promise<{ candidates: DouyinMusicCandidate[]; entryFound: boolean }> {
+  await requireCurrentPreMusicNone(page, evidence, resolveCurrent);
   const entry = page.getByText("选择音乐", { exact: true });
   if (await entry.count() !== 1 || !await entry.isVisible()) return { candidates: [], entryFound: false };
   await entry.click();
@@ -111,6 +124,15 @@ export async function inspectRecommendedDouyinMusic(page: Page): Promise<{ candi
       selectable: !(element.getAttribute("aria-disabled") === "true" || element.hasAttribute("disabled")), usageText: text.slice(0, 160) };
   }));
   return { candidates, entryFound: true };
+}
+
+/** The sole music-row click path checks the same process-local evidence again immediately before dispatch. */
+export async function clickRecommendedDouyinMusicOnce(page: Page, row: Locator,
+  evidence: DouyinPreMusicEvidence, resolveCurrent: () => Promise<DouyinPreMusicBinding>,
+  beforeClick: () => void): Promise<void> {
+  await requireCurrentPreMusicNone(page, evidence, resolveCurrent);
+  beforeClick();
+  await row.click({ timeout: 10_000 });
 }
 
 export async function readSelectedDouyinMusic(page: Page): Promise<DouyinMusicReadback> {
