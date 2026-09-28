@@ -11,7 +11,7 @@ const submittedAt = "2026-09-28T04:19:20.640Z";
 const browsers: Browser[] = [];
 afterEach(async () => { for (const browser of browsers.splice(0)) await browser.close(); });
 
-async function fixture(cards: string[]) {
+async function fixture(cards: string[], profileLink = false) {
   const browser = await chromium.launch({ executablePath: chrome, headless: true });
   browsers.push(browser);
   const context = await browser.newContext();
@@ -25,8 +25,11 @@ async function fixture(cards: string[]) {
   });
   await context.route("https://www.douyin.com/**", async (route) => {
     methods.push(route.request().method());
+    const body = profileLink && new URL(route.request().url()).pathname === "/user/self"
+      ? `<a href="https://www.douyin.com/note/${remoteId}?source=profile">作品</a>`
+      : `${title} ${marker}`;
     await route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body:
-      `<html><body>${title} ${marker}</body></html>` });
+      `<html><body>${body}</body></html>` });
   });
   return { context, page, methods };
 }
@@ -84,14 +87,26 @@ describe.skipIf(!existsSync(chrome))("Douyin exact-card read-only public view", 
       exactRemoteIdMatch: true });
   }, 20_000);
 
-  it("records a bounded view dialog and actual link without treating it as an opened public URL", async () => {
+  it("opens the actual exact-ID link from a bounded view dialog", async () => {
     const modalCard = card().replace(/window\.open\([^;]+\)/u, "document.querySelector('#view').hidden=false");
     const { context, page } = await fixture([modalCard,
       `<div id="view" role="dialog" hidden><a href="https://www.douyin.com/note/${remoteId}">查看</a></div>`]);
     const result = await probeDouyinPublishedCardPublicUrl(page, context, {
       remoteId, title, marker, submitBoundaryEnteredAt: submittedAt });
-    expect(result).toMatchObject({ attempted: true, reason: "COVER_DID_NOT_OPEN_PUBLIC_WORK",
+    expect(result).toMatchObject({ attempted: true, reason: "ACTUAL_PUBLIC_WORK_OPENED",
+      publicUrlSource: "ACTUAL_VIEW_HREF", exactRemoteIdMatch: true,
       observedPagePath: "/creator-micro/content/manage", visibleDialogCount: 1,
       visibleWorkLinkPaths: [expect.objectContaining({ exactRemoteIdInPath: true })] });
+  }, 20_000);
+
+  it("uses an actual exact-ID profile href when the cover opens the public self page", async () => {
+    const profileCard = card().replace(`https://www.douyin.com/note/${remoteId}?track=discard`,
+      "https://www.douyin.com/user/self");
+    const { context, page } = await fixture([profileCard], true);
+    const result = await probeDouyinPublishedCardPublicUrl(page, context, {
+      remoteId, title, marker, submitBoundaryEnteredAt: submittedAt });
+    expect(result).toMatchObject({ attempted: true, publicUrlSource: "ACTUAL_VIEW_HREF",
+      actualPublicUrl: `https://www.douyin.com/note/${remoteId}`, exactRemoteIdMatch: true,
+      publicTitleMatch: true, publicMarkerMatch: true });
   }, 20_000);
 });
