@@ -15,7 +15,7 @@ import { observeDouyinImageEditor, selectAndObserveDouyinImage } from "./image-t
 import { inspectDouyinManagementControls, inspectDouyinManagementReadOnlyNavigation } from "./image-text-management-preflight";
 import { inspectDouyinManagementTopology, type DouyinManagementTopology } from "./image-text-management-topology";
 import { revealDouyinCreatorIdentityReadOnly, type DouyinIdentityMenuProbe } from "./image-text-identity-menu";
-import { probeDouyinPublishedCardPublicUrl, type DouyinManagementPublicProbe } from "./image-text-management-public-probe";
+import { isTrustedDouyinPublishedProbe, probeDouyinPublishedCardPublicUrl, type DouyinManagementPublicProbe } from "./image-text-management-public-probe";
 import { inspectDouyinBodyPage, type DouyinBodyPageDiagnostic } from "./image-text-body-diagnostic";
 import { readDouyinBodyText, type DouyinBodyReadback } from "./image-text-body-readback";
 import { assertDouyinMusicReadback, chooseDouyinMusic, clickRecommendedDouyinMusicOnce, douyinMusicDrawerRows, douyinMusicIdentityKey,
@@ -923,6 +923,26 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
       || await this.readOwnedCreatorId(ctx, owned) !== expected) return unknown("OWNED_CREATOR_IDENTITY_UNVERIFIED");
     const tab = await owned.session.context.newPage();
     try {
+      // Current Creator management cards are linkless. Bind the unique published card
+      // to the trusted submit ID through an actual view href, never a constructed URL.
+      if (input.expectedExternalId && /^\d{10,30}$/u.test(input.expectedExternalId) && input.submittedAt) {
+        const probe = await probeDouyinPublishedCardPublicUrl(tab, owned.session.context, {
+          remoteId: input.expectedExternalId, title: input.title, submitBoundaryEnteredAt: input.submittedAt });
+        const stillOwned = await this.activeCanonicalPage(ctx);
+        if (!stillOwned || stillOwned.page !== owned.page || stillOwned.session.context !== owned.session.context
+          || await this.readOwnedCreatorId(ctx, stillOwned) !== expected)
+          return unknown("OWNED_CREATOR_CONTEXT_CHANGED_AFTER_READ");
+        if (!isTrustedDouyinPublishedProbe(probe, input.expectedExternalId))
+          return unknown(`EXACT_PUBLIC_PROBE_${probe.reason}`);
+        return { status: "FOUND_PUBLISHED", remoteState: "PUBLISHED", externalId: input.expectedExternalId,
+          publishedUrl: probe.actualPublicUrl, titleMatch: true, accountMatch: true, timeWindowMatch: true,
+          response: { adapter: "douyin-image-text-browser", readOnly: true, matchedBy: "REMOTE_ID",
+            remoteState: "PUBLISHED", managementCardCount: probe.exactTargetCardCount,
+            cardTimeMatchesBoundary: probe.cardTimeMatchesBoundary, publicUrlSource: probe.publicUrlSource,
+            exactRemoteIdMatch: probe.exactRemoteIdMatch, publicTitleMatch: probe.publicTitleMatch,
+            publicImageEvidence: probe.publicImageEvidence },
+          message: "Douyin exact remote ID linked from unique published management card" };
+      }
       await tab.goto("https://creator.douyin.com/creator-micro/content/manage", { waitUntil: "domcontentloaded", timeout: 20_000 });
       if (new URL(tab.url()).pathname !== "/creator-micro/content/manage") return unknown("MANAGEMENT_ROUTE_UNAVAILABLE");
       await tab.locator('input[placeholder="搜索作品"]').waitFor({ state: "visible", timeout: 15_000 });

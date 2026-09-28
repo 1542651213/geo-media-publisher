@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { chromium, type Browser } from "playwright-core";
-import { probeDouyinPublishedCardPublicUrl } from "./image-text-management-public-probe";
+import { isTrustedDouyinPublishedProbe, probeDouyinPublishedCardPublicUrl } from "./image-text-management-public-probe";
 
 const chrome = "C:/Program Files/Google/Chrome/Application/chrome.exe";
 const remoteId = "7690435917298928942";
@@ -27,7 +27,7 @@ async function fixture(cards: string[], profileLink = false) {
     methods.push(route.request().method());
     const body = profileLink && new URL(route.request().url()).pathname === "/user/self"
       ? `<a href="https://www.douyin.com/note/${remoteId}?source=profile">作品</a>`
-      : `${title} ${marker}`;
+      : `${title} ${marker}<img src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='1'%20height='1'%3E%3C/svg%3E">`;
     await route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body:
       `<html><body>${body}</body></html>` });
   });
@@ -35,7 +35,7 @@ async function fixture(cards: string[], profileLink = false) {
 }
 
 function card(state = "已发布", id = remoteId): string {
-  return `<div class="video-card-real"><div>${title} ${marker}</div>
+  return `<div class="video-card-real"><div class="info-title-text-real">${title}。正文 ${marker}</div>
     <div class="info-time-real">2026年09月28日 12:19</div><div class="info-status-real">${state}</div>
     <div class="video-card-cover-real" style="cursor:pointer;width:100px;height:100px"
       onclick="window.open('https://www.douyin.com/note/${id}?track=discard','_blank')">封面</div>
@@ -108,5 +108,37 @@ describe.skipIf(!existsSync(chrome))("Douyin exact-card read-only public view", 
     expect(result).toMatchObject({ attempted: true, publicUrlSource: "ACTUAL_VIEW_HREF",
       actualPublicUrl: `https://www.douyin.com/note/${remoteId}`, exactRemoteIdMatch: true,
       publicTitleMatch: true, publicMarkerMatch: true });
+  }, 20_000);
+
+  it("reconciles a unique exact title without a marker only after the real href proves the trusted ID", async () => {
+    const profileCard = card().replace(`https://www.douyin.com/note/${remoteId}?track=discard`,
+      "https://www.douyin.com/user/self");
+    const { context, page } = await fixture([profileCard], true);
+    const result = await probeDouyinPublishedCardPublicUrl(page, context, {
+      remoteId, title, submitBoundaryEnteredAt: submittedAt });
+    expect(result).toMatchObject({ attempted: true, cardState: "PUBLISHED",
+      exactRemoteIdMatch: true, actualPublicUrl: `https://www.douyin.com/note/${remoteId}`,
+      publicTitleMatch: true, publicMarkerMatch: false });
+    expect(isTrustedDouyinPublishedProbe(result, remoteId)).toBe(true);
+    for (const weakened of [
+      { ...result, cardState: "REVIEWING" as const },
+      { ...result, cardTimeMatchesBoundary: false },
+      { ...result, exactTargetCardCount: 2 },
+      { ...result, actualRemoteId: "7690435917298928999" },
+      { ...result, actualPublicUrl: "https://www.douyin.com/note/7690435917298928999" },
+      { ...result, actualPublicUrl: `https://other.douyin.com/note/${remoteId}` },
+      { ...result, publicTitleMatch: false },
+      { ...result, publicImageEvidence: false },
+      { ...result, reason: "PUBLIC_VIEW_READ_FAILED_AFTER_CLICK" }
+    ]) expect(isTrustedDouyinPublishedProbe(weakened, remoteId)).toBe(false);
+  }, 20_000);
+
+  it("does not accept a title that only contains the approved title as a substring", async () => {
+    const { context, page, methods } = await fixture([
+      card().replace(`>${title}。正文`, `>扩展${title}。正文`)]);
+    const result = await probeDouyinPublishedCardPublicUrl(page, context, {
+      remoteId, title, submitBoundaryEnteredAt: submittedAt });
+    expect(result).toMatchObject({ attempted: false, reason: "TARGET_CARD_NOT_UNIQUE" });
+    expect(methods).toEqual(["GET"]);
   }, 20_000);
 });

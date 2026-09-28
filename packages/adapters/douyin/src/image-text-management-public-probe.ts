@@ -25,6 +25,19 @@ export interface DouyinManagementPublicProbe {
 const managementUrl = "https://creator.douyin.com/creator-micro/content/manage";
 const publicPath = /^\/(?:note|video)\/(\d{10,30})(?:\/|$)/u;
 
+/** A management result may be persisted only after its actual view href proves the trusted response ID. */
+export function isTrustedDouyinPublishedProbe(probe: DouyinManagementPublicProbe,
+  expectedRemoteId: string): probe is DouyinManagementPublicProbe & { actualPublicUrl: string } {
+  return /^\d{10,30}$/u.test(expectedRemoteId) && probe.reason === "ACTUAL_PUBLIC_WORK_OPENED"
+    && probe.exactTargetCardCount === 1 && probe.cardState === "PUBLISHED"
+    && probe.cardTimeMatchesBoundary && probe.exactRemoteIdMatch
+    && probe.actualRemoteId === expectedRemoteId
+    && (probe.actualPublicUrl === `https://www.douyin.com/note/${expectedRemoteId}`
+      || probe.actualPublicUrl === `https://www.douyin.com/video/${expectedRemoteId}`)
+    && probe.publicUrlSource !== null && probe.publicReachable
+    && probe.publicTitleMatch && probe.publicImageEvidence;
+}
+
 function publishedTime(raw: string | null): number | null {
   const match = raw && /^(\d{4})年(\d{2})月(\d{2})日\s+(\d{2}):(\d{2})$/u.exec(raw);
   if (!match) return null;
@@ -35,7 +48,7 @@ function publishedTime(raw: string | null): number | null {
 
 /** Clicks only the cover of one exact, same-window management card; this is a read-only view action. */
 export async function probeDouyinPublishedCardPublicUrl(page: Page, context: BrowserContext,
-  input: { remoteId: string; title: string; marker: string; submitBoundaryEnteredAt: string }): Promise<DouyinManagementPublicProbe> {
+  input: { remoteId: string; title: string; marker?: string; submitBoundaryEnteredAt: string }): Promise<DouyinManagementPublicProbe> {
   const empty = (reason: string, details?: Partial<DouyinManagementPublicProbe>): DouyinManagementPublicProbe => ({
     attempted: false, reason, exactTargetCardCount: 0, cardState: null, cardTime: null,
     cardTimeMatchesBoundary: false, actualPublicUrl: null, actualRemoteId: null,
@@ -44,7 +57,8 @@ export async function probeDouyinPublishedCardPublicUrl(page: Page, context: Bro
     observedPagePath: null, popupOpened: false, visibleWorkLinkPaths: [], visibleDialogCount: 0,
     ...details });
   if (page.isClosed() || page.context() !== context || !context.pages().includes(page)) return empty("CONTEXT_MISMATCH");
-  if (!/^\d{10,30}$/u.test(input.remoteId) || !input.title || !/^DYCORE[A-Za-z0-9]{4,32}$/u.test(input.marker))
+  if (!/^\d{10,30}$/u.test(input.remoteId) || !input.title
+    || input.marker !== undefined && !/^DYCORE[A-Za-z0-9]{4,32}$/u.test(input.marker))
     return empty("TARGET_INVALID");
   const submittedAt = Date.parse(input.submitBoundaryEnteredAt);
   if (!Number.isFinite(submittedAt)) return empty("SUBMIT_TIME_INVALID");
@@ -55,11 +69,27 @@ export async function probeDouyinPublishedCardPublicUrl(page: Page, context: Bro
   // The list's load-more/loading shell appears before cards. It cannot establish a negative result.
   await page.waitForFunction(() => document.querySelector('[class*="content-body-"] > [class*="video-card-"]'),
     null, { timeout: 15_000 }).catch(() => undefined);
-  const cards = page.locator('[class*="list-scroll-"] [class*="content-body-"] > [class*="video-card-"]')
-    .filter({ hasText: input.title }).filter({ hasText: input.marker });
-  const count = await cards.count();
+  const allCards = page.locator('[class*="list-scroll-"] [class*="content-body-"] > [class*="video-card-"]');
+  const matchingIndices = await allCards.evaluateAll((elements, { title, marker }) => {
+    const approved = title.normalize("NFKC").trim();
+    return elements.flatMap((element, index) => {
+      const node = element.querySelector<HTMLElement>('[class*="info-title-text-"]');
+      const text = node?.innerText.normalize("NFKC").replace(/\s+/gu, " ").trim() ?? "";
+      const titleMatches = text === approved || text.startsWith(`${approved}。`) || text.startsWith(`${approved} `);
+      return titleMatches && (!marker || (element as HTMLElement).innerText.includes(marker)) ? [index] : [];
+    });
+  }, { title: input.title, marker: input.marker });
+  const count = matchingIndices.length;
   if (count !== 1) return empty("TARGET_CARD_NOT_UNIQUE", { exactTargetCardCount: count });
-  const card = cards.first();
+  const card = allCards.nth(matchingIndices[0]!);
+  const titleNodes = card.locator('[class*="info-title-text-"]');
+  if (await titleNodes.count() !== 1) return empty("TARGET_TITLE_NODE_CHANGED", { exactTargetCardCount: count });
+  const currentTitle = (await titleNodes.innerText()).normalize("NFKC").replace(/\s+/gu, " ").trim();
+  const approvedTitle = input.title.normalize("NFKC").trim();
+  if (currentTitle !== approvedTitle && !currentTitle.startsWith(`${approvedTitle}。`)
+    && !currentTitle.startsWith(`${approvedTitle} `)) return empty("TARGET_TITLE_NODE_CHANGED", { exactTargetCardCount: count });
+  if (input.marker && !await card.getByText(input.marker, { exact: false }).count())
+    return empty("TARGET_MARKER_CHANGED", { exactTargetCardCount: count });
   const stateNodes = await card.locator('[class*="info-status-"]').allInnerTexts();
   const state: DouyinManagementPublicProbe["cardState"] = stateNodes.length === 1 && stateNodes[0]?.trim() === "已发布" ? "PUBLISHED"
     : stateNodes.length === 1 && stateNodes[0]?.trim() === "审核中" ? "REVIEWING"
@@ -90,7 +120,7 @@ export async function probeDouyinPublishedCardPublicUrl(page: Page, context: Bro
         .some((anchor) => { try { const url = new URL(anchor.href);
           const box = anchor.getBoundingClientRect();
           return box.width > 0 && box.height > 0 && url.protocol === "https:"
-            && (url.hostname === "douyin.com" || url.hostname.endsWith(".douyin.com"))
+            && url.hostname === "www.douyin.com"
             && /^\/(?:note|video)\/\d{10,30}(?:\/|$)/u.test(url.pathname)
             && url.pathname.split("/").includes(targetId); } catch { return false; } }),
       input.remoteId, { timeout: 10_000 }).catch(() => undefined);
@@ -106,11 +136,11 @@ export async function probeDouyinPublishedCardPublicUrl(page: Page, context: Bro
             exactRemoteIdInPath: url.pathname.split("/").includes(targetId) }; } catch { return null; } })
         .filter((value): value is { host: string; path: string; url: string; exactRemoteIdInPath: boolean } => value !== null)
         .filter((value) => /\/(?:note|video)\//u.test(value.path)
-          && (value.host === "douyin.com" || value.host.endsWith(".douyin.com"))).slice(0, 12)
+          && value.host === "www.douyin.com").slice(0, 12)
     }), input.remoteId).catch(() => ({ visibleDialogCount: 0, visibleWorkLinkPaths: [] }));
     const viewDetails = { ...details, attempted: true, observedPageHost: parsed.host,
       observedPagePath: parsed.pathname.slice(0, 150), popupOpened: Boolean(popup), ...viewTopology };
-    const openedId = parsed.protocol === "https:" && (parsed.hostname === "douyin.com" || parsed.hostname.endsWith(".douyin.com"))
+    const openedId = parsed.protocol === "https:" && parsed.hostname === "www.douyin.com"
       ? publicPath.exec(parsed.pathname)?.[1] ?? null : null;
     const exactProfileLinks = viewTopology.visibleWorkLinkPaths.filter((link) => link.exactRemoteIdInPath);
     const actualPublicUrl = openedId ? `${parsed.origin}${parsed.pathname}`
@@ -120,12 +150,13 @@ export async function probeDouyinPublishedCardPublicUrl(page: Page, context: Bro
     if (!actualPublicUrl) return empty("COVER_DID_NOT_OPEN_PUBLIC_WORK", viewDetails);
     if (publicUrlSource === "ACTUAL_VIEW_HREF") {
       await observed.goto(actualPublicUrl, { waitUntil: "domcontentloaded", timeout: 20_000 });
-      if (new URL(observed.url()).pathname !== new URL(actualPublicUrl).pathname)
+      if (new URL(observed.url()).origin !== "https://www.douyin.com"
+        || new URL(observed.url()).pathname !== new URL(actualPublicUrl).pathname)
         return empty("PROFILE_LINK_NAVIGATION_CHANGED", { ...viewDetails, actualPublicUrl,
           actualRemoteId, exactRemoteIdMatch: actualRemoteId === input.remoteId, publicUrlSource });
     }
     const evidence = await observed.evaluate(({ title, marker }) => ({
-      title: document.body.innerText.includes(title), marker: document.body.innerText.includes(marker),
+      title: document.body.innerText.includes(title), marker: marker ? document.body.innerText.includes(marker) : false,
       images: [...document.images].some((image) => image.complete && image.naturalWidth > 0)
     }), { title: input.title, marker: input.marker }).catch(() => ({ title: false, marker: false, images: false }));
     return { ...empty(actualRemoteId === input.remoteId ? "ACTUAL_PUBLIC_WORK_OPENED" : "PUBLIC_REMOTE_ID_MISMATCH", viewDetails),
