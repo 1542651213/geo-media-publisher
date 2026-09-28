@@ -15,6 +15,7 @@ import { observeDouyinImageEditor, selectAndObserveDouyinImage } from "./image-t
 import { inspectDouyinManagementControls, inspectDouyinManagementReadOnlyNavigation } from "./image-text-management-preflight";
 import { inspectDouyinManagementTopology, type DouyinManagementTopology } from "./image-text-management-topology";
 import { revealDouyinCreatorIdentityReadOnly, type DouyinIdentityMenuProbe } from "./image-text-identity-menu";
+import { probeDouyinPublishedCardPublicUrl, type DouyinManagementPublicProbe } from "./image-text-management-public-probe";
 import { inspectDouyinBodyPage, type DouyinBodyPageDiagnostic } from "./image-text-body-diagnostic";
 import { readDouyinBodyText, type DouyinBodyReadback } from "./image-text-body-readback";
 import { assertDouyinMusicReadback, chooseDouyinMusic, clickRecommendedDouyinMusicOnce, douyinMusicDrawerRows, douyinMusicIdentityKey,
@@ -255,7 +256,8 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
 
   /** Post-boundary, read-only topology on a temporary Page in the account-owned Context. */
   async inspectManagementTopologyReadOnly(ctx: AccountContext, targetRemoteId: string,
-    targetTitle?: string, targetMarker?: string): Promise<DouyinManagementTopology &
+    targetTitle?: string, targetMarker?: string, submitBoundaryEnteredAt?: string): Promise<DouyinManagementTopology &
+    { publicCardProbe: DouyinManagementPublicProbe | null } &
     { creatorId: string; sessionIdHash: string; canonicalPagePath: string; contextOwnership: true }> {
     if (this.nativeSubmitEnabled) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_READONLY_RUNTIME_REQUIRED");
     const owned = await this.activeCanonicalPage(ctx);
@@ -274,6 +276,9 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     try {
       await tab.goto("https://creator.douyin.com/creator-micro/content/manage", { waitUntil: "domcontentloaded", timeout: 20_000 });
       const result = await inspectDouyinManagementTopology(tab, owned.session.context, targetRemoteId, targetTitle, targetMarker);
+      const publicCardProbe = targetTitle && targetMarker && submitBoundaryEnteredAt
+        ? await probeDouyinPublishedCardPublicUrl(tab, owned.session.context, {
+          remoteId: targetRemoteId, title: targetTitle, marker: targetMarker, submitBoundaryEnteredAt }) : null;
       const latest = await this.activeCanonicalPage(ctx);
       if (!latest || latest.page !== canonicalPage || latest.session.context !== owned.session.context
         || latest.session.sessionIdHash !== sessionIdHash || canonicalPage.isClosed()
@@ -281,7 +286,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
         || new URL(canonicalPage.url()).pathname !== canonicalPagePath
         || await this.readOwnedCreatorId(ctx, latest) !== expectedCreatorId)
         throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_READONLY_CREATOR_CONTEXT_CHANGED");
-      return { ...result, creatorId: expectedCreatorId, sessionIdHash, canonicalPagePath, contextOwnership: true };
+      return { ...result, publicCardProbe, creatorId: expectedCreatorId, sessionIdHash, canonicalPagePath, contextOwnership: true };
     } finally { await tab.close().catch(() => undefined); }
   }
 
