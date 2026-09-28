@@ -73,4 +73,16 @@ describe.skipIf(!existsSync(chrome))("Douyin bounded app-owned management topolo
     expect(page.url()).toBe(manage);
     expect(methods).toEqual(["GET"]);
   });
+
+  it("waits for the real list to replace an early loading surface", async () => {
+    const { context, page } = await fixture(`<!doctype html><html><body>
+      <input placeholder="搜索作品"><div class="list-loading" role="progressbar">加载中</div>
+      <section id="works"></section><script>setTimeout(() => {
+        document.querySelector('.list-loading').remove();
+        document.querySelector('#works').innerHTML = '<div class="work-card" data-work-id="${targetId}"><a href="https://www.douyin.com/note/${targetId}">目标</a><span>已发布</span></div>';
+      }, 400);</script></body></html>`);
+    const result = await inspectDouyinManagementTopology(page, context, targetId);
+    expect(result.loadingIndicatorCount).toBe(0);
+    expect(result.rowSamples.some((row) => row.exactTargetIdInData)).toBe(true);
+  }, 15_000);
 });

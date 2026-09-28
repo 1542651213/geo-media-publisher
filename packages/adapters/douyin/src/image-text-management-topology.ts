@@ -36,6 +36,14 @@ export async function inspectDouyinManagementTopology(page: Page, context: Brows
   if (!/^\d{10,30}$/u.test(targetRemoteId)) throw new Error("DOUYIN_MANAGEMENT_TOPOLOGY_TARGET_ID_INVALID");
   await page.locator('input[placeholder="搜索作品"]').first().waitFor({ state: "visible", timeout: 15_000 })
     .catch(() => undefined);
+  // The search control can hydrate before the work list. Wait only for the observed loading surface;
+  // a timeout remains visible in the returned snapshot and never proves an empty list.
+  await page.waitForFunction(() => [...document.querySelectorAll<HTMLElement>(
+    '[aria-busy="true"],[role="progressbar"],[class*="loading"],[class*="spinner"]')]
+    .every((element) => {
+      const box = element.getBoundingClientRect();
+      return box.width === 0 || box.height === 0 || getComputedStyle(element).visibility === "hidden";
+    }), null, { timeout: 12_000 }).catch(() => undefined);
   const snapshot = await page.evaluate((targetId) => {
     const safeClass = (element: Element): string => {
       const value = typeof element.className === "string" ? element.className : "";
