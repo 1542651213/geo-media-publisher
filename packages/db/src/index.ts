@@ -1,64 +1,48 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
-import { dirname } from "node:path";
-import { join } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { AppRepository } from "./repository";
 
 export { AppRepository } from "./repository";
-export type { OneShotConfirmationPersistenceResult, StoredVideoAsset, StoredVideoAssetStatus } from "./repository";
+export type { StoredVideoAsset, StoredVideoAssetStatus } from "./repository";
 export type { AIBatchItem, AIBatchTarget, ArticleInput, ArticlePage, AIProviderProfileInput, BrandInput, BrandKnowledgeEntryInput, ContentQualityAuditView, ContentQualityItemView, ContentQualityReviewView, ContentQualityStateView, ContentStudioMediaAssetView, ContentStudioTaskPayload, ContentStudioTaskView, ContentStudioVersionView, HumanReviewContentSnapshot, HumanReviewDatasetItemView, HumanReviewDatasetStatus, HumanReviewDatasetView, HumanReviewDecision, HumanReviewFinalStatus, HumanReviewIssueDecisionView, HumanReviewItemReviewView, HumanReviewItemStatus, HumanReviewMachineDecision, HumanReviewMachineIssueView, HumanReviewSubmitInput, JobInput, JobPage, QualityBenchmarkContentView, QualityBenchmarkItemAttemptStatus, QualityBenchmarkItemAttemptView, QualityBenchmarkItemStatus, QualityBenchmarkItemView, QualityBenchmarkMetrics, QualityBenchmarkRunStatus, QualityBenchmarkRunType, QualityBenchmarkRunView } from "./repository";
 export * from "./schema";
 
-export type MigrationEventCode = "MIGRATION_DISCOVERY" | "MIGRATION_APPLY_STARTED" | "MIGRATION_APPLY_COMPLETED" | "MIGRATION_APPLY_FAILED" | "TASK10S_SCHEMA_READY";
-
-export interface MigrationEvent {
-  code: MigrationEventCode;
-  migrationId?: string;
-  discoveredMigrationCount?: number;
-  appliedMigrationCount?: number;
-  latestMigrationId?: string | null;
-  productionSchemaVersion?: string | null;
-  authTablePresent?: boolean;
+/** Reject host-Node Repository access to the app's production database before any filesystem write. */
+export function assertProductionDatabaseRuntime(filePath: string, electronVersion: string | null = process.versions.electron ?? null): void {
+  const pathComponent = (value: string) => value.replace(/[. ]+$/u, "").toLowerCase();
+  const absolutePath = resolve(filePath);
+  if (pathComponent(basename(absolutePath)) !== "publisher.db") return;
+  const parent = dirname(absolutePath);
+  const canonicalParent = existsSync(parent) ? realpathSync(parent) : parent;
+  const productionDirectory = [parent, canonicalParent].some((path) => pathComponent(basename(path)) === "production-data");
+  if (productionDirectory && !electronVersion) {
+    throw Object.assign(new Error("PRODUCTION_DATABASE_ELECTRON_REQUIRED"), { code: "PRODUCTION_DATABASE_ELECTRON_REQUIRED" });
+  }
 }
 
-export type MigrationObserver = (event: MigrationEvent) => void;
-
-export function openDatabase(filePath: string, migrationsDir: string, observeMigration?: MigrationObserver): { db: Database.Database; repository: AppRepository } {
+export function openDatabase(filePath: string, migrationsDir: string): { db: Database.Database; repository: AppRepository } {
+  assertProductionDatabaseRuntime(filePath);
   mkdirSync(join(filePath, ".."), { recursive: true });
   const db = new Database(filePath);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
-  runMigrations(db, migrationsDir, observeMigration);
+  runMigrations(db, migrationsDir);
   return { db, repository: new AppRepository(db) };
 }
 
-export function runMigrations(db: Database.Database, migrationsDir: string, observeMigration?: MigrationObserver): void {
+export function runMigrations(db: Database.Database, migrationsDir: string): void {
   db.exec("CREATE TABLE IF NOT EXISTS migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)");
   if (!existsSync(migrationsDir)) throw new Error(`Migration directory not found: ${migrationsDir}`);
   const files = readdirSync(migrationsDir).filter((file) => file.endsWith(".sql")).sort();
-  const latestMigrationId = files.at(-1) ?? null;
-  observeMigration?.({ code: "MIGRATION_DISCOVERY", discoveredMigrationCount: files.length, latestMigrationId });
   const apply = db.transaction((file: string, sql: string) => {
     db.exec(sql);
     db.prepare("INSERT INTO migrations (id, applied_at) VALUES (?, ?)").run(file, new Date().toISOString());
   });
-  let appliedMigrationCount = 0;
   for (const file of files) {
     const applied = db.prepare("SELECT id FROM migrations WHERE id=?").get(file) as { id: string } | undefined;
-    if (!applied) {
-      observeMigration?.({ code: "MIGRATION_APPLY_STARTED", migrationId: file });
-      try {
-        apply(file, readFileSync(join(migrationsDir, file), "utf8"));
-        appliedMigrationCount += 1;
-        observeMigration?.({ code: "MIGRATION_APPLY_COMPLETED", migrationId: file, appliedMigrationCount });
-      } catch (error) {
-        observeMigration?.({ code: "MIGRATION_APPLY_FAILED", migrationId: file });
-        throw error;
-      }
-    }
+    if (!applied) apply(file, readFileSync(join(migrationsDir, file), "utf8"));
   }
-  const authTablePresent = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='one_shot_publication_authorizations'").get());
-  if (files.includes("0023_v150_one_shot_publication_authorization.sql") && authTablePresent) observeMigration?.({ code: "TASK10S_SCHEMA_READY", migrationId: "0023_v150_one_shot_publication_authorization.sql", latestMigrationId, productionSchemaVersion: "0023", authTablePresent });
 }
 
 export async function backupDatabase(db: Database.Database, backupPath: string): Promise<void> {

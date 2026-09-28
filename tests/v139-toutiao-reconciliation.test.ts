@@ -39,11 +39,37 @@ describe("V1.3.9 Toutiao accepted pending-review reconciliation", () => {
     expect(reconciled.record).toMatchObject({ id: expect.any(String), status: "Submitted", success: false, publishedExternalId: null, publishedUrl: null, verificationStatus: "WaitingUser" });
     expect(reconciled.record.response).toMatchObject({ reconciliationStatus: "PENDING_REVIEW", reconciliation: { platformStatus: "审核中" } });
     expect(opened.repository.getSubmissionIntentByJob(job.id)).toMatchObject({ state: "Submitted", finalSubmitCount: 1, errorCode: null, externalId: null });
+    expect(opened.repository.getSubmissionIntentByJob(job.id)?.remoteStatus).toBe("SUBMIT_ACCEPTED");
     expect({ jobs: opened.repository.listJobs().length, records: opened.repository.getPublishRecords().length }).toEqual(beforeCounts);
+
+    const again = opened.repository.reconcileJobAsSubmitted(job.id, { response: { readOnly: true, remoteState: "SCHEDULED" },
+      externalId: "7678241442350891547", remoteStatus: "SCHEDULED_ACCEPTED" });
+    expect(again.job.status).toBe("Submitted");
+    expect(opened.repository.getSubmissionIntentByJob(job.id)).toMatchObject({ finalSubmitCount: 1,
+      externalId: "7678241442350891547", remoteStatus: "SCHEDULED_ACCEPTED" });
 
     const published = opened.repository.reconcileJobAsPublished(job.id, { externalId: "7678241442350891547", publishedUrl: "https://www.toutiao.com/item/7678241442350891547/", response: { readOnly: true, verified: true } });
     expect(published.job).toMatchObject({ id: job.id, status: "Success" });
     expect(published.record).toMatchObject({ status: "Published", success: true, publishedExternalId: "7678241442350891547", publishedUrl: "https://www.toutiao.com/item/7678241442350891547/", verificationStatus: "Verified" });
     expect(opened.repository.getSubmissionIntentByJob(job.id)).toMatchObject({ state: "Submitted", finalSubmitCount: 1, errorCode: null, externalId: "7678241442350891547" });
+  });
+
+  it("persists native transport in Prepared Record metadata and cannot override an API preparation", () => {
+    const directory = mkdtempSync(join(tmpdir(), "toutiao-native-transport-")); tempDirs.push(directory);
+    const opened = openDatabase(join(directory, "publisher.db"), migrationDir); databases.push(opened.db);
+    opened.repository.seedDevelopment(join(process.cwd(), "PLATFORMS.csv"));
+    const repo = opened.repository;
+    const brand = repo.createBrand({ name: "Binding", companyName: "Test" });
+    const account = repo.syncBrowserPlatformAccount({ accountId: repo.createAccount({ platformKey: "toutiao", name: "test" }).id,
+      platformKey: "toutiao", browserSessionId: "fixture" });
+    const article = repo.createArticle({ brandId: brand.id, topic: "test", keyword: "test", city: "", title: "Native test", body: "Test content",
+      summary: "", tags: [], seoKeywords: [], articleType: "科普", aiProvider: "system", aiModel: "fixture", generatedAt: new Date().toISOString(),
+      reusePolicy: "once", contentHash: "a".repeat(64), qualityStatus: "passed", qualityWarnings: [], source: "production" })!;
+    const job = repo.createArticlePublishJob({ articleId: article.id, platformKey: "toutiao", platformAccountId: account.platformAccountId! });
+    repo.insertPublishRecord({ jobId: job.id, accountId: account.id, platformKey: "toutiao", articleId: article.id,
+      publishedUrl: null, publishedExternalId: null, success: false, status: "Prepared", response: { contentTransport: "ARTICLE_BROWSER", preparedInputHash: "b".repeat(64) } });
+    expect(repo.getFrozenContentTransport(job.id)).toBe("ARTICLE_BROWSER");
+    repo.freezeToutiaoArticleSettings(job.id, { version: 1, coverMode: "none", coverImages: [], articleAdType: "none", remoteScheduledAt: null });
+    expect(() => repo.getFrozenContentTransport(job.id)).toThrow(/transport/i);
   });
 });

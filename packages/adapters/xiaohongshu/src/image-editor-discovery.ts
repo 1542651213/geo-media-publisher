@@ -1,6 +1,5 @@
 import type { Locator, Page } from "playwright-core";
 import type { PreSubmitGateFailureCode, PreSubmitGateFailureStage } from "@publisher/adapters-core";
-import { recoverNativeFilePicker, type NativeFilePickerRecoveryProbe, type NativeFilePickerRecoveryResult } from "./native-file-picker-recovery";
 
 export type ImageEditorShellStatus = "IMAGE_EDITOR_SHELL_READY" | "IMAGE_EDITOR_SHELL_NOT_READY" | "IMAGE_EDITOR_SHELL_TIMEOUT";
 export type ImageEditorInspectionStatus = "READY" | "FAILED";
@@ -11,26 +10,6 @@ export type ImageEditorPhase = "IMAGE_POST_PRE_UPLOAD" | "IMAGE_POST_POST_UPLOAD
 export type ImageEditorPhaseConfidence = "HIGH" | "LOW";
 export type ImageEditorUploadCapabilityStatus = "PRESENT" | "AMBIGUOUS" | "ABSENT";
 export type ImageEditorPostUploadControlsStatus = "READY" | "FAIL";
-export type ImageEditorSelectedTab = "上传视频" | "上传图文" | "写长文" | "发播客";
-
-export interface ImageEditorTabPresence {
-  uploadVideoTabPresent: boolean;
-  uploadImageTabPresent: boolean;
-  longFormTabPresent: boolean;
-  podcastTabPresent: boolean;
-  currentSelectedTab: ImageEditorSelectedTab | null;
-}
-
-export interface ImageEditorTabCandidateEvidence {
-  label: ImageEditorSelectedTab;
-  rendered: boolean;
-  intersectsViewport: boolean;
-  creatorTabRendered: boolean;
-  creatorTabIntersectsViewport: boolean;
-  enabled: boolean;
-  pointerEvents: string;
-  active: boolean;
-}
 
 export interface ImageEditorBoundingBox {
   x: number;
@@ -128,12 +107,6 @@ export interface ImageEditorIntermediateActionCandidate {
   semanticSignal: string;
   visible: boolean;
   enabled: boolean;
-  normalizedText?: string;
-  boundingBox?: ImageEditorBoundingBox | null;
-  nearestInteractiveAncestorTag?: string | null;
-  nearestInteractiveAncestorRole?: string | null;
-  pointerEvents?: string;
-  hitTestValid?: boolean;
 }
 
 export interface ImageEditorPhaseEvidence {
@@ -146,7 +119,6 @@ export interface ImageEditorPhaseEvidence {
   uploadCapabilityPresent: boolean;
   uploadCapabilityUnique: boolean;
   preUploadSemanticSignalPresent: boolean;
-  selectedTab: ImageEditorSelectedTab | null;
   titleCandidateCount: number;
   bodyCandidateCount: number;
   finalSubmitCandidateCount: number;
@@ -182,12 +154,8 @@ interface ImageEditorPhaseDomSnapshot {
   mediaPreviewDiagnostics: ImageEditorMediaPreviewDiagnostics;
   modalDiagnostics: ImageEditorModalDiagnostics;
   intermediateActionCandidates: readonly ImageEditorIntermediateActionCandidate[];
-  requiredValidationSignals: readonly string[];
-  forbiddenActionSignalPresent: boolean;
   mediaPreviewSignalPresent: boolean;
   mediaEditingSignalPresent: boolean;
-  tabPresence: ImageEditorTabPresence;
-  tabCandidates: readonly ImageEditorTabCandidateEvidence[];
   uploadBusy?: boolean;
   previewReady?: boolean;
 }
@@ -208,9 +176,6 @@ export interface ImageEditorControlCandidate {
   semanticSignal: string;
   visible: boolean;
   enabled: boolean;
-  boundingBox?: ImageEditorBoundingBox | null;
-  hitTestValid?: boolean;
-  normalizedText?: string;
 }
 
 export interface ImageEditorControlDiscovery {
@@ -244,13 +209,8 @@ export interface ImageEditorDomSnapshot {
   mediaPreviewDiagnostics?: ImageEditorMediaPreviewDiagnostics;
   modalDiagnostics?: ImageEditorModalDiagnostics;
   intermediateActionCandidates?: readonly ImageEditorIntermediateActionCandidate[];
-  requiredValidationSignals?: readonly string[];
-  forbiddenActionSignalPresent?: boolean;
   mediaPreviewSignalPresent?: boolean;
   mediaEditingSignalPresent?: boolean;
-  phaseTopology?: ImageEditorPhaseTopology;
-  tabPresence?: ImageEditorTabPresence;
-  tabCandidates?: readonly ImageEditorTabCandidateEvidence[];
   uploadBusy?: boolean;
   previewReady?: boolean;
 }
@@ -352,8 +312,6 @@ export interface ImageEditorDiagnostic {
   mediaPreviewDiagnostics?: ImageEditorMediaPreviewDiagnostics;
   modalDiagnostics?: ImageEditorModalDiagnostics;
   intermediateActionCandidates?: readonly ImageEditorIntermediateActionCandidate[];
-  requiredValidationSignals?: readonly string[];
-  forbiddenActionSignalPresent?: boolean;
   postUploadTerminalStateReached?: boolean;
   postUploadIntermediateState?: ImageEditorPhase | null;
   postUploadReadinessDurationMs?: number;
@@ -374,17 +332,7 @@ export interface ImageEditorDiagnostic {
   action?: "IMAGE_UPLOAD_MUTATION" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED";
   mutationType?: "IMAGE_UPLOAD_ONLY";
   selfTestMode?: "POST_UPLOAD_DISCOVERY_ONLY";
-  uploadMutationCount?: number;
-  uploadAttemptIndex?: number;
-  nativeFilePickerDetected?: boolean;
-  nativeFilePickerCancelled?: boolean;
-  nativeFilePickerRecovery?: NativeFilePickerRecoveryResult["status"];
-  nativeFilePickerWindowIdBefore?: string | null;
-  nativeFilePickerWindowIdAfter?: string | null;
-  nativeFilePickerOpenBefore?: boolean;
-  nativeFilePickerOpenAfter?: boolean | null;
-  nativeFilePickerCancelActionSent?: boolean;
-  nativeFilePickerCancelEffectVerified?: boolean;
+  uploadMutationCount?: 1;
 }
 
 export interface ImagePostEditorInspectionResult {
@@ -403,8 +351,6 @@ export interface ImagePostEditorInspectionResult {
   imageUploadControlDetected: boolean;
   publishSettingsAreaDetected: boolean;
   finalSubmitControlDetected: boolean;
-  finalSubmitControlPresent: boolean;
-  finalSubmitControlEnabled: boolean;
   securityVerificationPresent: boolean;
   loginPagePresent: boolean;
   sanitizedUrl: string;
@@ -416,8 +362,6 @@ export interface ImagePostEditorInspectionResult {
   mediaPreviewDiagnostics?: ImageEditorMediaPreviewDiagnostics;
   modalDiagnostics?: ImageEditorModalDiagnostics;
   intermediateActionCandidates?: readonly ImageEditorIntermediateActionCandidate[];
-  requiredValidationSignals?: readonly string[];
-  forbiddenActionSignalPresent?: boolean;
 }
 
 export interface ImagePostUploadEditorInspectionResult extends ImagePostEditorInspectionResult {
@@ -430,15 +374,6 @@ export interface ImagePostUploadEditorInspectionResult extends ImagePostEditorIn
   terminalStateReached: boolean;
   intermediateState: "NONE" | "IMAGE_POST_MEDIA_PREVIEW" | "IMAGE_POST_MEDIA_EDITING" | "IMAGE_POST_CONFIRMATION_REQUIRED";
   postUploadReadinessDurationMs: number;
-  nativeFilePickerDetected: boolean;
-  nativeFilePickerCancelled: boolean;
-  nativeFilePickerRecovery: NativeFilePickerRecoveryResult["status"];
-  nativeFilePickerWindowIdBefore: string | null;
-  nativeFilePickerWindowIdAfter: string | null;
-  nativeFilePickerOpenBefore: boolean;
-  nativeFilePickerOpenAfter: boolean | null;
-  nativeFilePickerCancelActionSent: boolean;
-  nativeFilePickerCancelEffectVerified: boolean;
 }
 
 export interface PreUploadImageEditorContractResult {
@@ -455,12 +390,9 @@ export interface PreUploadImageEditorContractResult {
 export interface ImageEditorInspectionOptions {
   maxWaitMs?: number;
   probeIntervalMs?: number;
-  readinessWindowMs?: number;
-  readinessSampleIntervalMs?: number;
   stableSampleCount?: number;
   requiredControls?: readonly ImageEditorControlKind[];
   postUploadReadiness?: boolean;
-  nativeFilePickerRecovery?: NativeFilePickerRecoveryProbe;
   emit?: (diagnostic: ImageEditorDiagnostic) => void;
 }
 
@@ -508,11 +440,8 @@ export interface ImagePostEditorPhaseInspectionResult {
   mediaPreviewDiagnostics?: ImageEditorMediaPreviewDiagnostics;
   modalDiagnostics?: ImageEditorModalDiagnostics;
   intermediateActionCandidates?: readonly ImageEditorIntermediateActionCandidate[];
-  requiredValidationSignals?: readonly string[];
-  forbiddenActionSignalPresent?: boolean;
   mediaPreviewSignalPresent?: boolean;
   mediaEditingSignalPresent?: boolean;
-  tabPresence?: ImageEditorTabPresence;
   securityVerificationPresent: boolean;
   loginPagePresent: boolean;
   sanitizedUrl: string;
@@ -521,9 +450,6 @@ export interface ImagePostEditorPhaseInspectionResult {
 const DEFAULT_MAX_WAIT_MS = 3_000;
 const DEFAULT_PROBE_INTERVAL_MS = 80;
 const DEFAULT_STABLE_SAMPLE_COUNT = 2;
-const DEFAULT_POST_UPLOAD_READINESS_WINDOW_MS = 15_000;
-const DEFAULT_POST_UPLOAD_READINESS_SAMPLE_INTERVAL_MS = 300;
-const MAX_READINESS_WINDOW_MS = 60_000;
 const EDITOR_ROUTE_PATTERN = /^https:\/\/creator\.xiaohongshu\.com\/publish\/publish(?:[/?#]|$)/iu;
 const TITLE_SELECTOR = 'input[placeholder*="标题"], input[aria-label*="标题"], input[name*="title" i], input[id*="title" i], [data-testid*="title" i]';
 const TITLE_TEXTAREA_SELECTOR = 'textarea[placeholder*="标题"], textarea[aria-label*="标题"]';
@@ -573,61 +499,6 @@ function emptyModalDiagnostics(): ImageEditorModalDiagnostics {
   return { dialogCount: 0, modalSignalCount: 0, maskCount: 0, overlayCount: 0, drawerCount: 0, visible: false, ariaModalCount: 0 };
 }
 
-function emptyTabPresence(): ImageEditorTabPresence {
-  return { uploadVideoTabPresent: false, uploadImageTabPresent: false, longFormTabPresent: false, podcastTabPresent: false, currentSelectedTab: null };
-}
-
-function normalizeTabPresence(value: unknown): ImageEditorTabPresence {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return emptyTabPresence();
-  const record = value as Record<string, unknown>;
-  const selected = record.currentSelectedTab;
-  return {
-    uploadVideoTabPresent: record.uploadVideoTabPresent === true,
-    uploadImageTabPresent: record.uploadImageTabPresent === true,
-    longFormTabPresent: record.longFormTabPresent === true,
-    podcastTabPresent: record.podcastTabPresent === true,
-    currentSelectedTab: selected === "上传视频" || selected === "上传图文" || selected === "写长文" || selected === "发播客" ? selected : null
-  };
-}
-
-function normalizeTabCandidateEvidence(value: unknown): readonly ImageEditorTabCandidateEvidence[] {
-  if (!Array.isArray(value)) return [];
-  return value.map((item): ImageEditorTabCandidateEvidence | null => {
-    if (typeof item !== "object" || item === null || Array.isArray(item)) return null;
-    const record = item as Record<string, unknown>;
-    const label = record.label;
-    if (label !== "上传视频" && label !== "上传图文" && label !== "写长文" && label !== "发播客") return null;
-    return {
-      label,
-      rendered: record.rendered === true,
-      intersectsViewport: record.intersectsViewport === true,
-      creatorTabRendered: record.creatorTabRendered === true,
-      creatorTabIntersectsViewport: record.creatorTabIntersectsViewport === true,
-      enabled: record.enabled === true,
-      pointerEvents: typeof record.pointerEvents === "string" ? record.pointerEvents.slice(0, 40) : "unknown",
-      active: record.active === true
-    };
-  }).filter((item): item is ImageEditorTabCandidateEvidence => Boolean(item)).slice(0, 40);
-}
-
-export function resolveImageEditorTabPresence(candidates: readonly ImageEditorTabCandidateEvidence[]): ImageEditorTabPresence {
-  const viewportCandidates = candidates.filter((candidate) => candidate.rendered
-    && candidate.intersectsViewport
-    && candidate.creatorTabRendered
-    && candidate.creatorTabIntersectsViewport
-    && candidate.enabled
-    && candidate.pointerEvents !== "none");
-  const activeCandidates = viewportCandidates.filter((candidate) => candidate.active);
-  const currentSelectedTab = activeCandidates.length === 1 ? activeCandidates[0]?.label ?? null : null;
-  return {
-    uploadVideoTabPresent: viewportCandidates.some((candidate) => candidate.label === "上传视频"),
-    uploadImageTabPresent: viewportCandidates.some((candidate) => candidate.label === "上传图文"),
-    longFormTabPresent: viewportCandidates.some((candidate) => candidate.label === "写长文"),
-    podcastTabPresent: viewportCandidates.some((candidate) => candidate.label === "发播客"),
-    currentSelectedTab
-  };
-}
-
 export function resolveImageEditorUploadCapability(relationships: readonly ImageEditorUploadControlRelationship[]): ImageEditorUploadCapabilityResult {
   const usableRelationships = relationships.filter((relationship) => relationship.enabled && relationship.usableSurface);
   const status: ImageEditorUploadCapabilityStatus = usableRelationships.length === 1
@@ -657,7 +528,6 @@ export function classifyImagePostEditorPhase(evidence: ImageEditorPhaseEvidence)
     evidence.uploadCapabilityPresent
     && evidence.uploadCapabilityUnique
     && evidence.preUploadSemanticSignalPresent
-    && evidence.selectedTab === "上传图文"
     && evidence.titleCandidateCount === 0
     && evidence.bodyCandidateCount === 0
     && evidence.finalSubmitCandidateCount === 0
@@ -707,7 +577,6 @@ export function assertPreUploadImageEditorContract(inspection: ImagePostEditorPh
   if (inspection.phaseTopology.stable !== true || inspection.phase === "IMAGE_POST_TRANSITIONING") return failure("PRE_UPLOAD_PHASE_NOT_READY", "stable-pre-upload-phase");
   if (inspection.contentType !== "IMAGE_POST" || !inspection.contentTypeReady) return failure("CONTENT_TYPE_NOT_READY", "content-type:image-post");
   if (!inspection.uploadCapabilityPresent || !inspection.uploadCapabilityUnique || inspection.uploadCapabilityStatus !== "PRESENT") return failure("UPLOAD_CAPABILITY_NOT_VERIFIED", "image-upload-capability");
-  if (inspection.tabPresence?.currentSelectedTab !== "上传图文") return failure("PRE_UPLOAD_PHASE_NOT_READY", "selected-tab:上传图文");
   if (inspection.preUploadSemanticNodes.length === 0) return failure("PRE_UPLOAD_PHASE_NOT_READY", "pre-upload-semantic-signal");
   if (inspection.phase !== "IMAGE_POST_PRE_UPLOAD" || inspection.confidence !== "HIGH") return failure("PRE_UPLOAD_PHASE_NOT_READY", "image-post-pre-upload-phase");
   if (inspection.phaseTopology.titleCandidateCount !== 0 || inspection.phaseTopology.bodyCandidateCount !== 0 || inspection.phaseTopology.finalSubmitCandidateCount !== 0) return failure("PRE_UPLOAD_PHASE_NOT_READY", "post-upload-controls-absent-before-upload");
@@ -750,8 +619,6 @@ function emptyResult(status: ImageEditorInspectionStatus, shellStatus: ImageEdit
     imageUploadControlDetected: false,
     publishSettingsAreaDetected: false,
     finalSubmitControlDetected: false,
-    finalSubmitControlPresent: false,
-    finalSubmitControlEnabled: false,
     securityVerificationPresent: false,
     loginPagePresent: false,
     sanitizedUrl
@@ -769,26 +636,11 @@ function emit(options: ImageEditorInspectionOptions, metadata: ImageEditorInspec
 function controlDiscovery(kind: ImageEditorControlKind, candidates: readonly ImageEditorControlCandidate[]): ImageEditorControlDiscovery {
   const visible = candidates.filter((candidate) => candidate.visible);
   const enabled = visible.filter((candidate) => candidate.enabled);
-  if (kind === "FINAL_SUBMIT_CONTROL") {
-    if (visible.length > 1) return { kind, status: "AMBIGUOUS", detected: false, candidates };
-    if (enabled.length === 1) return { kind, status: "FOUND_UNIQUE", detected: true, candidates };
-    if (candidates.length === 0) return { kind, status: "NOT_FOUND", detected: false, candidates };
-    if (visible.length === 0) return { kind, status: "NOT_VISIBLE", detected: false, candidates };
-    return { kind, status: "DISABLED", detected: false, candidates };
-  }
   if (enabled.length === 1) return { kind, status: "FOUND_UNIQUE", detected: true, candidates };
   if (enabled.length > 1) return { kind, status: "AMBIGUOUS", detected: false, candidates };
   if (candidates.length === 0) return { kind, status: "NOT_FOUND", detected: false, candidates };
   if (visible.length === 0) return { kind, status: "NOT_VISIBLE", detected: false, candidates };
   return { kind, status: "DISABLED", detected: false, candidates };
-}
-
-function finalSubmitControlPresence(candidates: readonly ImageEditorControlCandidate[]): { present: boolean; enabled: boolean } {
-  const visible = candidates.filter((candidate) => candidate.visible);
-  return {
-    present: visible.length === 1,
-    enabled: visible.length === 1 && visible[0]?.enabled === true
-  };
 }
 
 function settingsDiscovery(candidates: readonly ImageEditorControlCandidate[]): ImageEditorSettingsDiscovery {
@@ -853,10 +705,7 @@ function normalizeCandidate(value: unknown): ImageEditorControlCandidate | null 
     role: typeof record.role === "string" ? record.role : null,
     semanticSignal: record.semanticSignal,
     visible: record.visible,
-    enabled: record.enabled,
-    boundingBox: normalizeBoundingBox(record.boundingBox),
-    hitTestValid: record.hitTestValid === true,
-    normalizedText: typeof record.normalizedText === "string" ? record.normalizedText.slice(0, 120) : undefined
+    enabled: record.enabled
   };
 }
 
@@ -892,8 +741,6 @@ function normalizeSnapshot(value: unknown, fallbackUrl: string): ImageEditorDomS
     mediaPreviewDiagnostics: normalizeMediaPreviewDiagnostics(record.mediaPreviewDiagnostics),
     modalDiagnostics: normalizeModalDiagnostics(record.modalDiagnostics),
     intermediateActionCandidates: normalizeIntermediateActionCandidates(record.intermediateActionCandidates),
-    requiredValidationSignals: Array.isArray(record.requiredValidationSignals) ? record.requiredValidationSignals.filter((signal): signal is string => typeof signal === "string").map((signal) => signal.slice(0, 120)).slice(0, 12) : [],
-    forbiddenActionSignalPresent: record.forbiddenActionSignalPresent === true,
     mediaPreviewSignalPresent: record.mediaPreviewSignalPresent === true,
     mediaEditingSignalPresent: record.mediaEditingSignalPresent === true,
     ...(typeof record.uploadBusy === "boolean" ? { uploadBusy: record.uploadBusy } : {}),
@@ -1047,13 +894,7 @@ function normalizeIntermediateActionCandidates(value: unknown): readonly ImageEd
       role: typeof record.role === "string" ? record.role : null,
       semanticSignal: record.semanticSignal.slice(0, 80),
       visible: record.visible,
-      enabled: record.enabled,
-      normalizedText: typeof record.normalizedText === "string" ? record.normalizedText.slice(0, 120) : record.semanticSignal.slice(0, 120),
-      boundingBox: normalizeBoundingBox(record.boundingBox),
-      nearestInteractiveAncestorTag: typeof record.nearestInteractiveAncestorTag === "string" ? record.nearestInteractiveAncestorTag : null,
-      nearestInteractiveAncestorRole: typeof record.nearestInteractiveAncestorRole === "string" ? record.nearestInteractiveAncestorRole : null,
-      pointerEvents: typeof record.pointerEvents === "string" ? record.pointerEvents : "unknown",
-      hitTestValid: record.hitTestValid === true
+      enabled: record.enabled
     };
   }).filter((item): item is ImageEditorIntermediateActionCandidate => Boolean(item)).slice(0, 20);
 }
@@ -1083,12 +924,8 @@ function emptyPhaseSnapshot(fallbackUrl: string): ImageEditorPhaseDomSnapshot {
     mediaPreviewDiagnostics: emptyMediaPreviewDiagnostics(),
     modalDiagnostics: emptyModalDiagnostics(),
     intermediateActionCandidates: [],
-    requiredValidationSignals: [],
-    forbiddenActionSignalPresent: false,
     mediaPreviewSignalPresent: false,
     mediaEditingSignalPresent: false,
-    tabPresence: emptyTabPresence(),
-    tabCandidates: [],
     uploadBusy: false,
     previewReady: false
   };
@@ -1100,8 +937,6 @@ function normalizePhaseSnapshot(value: unknown, fallbackUrl: string): ImageEdito
   const relationships = normalizeUploadRelationships(record.uploadControlRelationships);
   const uploadCapability = resolveImageEditorUploadCapability(relationships);
   const topology = normalizePhaseTopology(record.phaseTopology);
-  const tabCandidates = normalizeTabCandidateEvidence(record.tabCandidates);
-  const tabPresence = tabCandidates.length > 0 ? resolveImageEditorTabPresence(tabCandidates) : normalizeTabPresence(record.tabPresence);
   return {
     currentUrl: typeof record.currentUrl === "string" ? record.currentUrl : fallbackUrl,
     readyState: typeof record.readyState === "string" ? record.readyState : "loading",
@@ -1114,7 +949,7 @@ function normalizePhaseSnapshot(value: unknown, fallbackUrl: string): ImageEdito
     domStable: false,
     uploadCapabilityPresent: uploadCapability.present,
     uploadCapabilityUnique: uploadCapability.uniqueSurface,
-    preUploadSemanticSignalPresent: record.preUploadSemanticSignalPresent === true || tabPresence.currentSelectedTab === "上传图文",
+    preUploadSemanticSignalPresent: record.preUploadSemanticSignalPresent === true,
     titleCandidateCount: topology.titleCandidateCount,
     bodyCandidateCount: topology.bodyCandidateCount,
     finalSubmitCandidateCount: topology.finalSubmitCandidateCount,
@@ -1125,12 +960,8 @@ function normalizePhaseSnapshot(value: unknown, fallbackUrl: string): ImageEdito
     mediaPreviewDiagnostics: normalizeMediaPreviewDiagnostics(record.mediaPreviewDiagnostics),
     modalDiagnostics: normalizeModalDiagnostics(record.modalDiagnostics),
     intermediateActionCandidates: normalizeIntermediateActionCandidates(record.intermediateActionCandidates),
-    requiredValidationSignals: Array.isArray(record.requiredValidationSignals) ? record.requiredValidationSignals.filter((signal): signal is string => typeof signal === "string").map((signal) => signal.slice(0, 120)).slice(0, 12) : [],
-    forbiddenActionSignalPresent: record.forbiddenActionSignalPresent === true,
     mediaPreviewSignalPresent: record.mediaPreviewSignalPresent === true,
     mediaEditingSignalPresent: record.mediaEditingSignalPresent === true,
-    tabPresence,
-    tabCandidates,
     phaseTopology: topology,
     ...(typeof record.uploadBusy === "boolean" ? { uploadBusy: record.uploadBusy } : {}),
     ...(typeof record.previewReady === "boolean" ? { previewReady: record.previewReady } : {})
@@ -1178,30 +1009,19 @@ async function locatorEnabled(locator: Locator): Promise<boolean> {
   return typeof candidate.isEnabled === "function" ? candidate.isEnabled().catch(() => false) : true;
 }
 
-async function locatorBoundingBox(locator: Locator): Promise<ImageEditorBoundingBox | null> {
-  const candidate = locator as unknown as { boundingBox?: () => Promise<ImageEditorBoundingBox | null> };
-  if (typeof candidate.boundingBox !== "function") return null;
-  return candidate.boundingBox().catch(() => null);
-}
-
 async function readLocatorCandidates(page: Page, selector: string, semanticSignal: string, filter: (locator: Locator) => Promise<boolean> = async () => true): Promise<readonly ImageEditorControlCandidate[]> {
   const locator = page.locator(selector);
   const candidates: ImageEditorControlCandidate[] = [];
   for (let index = 0; index < await locatorCount(locator); index += 1) {
     const item = locatorAt(locator, index);
     if (!(await filter(item))) continue;
-    const visible = await locatorVisible(item);
-    const enabled = await locatorEnabled(item);
-    const boundingBox = await locatorBoundingBox(item);
     candidates.push({
       candidateId: (await locatorAttribute(item, "data-testid")) || `${semanticSignal}-${index}`,
       tagName: (await locatorAttribute(item, "tagName")).toUpperCase() || "UNKNOWN",
       role: (await locatorAttribute(item, "role")) || null,
       semanticSignal,
-      visible,
-      enabled,
-      boundingBox,
-      hitTestValid: visible && enabled && boundingBox !== null
+      visible: await locatorVisible(item),
+      enabled: await locatorEnabled(item)
     });
   }
   return candidates;
@@ -1232,42 +1052,13 @@ async function readSnapshotFromLocators(page: Page, fallbackUrl: string): Promis
     const item = locatorAt(finalLocator, index);
     const label = (await locatorText(item) || await locatorAttribute(item, "aria-label") || await locatorAttribute(item, "title")).normalize("NFKC").replace(/[\s]+/gu, " ").trim();
     if (!/^(发布|发布笔记|发表|提交|立即发布|publish|submit)$/iu.test(label) || /视频/iu.test(label)) continue;
-    const visible = await locatorVisible(item);
-    const enabled = await locatorEnabled(item);
-    const boundingBox = await locatorBoundingBox(item);
     finalSubmitCandidates.push({
       candidateId: (await locatorAttribute(item, "data-testid")) || `final-submit-${index}`,
       tagName: (await locatorAttribute(item, "tagName")).toUpperCase() || "BUTTON",
       role: (await locatorAttribute(item, "role")) || null,
       semanticSignal: "final-submit-label",
-      visible,
-      enabled,
-      boundingBox,
-      hitTestValid: visible && boundingBox !== null
-    });
-  }
-  const intermediateActionCandidates: ImageEditorIntermediateActionCandidate[] = [];
-  const interactive = page.locator('button, [role="button"], a, [role="tab"]');
-  for (let index = 0; index < await locatorCount(interactive); index += 1) {
-    const item = locatorAt(interactive, index);
-    const label = (await locatorText(item) || await locatorAttribute(item, "aria-label") || await locatorAttribute(item, "title")).normalize("NFKC").replace(/[\s]+/gu, " ").trim();
-    if (!/完成|确认|下一步|继续|编辑图片|编辑照片|裁剪完成|返回编辑|done|confirm|next|continue|edit\s*(?:image|photo)|crop(?:ping)?\s*done|back\s*to\s*edit/iu.test(label)) continue;
-    const visible = await locatorVisible(item);
-    const enabled = await locatorEnabled(item);
-    const boundingBox = await locatorBoundingBox(item);
-    intermediateActionCandidates.push({
-      candidateId: (await locatorAttribute(item, "data-testid")) || `intermediate-action-${index}`,
-      tagName: (await locatorAttribute(item, "tagName")).toUpperCase() || "BUTTON",
-      role: (await locatorAttribute(item, "role")) || "button",
-      semanticSignal: "intermediate-action",
-      normalizedText: label.slice(0, 120),
-      visible,
-      enabled,
-      boundingBox,
-      nearestInteractiveAncestorTag: "BUTTON",
-      nearestInteractiveAncestorRole: "button",
-      pointerEvents: "auto",
-      hitTestValid: visible && enabled && boundingBox !== null
+      visible: await locatorVisible(item),
+      enabled: await locatorEnabled(item)
     });
   }
   const contentTypeSignal: ImageEditorContentType = /视频|video/iu.test(bodyText) && uploadCandidates.length === 0 ? "VIDEO" : uploadCandidates.length > 0 || /图文|图片|image/iu.test(bodyText) ? "IMAGE_POST" : "UNKNOWN";
@@ -1276,66 +1067,8 @@ async function readSnapshotFromLocators(page: Page, fallbackUrl: string): Promis
   const busy = page.locator('[aria-busy="true"], [class*="loading" i], [class*="uploading" i], progress');
   const preview = page.locator('img[class*="preview" i], img[src*="xhscdn" i], [class*="preview" i], [data-testid*="upload-result" i], [class*="uploaded" i]');
   const uploadBusy = await locatorCount(busy) > 0;
-  const previewCount = await locatorCount(preview);
-  const previewGeometry: ImageEditorBoundingBox[] = [];
-  for (let index = 0; index < previewCount; index += 1) {
-    const box = await locatorBoundingBox(locatorAt(preview, index));
-    if (box) previewGeometry.push(box);
-  }
-  const previewReady = previewCount > 0 && await locatorVisible(locatorAt(preview, 0));
-  const interactiveTopology: ImageEditorInteractiveTopology = {
-    buttonCount: 0,
-    roleButtonCount: 0,
-    dialogCount: 0,
-    modalSignalCount: 0,
-    fileInputCount: uploadCandidates.length,
-    contenteditableCount: 0,
-    textareaCount: 0,
-    textInputCount: titleCandidates.length,
-    titleCandidateCount: titleCandidates.length,
-    bodyCandidateCount: bodyCandidates.length,
-    finalSubmitCandidateCount: finalSubmitCandidates.length
-  };
-  const phaseTopology: ImageEditorPhaseTopology = {
-    titleCandidateCount: titleCandidates.length,
-    bodyCandidateCount: bodyCandidates.length,
-    uploadCandidateCount: uploadCandidates.length,
-    finalSubmitCandidateCount: finalSubmitCandidates.length,
-    contenteditableCount: 0,
-    textareaCount: 0,
-    textInputCount: titleCandidates.length,
-    fileInputCount: uploadCandidates.length,
-    buttonCount: intermediateActionCandidates.length + finalSubmitCandidates.length,
-    roleButtonCount: intermediateActionCandidates.length + finalSubmitCandidates.length,
-    semanticSignals: intermediateActionCandidates.map((candidate) => candidate.normalizedText ?? candidate.semanticSignal),
-    stable: false
-  };
-  return {
-    currentUrl,
-    readyState: "complete",
-    shellSignal,
-    shellFingerprint,
-    contentTypeSignal,
-    securityVerificationPresent,
-    loginPagePresent,
-    titleCandidates,
-    bodyCandidates,
-    uploadCandidates,
-    publishSettingsCandidates,
-    finalSubmitCandidates,
-    postUploadSemanticNodes: intermediateActionCandidates.map((candidate) => ({ tagName: candidate.tagName, normalizedText: candidate.normalizedText ?? candidate.semanticSignal, role: candidate.role, visible: candidate.visible, enabled: candidate.enabled, boundingBox: candidate.boundingBox ?? null, nearestInteractiveAncestorTag: candidate.nearestInteractiveAncestorTag ?? null, nearestInteractiveAncestorRole: candidate.nearestInteractiveAncestorRole ?? null })),
-    interactiveTopology,
-    mediaPreviewDiagnostics: { previewCount, previewVisible: previewReady, previewGeometry, deleteReplaceEditSignals: [], associatedSemanticText: previewReady ? ["预览"] : [] },
-    modalDiagnostics: emptyModalDiagnostics(),
-    intermediateActionCandidates,
-    requiredValidationSignals: [],
-    forbiddenActionSignalPresent: false,
-    mediaPreviewSignalPresent: previewReady || intermediateActionCandidates.length > 0,
-    mediaEditingSignalPresent: intermediateActionCandidates.some((candidate) => /编辑|裁剪|edit|crop/iu.test(candidate.normalizedText ?? "")),
-    phaseTopology,
-    uploadBusy,
-    previewReady
-  };
+  const previewReady = await locatorCount(preview) > 0 && await locatorVisible(locatorAt(preview, 0));
+  return { currentUrl, readyState: "complete", shellSignal, shellFingerprint, contentTypeSignal, securityVerificationPresent, loginPagePresent, titleCandidates, bodyCandidates, uploadCandidates, publishSettingsCandidates, finalSubmitCandidates, uploadBusy, previewReady };
 }
 
 async function readSnapshot(page: Page): Promise<ImageEditorDomSnapshot> {
@@ -1344,11 +1077,6 @@ async function readSnapshot(page: Page): Promise<ImageEditorDomSnapshot> {
   try {
     raw = await page.evaluate(() => {
     const normalize = (value: string): string => value.normalize("NFKC").replace(/[\s]+/gu, " ").trim();
-    const boundingBox = (element: Element): ImageEditorBoundingBox | null => {
-      const rect = element.getBoundingClientRect();
-      if (![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) return null;
-      return { x: Math.round(rect.x * 100) / 100, y: Math.round(rect.y * 100) / 100, width: Math.round(rect.width * 100) / 100, height: Math.round(rect.height * 100) / 100 };
-    };
     const visible = (element: Element): boolean => {
       const node = element as HTMLElement;
       const style = window.getComputedStyle(node);
@@ -1359,29 +1087,13 @@ async function readSnapshot(page: Page): Promise<ImageEditorDomSnapshot> {
       const node = element as HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
       return !node.disabled && element.getAttribute("aria-disabled") !== "true";
     };
-    const isInteractive = (element: Element): boolean => ["A", "BUTTON", "INPUT", "LABEL", "SELECT", "TEXTAREA"].includes(element.tagName) || ["button", "link", "tab", "radio", "checkbox"].includes(element.getAttribute("role") ?? "");
-    const nearestInteractive = (element: Element): Element | null => {
-      let current: Element | null = element;
-      for (let depth = 0; current && depth <= 6; depth += 1, current = current.parentElement) if (isInteractive(current)) return current;
-      return null;
-    };
-    const hitTestValid = (element: Element): boolean => {
-      const box = boundingBox(element);
-      if (!box) return false;
-      const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
-      const owner = nearestInteractive(element) ?? element;
-      return hit === element || Boolean(hit && (element.contains(hit) || owner.contains(hit)));
-    };
     const candidate = (element: Element, semanticSignal: string, index: number) => ({
       candidateId: element.getAttribute("data-testid")?.trim() || `${semanticSignal}-${index}`,
       tagName: element.tagName.toUpperCase(),
       role: element.getAttribute("role"),
       semanticSignal,
       visible: visible(element),
-      enabled: enabled(element),
-      boundingBox: boundingBox(element),
-      hitTestValid: hitTestValid(element),
-      normalizedText: normalize(`${element.textContent ?? ""} ${element.getAttribute("aria-label") ?? ""} ${element.getAttribute("title") ?? ""}`).slice(0, 120)
+      enabled: enabled(element)
     });
     const select = (selector: string, semanticSignal: string, filter: (element: Element) => boolean = () => true) => Array.from(document.querySelectorAll(selector)).filter(filter).map((element, index) => candidate(element, semanticSignal, index));
     const titleCandidates = select('input[placeholder*="标题"], input[aria-label*="标题"], input[name*="title" i], input[id*="title" i], textarea[placeholder*="标题"], [data-testid*="title" i]', "title-editor", (element) => ["INPUT", "TEXTAREA"].includes(element.tagName) || element.getAttribute("role") === "textbox");
@@ -1398,13 +1110,7 @@ async function readSnapshot(page: Page): Promise<ImageEditorDomSnapshot> {
     const semanticControls = semanticElements.map(semanticText).join(" ");
     const intermediateActionElements = semanticElements.filter((element) => visible(element) && /完成|确认|下一步|继续|done|confirm|next|continue/iu.test(semanticText(element)));
     const mediaEditingSignalPresent = semanticElements.some((element) => visible(element) && /裁剪|编辑图片|编辑照片|crop|edit image/iu.test(semanticText(element)));
-    const editorRoots = Array.from(document.querySelectorAll('[data-testid*="editor" i], [class*="editor" i], [data-testid*="publish" i], [class*="publish" i]')).filter((root) => {
-      const hasEditorField = Boolean(root.querySelector('input[placeholder*="标题"], input[aria-label*="标题"], textarea[placeholder*="标题"], [contenteditable="true"], input[type="file"]'));
-      const hasImageEditSignal = normalize(root.textContent ?? "").includes("图片编辑") || Boolean(root.querySelector('[data-testid*="upload-result" i], [class*="image-item" i], [class*="media-item" i]'));
-      return hasEditorField || hasImageEditSignal;
-    });
-    const inEditor = (element: Element): boolean => editorRoots.length > 0 && editorRoots.some((root) => root.contains(element));
-    const previewElements = Array.from(document.querySelectorAll('img[class*="preview" i], img[src^="blob:" i], img[src^="data:image" i], [data-testid*="upload-result" i], [data-testid*="preview" i], [class*="image-item" i], [class*="media-item" i]')).filter(inEditor);
+    const previewElements = Array.from(document.querySelectorAll('img[class*="preview" i], img[src*="xhscdn" i], [class*="preview" i], [data-testid*="upload-result" i], [class*="uploaded" i]'));
     const previewReady = previewElements.some(visible);
     const previewGeometry = previewElements.map((element) => {
       const rect = element.getBoundingClientRect();
@@ -1438,17 +1144,9 @@ async function readSnapshot(page: Page): Promise<ImageEditorDomSnapshot> {
       tagName: element.tagName.toUpperCase(),
       role: element.getAttribute("role"),
       semanticSignal: "intermediate-action",
-      normalizedText: semanticText(element),
       visible: true,
-      enabled: !(element as HTMLButtonElement).disabled && element.getAttribute("aria-disabled") !== "true",
-      boundingBox: boundingBox(element),
-      nearestInteractiveAncestorTag: nearestInteractive(element)?.tagName.toUpperCase() ?? null,
-      nearestInteractiveAncestorRole: nearestInteractive(element)?.getAttribute("role") ?? null,
-      pointerEvents: window.getComputedStyle(nearestInteractive(element) ?? element).pointerEvents,
-      hitTestValid: hitTestValid(element)
+      enabled: !(element as HTMLButtonElement).disabled && element.getAttribute("aria-disabled") !== "true"
     }));
-    const requiredValidationSignals = Array.from(new Set(semanticElements.map(semanticText).filter((text) => /必填|必须|不能为空|请选择|required|must\s+(?:select|choose|fill)/iu.test(text)))).slice(0, 12);
-    const forbiddenActionSignalPresent = semanticElements.some((element) => /删除账号|注销账号|退出登录|永久删除|delete\s+account|log\s*out/iu.test(semanticText(element)));
     const typedAttributes = Array.from(document.querySelectorAll("[data-content-type], [data-type]")).map((element) => `${element.getAttribute("data-content-type") ?? ""} ${element.getAttribute("data-type") ?? ""}`).join(" ").toLowerCase();
     const hasVideoSignal = /video|视频/iu.test(`${typedAttributes} ${semanticControls}`);
     const hasImageSignal = /image|图文|图片/iu.test(`${typedAttributes} ${semanticControls}`) || uploadCandidates.length > 0;
@@ -1471,7 +1169,7 @@ async function readSnapshot(page: Page): Promise<ImageEditorDomSnapshot> {
       finalSubmitCandidateCount: finalSubmitCandidates.length
     };
     const shellFingerprint = JSON.stringify({ shellCount, title: titleCandidates.length, body: bodyCandidates.length, upload: uploadCandidates.length, settings: settingsCandidates.length, finalSubmit: finalSubmitCandidates.length, previewCount: previewGeometry.length, modalSignalCount: modalDiagnostics.modalSignalCount, intermediateActionCount: intermediateActionCandidates.length });
-    return { currentUrl: window.location.href, readyState: document.readyState, shellSignal, shellFingerprint, contentTypeSignal, securityVerificationPresent, loginPagePresent, titleCandidates, bodyCandidates, uploadCandidates, publishSettingsCandidates: settingsCandidates, finalSubmitCandidates, postUploadSemanticNodes, interactiveTopology, mediaPreviewDiagnostics: { previewCount: previewGeometry.length, previewVisible: previewGeometry.length > 0, previewGeometry, deleteReplaceEditSignals: associatedSemanticText.filter((text) => /删除|替换|编辑|裁剪|重新上传|delete|replace|edit|crop|reupload/iu.test(text)).slice(0, 12), associatedSemanticText }, modalDiagnostics, intermediateActionCandidates, requiredValidationSignals, forbiddenActionSignalPresent, mediaPreviewSignalPresent, mediaEditingSignalPresent, uploadBusy, previewReady };
+    return { currentUrl: window.location.href, readyState: document.readyState, shellSignal, shellFingerprint, contentTypeSignal, securityVerificationPresent, loginPagePresent, titleCandidates, bodyCandidates, uploadCandidates, publishSettingsCandidates: settingsCandidates, finalSubmitCandidates, postUploadSemanticNodes, interactiveTopology, mediaPreviewDiagnostics: { previewCount: previewGeometry.length, previewVisible: previewGeometry.length > 0, previewGeometry, deleteReplaceEditSignals: associatedSemanticText.filter((text) => /删除|替换|编辑|裁剪|重新上传|delete|replace|edit|crop|reupload/iu.test(text)).slice(0, 12), associatedSemanticText }, modalDiagnostics, intermediateActionCandidates, mediaPreviewSignalPresent, mediaEditingSignalPresent, uploadBusy, previewReady };
     });
   } catch {
     raw = null;
@@ -1491,13 +1189,6 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
         if (![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) return null;
         return { x: Math.round(rect.x * 100) / 100, y: Math.round(rect.y * 100) / 100, width: Math.round(rect.width * 100) / 100, height: Math.round(rect.height * 100) / 100 };
       };
-      const intersectsViewport = (box: ImageEditorBoundingBox | null): boolean => box !== null
-        && box.x + box.width > 0
-        && box.y + box.height > 0
-        && box.x < window.innerWidth
-        && box.y < window.innerHeight
-        && box.width > 0
-        && box.height > 0;
       const visible = (element: Element): boolean => {
         const style = window.getComputedStyle(element);
         const box = boundingBox(element);
@@ -1508,16 +1199,6 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
         return !node.disabled && element.getAttribute("aria-disabled") !== "true";
       };
       const role = (element: Element): string | null => element.getAttribute("role");
-      const hasClassToken = (element: Element, token: string): boolean => (element.getAttribute("class") ?? "").split(/[\s]+/u).includes(token);
-      const isPositiveState = (value: string | null): boolean => value !== null && value.toLowerCase() !== "false" && value !== "0";
-      const activeSignal = (element: Element): boolean => isPositiveState(element.getAttribute("aria-selected"))
-        || isPositiveState(element.getAttribute("aria-current"))
-        || isPositiveState(element.getAttribute("aria-pressed"))
-        || isPositiveState(element.getAttribute("data-selected"))
-        || isPositiveState(element.getAttribute("data-active"))
-        || hasClassToken(element, "active")
-        || hasClassToken(element, "selected")
-        || hasClassToken(element, "current");
       const semanticText = (element: Element): string => normalize(`${element.textContent ?? ""} ${element.getAttribute("aria-label") ?? ""} ${element.getAttribute("title") ?? ""} ${element.getAttribute("data-content-type") ?? ""} ${element.getAttribute("data-type") ?? ""}`).slice(0, 120);
       const signalFor = (value: string): string | null => {
         const text = value.toLowerCase();
@@ -1540,13 +1221,6 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
         }
         return null;
       };
-      const hitTestValid = (element: Element): boolean => {
-        const box = boundingBox(element);
-        if (!box) return false;
-        const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
-        const owner = nearestInteractive(element) ?? element;
-        return hit === element || Boolean(hit && (element.contains(hit) || owner.contains(hit)));
-      };
       const semanticElements = Array.from(document.querySelectorAll("button, a, label, [role], [aria-label], [data-testid], [data-content-type], [data-type]"));
       const preUploadSemanticNodes: ImageEditorSemanticNode[] = [];
       for (const element of semanticElements) {
@@ -1566,56 +1240,6 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
         if (preUploadSemanticNodes.length >= 20) break;
       }
       const uploadInputs = Array.from(document.querySelectorAll('input[type="file"]'));
-      const exactTabElements = (label: ImageEditorSelectedTab): Element[] => {
-        const raw = Array.from(document.querySelectorAll("*")).filter((element) => normalize(element.textContent ?? "") === label);
-        return raw.filter((element) => !raw.some((other) => other !== element && element.contains(other))).slice(0, 20);
-      };
-      const creatorTabAncestor = (element: Element): Element | null => {
-        let current = element.parentElement;
-        for (let depth = 1; current && depth <= 5; depth += 1, current = current.parentElement) {
-          if (hasClassToken(current, "creator-tab")) return current;
-        }
-        return null;
-      };
-      const tabCandidates: ImageEditorTabCandidateEvidence[] = [];
-      for (const label of ["上传视频", "上传图文", "写长文", "发播客"] as const) {
-        for (const element of exactTabElements(label)) {
-          const creatorTab = creatorTabAncestor(element);
-          const elementBox = boundingBox(element);
-          const creatorTabBox = creatorTab ? boundingBox(creatorTab) : null;
-          let current: Element | null = element;
-          let active = false;
-          for (let depth = 0; current && depth <= 5; depth += 1, current = current.parentElement) {
-            if (activeSignal(current)) { active = true; break; }
-          }
-          const elementStyle = window.getComputedStyle(element);
-          tabCandidates.push({
-            label,
-            rendered: visible(element),
-            intersectsViewport: intersectsViewport(elementBox),
-            creatorTabRendered: creatorTab !== null && visible(creatorTab),
-            creatorTabIntersectsViewport: intersectsViewport(creatorTabBox),
-            enabled: enabled(element),
-            pointerEvents: elementStyle.pointerEvents,
-            active
-          });
-        }
-      }
-      const usableTabCandidates = tabCandidates.filter((candidate) => candidate.rendered
-        && candidate.intersectsViewport
-        && candidate.creatorTabRendered
-        && candidate.creatorTabIntersectsViewport
-        && candidate.enabled
-        && candidate.pointerEvents !== "none");
-      const activeTabCandidates = usableTabCandidates.filter((candidate) => candidate.active);
-      const currentSelectedTab = activeTabCandidates.length === 1 ? activeTabCandidates[0]?.label ?? null : null;
-      const tabPresence: ImageEditorTabPresence = {
-        uploadVideoTabPresent: usableTabCandidates.some((candidate) => candidate.label === "上传视频"),
-        uploadImageTabPresent: usableTabCandidates.some((candidate) => candidate.label === "上传图文"),
-        longFormTabPresent: usableTabCandidates.some((candidate) => candidate.label === "写长文"),
-        podcastTabPresent: usableTabCandidates.some((candidate) => candidate.label === "发播客"),
-        currentSelectedTab
-      };
       const uploadControlRelationships: ImageEditorUploadControlRelationship[] = uploadInputs.slice(0, 20).map((input, index) => {
         const ancestors: ImageEditorUploadAncestor[] = [];
         let current: Element | null = input.parentElement;
@@ -1656,35 +1280,15 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
       const finalSubmitCandidateCount = Array.from(document.querySelectorAll("button, [role=\"button\"]")).filter((element) => /^(发布|发布笔记|发表|提交|立即发布|publish|submit)$/iu.test(normalize(element.textContent ?? element.getAttribute("aria-label") ?? element.getAttribute("title") ?? "")) && !/视频/iu.test(semanticText(element))).length;
       const bodyText = normalize(document.body?.innerText ?? "");
       const semanticControls = semanticElements.map(semanticText).join(" ");
-      const intermediateActionElements = semanticElements.filter((element) => visible(element) && /完成|确认|下一步|继续|done|confirm|next|continue|编辑图片|裁剪完成|返回编辑|edit image|crop done|back to edit/iu.test(semanticText(element)));
-      const intermediateActionCandidates = intermediateActionElements.slice(0, 20).map((element, index) => ({
-        candidateId: element.getAttribute("data-testid")?.trim() || `intermediate-action-${index}`,
-        tagName: element.tagName.toUpperCase(),
-        role: element.getAttribute("role"),
-        semanticSignal: "intermediate-action",
-        normalizedText: semanticText(element),
-        visible: true,
-        enabled: enabled(element),
-        boundingBox: boundingBox(element),
-        nearestInteractiveAncestorTag: nearestInteractive(element)?.tagName.toUpperCase() ?? null,
-        nearestInteractiveAncestorRole: nearestInteractive(element)?.getAttribute("role") ?? null,
-        pointerEvents: window.getComputedStyle(nearestInteractive(element) ?? element).pointerEvents,
-        hitTestValid: hitTestValid(element)
-      }));
-      const requiredValidationSignals = Array.from(new Set(semanticElements.map(semanticText).filter((text) => /必填|必须|不能为空|请选择|required|must\s+(?:select|choose|fill)/iu.test(text)))).slice(0, 12);
-      const forbiddenActionSignalPresent = semanticElements.some((element) => /删除账号|注销账号|退出登录|永久删除|delete\s+account|log\s*out/iu.test(semanticText(element)));
       const typedAttributes = Array.from(document.querySelectorAll("[data-content-type], [data-type]")).map((element) => `${element.getAttribute("data-content-type") ?? ""} ${element.getAttribute("data-type") ?? ""}`).join(" ");
-      const imageSignal = uploadInputs.length > 0 || usableTabCandidates.some((candidate) => candidate.label === "上传图文") || /image|图文|图片/iu.test(`${typedAttributes} ${semanticControls} ${bodyText}`);
+      const imageSignal = uploadInputs.length > 0 || /image|图文|图片/iu.test(`${typedAttributes} ${semanticControls} ${bodyText}`);
       const videoSignal = /video|视频/iu.test(`${typedAttributes} ${semanticControls} ${bodyText}`);
       const contentTypeSignal: ImageEditorContentType = videoSignal && !imageSignal ? "VIDEO" : imageSignal ? "IMAGE_POST" : "UNKNOWN";
       const loginPagePresent = /\/login(?:[/?#]|$)/iu.test(window.location.href) || /登录/iu.test(bodyText) || Boolean(document.querySelector('[data-testid*="login" i], form[action*="login" i]'));
       const securityVerificationPresent = /security|verify|captcha|安全验证|验证码/iu.test(`${window.location.pathname} ${semanticControls} ${bodyText}`) || Boolean(document.querySelector('[data-testid*="captcha" i], [class*="captcha" i], [aria-label*="安全验证"]'));
       const shellCount = document.querySelectorAll('main, [role="main"], [data-testid*="publish" i], [class*="publish" i], [class*="editor" i]').length;
       const shellSignal = /^https:\/\/creator\.xiaohongshu\.com\/publish\/publish(?:[/?#]|$)/iu.test(window.location.href) && document.readyState === "complete" && document.body !== null && shellCount > 0 && !loginPagePresent && !securityVerificationPresent;
-      const semanticSignals = Array.from(new Set([
-        ...preUploadSemanticNodes.map((node) => signalFor(node.normalizedText)),
-        ...(tabPresence.currentSelectedTab === "上传图文" ? ["image-post"] : [])
-      ].filter((signal): signal is string => signal !== null))).slice(0, 12);
+      const semanticSignals = Array.from(new Set(preUploadSemanticNodes.map((node) => signalFor(node.normalizedText)).filter((signal): signal is string => signal !== null))).slice(0, 12);
       const phaseTopology: ImageEditorPhaseTopology = {
         titleCandidateCount,
         bodyCandidateCount,
@@ -1701,27 +1305,19 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
       };
       const capability = uploadControlRelationships.filter((relationship) => relationship.enabled && relationship.usableSurface);
       const uploadBusy = document.querySelector('[aria-busy="true"], [class*="loading" i], [class*="uploading" i], progress') !== null;
-      const editorRoots = Array.from(document.querySelectorAll('[data-testid*="editor" i], [class*="editor" i], [data-testid*="publish" i], [class*="publish" i]')).filter((root) => {
-        const hasEditorField = Boolean(root.querySelector('input[placeholder*="标题"], input[aria-label*="标题"], textarea[placeholder*="标题"], [contenteditable="true"], input[type="file"]'));
-        const hasImageEditSignal = normalize(root.textContent ?? "").includes("图片编辑") || Boolean(root.querySelector('[data-testid*="upload-result" i], [class*="image-item" i], [class*="media-item" i]'));
-        return hasEditorField || hasImageEditSignal;
-      });
-      const inEditor = (element: Element): boolean => editorRoots.length > 0 && editorRoots.some((root) => root.contains(element));
-      const previewReady = Array.from(document.querySelectorAll('img[class*="preview" i], img[src^="blob:" i], img[src^="data:image" i], [data-testid*="upload-result" i], [data-testid*="preview" i], [class*="image-item" i], [class*="media-item" i]')).filter(inEditor).some(visible);
+      const previewReady = Array.from(document.querySelectorAll('img[class*="preview" i], img[src*="xhscdn" i], [class*="preview" i], [data-testid*="upload-result" i], [class*="uploaded" i]')).some(visible);
       return {
         currentUrl: window.location.href,
         readyState: document.readyState,
         shellSignal,
-        shellFingerprint: JSON.stringify({ shellCount, titleCandidateCount, bodyCandidateCount, uploadCandidateCount, finalSubmitCandidateCount, semanticSignals, capabilityCount: capability.length, tabPresence }),
+        shellFingerprint: JSON.stringify({ shellCount, titleCandidateCount, bodyCandidateCount, uploadCandidateCount, finalSubmitCandidateCount, semanticSignals, capabilityCount: capability.length }),
         contentTypeSignal,
         securityVerificationPresent,
         loginPagePresent,
         domStable: false,
         uploadCapabilityPresent: capability.length === 1,
         uploadCapabilityUnique: capability.length === 1,
-        preUploadSemanticSignalPresent: semanticSignals.some((signal) => signal === "upload" || signal === "drag" || signal === "image" || signal === "image-post") || tabPresence.currentSelectedTab === "上传图文",
-        tabCandidates,
-        tabPresence,
+        preUploadSemanticSignalPresent: semanticSignals.some((signal) => signal === "upload" || signal === "drag" || signal === "image" || signal === "image-post"),
         titleCandidateCount,
         bodyCandidateCount,
         finalSubmitCandidateCount,
@@ -1743,10 +1339,8 @@ async function readPhaseDomSnapshot(page: Page): Promise<ImageEditorPhaseDomSnap
           finalSubmitCandidateCount
         },
         mediaPreviewDiagnostics: { previewCount: previewReady ? 1 : 0, previewVisible: previewReady, previewGeometry: [], deleteReplaceEditSignals: [], associatedSemanticText: [] },
-        modalDiagnostics: { dialogCount: 0, modalSignalCount: 0, maskCount: 0, overlayCount: 0, drawerCount: 0, visible: false, ariaModalCount: 0 },
-        intermediateActionCandidates,
-        requiredValidationSignals,
-        forbiddenActionSignalPresent,
+        modalDiagnostics: emptyModalDiagnostics(),
+        intermediateActionCandidates: [],
         mediaPreviewSignalPresent: false,
         mediaEditingSignalPresent: false,
         uploadBusy,
@@ -1816,9 +1410,8 @@ function postUploadPhaseEvidence(snapshot: ImageEditorDomSnapshot, domStable: bo
 }
 
 export async function inspectImagePostEditor(page: Page, metadata: ImageEditorInspectionMetadata, options: ImageEditorInspectionOptions = {}): Promise<ImagePostEditorInspectionResult> {
-  const requestedWaitMs = options.readinessWindowMs ?? options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
-  const maxWaitMs = Math.max(0, Math.min(MAX_READINESS_WINDOW_MS, requestedWaitMs));
-  const probeIntervalMs = Math.max(0, options.readinessSampleIntervalMs ?? options.probeIntervalMs ?? DEFAULT_PROBE_INTERVAL_MS);
+  const maxWaitMs = Math.max(0, Math.min(DEFAULT_MAX_WAIT_MS, options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS));
+  const probeIntervalMs = Math.max(0, options.probeIntervalMs ?? DEFAULT_PROBE_INTERVAL_MS);
   const stableSampleCount = Math.max(2, options.stableSampleCount ?? DEFAULT_STABLE_SAMPLE_COUNT);
   const startedAt = Date.now();
   const readinessSamples: ImageEditorReadinessSample[] = [];
@@ -1911,8 +1504,6 @@ export async function inspectImagePostEditor(page: Page, metadata: ImageEditorIn
       result.mediaPreviewDiagnostics = lastSnapshot.mediaPreviewDiagnostics;
       result.modalDiagnostics = lastSnapshot.modalDiagnostics;
       result.intermediateActionCandidates = lastSnapshot.intermediateActionCandidates;
-      result.requiredValidationSignals = lastSnapshot.requiredValidationSignals;
-      result.forbiddenActionSignalPresent = lastSnapshot.forbiddenActionSignalPresent;
       result.failureCode = postUploadClassification.intermediateState !== "NONE"
         ? (lastSnapshot.intermediateActionCandidates?.length ?? 0) > 0 ? "POST_UPLOAD_INTERMEDIATE_ACTION_REQUIRED" : "POST_UPLOAD_INTERMEDIATE_STATE"
         : "POST_UPLOAD_EDITOR_NOT_READY";
@@ -1930,9 +1521,7 @@ export async function inspectImagePostEditor(page: Page, metadata: ImageEditorIn
   emit(options, metadata, "IMAGE_EDITOR_CONTROLS_DISCOVERED", { ...baseFields(lastSnapshot), contentType, contentTypeReady, titleEditor, bodyEditor, imageUploadControl, publishSettingsArea, finalSubmitControl });
   const requiredControls = options.requiredControls ?? ["TITLE_EDITOR", "BODY_EDITOR", "IMAGE_UPLOAD_CONTROL", "FINAL_SUBMIT_CONTROL"];
   const controls = [titleEditor, bodyEditor, imageUploadControl, finalSubmitControl].filter((control) => requiredControls.includes(control.kind));
-  const failedControl = controls.find((control) => options.postUploadReadiness && control.kind === "FINAL_SUBMIT_CONTROL"
-    ? !finalSubmitControlPresence(control.candidates).present
-    : control.status !== "FOUND_UNIQUE");
+  const failedControl = controls.find((control) => control.status !== "FOUND_UNIQUE");
   const result = emptyResult(failedControl ? "FAILED" : "READY", "IMAGE_EDITOR_SHELL_READY", sanitizeUrl(lastSnapshot.currentUrl), readinessSamples);
   result.contentType = contentType;
   result.contentTypeReady = contentTypeReady;
@@ -1945,10 +1534,7 @@ export async function inspectImagePostEditor(page: Page, metadata: ImageEditorIn
   result.bodyEditorDetected = bodyEditor.detected;
   result.imageUploadControlDetected = imageUploadControl.detected;
   result.publishSettingsAreaDetected = publishSettingsArea.detected;
-  const finalSubmitPresence = finalSubmitControlPresence(finalSubmitControl.candidates);
-  result.finalSubmitControlPresent = finalSubmitPresence.present;
-  result.finalSubmitControlEnabled = finalSubmitPresence.enabled;
-  result.finalSubmitControlDetected = finalSubmitPresence.present;
+  result.finalSubmitControlDetected = finalSubmitControl.detected;
   result.securityVerificationPresent = lastSnapshot.securityVerificationPresent;
   result.loginPagePresent = lastSnapshot.loginPagePresent;
   result.postUploadSemanticNodes = lastSnapshot.postUploadSemanticNodes;
@@ -1956,8 +1542,6 @@ export async function inspectImagePostEditor(page: Page, metadata: ImageEditorIn
   result.mediaPreviewDiagnostics = lastSnapshot.mediaPreviewDiagnostics;
   result.modalDiagnostics = lastSnapshot.modalDiagnostics;
   result.intermediateActionCandidates = lastSnapshot.intermediateActionCandidates;
-  result.requiredValidationSignals = lastSnapshot.requiredValidationSignals;
-  result.forbiddenActionSignalPresent = lastSnapshot.forbiddenActionSignalPresent;
   if (failedControl) {
     result.failureCode = controlFailureCode(failedControl) ?? "EDITOR_CONTROL_AMBIGUOUS";
     result.failureStage = "EDITOR_DISCOVERY";
@@ -1988,20 +1572,10 @@ function postUploadControlFailureCode(code: PreSubmitGateFailureCode | undefined
 }
 
 export async function inspectPostUploadImageEditor(page: Page, metadata: ImageEditorInspectionMetadata, options: ImageEditorInspectionOptions = {}): Promise<ImagePostUploadEditorInspectionResult> {
-  const nativeFilePickerRecovery = await recoverNativeFilePicker(options.nativeFilePickerRecovery);
   emit(options, metadata, "POST_UPLOAD_EDITOR_READINESS_STARTED", {
     sanitizedUrl: sanitizeUrl(page.url()),
     expectedPhase: "IMAGE_POST_POST_UPLOAD_EDITOR",
-    observedPhase: "IMAGE_POST_TRANSITIONING",
-    nativeFilePickerDetected: nativeFilePickerRecovery.detected,
-    nativeFilePickerCancelled: nativeFilePickerRecovery.cancelled,
-    nativeFilePickerRecovery: nativeFilePickerRecovery.status,
-    nativeFilePickerWindowIdBefore: nativeFilePickerRecovery.pickerWindowIdBefore,
-    nativeFilePickerWindowIdAfter: nativeFilePickerRecovery.pickerWindowIdAfter,
-    nativeFilePickerOpenBefore: nativeFilePickerRecovery.pickerOpenBefore,
-    nativeFilePickerOpenAfter: nativeFilePickerRecovery.pickerOpenAfter,
-    nativeFilePickerCancelActionSent: nativeFilePickerRecovery.cancelActionSent,
-    nativeFilePickerCancelEffectVerified: nativeFilePickerRecovery.cancelEffectVerified
+    observedPhase: "IMAGE_POST_TRANSITIONING"
   });
   const startedAt = Date.now();
   const forwardedEmitter = (diagnostic: ImageEditorDiagnostic): void => {
@@ -2027,12 +1601,8 @@ export async function inspectPostUploadImageEditor(page: Page, metadata: ImageEd
       ...(diagnostic.postUploadIntermediateState === undefined ? {} : { postUploadIntermediateState: diagnostic.postUploadIntermediateState })
     });
   };
-  const readinessWindowMs = options.readinessWindowMs ?? options.maxWaitMs ?? DEFAULT_POST_UPLOAD_READINESS_WINDOW_MS;
-  const readinessSampleIntervalMs = options.readinessSampleIntervalMs ?? options.probeIntervalMs ?? DEFAULT_POST_UPLOAD_READINESS_SAMPLE_INTERVAL_MS;
   const inspected = await inspectImagePostEditor(page, metadata, {
     ...options,
-    readinessWindowMs,
-    readinessSampleIntervalMs,
     postUploadReadiness: true,
     requiredControls: ["TITLE_EDITOR", "BODY_EDITOR", "FINAL_SUBMIT_CONTROL"],
     emit: forwardedEmitter
@@ -2063,12 +1633,10 @@ export async function inspectPostUploadImageEditor(page: Page, metadata: ImageEd
   const controlsReady = inspected.status === "READY" && phaseState.phase === "IMAGE_POST_POST_UPLOAD_EDITOR";
   const completionReady = !uploadBusy && previewReady;
   const isAuthenticated = !inspected.loginPagePresent && !inspected.securityVerificationPresent;
-  const ready = nativeFilePickerRecovery.status !== "BLOCKED" && controlsReady && completionReady && isAuthenticated && inspected.contentType === "IMAGE_POST" && inspected.contentTypeReady;
+  const ready = controlsReady && completionReady && isAuthenticated && inspected.contentType === "IMAGE_POST" && inspected.contentTypeReady;
   const observedPhase: ImageEditorPhase = phaseState.phase;
   const confidence: ImageEditorPhaseConfidence = ready ? "HIGH" : phaseState.confidence;
-  const reason = nativeFilePickerRecovery.status === "BLOCKED"
-    ? "native file picker was detected but could not be safely cancelled"
-    : ready
+  const reason = ready
     ? "upload completion and stable post-upload editor controls are present"
     : uploadBusy
       ? "upload is still busy"
@@ -2077,11 +1645,7 @@ export async function inspectPostUploadImageEditor(page: Page, metadata: ImageEd
         : phaseState.reason;
   const postUploadControlsStatus: ImageEditorPostUploadControlsStatus = ready ? "READY" : "FAIL";
   if (!ready) {
-    if (nativeFilePickerRecovery.status === "BLOCKED") {
-      inspected.failureCode = "POST_UPLOAD_EDITOR_TIMEOUT";
-      inspected.failureStage = "EDITOR_DISCOVERY";
-      inspected.missingSignal = "native-file-picker-cancel";
-    } else if (inspected.loginPagePresent) {
+    if (inspected.loginPagePresent) {
       inspected.failureCode = "AUTH_REDIRECTED_TO_LOGIN";
       inspected.failureStage = "AUTHENTICATION";
       inspected.missingSignal = "login-url";
@@ -2125,22 +1689,11 @@ export async function inspectPostUploadImageEditor(page: Page, metadata: ImageEd
     postUploadIntermediateState: phaseState.intermediateState === "NONE" ? null : phaseState.intermediateState,
     postUploadReadinessDurationMs: lastSample?.elapsedMs ?? Math.max(0, Date.now() - startedAt),
     postUploadReadinessSampleCount: inspected.readinessSamples.length,
-    nativeFilePickerDetected: nativeFilePickerRecovery.detected,
-    nativeFilePickerCancelled: nativeFilePickerRecovery.cancelled,
-    nativeFilePickerRecovery: nativeFilePickerRecovery.status,
-    nativeFilePickerWindowIdBefore: nativeFilePickerRecovery.pickerWindowIdBefore ?? null,
-    nativeFilePickerWindowIdAfter: nativeFilePickerRecovery.pickerWindowIdAfter ?? null,
-    nativeFilePickerOpenBefore: nativeFilePickerRecovery.pickerOpenBefore ?? false,
-    nativeFilePickerOpenAfter: nativeFilePickerRecovery.pickerOpenAfter ?? null,
-    nativeFilePickerCancelActionSent: nativeFilePickerRecovery.cancelActionSent ?? false,
-    nativeFilePickerCancelEffectVerified: nativeFilePickerRecovery.cancelEffectVerified ?? false,
     postUploadSemanticNodes: inspected.postUploadSemanticNodes ?? [],
     interactiveTopology: inspected.interactiveTopology ?? emptyInteractiveTopology(),
     mediaPreviewDiagnostics: mediaPreview,
     modalDiagnostics: modal,
-    intermediateActionCandidates: inspected.intermediateActionCandidates ?? [],
-    requiredValidationSignals: inspected.requiredValidationSignals ?? [],
-    forbiddenActionSignalPresent: inspected.forbiddenActionSignalPresent === true
+    intermediateActionCandidates: inspected.intermediateActionCandidates ?? []
   };
   emit(options, metadata, "POST_UPLOAD_EDITOR_SEMANTIC_INVENTORY_OBSERVED", {
     ...markerFields,
@@ -2180,15 +1733,6 @@ export async function inspectPostUploadImageEditor(page: Page, metadata: ImageEd
     terminalStateReached: phaseState.terminalStateReached,
     intermediateState: phaseState.intermediateState,
     postUploadReadinessDurationMs: lastSample?.elapsedMs ?? Math.max(0, Date.now() - startedAt),
-    nativeFilePickerDetected: nativeFilePickerRecovery.detected,
-    nativeFilePickerCancelled: nativeFilePickerRecovery.cancelled,
-    nativeFilePickerRecovery: nativeFilePickerRecovery.status,
-    nativeFilePickerWindowIdBefore: nativeFilePickerRecovery.pickerWindowIdBefore ?? null,
-    nativeFilePickerWindowIdAfter: nativeFilePickerRecovery.pickerWindowIdAfter ?? null,
-    nativeFilePickerOpenBefore: nativeFilePickerRecovery.pickerOpenBefore ?? false,
-    nativeFilePickerOpenAfter: nativeFilePickerRecovery.pickerOpenAfter ?? null,
-    nativeFilePickerCancelActionSent: nativeFilePickerRecovery.cancelActionSent ?? false,
-    nativeFilePickerCancelEffectVerified: nativeFilePickerRecovery.cancelEffectVerified ?? false,
     status: ready ? "READY" : "FAILED"
   };
   if (ready) {
@@ -2276,19 +1820,15 @@ function phaseResult(snapshot: ImageEditorPhaseDomSnapshot, classification: Imag
     mediaPreviewDiagnostics: snapshot.mediaPreviewDiagnostics,
     modalDiagnostics: snapshot.modalDiagnostics,
     intermediateActionCandidates: snapshot.intermediateActionCandidates,
-    requiredValidationSignals: snapshot.requiredValidationSignals,
-    forbiddenActionSignalPresent: snapshot.forbiddenActionSignalPresent,
     securityVerificationPresent: snapshot.securityVerificationPresent,
     loginPagePresent: snapshot.loginPagePresent,
-    tabPresence: snapshot.tabPresence,
     sanitizedUrl: sanitizeUrl(snapshot.currentUrl)
   };
 }
 
 export async function inspectImagePostEditorPhase(page: Page, metadata: ImageEditorInspectionMetadata, options: ImageEditorInspectionOptions = {}): Promise<ImagePostEditorPhaseInspectionResult> {
-  const requestedWaitMs = options.readinessWindowMs ?? options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
-  const maxWaitMs = Math.max(0, Math.min(MAX_READINESS_WINDOW_MS, requestedWaitMs));
-  const probeIntervalMs = Math.max(0, options.readinessSampleIntervalMs ?? options.probeIntervalMs ?? DEFAULT_PROBE_INTERVAL_MS);
+  const maxWaitMs = Math.max(0, Math.min(DEFAULT_MAX_WAIT_MS, options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS));
+  const probeIntervalMs = Math.max(0, options.probeIntervalMs ?? DEFAULT_PROBE_INTERVAL_MS);
   const stableSampleCount = Math.max(2, options.stableSampleCount ?? DEFAULT_STABLE_SAMPLE_COUNT);
   const startedAt = Date.now();
   const readinessSamples: ImageEditorReadinessSample[] = [];
@@ -2331,13 +1871,11 @@ export async function inspectImagePostEditorPhase(page: Page, metadata: ImageEdi
       uploadCapabilityPresent: lastSnapshot.uploadCapabilityPresent,
       uploadCapabilityUnique: lastSnapshot.uploadCapabilityUnique,
       preUploadSemanticSignalPresent: lastSnapshot.preUploadSemanticSignalPresent,
-      selectedTab: lastSnapshot.tabPresence.currentSelectedTab,
       titleCandidateCount: lastSnapshot.titleCandidateCount,
       bodyCandidateCount: lastSnapshot.bodyCandidateCount,
       finalSubmitCandidateCount: lastSnapshot.finalSubmitCandidateCount
     });
-    const terminalPhase = lastClassification.phase === "IMAGE_POST_PRE_UPLOAD" || lastClassification.phase === "IMAGE_POST_POST_UPLOAD_EDITOR";
-    if (lastClassification.phase === "LOGIN" || lastClassification.phase === "SECURITY_VERIFICATION" || terminalPhase) {
+    if (lastClassification.phase === "LOGIN" || lastClassification.phase === "SECURITY_VERIFICATION" || lastSnapshot.domStable) {
       emit(options, metadata, "IMAGE_EDITOR_PHASE_OBSERVED", {
         ...phaseDiagnosticFields(lastSnapshot),
         phase: lastClassification.phase,

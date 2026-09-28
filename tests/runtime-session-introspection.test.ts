@@ -16,7 +16,7 @@ describe("canonical session runtime introspection", () => {
   it("keeps the heartbeat read-only and free of browser navigation or publish calls", () => {
     const ipc = readFileSync(new URL("../apps/desktop/src/main/ipc.ts", import.meta.url), "utf8");
     const start = ipc.indexOf('register("accounts:session-heartbeat"');
-    const end = ipc.indexOf('register("accounts:overview"', start);
+    const end = ipc.indexOf('register("accounts:get-runtime-session-status"', start);
     expect(start).toBeGreaterThanOrEqual(0);
     const route = ipc.slice(start, end < 0 ? undefined : end);
 

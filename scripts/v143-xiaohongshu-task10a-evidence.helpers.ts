@@ -138,28 +138,6 @@ export type Task10AEvidenceSummary = {
   publishSettingsAreaStatus: string | null;
   finalSubmitCandidates: unknown[];
   finalSubmitControlStatus: string | null;
-  productionSchemaVersion: string | null;
-  task10sAuthTablePresent: boolean | null;
-  expectedCreatorIdentity: unknown;
-  observedCreatorIdentity: unknown;
-  accountIdentityVerified: boolean | null;
-  accountIdentityMismatch: boolean | null;
-  activeUnusedAuthorizationCount: number | null;
-  reusableOneShotOperationId: string | null;
-  supersededUnusedAuthorizationCount: number | null;
-  confirmIpcAttemptCount: number;
-  confirmDuplicateSuppressedCount: number;
-  confirmTransactionStatus: "NOT_STARTED" | "STARTED" | "COMMITTED" | "ROLLED_BACK" | "DUPLICATE_SUPPRESSED";
-  authorizationCreated: "YES" | "NO" | "UNKNOWN";
-  operationCreated: "YES" | "NO" | "UNKNOWN";
-  publicationTransactionCount: number;
-  partialConfirmationStateDetected: boolean;
-  partialConfirmReconciliationStarted: boolean;
-  partialConfirmReconciliationCommitted: boolean;
-  partialConfirmReconciliationRolledBack: boolean;
-  partialConfirmReconciliationResult: string | null;
-  oneShotConfirmRetryEligible: boolean | null;
-  reconciliationMutationCount: number;
   editorDiscoveryFailureCode: string | null;
   editorDiscoveryFailureStage: string | null;
   editorDiscoveryMissingSignal: string | null;
@@ -183,7 +161,7 @@ export type AnalyzeTask10AEvidenceInput = {
   publishDomainCounts?: PublishDomainCounts;
 };
 
-const GATE_START_CODES = new Set(["PRE_SUBMIT_GATE_INSPECTION_STARTED", "XHS_CANONICAL_PAGE_OPERATION_STARTED", "PARTIAL_CONFIRMATION_STATE_DETECTED", "XHS_CREATOR_IDENTITY_PROOF"]);
+const GATE_START_CODES = new Set(["PRE_SUBMIT_GATE_INSPECTION_STARTED", "XHS_CANONICAL_PAGE_OPERATION_STARTED"]);
 const HEARTBEAT_CODE = "CANONICAL_SESSION_HEARTBEAT";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -352,28 +330,6 @@ function emptySummary(input: AnalyzeTask10AEvidenceInput, gateResult: string): T
     publishSettingsAreaStatus: null,
     finalSubmitCandidates: [],
     finalSubmitControlStatus: null,
-    productionSchemaVersion: null,
-    task10sAuthTablePresent: null,
-    expectedCreatorIdentity: null,
-    observedCreatorIdentity: null,
-    accountIdentityVerified: null,
-    accountIdentityMismatch: null,
-    activeUnusedAuthorizationCount: null,
-    reusableOneShotOperationId: null,
-    supersededUnusedAuthorizationCount: null,
-    confirmIpcAttemptCount: 0,
-    confirmDuplicateSuppressedCount: 0,
-    confirmTransactionStatus: "NOT_STARTED",
-    authorizationCreated: "UNKNOWN",
-    operationCreated: "UNKNOWN",
-    publicationTransactionCount: 0,
-    partialConfirmationStateDetected: false,
-    partialConfirmReconciliationStarted: false,
-    partialConfirmReconciliationCommitted: false,
-    partialConfirmReconciliationRolledBack: false,
-    partialConfirmReconciliationResult: null,
-    oneShotConfirmRetryEligible: null,
-    reconciliationMutationCount: 0,
     editorDiscoveryFailureCode: null,
     editorDiscoveryFailureStage: null,
     editorDiscoveryMissingSignal: null,
@@ -389,9 +345,7 @@ function operationIdFor(event: EvidenceLogEvent): string | null {
 
 function isGateStart(event: EvidenceLogEvent): boolean {
   if (!GATE_START_CODES.has(event.code)) return false;
-  if (event.code === "PARTIAL_CONFIRMATION_STATE_DETECTED") return true;
   if (event.code === "PRE_SUBMIT_GATE_INSPECTION_STARTED") return true;
-  if (event.code === "XHS_CREATOR_IDENTITY_PROOF") return true;
   return event.context.action === "PRE_SUBMIT_GATE";
 }
 
@@ -413,15 +367,6 @@ function countOccurrences(events: EvidenceLogEvent[], patterns: RegExp[]): numbe
 const FINAL_SUBMIT_MARKERS = new Set(["FINAL_SUBMIT_ATTEMPTED", "FINAL_SUBMIT_CLICKED", "SUBMIT_COMMITTED"]);
 const PREPARE_PUBLISH_MARKERS = new Set(["PREPARE_PUBLISH_STARTED"]);
 const UPLOAD_MUTATION_MARKERS = new Set(["IMAGE_UPLOAD_STARTED", "SET_INPUT_FILES_CALLED", "UPLOAD_MUTATION_EXECUTED"]);
-const CONFIRM_IPC_ATTEMPT_MARKERS = new Set(["CONFIRM_IPC_ATTEMPT", "CONFIRM_IPC_REQUEST_STARTED"]);
-const CONFIRM_DUPLICATE_MARKER = "ONE_SHOT_CONFIRM_DUPLICATE_SUPPRESSED";
-const PARTIAL_CONFIRMATION_MARKERS = new Set([
-  "PARTIAL_CONFIRMATION_STATE_DETECTED",
-  "PARTIAL_CONFIRM_RECONCILIATION_STARTED",
-  "PARTIAL_CONFIRM_RECONCILIATION_COMMITTED",
-  "PARTIAL_CONFIRM_RECONCILIATION_ROLLED_BACK",
-  "PARTIAL_CONFIRM_RECONCILIATION_RESULT"
-]);
 
 function isFinalSubmitMarker(event: EvidenceLogEvent): boolean {
   if (FINAL_SUBMIT_MARKERS.has(event.code)) return true;
@@ -447,53 +392,6 @@ function isUploadMutationMarker(event: EvidenceLogEvent): boolean {
 
 function countUploadMutations(events: EvidenceLogEvent[]): number {
   return events.reduce((count, event) => count + (isUploadMutationMarker(event) ? 1 : 0), 0);
-}
-
-function isConfirmIpcAttempt(event: EvidenceLogEvent): boolean {
-  if (CONFIRM_IPC_ATTEMPT_MARKERS.has(event.code)) return true;
-  return event.code === "IPC_HANDLER_ERROR" && event.context.channel === "platform-self-test:confirm-one-shot-publish";
-}
-
-function latestBoolean(events: EvidenceLogEvent[], key: string): boolean | null {
-  for (const event of [...events].reverse()) {
-    const value = booleanValue(event.context[key]);
-    if (value !== null) return value;
-  }
-  return null;
-}
-
-function confirmationStatus(events: EvidenceLogEvent[]): Task10AEvidenceSummary["confirmTransactionStatus"] {
-  if (events.some((event) => event.code === "ONE_SHOT_CONFIRM_ROLLED_BACK")) return "ROLLED_BACK";
-  if (events.some((event) => event.code === "ONE_SHOT_CONFIRM_COMMITTED")) return "COMMITTED";
-  if (events.some((event) => event.code === "ONE_SHOT_CONFIRM_STARTED")) return "STARTED";
-  if (events.some((event) => event.code === CONFIRM_DUPLICATE_MARKER)) return "DUPLICATE_SUPPRESSED";
-  return "NOT_STARTED";
-}
-
-function authorizationCreated(events: EvidenceLogEvent[], status: Task10AEvidenceSummary["confirmTransactionStatus"]): Task10AEvidenceSummary["authorizationCreated"] {
-  const explicit = latestBoolean(events, "authorizationCreated");
-  if (explicit !== null) return explicit ? "YES" : "NO";
-  if (status === "COMMITTED" || status === "DUPLICATE_SUPPRESSED") return "YES";
-  if (status === "ROLLED_BACK") return "NO";
-  return "UNKNOWN";
-}
-
-function operationCreated(events: EvidenceLogEvent[], status: Task10AEvidenceSummary["confirmTransactionStatus"]): Task10AEvidenceSummary["operationCreated"] {
-  const explicit = latestBoolean(events, "operationCreated");
-  if (explicit !== null) return explicit ? "YES" : "NO";
-  if (events.some((event) => event.code === "XHS_ONE_SHOT_OPERATION_CREATED")) return "YES";
-  if (status === "ROLLED_BACK" || status === "COMMITTED" || status === "DUPLICATE_SUPPRESSED") return "NO";
-  return "UNKNOWN";
-}
-
-function publicationTransactionCount(events: EvidenceLogEvent[]): number {
-  let count = 0;
-  for (const event of events) {
-    const value = numberValue(event.context.publicationTransactionCount);
-    if (value !== null) count = Math.max(count, value);
-    if (event.code === "PUBLICATION_TRANSACTION_STARTED" && value === null) count = Math.max(count, 1);
-  }
-  return count;
 }
 
 function numberValue(value: unknown): number | null {
@@ -616,21 +514,6 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
     : missingSignal;
   const imageEditorControl = (field: string): Record<string, unknown> => isRecord(imageEditorControlsContext[field]) ? imageEditorControlsContext[field] : {};
   const imageEditorCandidates = (field: string): unknown[] => Array.isArray(imageEditorControl(field).candidates) ? imageEditorControl(field).candidates as unknown[] : [];
-  const schemaReadyEvent = [...gateEvents].reverse().find((event) => event.code === "TASK10S_SCHEMA_READY");
-  const schemaVersionEvent = [...gateEvents].reverse().find((event) => event.code === "MIGRATION_DISCOVERY" || event.code === "MIGRATION_APPLY_COMPLETED");
-  const productionSchemaVersion = stringValue(schemaReadyEvent?.context.productionSchemaVersion)
-    ?? stringValue(schemaReadyEvent?.context.schemaVersion)
-    ?? (schemaReadyEvent ? "0023" : null)
-    ?? stringValue(schemaVersionEvent?.context.productionSchemaVersion)
-    ?? stringValue(schemaVersionEvent?.context.schemaVersion);
-  const task10sAuthTablePresent = booleanValue(schemaReadyEvent?.context.authTablePresent) ?? (schemaReadyEvent ? true : null);
-  const identityProofEvent = [...gateEvents].reverse().find((event) => event.code === "XHS_CREATOR_IDENTITY_PROOF");
-  const identityConvergenceEvent = [...gateEvents].reverse().find((event) => event.code === "XHS_IDENTITY_AUTHORIZATION_CONVERGED");
-  const confirmEvents = gateEvents.filter((event) => event.code === "CONFIRM_IPC_ATTEMPT" || event.code === "CONFIRM_IPC_REQUEST_STARTED" || event.code === "IPC_HANDLER_ERROR" || event.code === "ONE_SHOT_CONFIRM_STARTED" || event.code === "ONE_SHOT_CONFIRM_COMMITTED" || event.code === "ONE_SHOT_CONFIRM_ROLLED_BACK" || event.code === CONFIRM_DUPLICATE_MARKER);
-  const reconciliationEvents = gateEvents.filter((event) => PARTIAL_CONFIRMATION_MARKERS.has(event.code));
-  const reconciliationResultEvent = [...reconciliationEvents].reverse().find((event) => event.code === "PARTIAL_CONFIRM_RECONCILIATION_RESULT");
-  const reconciliationMutationCount = reconciliationEvents.reduce((count, event) => Math.max(count, numberValue(event.context.mutationCount) ?? numberValue(event.context.reconciliationMutationCount) ?? 0), 0);
-  const confirmStatus = confirmationStatus(confirmEvents);
   const result: Task10AEvidenceSummary = {
     ...emptySummary(input, gateResult),
     evidenceAmbiguous: "NO",
@@ -742,28 +625,6 @@ export function analyzeTask10AEvidence(input: AnalyzeTask10AEvidenceInput): Task
     publishSettingsAreaStatus: stringValue(imageEditorControl("publishSettingsArea").status),
     finalSubmitCandidates: imageEditorCandidates("finalSubmitControl"),
     finalSubmitControlStatus: stringValue(imageEditorControl("finalSubmitControl").status),
-    productionSchemaVersion,
-    task10sAuthTablePresent,
-    expectedCreatorIdentity: identityProofEvent?.context.EXPECTED_CREATOR_IDENTITY ?? null,
-    observedCreatorIdentity: identityProofEvent?.context.OBSERVED_CREATOR_IDENTITY ?? null,
-    accountIdentityVerified: booleanValue(identityConvergenceEvent?.context.ACCOUNT_IDENTITY_VERIFIED) ?? booleanValue(identityProofEvent?.context.ACCOUNT_IDENTITY_VERIFIED),
-    accountIdentityMismatch: booleanValue(identityProofEvent?.context.ACCOUNT_IDENTITY_MISMATCH),
-    activeUnusedAuthorizationCount: numberValue(identityConvergenceEvent?.context.ACTIVE_UNUSED_AUTHORIZATION_COUNT),
-    reusableOneShotOperationId: stringValue(identityConvergenceEvent?.context.REUSABLE_ONE_SHOT_OPERATION_ID),
-    supersededUnusedAuthorizationCount: numberValue(identityConvergenceEvent?.context.SUPERSEDED_UNUSED_AUTHORIZATION_COUNT),
-    confirmIpcAttemptCount: confirmEvents.filter(isConfirmIpcAttempt).length,
-    confirmDuplicateSuppressedCount: confirmEvents.filter((event) => event.code === CONFIRM_DUPLICATE_MARKER).length,
-    confirmTransactionStatus: confirmStatus,
-    authorizationCreated: authorizationCreated(confirmEvents, confirmStatus),
-    operationCreated: operationCreated(confirmEvents, confirmStatus),
-    publicationTransactionCount: publicationTransactionCount(gateEvents),
-    partialConfirmationStateDetected: reconciliationEvents.some((event) => event.code === "PARTIAL_CONFIRMATION_STATE_DETECTED"),
-    partialConfirmReconciliationStarted: reconciliationEvents.some((event) => event.code === "PARTIAL_CONFIRM_RECONCILIATION_STARTED"),
-    partialConfirmReconciliationCommitted: reconciliationEvents.some((event) => event.code === "PARTIAL_CONFIRM_RECONCILIATION_COMMITTED"),
-    partialConfirmReconciliationRolledBack: reconciliationEvents.some((event) => event.code === "PARTIAL_CONFIRM_RECONCILIATION_ROLLED_BACK"),
-    partialConfirmReconciliationResult: stringValue(reconciliationResultEvent?.context.status) ?? stringValue(reconciliationResultEvent?.context.result),
-    oneShotConfirmRetryEligible: latestBoolean(reconciliationEvents, "retryEligible") ?? latestBoolean(reconciliationEvents, "oneShotConfirmRetryEligible"),
-    reconciliationMutationCount,
     editorDiscoveryFailureCode: postUploadPhaseFailureCode ?? stringValue(imageEditorFailureEvent?.context.failureCode) ?? (effectiveFailureStage === "EDITOR_DISCOVERY" ? effectiveFailureCode : null),
     editorDiscoveryFailureStage: postUploadPhaseFailureCode ? "EDITOR_DISCOVERY" : stringValue(imageEditorFailureEvent?.context.failureStage) ?? (effectiveFailureStage === "EDITOR_DISCOVERY" ? effectiveFailureStage : null),
     editorDiscoveryMissingSignal: postUploadPhaseFailureCode ? effectiveMissingSignal : stringValue(imageEditorFailureEvent?.context.missingSignal) ?? (effectiveFailureStage === "EDITOR_DISCOVERY" ? effectiveMissingSignal : null),

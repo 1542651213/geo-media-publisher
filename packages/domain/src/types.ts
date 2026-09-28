@@ -55,6 +55,8 @@ export const ERROR_CODES = [
   "EXTERNAL_EVIDENCE_INCOMPLETE",
   "RECONCILIATION_UNCERTAIN",
   "CONFIRMED_NOT_PUBLISHED",
+  "ARTICLE_API_SUBMIT_NOT_IMPLEMENTED",
+  "TRANSPORT_FALLBACK_FORBIDDEN",
   "UNKNOWN"
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -88,8 +90,9 @@ export const PLATFORM_LIFECYCLE_STATUSES = [
 export type PlatformLifecycleStatus = (typeof PLATFORM_LIFECYCLE_STATUSES)[number];
 /** @deprecated Use PlatformLifecycleStatus. Kept as an alias for V0.3 callers. */
 export type PlatformVerificationStatus = PlatformLifecycleStatus;
+import type { ContentTransport, CoverConstraint, RemoteScheduleConstraint, TitleConstraint } from "./toutiao-article";
 export type PlatformCapability = "API" | "OAuth" | "BrowserAutomation" | "SemiAuto" | "Manual" | "Blocked";
-export type AdapterTransport = "official_api" | "official_sdk" | "browser" | "semi_auto" | "hybrid" | "manual";
+export type AdapterTransport = "official_api" | "official_sdk" | "web_api" | "browser" | "semi_auto" | "hybrid" | "manual";
 export type PublishMode = "AUTO" | "ASSISTED" | "MANUAL";
 export type FinalPublishMode = "PREPARE_ONLY" | "CONFIRM_BEFORE_PUBLISH" | "AUTO_PUBLISH";
 export type ImageSelectionMode = "random" | "manual" | "none";
@@ -98,6 +101,7 @@ export type ContentReviewMode = (typeof CONTENT_REVIEW_MODES)[number];
 export const normalizeContentReviewMode = (value: unknown): ContentReviewMode =>
   CONTENT_REVIEW_MODES.includes(value as ContentReviewMode) ? value as ContentReviewMode : "WarningOnly";
 export type PublishRecordVerificationStatus = "NotTested" | "WaitingUser" | "Verified" | "Failed";
+export type PublishRemoteStatus = "SUBMIT_NOT_STARTED" | "SUBMITTING" | "SUBMIT_ACCEPTED" | "SCHEDULED_ACCEPTED" | "CONFIRMING" | "PUBLISHED_MANAGEMENT" | "PUBLISHED_CONFIRMED" | "FAILED_CONFIRMED" | "UNCERTAIN" | "SAFE_TO_RETRY";
 export const PLATFORM_SELF_TEST_LEVELS = ["L1_LOGIN", "L2_EDITOR", "L3_CONTENT_FILL", "L4_DRAFT", "L5_PUBLISH"] as const;
 export type PlatformSelfTestLevel = (typeof PLATFORM_SELF_TEST_LEVELS)[number];
 export const PLATFORM_SELF_TEST_RESULTS = ["NOT_TESTED", "TESTING", "PASSED", "PARTIAL_PASSED", "WAITING_FOR_USER", "FAILED", "NOT_SUPPORTED"] as const;
@@ -137,6 +141,8 @@ export interface AdapterManifest {
   transport: AdapterTransport;
   /** Primary integration capability; kept separate from content capabilities. */
   integrationMode?: PlatformCapability;
+  /** Explicit account UI choice when a platform has different content adapters. */
+  preferredForAccountConnection?: boolean;
   supportsArticle: boolean;
   supportsVideo: boolean;
   officialWebsite: string;
@@ -415,73 +421,6 @@ export interface Account {
   archivedAt?: string | null;
 }
 
-export type CreatorIdentityProofSource = "CREATOR_PROFILE_LINK" | "CREATOR_STRUCTURED_DATA" | "CREATOR_ACCOUNT_SURFACE";
-
-export interface CreatorIdentityProof {
-  platformKey: "xiaohongshu";
-  externalCreatorId: string | null;
-  displayName: string | null;
-  profileUrl: string | null;
-  source: CreatorIdentityProofSource;
-  stable: boolean;
-}
-
-/** A short-lived identity proof bound to one live BrowserSession Context/Page. */
-export interface CurrentRuntimeIdentityProof {
-  accountId: string;
-  platformKey: "xiaohongshu";
-  expectedExternalCreatorId: string;
-  observedExternalCreatorId: string;
-  canonicalContextId: string;
-  canonicalPageId: string;
-  verified: true;
-}
-
-/** Short-lived identity proof bound to a live XHS BrowserSession and Context.
- * The source Page is only the fresh proof origin; later editor Pages may differ.
- */
-export interface XhsContextIdentityAttestation {
-  accountId: string;
-  platformKey: "xiaohongshu";
-  expectedExternalCreatorId: string;
-  observedExternalCreatorId: string;
-  browserSessionIdentity: string;
-  browserContextIdentity: string;
-  sourcePageIdentity: string;
-  sourceOrigin: "https://creator.xiaohongshu.com";
-  sourcePathname: string;
-  externalAccountId: string | null;
-  issuedAt: string;
-  expiresAt: string;
-  verified: true;
-}
-
-export interface PlatformAccountIdentityBinding {
-  id: string;
-  platformKey: string;
-  accountId: string;
-  externalCreatorId: string;
-  displayName: string | null;
-  profileUrl: string | null;
-  bindingSource: "LEGACY_ACCOUNT_EXTERNAL_ID_MATCH" | "OWNER_APPROVED_CREATOR_IDENTITY_BINDING";
-  boundAt: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface CreatorIdentityVerificationResult {
-  expectedExternalCreatorId: string | null;
-  observed: CreatorIdentityProof;
-  verified: boolean;
-  mismatch: boolean;
-  canonicalContextId: string;
-  canonicalPageId: string;
-  canonicalPageUrl: string;
-  domLocationHref: string;
-  pageUrlConsistency: "PASS" | "FAIL";
-  routeClass: "CREATOR_HOME" | "PUBLISH_EDITOR" | "CREATOR_CONTENT" | "OTHER_CREATOR_PAGE" | "LOGIN" | "SECURITY_VERIFICATION" | "UNKNOWN";
-}
-
 export type PlatformAccount = Account;
 
 export interface PlatformSelfTestStep {
@@ -505,8 +444,6 @@ export interface PlatformSelfTestRun {
   id: string;
   testRunId: string;
   platformKey: string;
-  /** Immutable local Account primary key selected for this run. */
-  accountId: string;
   platformAccountId: string;
   requestedLevel: PlatformSelfTestLevel;
   overallResult: PlatformSelfTestResult;
@@ -523,33 +460,6 @@ export interface PlatformSelfTestRun {
   cleanupStatus: PlatformSelfTestCleanupStatus;
   cleanedAt: string | null;
   steps: PlatformSelfTestStep[];
-}
-
-export interface Task10SPrepublishResult {
-  testRunId: string;
-  operationId: string;
-  platformKey: "xiaohongshu";
-  accountId: string;
-  status: "READY_FOR_FINAL_SUBMIT" | "BLOCKED";
-  authorizationState: "AUTHORIZED_UNUSED";
-  canonicalAuthorizationId: string;
-  accountIdentityVerified: boolean;
-  creatorId: string | null;
-  editor: { attemptCount: number; result: "PASSED" | "BLOCKED"; pageUrl: string | null; routeClass: "PUBLISH_EDITOR" | "UNKNOWN"; contextId: string | null; pageId: string | null; contextCorrelation: "PASS" | "NOT_OBSERVED"; pageCorrelation: "PASS" | "NOT_OBSERVED" };
-  safeFixture: { path: string; sha256: string | null; exists: boolean; assetId: string | null };
-  image: { attemptCount: number; result: PlatformSelfTestResult; assetId: string | null; domReadback: string | null; previewCount: number | null; error: string | null };
-  title: { attemptCount: number; expected: string; observed: string | null; readbackMatch: boolean };
-  body: { attemptCount: number; expected: string; observed: string | null; readbackMatch: boolean };
-  requiredFields: { total: number; pass: number; missing: string[]; result: "PASS" | "BLOCKED" | "NOT_OBSERVED" };
-  settings: { readOnlyCheck: "PASS" | "BLOCKED" | "NOT_OBSERVED"; mutationCount: number; values: Array<{ label: string; required: boolean; value: string }> };
-  finalSubmit: { found: boolean; enabled: boolean; text: string | null; count: number; clickCount: number | null };
-  preparedContent: { prepared: boolean; imageAssetId: string | null; response: Record<string, unknown> | null };
-  prepublishEvidence: { total: number; pass: number; missing: string[] };
-  readyToResumeExistingOneShot: boolean;
-  database: { before: Record<string, number>; after: Record<string, number> };
-  safety: { authorizationMutationCount: 0; prepublishEvidenceMutationCount: number; jobMutationCount: 0; intentMutationCount: 0; publishRecordMutationCount: 0; uploadMutationCount: number; titleMutationCount: number; bodyMutationCount: number; settingsMutationCount: 0; publicationTransactionCount: 0; finalSubmitCount: number | null };
-  evidencePath: string | null;
-  run: PlatformSelfTestRun;
 }
 
 export function defaultAccountSelection(accounts: Account[]): { selectedAccountId: string | null; requiresChoice: boolean } {
@@ -627,6 +537,8 @@ export interface PublishRecord {
   bodyFilled?: boolean | null;
   selectedImageAssetId?: string | null;
   imageSelectionMode?: ImageSelectionMode;
+  submissionAttemptId?: string | null;
+  remoteStatus?: PublishRemoteStatus | null;
 }
 
 export interface ImageAsset {
@@ -653,6 +565,13 @@ export interface ImageAsset {
 
 export interface PlatformCapabilities {
   article: boolean;
+  /** Content-specific transport; platform-level integrationMode remains account-facing metadata. */
+  contentTransport?: ContentTransport;
+  /** Submission is confirmed by an account-owned management scan, not an immediate editor URL. */
+  browserManagementReconciliation?: boolean;
+  titleConstraint?: TitleConstraint;
+  remoteScheduleConstraint?: RemoteScheduleConstraint;
+  coverConstraint?: CoverConstraint;
   imagePost: boolean;
   video: boolean;
   /** Explicit, typed entry modes exposed by the platform UI. */
@@ -680,10 +599,6 @@ export interface AccountContext {
   accountName: string;
   platformKey: string;
   settings: Record<string, string | number | boolean>;
-  /** Main-process-only proof bound to the current canonical browser runtime. */
-  runtimeIdentityProof?: CurrentRuntimeIdentityProof;
-  /** Main-process-only proof bound to the current XHS Session and Context. */
-  runtimeIdentityAttestation?: XhsContextIdentityAttestation;
   /** Main-process-only credentials. Never serialize or log this object in the renderer. */
   secrets?: Record<string, string>;
 }
@@ -724,7 +639,7 @@ export interface PublishVideoInput {
 
 export interface PublishResult {
   success: boolean;
-  status?: "published" | "publishing" | "failed";
+  status?: "published" | "publishing" | "scheduled" | "failed";
   dryRun?: boolean;
   prepared?: boolean;
   publishedUrl?: string;
@@ -733,78 +648,6 @@ export interface PublishResult {
   editorOpenedAt?: string | null;
   titleFilled?: boolean;
   bodyFilled?: boolean;
-}
-
-export const OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH = "OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH" as const;
-export const ONE_SHOT_REAL_PUBLISH_ACCEPTANCE = "ONE_SHOT_REAL_PUBLISH_ACCEPTANCE" as const;
-
-export type OneShotPublicationAuthorizationState =
-  | "NOT_AUTHORIZED"
-  | "AUTHORIZED_UNUSED"
-  | "ARMED"
-  | "FINAL_MOUSEPRESS_DISPATCH_STARTED"
-  | "SUBMIT_RECONCILIATION_REQUIRED"
-  | "CONSUMED"
-  | "COMPLETED"
-  | "SUPERSEDED_UNUSED";
-
-export interface OneShotPublicationAuthorization {
-  authorization: typeof OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH;
-  state: OneShotPublicationAuthorizationState;
-  platformKey: "xiaohongshu";
-  /** Immutable account selected when the run/operation was created. */
-  accountId: string;
-  operationId: string;
-  mode: typeof ONE_SHOT_REAL_PUBLISH_ACCEPTANCE;
-  publicationTransactionCount: number;
-  publicationCommitActionCount: number;
-  finalSubmitAttemptCount: number;
-  finalSubmitRetryCount: number;
-  finalSubmitActionStarted: boolean;
-  finalSubmitActionCompleted: boolean;
-  createdAt?: string;
-  updatedAt?: string;
-  consumedAt?: string | null;
-}
-
-export interface OneShotAuthorizationConvergenceResult {
-  reusableOperationId: string | null;
-  supersededOperationIds: string[];
-  activeUnusedAuthorizationCount: number;
-  mutationCount: number;
-}
-
-export interface XhsIdentityAcceptance {
-  verification: CreatorIdentityVerificationResult;
-  binding: PlatformAccountIdentityBinding | null;
-  convergence: OneShotAuthorizationConvergenceResult;
-}
-
-export interface FailedOneShotConfirmationIdentity {
-  testRunId: string;
-  platformKey: "xiaohongshu";
-  accountId: string;
-}
-
-export interface OneShotConfirmationReconciliationSnapshot {
-  identity: FailedOneShotConfirmationIdentity;
-  run: PlatformSelfTestRun;
-  authorizationCount: number;
-  operationCount: number;
-  publicationTransactionCount: number;
-  finalSubmitAttemptCount: number;
-  externalPublicationEvidence: boolean;
-  needsReconciliation: boolean;
-  publishedOrVerified: boolean;
-}
-
-export type OneShotConfirmationReconciliationStatus = "RECONCILED_RETRYABLE" | "ALREADY_RECONCILED";
-
-export interface OneShotConfirmationReconciliationResult {
-  status: OneShotConfirmationReconciliationStatus;
-  testRunId: string;
-  mutationCount: 0 | 1;
-  retryEligible: true;
 }
 
 export const EXCEL_TEMPLATE_VERSION = "1.0";
@@ -930,7 +773,7 @@ export interface ExcelImportResult {
 }
 
 export interface PublishStatusResult {
-  status: "publishing" | "published" | "failed";
+  status: "publishing" | "scheduled" | "published" | "failed";
   externalId?: string;
   publishedUrl?: string;
   response: Record<string, unknown>;

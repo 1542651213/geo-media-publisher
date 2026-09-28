@@ -57,14 +57,17 @@ export class SafeStorageCredentialStore implements CredentialStore {
 
   set(key: string, value: string): void {
     if (!this.safeStorage.isEncryptionAvailable()) throw new CredentialEncryptionUnavailableError();
-    this.values[key] = this.safeStorage.encryptString(value).toString("base64");
-    this.persist();
+    const next = { ...this.values, [key]: this.safeStorage.encryptString(value).toString("base64") };
+    this.persist(next);
+    this.values[key] = next[key]!;
   }
 
   delete(key: string): void {
     if (!(key in this.values)) return;
+    const next = { ...this.values };
+    delete next[key];
+    this.persist(next);
     delete this.values[key];
-    this.persist();
   }
 
   has(key: string): boolean {
@@ -94,10 +97,10 @@ export class SafeStorageCredentialStore implements CredentialStore {
     }
   }
 
-  private persist(): void {
+  private persist(values: EncryptedRecord): void {
     mkdirSync(dirname(this.filePath), { recursive: true });
     const tempPath = join(dirname(this.filePath), `.credentials-${process.pid}.tmp`);
-    writeFileSync(tempPath, JSON.stringify(this.values), { encoding: "utf8", mode: 0o600 });
+    writeFileSync(tempPath, JSON.stringify(values), { encoding: "utf8", mode: 0o600 });
     renameSync(tempPath, this.filePath);
   }
 }

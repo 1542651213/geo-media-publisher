@@ -4,15 +4,10 @@ import type { ControlledPostUploadDiscoveryResult } from "@publisher/adapters-co
 import {
   CONTROLLED_POST_UPLOAD_DISCOVERY_MODE,
   CONTROLLED_SELF_TEST_CONFIRMATION,
-  PUBLISH_FLOW_EXPLORATION_CONFIRMATION,
-  PUBLISH_FLOW_EXPLORATION_MODE,
   ControlledSelfTestEntryGuard,
   buildControlledSelfTestRequest,
-  buildPublishFlowExplorationRequest,
   controlledSelfTestResultMessage,
-  publishFlowExplorationResultMessage,
-  supportsControlledPostUploadDiscovery,
-  supportsPublishFlowExploration
+  supportsControlledPostUploadDiscovery
 } from "../apps/desktop/src/shared/controlled-self-test-entry";
 
 const platform = (controlledSelfTestModes?: string[]): Pick<Platform, "capabilities"> => ({
@@ -116,22 +111,5 @@ describe("controlled self-test entry policy", () => {
     expect(controlledSelfTestResultMessage(result({ status: "PASS", failureCode: null }))).toContain("上传后编辑器检查完成");
     expect(controlledSelfTestResultMessage(result())).toContain("POST_UPLOAD_EDITOR_TIMEOUT");
     expect(controlledSelfTestResultMessage(result())).not.toContain("发布成功");
-  });
-
-  it("requires the dedicated capability, connected account, and confirmation for exploration", () => {
-    const explorationPlatform = platform([PUBLISH_FLOW_EXPLORATION_MODE]);
-    expect(supportsPublishFlowExploration(explorationPlatform, account())).toBe(true);
-    expect(buildPublishFlowExplorationRequest({ account: account(), platform: explorationPlatform, connected: true, busy: false, confirmed: false })).toBeNull();
-    expect(buildPublishFlowExplorationRequest({ account: account(), platform: explorationPlatform, connected: true, busy: false, confirmed: true })).toEqual({
-      platformAccountId: "platform-account-1",
-      mode: PUBLISH_FLOW_EXPLORATION_MODE
-    });
-    expect(PUBLISH_FLOW_EXPLORATION_CONFIRMATION).toContain("不会点击最终发布");
-  });
-
-  it("keeps exploration result messaging separate from formal publish success", () => {
-    expect(publishFlowExplorationResultMessage({ readyForFinalSubmit: true, blocker: null })).toContain("未点击发布");
-    expect(publishFlowExplorationResultMessage({ readyForFinalSubmit: false, blocker: "FINAL_SUBMIT_NOT_READY" })).toContain("FINAL_SUBMIT_NOT_READY");
-    expect(publishFlowExplorationResultMessage({ readyForFinalSubmit: true, blocker: null })).not.toContain("发布成功");
   });
 });

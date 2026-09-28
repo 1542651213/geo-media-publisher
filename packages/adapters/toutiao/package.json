@@ -3,12 +3,13 @@
   "version": "0.4.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts", "./browser": "./src/browser.ts" },
+  "exports": { ".": "./src/index.ts", "./browser": "./src/browser.ts", "./article-api": "./src/article-api/index.ts" },
   "scripts": { "test": "vitest run" },
   "dependencies": {
     "@publisher/adapters-core": "workspace:*",
     "@publisher/adapters-browser": "workspace:*",
     "@publisher/domain": "workspace:*",
+    "@publisher/db": "workspace:*",
     "@publisher/security": "workspace:*"
   }
 }

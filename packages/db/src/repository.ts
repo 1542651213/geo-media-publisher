@@ -1,60 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type Database from "better-sqlite3";
-import { CONTENT_STUDIO_PLATFORM_KEYS, CORE_AI_FABRICATION_RULES, conservativePlatformContentRules, expandKeywords, normalizeContentReviewMode } from "@publisher/domain";
-import type { Account, ActivityLog, AdapterManifest, AIProviderProfile, AIUsage, Article, ArticleVariant, BackgroundAutomationStatus, Brand, BrandAsset, BrandDifferentiationMetrics, BrandKnowledgeCategory, BrandKnowledgeEntry, CityRegion, ContentGoal, ContentIntent, ContentQualityCheckResult, ContentQualityContentType, ContentQualityIssue, ContentQualityStatus, ContentQualityTrigger, ContentReviewMode, ContentSource, ContentStudioContent, ContentStudioPlatformKey, ContentStudioTopicPlan, DashboardStats, ExcelArticleRowInput, ExcelImportDiagnostic, ExcelImportDiagnosticCode, ExcelImportPreview, ExcelImportPreviewRow, ExcelImportResult, ExcelImportSheetCandidate, FailedOneShotConfirmationIdentity, FinalPublishMode, ImageAsset, ImageSelectionMode, KnowledgeSnapshot, KeywordItem, KeywordTemplate, LoginStatus, Notification, OneShotAuthorizationConvergenceResult, OneShotConfirmationReconciliationResult, OneShotConfirmationReconciliationSnapshot, OneShotPublicationAuthorization, Platform, PlatformAccountIdentityBinding, PlatformCapability, PlatformCapabilities, PlatformContentRules, PlatformProfile, PlatformSelfTestCleanupStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PlatformSelfTestStep, PromotionStrength, PublishJob, PublishPlan, PublishRecord, SearchIntent, VideoAsset } from "@publisher/domain";
+import { CONTENT_STUDIO_PLATFORM_KEYS, CORE_AI_FABRICATION_RULES, canonicalSerialize, conservativePlatformContentRules, expandKeywords, normalizeContentReviewMode, normalizeToutiaoSettings, redactSecretText, redactSecretValue } from "@publisher/domain";
+import { hashToutiaoContentBinding } from "@publisher/domain/toutiao-hash";
+import type { DouyinImageTextJobSettings } from "@publisher/domain/douyin-image-text";
+import type { Account, ActivityLog, AdapterManifest, AIProviderProfile, AIUsage, Article, ArticleVariant, BackgroundAutomationStatus, Brand, BrandAsset, BrandDifferentiationMetrics, BrandKnowledgeCategory, BrandKnowledgeEntry, CityRegion, ContentGoal, ContentIntent, ContentQualityCheckResult, ContentQualityContentType, ContentQualityIssue, ContentQualityStatus, ContentQualityTrigger, ContentReviewMode, ContentSource, ContentStudioContent, ContentStudioPlatformKey, ContentStudioTopicPlan, DashboardStats, ExcelArticleRowInput, ExcelImportDiagnostic, ExcelImportDiagnosticCode, ExcelImportPreview, ExcelImportPreviewRow, ExcelImportResult, ExcelImportSheetCandidate, FinalPublishMode, ImageAsset, ImageSelectionMode, KnowledgeSnapshot, KeywordItem, KeywordTemplate, LoginStatus, Notification, Platform, PlatformCapability, PlatformCapabilities, PlatformContentRules, PlatformProfile, PlatformSelfTestCleanupStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PlatformSelfTestStep, PromotionStrength, PublishJob, PublishPlan, PublishRecord, SearchIntent, VideoAsset } from "@publisher/domain";
+import type { PublishRemoteStatus, ToutiaoArticleSettingsSnapshot, ToutiaoContentBindingInput } from "@publisher/domain";
 
 type SqlValue = string | number | null;
 type Row = Record<string, unknown>;
 
 export type StoredVideoAssetStatus = "Draft" | "Ready" | "DryRun" | "Published" | "Failed";
-
-export interface OneShotConfirmationPersistenceResult {
-  authorization: OneShotPublicationAuthorization;
-  created: boolean;
-}
-
-const ONE_SHOT_CONFIRMATION_ERROR = "ONE_SHOT_PUBLISH_CONFIRMATION_REQUIRED";
-const ONE_SHOT_CONFIRMATION_STEP = "PUBLISH_CONFIRMATION";
-
-function reconciliationFailure(snapshot: OneShotConfirmationReconciliationSnapshot): string | null {
-  const step = snapshot.run.steps.find((item) => item.stepKey === ONE_SHOT_CONFIRMATION_STEP);
-  if (snapshot.identity.platformKey !== "xiaohongshu") return "ONE_SHOT_RECONCILIATION_PLATFORM_MISMATCH";
-  if (snapshot.run.platformKey !== snapshot.identity.platformKey || snapshot.run.accountId !== snapshot.identity.accountId || snapshot.run.platformAccountId !== snapshot.identity.accountId) return "ONE_SHOT_RECONCILIATION_ACCOUNT_MISMATCH";
-  if (snapshot.run.requestedLevel !== "L5_PUBLISH" || snapshot.run.overallResult !== "WAITING_FOR_USER") return "ONE_SHOT_RECONCILIATION_STATE_MISMATCH";
-  if (!snapshot.run.publishConfirmedAt) return "ONE_SHOT_RECONCILIATION_NOT_PARTIAL";
-  if (snapshot.authorizationCount !== 0) return "ONE_SHOT_RECONCILIATION_AUTHORIZATION_EXISTS";
-  if (snapshot.operationCount !== 0) return "ONE_SHOT_RECONCILIATION_OPERATION_EXISTS";
-  if (snapshot.publicationTransactionCount !== 0) return "ONE_SHOT_RECONCILIATION_PUBLICATION_STARTED";
-  if (snapshot.finalSubmitAttemptCount !== 0) return "ONE_SHOT_RECONCILIATION_FINAL_SUBMIT_STARTED";
-  if (snapshot.externalPublicationEvidence) return "ONE_SHOT_RECONCILIATION_EXTERNAL_EVIDENCE_EXISTS";
-  if (snapshot.needsReconciliation) return "ONE_SHOT_RECONCILIATION_NEEDS_RECONCILIATION";
-  if (snapshot.publishedOrVerified) return "ONE_SHOT_RECONCILIATION_ALREADY_PUBLISHED";
-  if (!step || step.result !== "WAITING_FOR_USER" || step.errorCode !== ONE_SHOT_CONFIRMATION_ERROR) return "ONE_SHOT_RECONCILIATION_CONFIRMATION_STEP_MISMATCH";
-  return null;
-}
-
-function isCanonicalRetryable(snapshot: OneShotConfirmationReconciliationSnapshot): boolean {
-  const step = snapshot.run.steps.find((item) => item.stepKey === ONE_SHOT_CONFIRMATION_STEP);
-  return snapshot.run.platformKey === snapshot.identity.platformKey
-    && snapshot.run.accountId === snapshot.identity.accountId
-    && snapshot.run.platformAccountId === snapshot.identity.accountId
-    && snapshot.run.requestedLevel === "L5_PUBLISH"
-    && snapshot.run.overallResult === "WAITING_FOR_USER"
-    && snapshot.run.publishConfirmedAt === null
-    && snapshot.run.publishJobId === null
-    && snapshot.run.publishRecordId === null
-    && snapshot.run.testArticleId === null
-    && snapshot.authorizationCount === 0
-    && snapshot.operationCount === 0
-    && snapshot.publicationTransactionCount === 0
-    && snapshot.finalSubmitAttemptCount === 0
-    && !snapshot.externalPublicationEvidence
-    && !snapshot.needsReconciliation
-    && !snapshot.publishedOrVerified
-    && step?.result === "WAITING_FOR_USER"
-    && step.errorCode === ONE_SHOT_CONFIRMATION_ERROR;
-}
 
 export interface StoredVideoAsset extends VideoAsset {
   brandId: string | null;
@@ -130,19 +86,12 @@ function inferIntegrationMode(transport: string, authStrategy?: string): Platfor
   if (transport === "official_api" || transport === "official_sdk" || transport === "hybrid") return "API";
   return "Blocked";
 }
-const sensitiveLogKey = /^(authorization|bearer|api[_-]?key|apikey|appsecret|secret|cookie|set-cookie|access_token|refresh_token|password|storagestate|token)$/iu;
 function sanitizeLogValue(value: unknown): unknown {
-  if (typeof value === "string") return value.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer [REDACTED]");
-  if (Array.isArray(value)) return value.map(sanitizeLogValue);
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => sensitiveLogKey.test(key) ? [key, "[REDACTED]"] : [key, sanitizeLogValue(item)]));
-  return value;
+  return redactSecretValue(value);
 }
 function sanitizeSelfTestEvidence(value: string | null | undefined): string | null {
   if (!value) return null;
-  return value
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer [REDACTED]")
-    .replace(/(authorization|cookie|storageState|api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\s*[=:]\s*[^\s,;]+/giu, "$1=[REDACTED]")
-    .slice(0, 2_000);
+  return redactSecretText(value).slice(0, 2_000);
 }
 
 export interface BrandInput {
@@ -633,6 +582,25 @@ export class AppRepository {
     this.db = db;
   }
 
+  getGlobalFormalPublishExecution(): { jobId: string; ownerPid: number; acquiredAt: string; executionPhase: string; submitBoundaryEnteredAt: string | null; updatedAt: string } | null {
+    const row = this.db.prepare("SELECT job_id,owner_pid,acquired_at,execution_phase,submit_boundary_entered_at,updated_at FROM global_formal_publish_execution WHERE singleton_id=1").get() as Row | undefined;
+    return row ? { jobId: textValue(row.job_id), ownerPid: intValue(row.owner_pid), acquiredAt: textValue(row.acquired_at), executionPhase: textValue(row.execution_phase), submitBoundaryEnteredAt: typeof row.submit_boundary_entered_at === "string" ? row.submit_boundary_entered_at : null, updatedAt: textValue(row.updated_at) } : null;
+  }
+
+  acquireGlobalFormalPublishExecution(jobId: string): void {
+    const timestamp = now();
+    const acquired = this.db.prepare("INSERT OR IGNORE INTO global_formal_publish_execution (singleton_id,job_id,owner_pid,acquired_at,execution_phase,updated_at) VALUES (1,?, ?,?,'CLAIMING',?)").run(jobId, process.pid, timestamp, timestamp);
+    if (acquired.changes !== 1) throw Object.assign(new Error("Another formal publish execution already holds the global slot"), { code: "GLOBAL_PUBLISH_BUSY" });
+  }
+
+  updateGlobalFormalPublishExecution(jobId: string, phase: "EXECUTING" | "SUBMITTING" | "CONFIRMING" | "UNCERTAIN_IN_FLIGHT"): void {
+    this.db.prepare("UPDATE global_formal_publish_execution SET execution_phase=?,submit_boundary_entered_at=CASE WHEN ?='SUBMITTING' THEN COALESCE(submit_boundary_entered_at,?) ELSE submit_boundary_entered_at END,updated_at=? WHERE singleton_id=1 AND job_id=?").run(phase, phase, now(), now(), jobId);
+  }
+
+  releaseGlobalFormalPublishExecution(jobId: string): void {
+    this.db.prepare("DELETE FROM global_formal_publish_execution WHERE singleton_id=1 AND job_id=?").run(jobId);
+  }
+
   listBrands(): Brand[] {
     return (this.db.prepare("SELECT * FROM brands ORDER BY updated_at DESC").all() as Row[]).map((row) => this.brandFromRow(row));
   }
@@ -784,10 +752,10 @@ export class AppRepository {
     return id;
   }
 
-  getMediaAsset(id: string): { id: string; filePath: string; provider: string; model: string } | null {
-    const row = this.db.prepare("SELECT id,file_path,provider,model FROM media_assets WHERE id=?").get(id) as Row | undefined;
+  getMediaAsset(id: string): { id: string; brandId: string | null; filePath: string; provider: string; model: string; metadata: Record<string, unknown> } | null {
+    const row = this.db.prepare("SELECT id,brand_id,file_path,provider,model,metadata_json FROM media_assets WHERE id=?").get(id) as Row | undefined;
     if (!row) return null;
-    return { id: textValue(row.id), filePath: textValue(row.file_path), provider: textValue(row.provider), model: textValue(row.model) };
+    return { id: textValue(row.id), brandId: typeof row.brand_id === "string" ? row.brand_id : null, filePath: textValue(row.file_path), provider: textValue(row.provider), model: textValue(row.model), metadata: parseJson<Record<string, unknown>>(row.metadata_json, {}) };
   }
 
   listImageAssets(brandId?: string, enabledOnly = false): ImageAsset[] {
@@ -1898,129 +1866,6 @@ export class AppRepository {
     return row ? toAccount(row) : null;
   }
 
-  getPlatformAccountIdentityBinding(platformKey: string, accountId: string): PlatformAccountIdentityBinding | null {
-    const row = this.db.prepare("SELECT * FROM platform_account_identity_bindings WHERE platform_key=? AND account_id=?").get(platformKey, accountId) as Row | undefined;
-    return row ? toPlatformAccountIdentityBinding(row) : null;
-  }
-
-  bindPlatformAccountIdentity(input: {
-    platformKey: "xiaohongshu";
-    accountId: string;
-    externalCreatorId: string;
-    displayName?: string | null;
-    profileUrl?: string | null;
-    bindingSource: PlatformAccountIdentityBinding["bindingSource"];
-  }): PlatformAccountIdentityBinding {
-    const transaction = this.db.transaction(() => {
-      const account = this.db.prepare("SELECT id FROM accounts WHERE id=? AND platform_key=? AND archived_at IS NULL").get(input.accountId, input.platformKey) as Row | undefined;
-      if (!account) throw new Error("身份绑定账号不存在或已归档");
-      const existing = this.db.prepare("SELECT * FROM platform_account_identity_bindings WHERE platform_key=? AND account_id=?").get(input.platformKey, input.accountId) as Row | undefined;
-      if (existing) {
-        if (textValue(existing.external_creator_id) !== input.externalCreatorId) throw new Error("当前账号已有不同的小红书 Creator 身份绑定，拒绝覆盖");
-        return toPlatformAccountIdentityBinding(existing);
-      }
-      const conflict = this.db.prepare("SELECT account_id FROM platform_account_identity_bindings WHERE platform_key=? AND external_creator_id=?").get(input.platformKey, input.externalCreatorId) as Row | undefined;
-      if (conflict && textValue(conflict.account_id) !== input.accountId) throw new Error("小红书 Creator 身份已绑定到其他内部账号");
-      const timestamp = now();
-      const id = randomUUID();
-      this.db.prepare(`INSERT INTO platform_account_identity_bindings (
-        id, platform_key, account_id, external_creator_id, display_name, profile_url,
-        binding_source, bound_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        id, input.platformKey, input.accountId, input.externalCreatorId, input.displayName ?? null, input.profileUrl ?? null,
-        input.bindingSource, timestamp, timestamp, timestamp
-      );
-      return toPlatformAccountIdentityBinding(this.db.prepare("SELECT * FROM platform_account_identity_bindings WHERE id=?").get(id) as Row);
-    });
-    return transaction();
-  }
-
-  /**
-   * Atomically establishes the first trusted XHS Creator identity for an
-   * active internal account, while also repairing the two supported partial
-   * legacy states. Ownership conflicts are deliberately fail-closed.
-   */
-  bootstrapXhsCreatorIdentity(input: {
-    accountId: string;
-    observedCreatorId: string;
-    displayName?: string | null;
-    profileUrl?: string | null;
-  }): { account: Account; binding: PlatformAccountIdentityBinding } {
-    const externalCreatorId = input.observedCreatorId.trim();
-    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/.test(externalCreatorId)) {
-      throw Object.assign(new Error("小红书 Creator 外部 ID 格式无效，拒绝绑定"), { code: "XHS_CREATOR_ID_INVALID" });
-    }
-    const transaction = this.db.transaction(() => {
-      const current = this.db.prepare("SELECT * FROM accounts WHERE id=? AND platform_key=?").get(input.accountId, "xiaohongshu") as Row | undefined;
-      if (!current) throw Object.assign(new Error("小红书身份绑定账号不存在"), { code: "XHS_IDENTITY_ACCOUNT_NOT_FOUND" });
-      if (current.archived_at != null || !boolValue(current.enabled)) throw Object.assign(new Error("小红书身份绑定账号不可用或已归档"), { code: "XHS_IDENTITY_ACCOUNT_UNAVAILABLE" });
-
-      const accountExternalCreatorId = typeof current.external_account_id === "string" && current.external_account_id.trim() ? current.external_account_id.trim() : null;
-      const currentBinding = this.db.prepare("SELECT * FROM platform_account_identity_bindings WHERE platform_key=? AND account_id=?").get("xiaohongshu", input.accountId) as Row | undefined;
-      const bindingExternalCreatorId = currentBinding && typeof currentBinding.external_creator_id === "string" && currentBinding.external_creator_id.trim() ? currentBinding.external_creator_id.trim() : null;
-      if (accountExternalCreatorId && bindingExternalCreatorId && accountExternalCreatorId !== bindingExternalCreatorId) {
-        throw Object.assign(new Error("账号 external account ID 与 Creator identity binding 冲突，拒绝选择其一"), { code: "XHS_IDENTITY_PARTIAL_STATE_CONFLICT" });
-      }
-      if (accountExternalCreatorId && accountExternalCreatorId !== externalCreatorId) {
-        throw Object.assign(new Error("小红书 Creator 身份与账号已有绑定不一致，拒绝覆盖"), { code: "XHS_CREATOR_IDENTITY_MISMATCH" });
-      }
-      if (bindingExternalCreatorId && bindingExternalCreatorId !== externalCreatorId) {
-        throw Object.assign(new Error("小红书 Creator identity binding 与当前证明不一致，拒绝覆盖"), { code: "XHS_CREATOR_IDENTITY_MISMATCH" });
-      }
-
-      const accountOwners = this.db.prepare("SELECT id, archived_at FROM accounts WHERE platform_key=? AND external_account_id=? AND id<>?").all("xiaohongshu", externalCreatorId, input.accountId) as Row[];
-      if (accountOwners.some((row) => row.archived_at == null)) {
-        throw Object.assign(new Error("小红书 Creator 身份已绑定到其他活动内部账号"), { code: "XHS_CREATOR_ID_ALREADY_BOUND_TO_ANOTHER_ACTIVE_ACCOUNT" });
-      }
-      if (accountOwners.some((row) => row.archived_at != null)) {
-        throw Object.assign(new Error("小红书 Creator 身份已属于归档内部账号，拒绝静默迁移"), { code: "XHS_CREATOR_ID_BOUND_TO_ARCHIVED_ACCOUNT" });
-      }
-      const bindingOwners = this.db.prepare("SELECT b.account_id, a.archived_at FROM platform_account_identity_bindings b LEFT JOIN accounts a ON a.id=b.account_id AND a.platform_key=b.platform_key WHERE b.platform_key=? AND b.external_creator_id=? AND b.account_id<>?").all("xiaohongshu", externalCreatorId, input.accountId) as Row[];
-      if (bindingOwners.some((row) => row.archived_at == null)) {
-        throw Object.assign(new Error("小红书 Creator identity binding 已属于其他活动内部账号"), { code: "XHS_CREATOR_ID_ALREADY_BOUND_TO_ANOTHER_ACTIVE_ACCOUNT" });
-      }
-      if (bindingOwners.some((row) => row.archived_at != null)) {
-        throw Object.assign(new Error("小红书 Creator identity binding 已属于归档内部账号，拒绝静默迁移"), { code: "XHS_CREATOR_ID_BOUND_TO_ARCHIVED_ACCOUNT" });
-      }
-
-      const timestamp = now();
-      if (!accountExternalCreatorId) {
-        this.db.prepare("UPDATE accounts SET external_account_id=?, updated_at=? WHERE id=? AND platform_key=? AND archived_at IS NULL").run(externalCreatorId, timestamp, input.accountId, "xiaohongshu");
-      }
-      if (!currentBinding) {
-        const id = randomUUID();
-        this.db.prepare(`INSERT INTO platform_account_identity_bindings (
-          id, platform_key, account_id, external_creator_id, display_name, profile_url,
-          binding_source, bound_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-          id, "xiaohongshu", input.accountId, externalCreatorId, input.displayName ?? null, input.profileUrl ?? null,
-          accountExternalCreatorId ? "LEGACY_ACCOUNT_EXTERNAL_ID_MATCH" : "OWNER_APPROVED_CREATOR_IDENTITY_BINDING", timestamp, timestamp, timestamp
-        );
-      }
-      const account = this.db.prepare("SELECT * FROM accounts WHERE id=? AND platform_key=?").get(input.accountId, "xiaohongshu") as Row | undefined;
-      const binding = this.db.prepare("SELECT * FROM platform_account_identity_bindings WHERE platform_key=? AND account_id=?").get("xiaohongshu", input.accountId) as Row | undefined;
-      if (!account || !binding) throw Object.assign(new Error("小红书 Creator identity bootstrap 写入后复读失败"), { code: "XHS_IDENTITY_BOOTSTRAP_REVALIDATION_FAILED" });
-      return { account: toAccount(account), binding: toPlatformAccountIdentityBinding(binding) };
-    });
-    try {
-      transaction();
-      const account = this.getAccountById(input.accountId, "xiaohongshu");
-      const binding = this.getPlatformAccountIdentityBinding("xiaohongshu", input.accountId);
-      if (!account || !binding || account.externalAccountId !== externalCreatorId || binding.accountId !== input.accountId || binding.externalCreatorId !== externalCreatorId) {
-        throw Object.assign(new Error("小红书 Creator identity bootstrap 提交后一致性复核失败"), { code: "XHS_IDENTITY_BOOTSTRAP_REVALIDATION_FAILED" });
-      }
-      return { account, binding };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (/UNIQUE constraint failed: platform_account_identity_bindings\.external_creator_id/i.test(message)) {
-        const owner = this.db.prepare("SELECT a.archived_at FROM platform_account_identity_bindings b LEFT JOIN accounts a ON a.id=b.account_id AND a.platform_key=b.platform_key WHERE b.platform_key=? AND b.external_creator_id=? AND b.account_id<>?").get("xiaohongshu", externalCreatorId, input.accountId) as Row | undefined;
-        if (owner?.archived_at != null) throw Object.assign(new Error("小红书 Creator identity binding 并发命中归档账号，拒绝静默迁移"), { code: "XHS_CREATOR_ID_BOUND_TO_ARCHIVED_ACCOUNT" });
-        throw Object.assign(new Error("小红书 Creator identity binding 并发冲突，已拒绝覆盖"), { code: "XHS_CREATOR_ID_ALREADY_BOUND_TO_ANOTHER_ACTIVE_ACCOUNT" });
-      }
-      throw error;
-    }
-  }
-
   findArchivedAccountByExternalIdForConnection(accountId: string, platformKey: string, externalAccountId: string): Account | null {
     const current = this.getAccountById(accountId, platformKey);
     if (!current) throw new Error("账号不存在");
@@ -2064,6 +1909,36 @@ export class AppRepository {
     this.db.prepare("UPDATE accounts SET platform_account_name=COALESCE(NULLIF(?,''),platform_account_name), login_status='logged_in', enabled=1, paused_reason=NULL, connection_mode='BrowserAutomation', authorization_status='Authorized', browser_session_id=?, external_account_id=?, archived_at=NULL, last_verified_at=?, last_login_check_at=?, last_used_at=?, updated_at=? WHERE id=? AND platform_key=?").run(input.accountName?.trim() ?? "", input.browserSessionId, preservedExternalId, timestamp, timestamp, timestamp, timestamp, input.accountId, input.platformKey);
     this.upsertAccountAuthorization({ accountId: input.accountId, platformKey: input.platformKey, authorizationType: "BrowserAutomation", status: "Authorized", providerAccountId: preservedExternalId, providerAccountName: input.accountName ?? null });
     return toAccount(this.db.prepare("SELECT * FROM accounts WHERE id=?").get(input.accountId) as Row);
+  }
+
+  getDouyinImageTextConnection(accountId: string): { creatorId: string; browserSessionIdHash: string; loginGeneration: number; active: boolean; verifiedAt: string } | null {
+    const row = this.db.prepare("SELECT creator_id,browser_session_id_hash,login_generation,active,verified_at FROM douyin_image_text_connections WHERE account_id=?").get(accountId) as Row | undefined;
+    return row ? { creatorId: textValue(row.creator_id), browserSessionIdHash: textValue(row.browser_session_id_hash),
+      loginGeneration: intValue(row.login_generation), active: intValue(row.active) === 1, verifiedAt: textValue(row.verified_at) } : null;
+  }
+
+  saveDouyinImageTextConnection(input: { accountId: string; creatorId: string; browserSessionIdHash: string }): { loginGeneration: number } {
+    const account = this.getAccountById(input.accountId, "douyin");
+    if (!account || !input.creatorId.trim() || !input.browserSessionIdHash.trim()) throw new Error("Douyin image-text account and identity are required");
+    return this.db.transaction(() => {
+      const duplicate = this.db.prepare("SELECT account_id FROM douyin_image_text_connections WHERE creator_id=? AND active=1 AND account_id<>?").get(input.creatorId, input.accountId) as Row | undefined;
+      if (duplicate) throw new Error("Douyin Creator identity is already bound to another active account");
+      const timestamp = now();
+      const prior = this.getDouyinImageTextConnection(input.accountId);
+      const loginGeneration = (prior?.loginGeneration ?? 0) + 1;
+      this.db.prepare(`INSERT INTO douyin_image_text_connections
+        (account_id,creator_id,browser_session_id_hash,login_generation,active,verified_at,updated_at)
+        VALUES (?,?,?,?,1,?,?) ON CONFLICT(account_id) DO UPDATE SET
+        creator_id=excluded.creator_id,browser_session_id_hash=excluded.browser_session_id_hash,
+        login_generation=excluded.login_generation,active=1,verified_at=excluded.verified_at,updated_at=excluded.updated_at`)
+        .run(input.accountId, input.creatorId, input.browserSessionIdHash, loginGeneration, timestamp, timestamp);
+      this.db.prepare("UPDATE accounts SET enabled=1,updated_at=? WHERE id=? AND platform_key='douyin'").run(timestamp, input.accountId);
+      return { loginGeneration };
+    })();
+  }
+
+  disconnectDouyinImageTextConnection(accountId: string): void {
+    this.db.prepare("UPDATE douyin_image_text_connections SET active=0,login_generation=login_generation+1,updated_at=? WHERE account_id=?").run(now(), accountId);
   }
 
   markPlatformAccountDisconnected(accountId: string, platformKey: string, authorizationType = "BrowserAutomation"): Account {
@@ -2136,66 +2011,6 @@ export class AppRepository {
     return toPlatformSelfTestRun(row, steps);
   }
 
-  getOneShotConfirmationReconciliationSnapshot(identity: FailedOneShotConfirmationIdentity): OneShotConfirmationReconciliationSnapshot {
-    const runRows = this.db.prepare("SELECT * FROM platform_self_test_runs WHERE test_run_id=?").all(identity.testRunId) as Row[];
-    if (runRows.length !== 1) throw new Error(runRows.length === 0 ? "ONE_SHOT_RECONCILIATION_IDENTITY_NOT_FOUND" : "ONE_SHOT_RECONCILIATION_IDENTITY_AMBIGUOUS");
-    const run = this.getPlatformSelfTestRun(identity.testRunId);
-    if (!run) throw new Error("ONE_SHOT_RECONCILIATION_IDENTITY_NOT_FOUND");
-    if (run.platformKey !== "xiaohongshu" || run.accountId !== identity.accountId || run.platformAccountId !== identity.accountId) throw new Error("ONE_SHOT_RECONCILIATION_IDENTITY_MISMATCH");
-    if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='one_shot_publication_authorizations'").get()) throw new Error("ONE_SHOT_RECONCILIATION_AUTHORIZATION_TABLE_MISSING");
-    const authorizationRows = this.db.prepare("SELECT publication_transaction_count,final_submit_attempt_count FROM one_shot_publication_authorizations WHERE operation_id=?").all(identity.testRunId) as Row[];
-    const jobRows = run.publishJobId
-      ? this.db.prepare("SELECT status,external_id FROM publish_jobs WHERE id=?").all(run.publishJobId) as Row[]
-      : [];
-    const recordRows = run.publishRecordId
-      ? this.db.prepare("SELECT status,verification_status,published_external_id,published_url FROM publish_records WHERE id=?").all(run.publishRecordId) as Row[]
-      : [];
-    const operationStepCount = run.steps.filter((step) => step.stepKey !== ONE_SHOT_CONFIRMATION_STEP).length;
-    const operationCount = operationStepCount + (run.testArticleId ? 1 : 0) + (run.publishJobId ? 1 : 0) + (run.publishRecordId ? 1 : 0) + jobRows.length + recordRows.length;
-    const externalPublicationEvidence = Boolean(run.externalId || run.externalUrl)
-      || run.steps.some((step) => Boolean(step.externalId || step.externalUrl))
-      || jobRows.some((row) => Boolean(row.external_id))
-      || recordRows.some((row) => Boolean(row.published_external_id || row.published_url));
-    const needsReconciliation = jobRows.some((row) => textValue(row.status) === "NeedsReconciliation") || recordRows.some((row) => textValue(row.status) === "NeedsReconciliation");
-    const publishedOrVerified = jobRows.some((row) => textValue(row.status) === "Published")
-      || recordRows.some((row) => textValue(row.status) === "Published" || textValue(row.verification_status) === "Verified");
-    return {
-      identity,
-      run,
-      authorizationCount: authorizationRows.length,
-      operationCount,
-      publicationTransactionCount: authorizationRows.reduce((total, row) => total + intValue(row.publication_transaction_count), 0),
-      finalSubmitAttemptCount: authorizationRows.reduce((total, row) => total + intValue(row.final_submit_attempt_count), 0),
-      externalPublicationEvidence,
-      needsReconciliation,
-      publishedOrVerified
-    };
-  }
-
-  reconcileFailedOneShotConfirmation(identity: FailedOneShotConfirmationIdentity): OneShotConfirmationReconciliationResult {
-    const transaction = this.db.transaction(() => {
-      const snapshot = this.getOneShotConfirmationReconciliationSnapshot(identity);
-      if (isCanonicalRetryable(snapshot)) return { status: "ALREADY_RECONCILED" as const, testRunId: identity.testRunId, mutationCount: 0 as const, retryEligible: true as const };
-      const failure = reconciliationFailure(snapshot);
-      if (failure) throw Object.assign(new Error(failure), { code: failure });
-      const timestamp = now();
-      const runUpdate = this.db.prepare("UPDATE platform_self_test_runs SET publish_confirmed_at=NULL,updated_at=? WHERE test_run_id=? AND publish_confirmed_at IS NOT NULL").run(timestamp, identity.testRunId);
-      if (runUpdate.changes !== 1) throw new Error("ONE_SHOT_RECONCILIATION_STATE_CHANGED");
-      const stepUpdate = this.db.prepare(`UPDATE platform_self_test_steps SET
-        result='WAITING_FOR_USER',error_code=?,message=?,verification_signal=?
-        WHERE test_run_id=? AND step_key=?`).run(
-        ONE_SHOT_CONFIRMATION_ERROR,
-        "一次性真实发布测试需要 Owner 确认",
-        "authorization:OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH:state:NOT_AUTHORIZED",
-        identity.testRunId,
-        ONE_SHOT_CONFIRMATION_STEP
-      );
-      if (stepUpdate.changes !== 1) throw new Error("ONE_SHOT_RECONCILIATION_CONFIRMATION_STEP_MISSING");
-      return { status: "RECONCILED_RETRYABLE" as const, testRunId: identity.testRunId, mutationCount: 1 as const, retryEligible: true as const };
-    });
-    return transaction();
-  }
-
   listPlatformSelfTestRuns(platformAccountId?: string): PlatformSelfTestRun[] {
     const rows = platformAccountId
       ? this.db.prepare("SELECT * FROM platform_self_test_runs WHERE platform_account_id=? ORDER BY last_tested_at DESC").all(platformAccountId) as Row[]
@@ -2242,39 +2057,6 @@ export class AppRepository {
     return this.getPlatformSelfTestRun(testRunId) as PlatformSelfTestRun;
   }
 
-  confirmPlatformSelfTestOneShotAtomically(testRunId: string, authorization: OneShotPublicationAuthorization): OneShotConfirmationPersistenceResult {
-    if (authorization.operationId !== testRunId) throw new Error("ONE_SHOT_OPERATION_BINDING_MISMATCH");
-    const transaction = this.db.transaction(() => {
-      const run = this.getPlatformSelfTestRun(testRunId);
-      if (!run || run.platformKey !== "xiaohongshu" || run.accountId !== authorization.accountId || run.platformAccountId !== authorization.accountId) throw new Error("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH");
-      const existing = this.getOneShotPublicationAuthorization(authorization.operationId);
-      if (existing) {
-        const sameIdentity = existing.authorization === authorization.authorization
-          && existing.platformKey === authorization.platformKey
-          && existing.accountId === authorization.accountId
-          && existing.operationId === authorization.operationId
-          && existing.mode === authorization.mode;
-        if (!sameIdentity) throw new Error("ONE_SHOT_AUTHORIZATION_BINDING_MISMATCH");
-        return { authorization: existing, created: false };
-      }
-      const timestamp = now();
-      const update = this.db.prepare("UPDATE platform_self_test_runs SET publish_confirmed_at=COALESCE(publish_confirmed_at,?),updated_at=? WHERE test_run_id=? AND requested_level='L5_PUBLISH'").run(timestamp, timestamp, testRunId);
-      if (update.changes === 0) throw new Error("当前运行不是可确认的真实发布测试");
-      this.db.prepare(`INSERT INTO one_shot_publication_authorizations (
-        id,authorization,platform_key,account_id,operation_id,mode,state,publication_transaction_count,
-        publication_commit_action_count,final_submit_attempt_count,final_submit_retry_count,
-        final_submit_action_started,final_submit_action_completed,created_at,updated_at,consumed_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-        randomUUID(), authorization.authorization, authorization.platformKey, authorization.accountId, authorization.operationId,
-        authorization.mode, authorization.state, authorization.publicationTransactionCount, authorization.publicationCommitActionCount,
-        authorization.finalSubmitAttemptCount, authorization.finalSubmitRetryCount, authorization.finalSubmitActionStarted ? 1 : 0,
-        authorization.finalSubmitActionCompleted ? 1 : 0, timestamp, timestamp, authorization.consumedAt ?? null
-      );
-      return { authorization: this.getOneShotPublicationAuthorization(authorization.operationId) as OneShotPublicationAuthorization, created: true };
-    });
-    return transaction();
-  }
-
   confirmPlatformSelfTestPublish(testRunId: string): PlatformSelfTestRun {
     const timestamp = now();
     const update = this.db.prepare("UPDATE platform_self_test_runs SET publish_confirmed_at=?,updated_at=? WHERE test_run_id=? AND requested_level='L5_PUBLISH'").run(timestamp, timestamp, testRunId);
@@ -2295,13 +2077,13 @@ export class AppRepository {
     if (!input.dryRun && !run.publishConfirmedAt) throw new Error("真实发布测试尚未获得用户明确确认");
     if (run.publishJobId) return this.getJob(run.publishJobId) as PublishJob;
     const account = this.listAccounts().find((item) => (item.platformAccountId ?? item.id) === run.platformAccountId && item.platformKey === run.platformKey);
-    if (!account || account.id !== run.accountId || account.platformKey !== run.platformKey || !account.enabled || account.archivedAt) throw new Error("平台自测账号绑定不可用");
+    if (!account) throw new Error("平台自测账号不存在");
     const brand = this.listBrands()[0];
     if (!brand) throw new Error("请先创建企业资料，再执行需要持久化内容的 L4/L5 自测");
     const timestamp = now();
     const article = this.createArticle({
       brandId: brand.id, topic: `platform_self_test:${run.platformKey}`, keyword: "平台发布链路测试", city: "", title: input.title,
-      body: input.body, summary: "Geo Media Publisher 内部发布链路测试", tags: ["内部测试"], seoKeywords: [], articleType: "自测",
+      body: input.body, summary: "Geo Media Publisher 内部发布链路测试", tags: run.platformKey === "toutiao" ? [] : ["内部测试"], seoKeywords: [], articleType: "自测",
       aiProvider: "system", aiModel: "transparent-self-test-v1.1.3", generatedAt: timestamp, reusePolicy: "once",
       contentHash: createHash("sha256").update(`${run.testRunId}\n${input.title}\n${input.body}`).digest("hex"), qualityStatus: "passed",
       qualityWarnings: [], source: "test", sourceNote: `platform-self-test:${run.testRunId}`
@@ -2424,13 +2206,21 @@ export class AppRepository {
     return this.getJob(id) as PublishJob;
   }
 
-  createArticlePublishJob(input: { articleId: string; platformKey: string; platformAccountId: string; publishMode?: "ASSISTED" | "MANUAL"; finalPublishMode?: FinalPublishMode; selectedImageAssetId?: string | null; imageSelectionMode?: ImageSelectionMode }): PublishJob {
+  createArticlePublishJob(input: { articleId: string; platformKey: string; platformAccountId: string; publishMode?: "ASSISTED" | "MANUAL"; finalPublishMode?: FinalPublishMode; selectedImageAssetId?: string | null; imageSelectionMode?: ImageSelectionMode; articleTransport?: "browser" | "api"; douyinImageTextSettings?: DouyinImageTextJobSettings }): PublishJob {
     const article = this.getArticle(input.articleId);
     if (!article) throw new Error("文章不存在");
     this.assertArticlePublishAllowed(article.id);
     const account = this.listAccounts().find((item) => item.platformAccountId === input.platformAccountId && item.platformKey === input.platformKey);
     if (!account) throw new Error("目标平台账号不存在");
-    if (!account.enabled || account.loginStatus !== "logged_in") throw new Error("目标账号未连接，禁止创建发布任务");
+    if (input.platformKey === "douyin") {
+      if (input.douyinImageTextSettings?.version !== 1 || input.douyinImageTextSettings.visibility !== "public"
+        || input.douyinImageTextSettings.timing !== "immediate") throw new Error("抖音图文需要 Owner 明确选择公开可见与立即发布");
+      const connection = this.getDouyinImageTextConnection(account.id);
+      if (!account.enabled || !connection?.active || !connection.creatorId)
+        throw new Error("抖音图文 Creator 账号未完成独立身份绑定，禁止创建发布任务");
+      if (input.imageSelectionMode !== "manual" || !input.selectedImageAssetId)
+        throw new Error("抖音图文必须手动选择一张属于当前文章品牌的图片");
+    } else if (!account.enabled || account.loginStatus !== "logged_in") throw new Error("目标账号未连接，禁止创建发布任务");
     const requestedImageMode = input.imageSelectionMode ?? "none";
     let selectedImageAssetId = input.selectedImageAssetId ?? null;
     if (selectedImageAssetId) {
@@ -2438,16 +2228,49 @@ export class AppRepository {
       if (!image || !image.enabled || (image.brandId && image.brandId !== article.brandId)) throw new Error("所选配图不可用或与文章品牌不匹配");
     }
     const existing = this.db.prepare("SELECT id FROM publish_jobs WHERE platform_account_id=? AND platform_key=? AND article_id=? AND status NOT IN ('Failed','Cancelled','ReconciledNotPublished') ORDER BY created_at DESC LIMIT 1").get(account.platformAccountId, input.platformKey, input.articleId) as Row | undefined;
-    if (existing) return this.getJob(textValue(existing.id)) as PublishJob;
+    if (existing) {
+      if (input.platformKey === "douyin" && JSON.stringify(this.getDouyinImageTextJobSettings(textValue(existing.id))) !== JSON.stringify(input.douyinImageTextSettings))
+        throw new Error("Existing Douyin Job settings differ from the Owner-selected candidate");
+      return this.getJob(textValue(existing.id)) as PublishJob;
+    }
     if (requestedImageMode === "random" && !selectedImageAssetId) selectedImageAssetId = this.selectImageAssetForArticle(article.id, input.platformKey)?.id ?? null;
     if (selectedImageAssetId) this.markImageAssetUsed(selectedImageAssetId);
     const id = randomUUID();
     const timestamp = now();
     const finalPublishMode = input.finalPublishMode ?? (input.publishMode === "MANUAL" ? "PREPARE_ONLY" : "CONFIRM_BEFORE_PUBLISH");
     const platform = this.listPlatforms().find((item) => item.platformKey === input.platformKey);
-    const apiAutoPublish = finalPublishMode === "AUTO_PUBLISH" && platform?.integrationMode === "API";
-    this.db.prepare("INSERT INTO publish_jobs (id,plan_id,account_id,platform_account_id,platform_key,article_id,article_variant_id,scheduled_at,status,max_attempts,created_at,dry_run,manual_confirmation_required,selected_image_asset_id,image_selection_mode,final_publish_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(id, null, account.id, account.platformAccountId, input.platformKey, input.articleId, null, timestamp, apiAutoPublish ? "Scheduled" : "AwaitingConfirmation", 3, timestamp, 0, apiAutoPublish ? 0 : 1, selectedImageAssetId, requestedImageMode, finalPublishMode);
+    const apiAutoPublish = finalPublishMode === "AUTO_PUBLISH" && (input.articleTransport ? input.articleTransport === "api" : input.platformKey === "toutiao" ? false : platform?.integrationMode === "API");
+    this.db.prepare("INSERT INTO publish_jobs (id,plan_id,account_id,platform_account_id,platform_key,article_id,article_variant_id,scheduled_at,status,max_attempts,created_at,dry_run,manual_confirmation_required,selected_image_asset_id,image_selection_mode,final_publish_mode,publish_payload_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(id, null, account.id, account.platformAccountId, input.platformKey, input.articleId, null, timestamp, apiAutoPublish ? "Scheduled" : "AwaitingConfirmation", 3, timestamp, 0, apiAutoPublish ? 0 : 1, selectedImageAssetId, requestedImageMode, finalPublishMode, json(input.platformKey === "douyin" ? { douyinImageTextSettings: input.douyinImageTextSettings } : {}));
     return this.getJob(id) as PublishJob;
+  }
+
+  getDouyinImageTextJobSettings(jobId: string): DouyinImageTextJobSettings | null {
+    const value = this.getPublishPayload(jobId).douyinImageTextSettings;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const settings = value as Record<string, unknown>;
+    return settings.version === 1 && settings.visibility === "public" && settings.timing === "immediate"
+      && (settings.musicMode === undefined || settings.musicMode === "NONE" || settings.musicMode === "AUTO_RECOMMENDED")
+      ? { version: 1, visibility: "public", timing: "immediate",
+        ...(settings.musicMode ? { musicMode: settings.musicMode } : {}) } : null;
+  }
+
+  /** Last ten actual or possibly submitted image posts; abandoned pre-boundary drafts do not count. */
+  getRecentDouyinImageTextMusic(accountId: string): Array<{ trackId: string | null; title: string; artist: string; duration: string }> {
+    const rows = this.db.prepare(`SELECT r.response_json FROM publish_records r
+      INNER JOIN publish_jobs j ON j.id=r.job_id
+      LEFT JOIN submission_intents i ON i.job_id=j.id
+      WHERE j.platform_key='douyin' AND j.content_kind='article' AND j.publish_payload_json LIKE '%douyinImageTextSettings%' AND j.account_id=?
+        AND (COALESCE(i.final_submit_count,0)>=1 OR r.status='Published')
+      ORDER BY r.published_at DESC LIMIT 10`).all(accountId) as Row[];
+    return rows.flatMap((row) => {
+      const response = parseJson<Record<string, unknown>>(row.response_json, {});
+      const music = response.musicBinding;
+      if (!music || typeof music !== "object" || Array.isArray(music)) return [];
+      const item = music as Record<string, unknown>;
+      return item.mode === "AUTO_RECOMMENDED" && typeof item.title === "string" && typeof item.artist === "string"
+        && typeof item.duration === "string" ? [{ trackId: typeof item.trackId === "string" ? item.trackId : null,
+          title: item.title, artist: item.artist, duration: item.duration }] : [];
+    });
   }
 
   previewExcelArticleImport(input: {
@@ -2555,15 +2378,6 @@ export class AppRepository {
     return (this.db.prepare("SELECT * FROM publish_jobs ORDER BY scheduled_at DESC").all() as Row[]).map(toJob);
   }
 
-  /** Read-only counts used by bounded platform exploration evidence. */
-  getPublishDomainCounts(): { publishJobs: number; submissionIntents: number; publishRecords: number } {
-    const count = (table: "publish_jobs" | "submission_intents" | "publish_records"): number => {
-      const row = this.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as Row;
-      return intValue(row.count);
-    };
-    return { publishJobs: count("publish_jobs"), submissionIntents: count("submission_intents"), publishRecords: count("publish_records") };
-  }
-
   listDueJobs(currentTime = new Date().toISOString(), limit = 50): PublishJob[] {
     const boundedLimit = Math.min(500, Math.max(1, Math.floor(limit)));
     return (this.db.prepare("SELECT * FROM publish_jobs WHERE status IN ('Pending','Scheduled','Retry') AND scheduled_at <= ? AND (next_retry_at IS NULL OR next_retry_at <= ?) ORDER BY scheduled_at ASC, platform_key ASC, account_id ASC LIMIT ?").all(currentTime, currentTime, boundedLimit) as Row[]).map(toJob);
@@ -2579,6 +2393,44 @@ export class AppRepository {
     return parseJson<Record<string, unknown>>(row?.publish_payload_json, {});
   }
 
+  /** A file selection may take effect even if the caller loses its response. Never issue it twice for this Job. */
+  claimDouyinImageTextFileSelection(input: { jobId: string; accountId: string; articleId: string;
+    loginGeneration: number; sessionIdHash: string; imageSha256: string; sourceContentHash: string }):
+    { operationId: string; stage: "FILE_SELECTION_DISPATCHED"; newlyClaimed: boolean } {
+    if (!/^[a-f0-9]{64}$/u.test(input.imageSha256) || !/^[a-f0-9]{64}$/u.test(input.sourceContentHash)
+      || !input.sessionIdHash.trim()) throw new Error("DOUYIN_IMAGE_SELECTION_BINDING_INVALID");
+    return this.db.transaction(() => {
+      const row = this.db.prepare("SELECT * FROM publish_jobs WHERE id=?").get(input.jobId) as Row | undefined;
+      if (!row || row.platform_key !== "douyin" || row.account_id !== input.accountId || row.article_id !== input.articleId
+        || row.status !== "AwaitingConfirmation" || row.content_kind !== "article" || !row.selected_image_asset_id)
+        throw new Error("DOUYIN_IMAGE_SELECTION_JOB_MISMATCH");
+      const binding = this.getDouyinImageTextConnection(input.accountId);
+      if (!binding?.active || binding.loginGeneration !== input.loginGeneration)
+        throw new Error("DOUYIN_IMAGE_SELECTION_LOGIN_GENERATION_MISMATCH");
+      const raw = String(row.publish_payload_json ?? "{}");
+      const payload = parseJson<Record<string, unknown>>(raw, {});
+      const existing = payload.douyinImageSelection;
+      if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+        const selected = existing as Record<string, unknown>;
+        if (selected.accountId !== input.accountId || selected.articleId !== input.articleId
+          || selected.loginGeneration !== input.loginGeneration || selected.sessionIdHash !== input.sessionIdHash
+          || selected.imageSha256 !== input.imageSha256 || selected.sourceContentHash !== input.sourceContentHash
+          || typeof selected.operationId !== "string" || selected.stage !== "FILE_SELECTION_DISPATCHED")
+          throw new Error("DOUYIN_IMAGE_SELECTION_ALREADY_BOUND_TO_OTHER_CONTENT");
+        return { operationId: selected.operationId, stage: "FILE_SELECTION_DISPATCHED" as const, newlyClaimed: false };
+      }
+      const operationId = randomUUID();
+      const next = json({ ...payload, douyinImageSelection: { operationId, stage: "FILE_SELECTION_DISPATCHED",
+        accountId: input.accountId, articleId: input.articleId, loginGeneration: input.loginGeneration,
+        sessionIdHash: input.sessionIdHash, imageSha256: input.imageSha256,
+        sourceContentHash: input.sourceContentHash, claimedAt: now() } });
+      const updated = this.db.prepare("UPDATE publish_jobs SET publish_payload_json=? WHERE id=? AND publish_payload_json=? AND status='AwaitingConfirmation'")
+        .run(next, input.jobId, raw);
+      if (updated.changes !== 1) throw new Error("DOUYIN_IMAGE_SELECTION_CONCURRENT_CLAIM");
+      return { operationId, stage: "FILE_SELECTION_DISPATCHED" as const, newlyClaimed: true };
+    })();
+  }
+
   confirmJob(id: string, dryRun = false): PublishJob {
     const job = this.getJob(id);
     if (!job) throw new Error("任务不存在");
@@ -2589,6 +2441,8 @@ export class AppRepository {
   }
 
   claimJob(id: string): PublishJob {
+    const priorIntent = this.getSubmissionIntentByJob(id);
+    if (priorIntent && (priorIntent.finalSubmitCount >= 1 || priorIntent.submitBoundaryEnteredAt || priorIntent.state === "Unknown" || priorIntent.remoteStatus === "UNCERTAIN")) throw Object.assign(new Error("A previous final submit requires confirmed remote non-publication before a new Job may be created"), { code: "FINAL_SUBMIT_ALREADY_USED" });
     const timestamp = now();
     const result = this.db.prepare("UPDATE publish_jobs SET status='Preparing', attempt_count=attempt_count+1, started_at=?, finished_at=NULL WHERE id=? AND status IN ('Pending','Scheduled','Retry','NeedsUserAction')").run(timestamp, id);
     if (result.changes === 0) throw new Error("任务当前不可执行");
@@ -2596,6 +2450,10 @@ export class AppRepository {
   }
 
   updateJobFailure(id: string, status: string, code: string, message: string, nextRetryAt: string | null): PublishJob {
+    if (status === "Retry") {
+      const intent = this.getSubmissionIntentByJob(id);
+      if (intent && (intent.finalSubmitCount >= 1 || intent.submitBoundaryEnteredAt || intent.state === "Unknown" || intent.remoteStatus === "UNCERTAIN")) throw Object.assign(new Error("A final submit attempt requires reconciliation; automatic or manual retry is forbidden"), { code: "FINAL_SUBMIT_ALREADY_USED" });
+    }
     this.db.prepare("UPDATE publish_jobs SET status=?, last_error_code=?, last_error_message=?, next_retry_at=?, finished_at=? WHERE id=?").run(status, code, message, nextRetryAt, status === "Retry" ? null : now(), id);
     return this.getJob(id) as PublishJob;
   }
@@ -2614,11 +2472,21 @@ export class AppRepository {
 
   recoverRunningJobs(): number {
     const timestamp = now();
+    const holder = this.getGlobalFormalPublishExecution();
+    if (holder && holder.ownerPid > 0) {
+      let ownerIsAlive = false;
+      try { process.kill(holder.ownerPid, 0); ownerIsAlive = true; }
+      catch (error) { if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) ownerIsAlive = true; }
+      if (ownerIsAlive) throw Object.assign(new Error("A live process still owns the global formal publish execution"), { code: "GLOBAL_PUBLISH_BUSY" });
+    }
     const recover = this.db.transaction(() => {
-      const safe = this.db.prepare("UPDATE publish_jobs SET status='Retry', next_retry_at=?, finished_at=NULL WHERE status IN ('Running','Preparing','ReadyToSubmit')").run(timestamp).changes;
-      const uncertain = this.db.prepare("UPDATE publish_jobs SET status='NeedsReconciliation', next_retry_at=NULL, finished_at=? WHERE status='Submitting'").run(timestamp).changes;
-      this.db.prepare("UPDATE submission_intents SET state='Unknown', updated_at=? WHERE state IN ('Prepared','Submitting') AND job_id IN (SELECT id FROM publish_jobs WHERE status='NeedsReconciliation')").run(timestamp);
-      return safe + uncertain;
+      const safe = this.db.prepare("UPDATE publish_jobs SET status='Retry', next_retry_at=?, finished_at=NULL WHERE status IN ('Running','Preparing','ReadyToSubmit') AND NOT EXISTS (SELECT 1 FROM submission_intents i WHERE i.job_id=publish_jobs.id AND (i.final_submit_count>=1 OR i.submit_boundary_entered_at IS NOT NULL OR i.state='Unknown' OR i.remote_status='UNCERTAIN'))").run(timestamp).changes;
+      const preparedSafe = this.db.prepare("UPDATE publish_jobs SET status='Retry', next_retry_at=?, finished_at=NULL WHERE status='Submitting' AND EXISTS (SELECT 1 FROM submission_intents i WHERE i.job_id=publish_jobs.id AND i.state='Prepared' AND i.final_submit_count=0 AND i.submit_boundary_entered_at IS NULL)").run(timestamp).changes;
+      this.db.prepare("UPDATE submission_intents SET state='NotSubmitted',remote_status='SAFE_TO_RETRY',updated_at=? WHERE job_id IN (SELECT id FROM publish_jobs WHERE status='Retry') AND state='Prepared' AND final_submit_count=0").run(timestamp);
+      const uncertain = this.db.prepare("UPDATE publish_jobs SET status='NeedsReconciliation', next_retry_at=NULL, finished_at=? WHERE status IN ('Running','Preparing','ReadyToSubmit','Submitting')").run(timestamp).changes;
+      this.db.prepare("UPDATE submission_intents SET state='Unknown',remote_status='UNCERTAIN',reconciliation_required=1,updated_at=? WHERE state IN ('Prepared','Submitting') AND job_id IN (SELECT id FROM publish_jobs WHERE status='NeedsReconciliation')").run(timestamp);
+      this.db.prepare("DELETE FROM global_formal_publish_execution WHERE singleton_id=1").run();
+      return safe + preparedSafe + uncertain;
     });
     return recover();
   }
@@ -2638,184 +2506,202 @@ export class AppRepository {
     return { id, job: this.getJob(jobId) as PublishJob };
   }
 
-  getSubmissionIntentByJob(jobId: string): { id: string; jobId: string; state: string; externalId: string | null; attempt: number; finalSubmitCount: number; errorCode: string | null; updatedAt: string } | null {
-    const row = this.db.prepare("SELECT id,job_id,state,external_id,attempt,final_submit_count,error_code,updated_at FROM submission_intents WHERE job_id=? ORDER BY created_at DESC LIMIT 1").get(jobId) as Row | undefined;
+  getSubmissionIntentByJob(jobId: string): { id: string; jobId: string; state: string; externalId: string | null; attempt: number; finalSubmitCount: number; errorCode: string | null; updatedAt: string; submissionAttemptId: string | null; submitBoundaryEnteredAt: string | null; remoteStatus: PublishRemoteStatus; payloadHash: string | null; adapterId: string | null; credentialVersion: string | null } | null {
+    const row = this.db.prepare("SELECT id,job_id,state,external_id,attempt,final_submit_count,error_code,updated_at,submission_attempt_id,submit_boundary_entered_at,remote_status,payload_hash,adapter_id,credential_version FROM submission_intents WHERE job_id=? ORDER BY created_at DESC LIMIT 1").get(jobId) as Row | undefined;
     if (!row) return null;
-    return { id: textValue(row.id), jobId: textValue(row.job_id), state: textValue(row.state), externalId: typeof row.external_id === "string" ? row.external_id : null, attempt: intValue(row.attempt), finalSubmitCount: intValue(row.final_submit_count), errorCode: typeof row.error_code === "string" ? row.error_code : null, updatedAt: textValue(row.updated_at) };
+    return { id: textValue(row.id), jobId: textValue(row.job_id), state: textValue(row.state), externalId: typeof row.external_id === "string" ? row.external_id : null, attempt: intValue(row.attempt), finalSubmitCount: intValue(row.final_submit_count), errorCode: typeof row.error_code === "string" ? row.error_code : null, updatedAt: textValue(row.updated_at), submissionAttemptId: typeof row.submission_attempt_id === "string" ? row.submission_attempt_id : null, submitBoundaryEnteredAt: typeof row.submit_boundary_entered_at === "string" ? row.submit_boundary_entered_at : null, remoteStatus: textValue(row.remote_status) as PublishRemoteStatus, payloadHash: typeof row.payload_hash === "string" ? row.payload_hash : null, adapterId: typeof row.adapter_id === "string" ? row.adapter_id : null, credentialVersion: typeof row.credential_version === "string" ? row.credential_version : null };
   }
 
-  listReusableOneShotPublicationAuthorizations(input: { platformKey: "xiaohongshu"; accountId: string; mode: "ONE_SHOT_REAL_PUBLISH_ACCEPTANCE" }): OneShotPublicationAuthorization[] {
-    const rows = this.db.prepare(`SELECT auth.* FROM one_shot_publication_authorizations auth
-      INNER JOIN platform_self_test_runs run ON run.test_run_id=auth.operation_id
-      WHERE auth.platform_key=? AND auth.account_id=? AND auth.mode=? AND auth.state='AUTHORIZED_UNUSED'
-        AND auth.publication_transaction_count=0 AND auth.publication_commit_action_count=0
-        AND auth.final_submit_attempt_count=0 AND auth.final_submit_retry_count=0
-        AND auth.final_submit_action_started=0 AND auth.final_submit_action_completed=0
-        AND run.platform_key=? AND run.platform_account_id=? AND run.publish_job_id IS NULL
-      ORDER BY auth.created_at DESC, auth.operation_id DESC`).all(
-      input.platformKey, input.accountId, input.mode, input.platformKey, input.accountId
-    ) as Row[];
-    return rows.map((row) => toOneShotPublicationAuthorization(row));
+  claimFinalSubmitAttempt(intentId: string, evidence: { payloadHash?: string; adapterId?: string; credentialVersion?: string } = {}): { id: string; jobId: string; attempt: number; submissionAttemptId: string } {
+    const timestamp = now();
+    return this.db.transaction(() => {
+      const submissionAttemptId = this.reserveSubmissionAttempt(intentId);
+      const update = this.db.prepare("UPDATE submission_intents SET final_submit_count=1,state='Submitting',submit_boundary_entered_at=?,payload_hash=?,adapter_id=?,credential_version=?,remote_request_started_at=?,remote_status='SUBMITTING',updated_at=? WHERE id=? AND state='Prepared' AND final_submit_count=0 AND submit_boundary_entered_at IS NULL").run(timestamp, evidence.payloadHash ?? null, evidence.adapterId ?? null, evidence.credentialVersion ?? null, timestamp, timestamp, intentId);
+      if (update.changes === 0) throw Object.assign(new Error("The persisted publish attempt has already been used or is not ready for final submit"), { code: "FINAL_SUBMIT_ALREADY_USED" });
+      const row = this.db.prepare("SELECT id,job_id,attempt FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
+      if (!row) throw new Error("Submission intent not found");
+      this.updateGlobalFormalPublishExecution(textValue(row.job_id), "SUBMITTING");
+      return { id: textValue(row.id), jobId: textValue(row.job_id), attempt: intValue(row.attempt), submissionAttemptId };
+    })();
   }
 
-  convergeUnusedOneShotAuthorization(input: { platformKey: "xiaohongshu"; accountId: string; mode: "ONE_SHOT_REAL_PUBLISH_ACCEPTANCE" }): OneShotAuthorizationConvergenceResult {
-    const transaction = this.db.transaction(() => {
-      const candidates = this.listReusableOneShotPublicationAuthorizations(input);
-      const winner = candidates[0] ?? null;
-      if (!winner) return { reusableOperationId: null, supersededOperationIds: [], activeUnusedAuthorizationCount: 0, mutationCount: 0 } satisfies OneShotAuthorizationConvergenceResult;
-      const supersededOperationIds: string[] = [];
-      const update = this.db.prepare(`UPDATE one_shot_publication_authorizations SET state='SUPERSEDED_UNUSED', updated_at=?
-        WHERE operation_id=? AND platform_key=? AND account_id=? AND mode=? AND state='AUTHORIZED_UNUSED'
-          AND publication_transaction_count=0 AND publication_commit_action_count=0
-          AND final_submit_attempt_count=0 AND final_submit_retry_count=0
-          AND final_submit_action_started=0 AND final_submit_action_completed=0`);
-      for (const candidate of candidates.slice(1)) {
-        const result = update.run(now(), candidate.operationId, input.platformKey, input.accountId, input.mode);
-        if (result.changes === 1) supersededOperationIds.push(candidate.operationId);
+  createToutiaoArticlePublishJob(input: { articleId: string; platformAccountId: string; settings?: ToutiaoArticleSettingsSnapshot; finalPublishMode?: FinalPublishMode; publishMode?: "ASSISTED" | "MANUAL"; selectedImageAssetId?: string | null; imageSelectionMode?: ImageSelectionMode }): PublishJob {
+    return this.db.transaction(() => {
+      const job = this.createArticlePublishJob({ articleId: input.articleId, platformKey: "toutiao", platformAccountId: input.platformAccountId, finalPublishMode: input.finalPublishMode, publishMode: input.publishMode, selectedImageAssetId: input.selectedImageAssetId, imageSelectionMode: input.imageSelectionMode, articleTransport: "api" });
+      const settings = input.settings ?? { version: 1, coverMode: job.selectedImageAssetId ? "single" : "none", coverImages: job.selectedImageAssetId ? [job.selectedImageAssetId] : [], articleAdType: "none", remoteScheduledAt: null } satisfies ToutiaoArticleSettingsSnapshot;
+      this.freezeToutiaoArticleSettings(job.id, settings);
+      return job;
+    })();
+  }
+
+  freezeToutiaoArticleSettings(jobId: string, settings: ToutiaoArticleSettingsSnapshot): void {
+    const job = this.getJob(jobId);
+    if (!job || job.platformKey !== "toutiao" || (job.contentKind ?? "article") !== "article") throw new Error("Toutiao article Job is required for settings snapshot");
+    const normalized = normalizeToutiaoSettings(settings);
+    const serialized = canonicalSerialize(normalized);
+    const existing = this.db.prepare("SELECT settings_json FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
+    if (existing) { if (existing.settings_json !== serialized) throw new Error("Toutiao article settings snapshot is already frozen"); return; }
+    this.db.prepare("INSERT INTO toutiao_article_job_preparations (job_id,account_id,article_id,settings_version,content_transport,settings_json,created_at) VALUES (?,?,?,?,'ARTICLE_WEB_API',?,?)").run(job.id, job.accountId, job.articleId, normalized.version, serialized, now());
+  }
+
+  getFrozenContentTransport(jobId: string): "ARTICLE_WEB_API" | "ARTICLE_BROWSER" | "DOUYIN_IMAGE_TEXT_BROWSER" | null {
+    const row = this.db.prepare("SELECT content_transport FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
+    const job = this.getJob(jobId);
+    const native = job?.platformKey === "toutiao" && this.getPublishRecordByJob(jobId)?.response.contentTransport === "ARTICLE_BROWSER";
+    if (native && row?.content_transport === "ARTICLE_WEB_API") throw new Error("Conflicting frozen Toutiao content transport");
+    if (native) return "ARTICLE_BROWSER";
+    const douyin = job?.platformKey === "douyin" && (job.contentKind ?? "article") === "article"
+      && this.getPublishRecordByJob(jobId)?.response.contentTransport === "DOUYIN_IMAGE_TEXT_BROWSER";
+    if (douyin) return "DOUYIN_IMAGE_TEXT_BROWSER";
+    return row?.content_transport === "ARTICLE_WEB_API" ? "ARTICLE_WEB_API" : null;
+  }
+
+  getToutiaoArticleSettingsSnapshot(jobId: string): ToutiaoArticleSettingsSnapshot | null {
+    const row = this.db.prepare("SELECT settings_json FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
+    return row ? parseJson<ToutiaoArticleSettingsSnapshot>(row.settings_json, { version: 1, coverMode: "none", coverImages: [], articleAdType: "none", remoteScheduledAt: null }) : null;
+  }
+
+  saveToutiaoArticlePreparedPayload(jobId: string, canonicalJson: string, payloadHash: string): void {
+    const row = this.db.prepare("SELECT account_id,article_id,canonical_payload_json,payload_hash FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
+    if (!row) throw new Error("Toutiao article settings snapshot is missing");
+    const parsed = JSON.parse(canonicalJson) as Record<string, unknown>;
+    if (parsed.jobId !== jobId || parsed.accountId !== row.account_id || parsed.articleId !== row.article_id || canonicalSerialize(parsed) !== canonicalJson || createHash("sha256").update(canonicalJson).digest("hex") !== payloadHash) throw new Error("Prepared payload binding does not match the frozen Job identity and hash");
+    const contentBindingHash = hashToutiaoContentBinding(parsed as unknown as ToutiaoContentBindingInput);
+    if (typeof row.payload_hash === "string") { if (row.payload_hash !== payloadHash || row.canonical_payload_json !== canonicalJson) throw new Error("Toutiao prepared payload is already frozen");
+      this.db.prepare("UPDATE toutiao_article_job_preparations SET content_binding_hash=COALESCE(content_binding_hash,?) WHERE job_id=?").run(contentBindingHash, jobId); return; }
+    this.db.prepare("UPDATE toutiao_article_job_preparations SET canonical_payload_json=?,payload_hash=?,content_binding_hash=?,prepared_at=? WHERE job_id=? AND payload_hash IS NULL").run(canonicalJson, payloadHash, contentBindingHash, now(), jobId);
+  }
+
+  bindToutiaoArticlePreparationToIntent(jobId: string, intentId: string): void {
+    this.db.transaction(() => {
+      const preparation = this.db.prepare("SELECT payload_hash,content_binding_hash,canonical_payload_json,intent_id FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
+      const intent = this.db.prepare("SELECT job_id,final_submit_count FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
+      if (!preparation || typeof preparation.payload_hash !== "string" || !intent || intent.job_id !== jobId || intValue(intent.final_submit_count) !== 0 || (preparation.intent_id && preparation.intent_id !== intentId)) throw new Error("Prepared payload cannot be bound to this submission intent");
+      const contentBindingHash = typeof preparation.content_binding_hash === "string" ? preparation.content_binding_hash : hashToutiaoContentBinding(JSON.parse(textValue(preparation.canonical_payload_json)) as ToutiaoContentBindingInput);
+      this.db.prepare("UPDATE toutiao_article_job_preparations SET intent_id=? WHERE job_id=?").run(intentId, jobId);
+      this.db.prepare("UPDATE toutiao_article_job_preparations SET content_binding_hash=? WHERE job_id=?").run(contentBindingHash, jobId);
+      this.db.prepare("UPDATE submission_intents SET payload_hash=? WHERE id=?").run(contentBindingHash, intentId);
+    })();
+  }
+
+  getToutiaoArticlePreparation(jobId: string): { settingsVersion: number; settings: ToutiaoArticleSettingsSnapshot; canonicalPayloadJson: string | null; payloadHash: string | null; contentBindingHash: string | null; preparedAt: string | null; intentId: string | null } | null {
+    const row = this.db.prepare("SELECT settings_version,settings_json,canonical_payload_json,payload_hash,content_binding_hash,prepared_at,intent_id FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
+    if (!row) return null;
+    return { settingsVersion: intValue(row.settings_version), settings: parseJson<ToutiaoArticleSettingsSnapshot>(row.settings_json, { version: 1, coverMode: "none", coverImages: [], articleAdType: "none", remoteScheduledAt: null }), canonicalPayloadJson: typeof row.canonical_payload_json === "string" ? row.canonical_payload_json : null, payloadHash: typeof row.payload_hash === "string" ? row.payload_hash : null, contentBindingHash: typeof row.content_binding_hash === "string" ? row.content_binding_hash : null, preparedAt: typeof row.prepared_at === "string" ? row.prepared_at : null, intentId: typeof row.intent_id === "string" ? row.intent_id : null };
+  }
+
+  getToutiaoCredentialMetadata(accountId: string): { accountId: string; bundleVersion: number; loginGeneration: number; credentialState: "VALID" | "INVALID" | "UNKNOWN"; credentialFingerprint: string; validatedAt: string | null } | null {
+    const row = this.db.prepare("SELECT * FROM toutiao_article_credential_metadata WHERE account_id=?").get(accountId) as Row | undefined;
+    if (!row) return null;
+    return { accountId: textValue(row.account_id), bundleVersion: intValue(row.bundle_version), loginGeneration: intValue(row.login_generation), credentialState: textValue(row.credential_state) as "VALID" | "INVALID" | "UNKNOWN", credentialFingerprint: textValue(row.credential_fingerprint), validatedAt: typeof row.validated_at === "string" ? row.validated_at : null };
+  }
+
+  updateToutiaoCredentialMetadata(input: { accountId: string; bundleVersion: number; loginGeneration: number; credentialState: "VALID" | "INVALID" | "UNKNOWN"; credentialFingerprint: string; validatedAt: string | null }, expectedVersion: number | null): void {
+    this.db.transaction(() => {
+      const account = this.listAccounts().find((item) => item.id === input.accountId && item.platformKey === "toutiao");
+      if (!account) throw new Error("Credential account is not a Toutiao account");
+      const current = this.getToutiaoCredentialMetadata(input.accountId);
+      if ((current?.bundleVersion ?? null) !== expectedVersion || input.bundleVersion !== (expectedVersion ?? 0) + 1
+        || input.loginGeneration < (current?.loginGeneration ?? 0) || !/^[a-f0-9]{64}$/u.test(input.credentialFingerprint)) throw new Error("Credential metadata version mismatch");
+      this.db.prepare("INSERT INTO toutiao_article_credential_metadata (account_id,bundle_version,login_generation,credential_state,credential_fingerprint,validated_at,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET bundle_version=excluded.bundle_version,login_generation=excluded.login_generation,credential_state=excluded.credential_state,credential_fingerprint=excluded.credential_fingerprint,validated_at=excluded.validated_at,updated_at=excluded.updated_at")
+        .run(input.accountId, input.bundleVersion, input.loginGeneration, input.credentialState, input.credentialFingerprint, input.validatedAt, now());
+    })();
+  }
+
+  bindToutiaoFinalPayloadForFutureSubmit(input: { jobId: string; intentId: string; accountId: string; contentBindingHash: string; finalPayloadHash: string; credentialBundleVersion: number; loginGeneration: number; signerVersion: string; signerInputHash: string; signatureGeneratedAt: string; authValidatedAt: string }, credentialVerifier: { assertBound(accountId: string, version: number, loginGeneration: number, stage: "signed_or_submitting"): unknown }): void {
+    this.db.transaction(() => {
+      const preparation = this.db.prepare("SELECT account_id,content_binding_hash,intent_id FROM toutiao_article_job_preparations WHERE job_id=?").get(input.jobId) as Row | undefined;
+      const intent = this.db.prepare("SELECT job_id,state,final_submit_count,submit_boundary_entered_at,payload_hash FROM submission_intents WHERE id=?").get(input.intentId) as Row | undefined;
+      const metadata = this.getToutiaoCredentialMetadata(input.accountId);
+      if (!preparation || preparation.account_id !== input.accountId || preparation.intent_id !== input.intentId || preparation.content_binding_hash !== input.contentBindingHash
+        || !intent || intent.job_id !== input.jobId || intent.state !== "Prepared" || intValue(intent.final_submit_count) !== 0 || intent.submit_boundary_entered_at || intent.payload_hash !== input.contentBindingHash
+        || !metadata || metadata.credentialState !== "VALID" || !metadata.validatedAt || metadata.bundleVersion !== input.credentialBundleVersion || metadata.loginGeneration !== input.loginGeneration
+        || !/^[a-f0-9]{64}$/u.test(input.finalPayloadHash) || !/^[a-f0-9]{64}$/u.test(input.signerInputHash) || !input.signerVersion || !Number.isFinite(Date.parse(input.signatureGeneratedAt))
+        || input.authValidatedAt !== metadata.validatedAt) throw Object.assign(new Error("Toutiao final submission preconditions are not met"), { code: "PAYLOAD_BINDING_MISMATCH" });
+      credentialVerifier.assertBound(input.accountId, input.credentialBundleVersion, input.loginGeneration, "signed_or_submitting");
+      const existing = this.db.prepare("SELECT * FROM toutiao_article_final_bindings WHERE job_id=?").get(input.jobId) as Row | undefined;
+      if (existing) {
+        if (existing.account_id !== input.accountId || existing.content_binding_hash !== input.contentBindingHash || existing.final_payload_hash !== input.finalPayloadHash
+          || existing.credential_bundle_version !== input.credentialBundleVersion || existing.login_generation !== input.loginGeneration
+          || existing.signer_version !== input.signerVersion || existing.signer_input_hash !== input.signerInputHash
+          || existing.signature_generated_at !== input.signatureGeneratedAt || existing.auth_validated_at !== input.authValidatedAt) throw Object.assign(new Error("Toutiao final binding is immutable"), { code: "PAYLOAD_BINDING_MISMATCH" });
+        return;
       }
-      return { reusableOperationId: winner.operationId, supersededOperationIds, activeUnusedAuthorizationCount: 1, mutationCount: supersededOperationIds.length } satisfies OneShotAuthorizationConvergenceResult;
-    });
-    return transaction();
+      this.db.prepare("INSERT INTO toutiao_article_final_bindings (job_id,account_id,content_binding_hash,final_payload_hash,credential_bundle_version,login_generation,signer_version,signer_input_hash,signature_generated_at,auth_validated_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+        .run(input.jobId, input.accountId, input.contentBindingHash, input.finalPayloadHash, input.credentialBundleVersion, input.loginGeneration, input.signerVersion, input.signerInputHash, input.signatureGeneratedAt, input.authValidatedAt, now());
+    })();
   }
 
-  createOneShotPublicationAuthorization(authorization: OneShotPublicationAuthorization): OneShotPublicationAuthorization {
-    const timestamp = now();
-    this.db.prepare(`INSERT INTO one_shot_publication_authorizations (
-      id,authorization,platform_key,account_id,operation_id,mode,state,publication_transaction_count,
-      publication_commit_action_count,final_submit_attempt_count,final_submit_retry_count,
-      final_submit_action_started,final_submit_action_completed,created_at,updated_at,consumed_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-      randomUUID(), authorization.authorization, authorization.platformKey, authorization.accountId, authorization.operationId,
-      authorization.mode, authorization.state, authorization.publicationTransactionCount, authorization.publicationCommitActionCount,
-      authorization.finalSubmitAttemptCount, authorization.finalSubmitRetryCount, authorization.finalSubmitActionStarted ? 1 : 0,
-      authorization.finalSubmitActionCompleted ? 1 : 0, timestamp, timestamp, authorization.consumedAt ?? null
-    );
-    return this.getOneShotPublicationAuthorization(authorization.operationId) as OneShotPublicationAuthorization;
+  assertToutiaoFutureSubmitReady(jobId: string, credentialVerifier: { assertBound(accountId: string, version: number, loginGeneration: number, stage: "signed_or_submitting"): unknown }): "SUBMIT_READY" {
+    const binding = this.db.prepare("SELECT * FROM toutiao_article_final_bindings WHERE job_id=?").get(jobId) as Row | undefined;
+    const preparation = this.db.prepare("SELECT account_id,content_binding_hash,intent_id FROM toutiao_article_job_preparations WHERE job_id=?").get(jobId) as Row | undefined;
+    const intent = preparation?.intent_id ? this.db.prepare("SELECT state,final_submit_count,submit_boundary_entered_at,payload_hash FROM submission_intents WHERE id=?").get(preparation.intent_id) as Row | undefined : undefined;
+    const metadata = binding ? this.getToutiaoCredentialMetadata(textValue(binding.account_id)) : null;
+    if (!binding || !preparation || !intent || !metadata || this.getFrozenContentTransport(jobId) !== "ARTICLE_WEB_API"
+      || preparation.content_binding_hash !== binding.content_binding_hash || intent.payload_hash !== binding.content_binding_hash
+      || intent.state !== "Prepared" || intValue(intent.final_submit_count) !== 0 || intent.submit_boundary_entered_at
+      || metadata.credentialState !== "VALID" || metadata.bundleVersion !== intValue(binding.credential_bundle_version)
+      || metadata.loginGeneration !== intValue(binding.login_generation) || metadata.validatedAt !== binding.auth_validated_at) throw Object.assign(new Error("Toutiao submit readiness requires new preflight and binding"), { code: "PAYLOAD_BINDING_MISMATCH" });
+    credentialVerifier.assertBound(textValue(binding.account_id), intValue(binding.credential_bundle_version), intValue(binding.login_generation), "signed_or_submitting");
+    return "SUBMIT_READY";
   }
 
-  getOneShotPublicationAuthorization(operationId: string): OneShotPublicationAuthorization | null {
-    const row = this.db.prepare("SELECT * FROM one_shot_publication_authorizations WHERE operation_id=?").get(operationId) as Row | undefined;
-    if (!row) return null;
-    return {
-      authorization: textValue(row.authorization) as OneShotPublicationAuthorization["authorization"],
-      state: textValue(row.state) as OneShotPublicationAuthorization["state"],
-      platformKey: textValue(row.platform_key) as OneShotPublicationAuthorization["platformKey"],
-      accountId: textValue(row.account_id) as OneShotPublicationAuthorization["accountId"],
-      operationId: textValue(row.operation_id),
-      mode: textValue(row.mode) as OneShotPublicationAuthorization["mode"],
-      publicationTransactionCount: intValue(row.publication_transaction_count),
-      publicationCommitActionCount: intValue(row.publication_commit_action_count),
-      finalSubmitAttemptCount: intValue(row.final_submit_attempt_count),
-      finalSubmitRetryCount: intValue(row.final_submit_retry_count),
-      finalSubmitActionStarted: boolValue(row.final_submit_action_started),
-      finalSubmitActionCompleted: boolValue(row.final_submit_action_completed),
-      createdAt: textValue(row.created_at),
-      updatedAt: textValue(row.updated_at),
-      consumedAt: typeof row.consumed_at === "string" ? row.consumed_at : null
-    };
+  reserveSubmissionAttempt(intentId: string): string {
+    const existing = this.db.prepare("SELECT submission_attempt_id,final_submit_count,submit_boundary_entered_at,state FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
+    if (!existing || textValue(existing.state) !== "Prepared" || intValue(existing.final_submit_count) !== 0 || existing.submit_boundary_entered_at) throw Object.assign(new Error("The persisted publish attempt has already been used or is not ready for final submit"), { code: "FINAL_SUBMIT_ALREADY_USED" });
+    if (typeof existing.submission_attempt_id === "string") return existing.submission_attempt_id;
+    const submissionAttemptId = randomUUID();
+    this.db.prepare("UPDATE submission_intents SET submission_attempt_id=?,updated_at=? WHERE id=? AND submission_attempt_id IS NULL AND state='Prepared' AND final_submit_count=0").run(submissionAttemptId, now(), intentId);
+    const reserved = this.db.prepare("SELECT submission_attempt_id FROM submission_intents WHERE id=?").get(intentId) as Row;
+    return textValue(reserved.submission_attempt_id);
   }
 
-  consumeOneShotPublicationAuthorization(operationId: string, accountId: string, platformKey: string): boolean {
-    const timestamp = now();
-    const result = this.db.prepare(`UPDATE one_shot_publication_authorizations SET
-      state='CONSUMED', publication_transaction_count=1, publication_commit_action_count=1,
-      final_submit_attempt_count=1, final_submit_retry_count=0, final_submit_action_started=1,
-      consumed_at=?, updated_at=? WHERE operation_id=? AND account_id=? AND platform_key=? AND authorization='OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH'
-      AND mode='ONE_SHOT_REAL_PUBLISH_ACCEPTANCE' AND state='AUTHORIZED_UNUSED'
-      AND publication_transaction_count=0 AND publication_commit_action_count=0
-      AND final_submit_attempt_count=0 AND final_submit_retry_count=0`).run(timestamp, timestamp, operationId, accountId, platformKey);
-    return result.changes === 1;
-  }
-
-  /**
-   * Atomically claims the final submission intent together with the durable
-   * one-shot authorization immediately before the only mousePressed dispatch.
-   * A rollback leaves both records reusable when browser-side preparation
-   * fails before that boundary.
-   */
-  startOneShotFinalMousePress(operationId: string, accountId: string, platformKey: string, intentId: string): boolean {
-    const timestamp = now();
-    const transaction = this.db.transaction(() => {
-      const authorization = this.db.prepare(`UPDATE one_shot_publication_authorizations SET
-        state='FINAL_MOUSEPRESS_DISPATCH_STARTED', publication_transaction_count=1, publication_commit_action_count=1,
-        final_submit_attempt_count=1, final_submit_retry_count=0, final_submit_action_started=1,
-        consumed_at=?, updated_at=? WHERE operation_id=? AND account_id=? AND platform_key=?
-        AND authorization='OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH' AND mode='ONE_SHOT_REAL_PUBLISH_ACCEPTANCE'
-        AND state='AUTHORIZED_UNUSED' AND publication_transaction_count=0 AND publication_commit_action_count=0
-        AND final_submit_attempt_count=0 AND final_submit_retry_count=0`).run(timestamp, timestamp, operationId, accountId, platformKey);
-      if (authorization.changes !== 1) throw new Error("One-shot authorization was already used or is not available");
-      const intent = this.db.prepare("UPDATE submission_intents SET final_submit_count=final_submit_count+1,state='Submitting',updated_at=? WHERE id=? AND state='Prepared' AND final_submit_count=0").run(timestamp, intentId);
-      if (intent.changes !== 1) throw new Error("The persisted publish attempt has already been used or is not ready for final submit");
-    });
-    try {
-      transaction();
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  markOneShotFinalMousePressReconciliationRequired(operationId: string): boolean {
-    const result = this.db.prepare("UPDATE one_shot_publication_authorizations SET state='SUBMIT_RECONCILIATION_REQUIRED', updated_at=? WHERE operation_id=? AND state='FINAL_MOUSEPRESS_DISPATCH_STARTED' AND final_submit_attempt_count=1").run(now(), operationId);
-    return result.changes === 1;
-  }
-
-  recordOneShotPublicationConfirmationAction(operationId: string): boolean {
-    const result = this.db.prepare(`UPDATE one_shot_publication_authorizations SET publication_commit_action_count=2, updated_at=?
-      WHERE operation_id=? AND state IN ('CONSUMED','FINAL_MOUSEPRESS_DISPATCH_STARTED') AND publication_transaction_count=1
-      AND final_submit_attempt_count=1 AND publication_commit_action_count=1`).run(now(), operationId);
-    return result.changes === 1;
-  }
-
-  completeOneShotPublicationAuthorization(operationId: string): boolean {
-    const result = this.db.prepare("UPDATE one_shot_publication_authorizations SET state=CASE WHEN state IN ('FINAL_MOUSEPRESS_DISPATCH_STARTED','SUBMIT_RECONCILIATION_REQUIRED') THEN 'COMPLETED' ELSE state END, final_submit_action_completed=1, updated_at=? WHERE operation_id=? AND state IN ('CONSUMED','FINAL_MOUSEPRESS_DISPATCH_STARTED','SUBMIT_RECONCILIATION_REQUIRED') AND final_submit_attempt_count=1").run(now(), operationId);
-    return result.changes === 1;
-  }
-
-  claimFinalSubmitAttempt(intentId: string): { id: string; jobId: string; attempt: number } {
-    const timestamp = now();
-    const update = this.db.prepare("UPDATE submission_intents SET final_submit_count=final_submit_count+1,state='Submitting',updated_at=? WHERE id=? AND state='Prepared' AND final_submit_count=0").run(timestamp, intentId);
-    if (update.changes === 0) throw Object.assign(new Error("The persisted publish attempt has already been used or is not ready for final submit"), { code: "FINAL_SUBMIT_ALREADY_USED" });
-    const row = this.db.prepare("SELECT id,job_id,attempt FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
-    if (!row) throw new Error("Submission intent not found");
-    return { id: textValue(row.id), jobId: textValue(row.job_id), attempt: intValue(row.attempt) };
-  }
-
-  markSubmissionIntentSubmitted(intentId: string, externalId: string | null): void {
-    this.db.prepare("UPDATE submission_intents SET state='Submitted', external_id=?, updated_at=? WHERE id=?").run(externalId, now(), intentId);
+  markSubmissionIntentSubmitted(intentId: string, externalId: string | null, remoteStatus: "SUBMIT_ACCEPTED" | "SCHEDULED_ACCEPTED" | "PUBLISHED_CONFIRMED" = "SUBMIT_ACCEPTED"): void {
+    this.db.prepare("UPDATE submission_intents SET state='Submitted', external_id=?,remote_status=?,remote_response_received_at=?,reconciliation_required=?, updated_at=? WHERE id=?").run(externalId, remoteStatus, now(), remoteStatus === "PUBLISHED_CONFIRMED" ? 0 : 1, now(), intentId);
     // Keep the job recoverable until PublishRecord is persisted, even without an external id.
     this.db.prepare("UPDATE publish_jobs SET status='Submitted', external_id=? WHERE submission_intent_id=?").run(externalId, intentId);
   }
 
-  reconcileJobAsSubmitted(jobId: string, input: { response: Record<string, unknown> }): { job: PublishJob; record: PublishRecord } {
+  reconcileJobAsSubmitted(jobId: string, input: { response: Record<string, unknown>; externalId?: string | null; remoteStatus?: "SUBMIT_ACCEPTED" | "SCHEDULED_ACCEPTED" }): { job: PublishJob; record: PublishRecord } {
     const job = this.getJob(jobId);
-    if (!job || job.status !== "NeedsReconciliation") throw new Error("Only a NeedsReconciliation Job can be closed as an accepted submission");
+    if (!job || !["NeedsReconciliation", "Submitted", "Publishing"].includes(job.status)) throw new Error("Only an awaiting reconciliation Job can be closed as an accepted submission");
     const intent = this.getSubmissionIntentByJob(jobId);
     if (!intent || intent.finalSubmitCount < 1) throw new Error("An accepted submission reconciliation requires a persisted final submit attempt");
     const existing = this.getPublishRecordByJob(jobId);
     if (!existing) throw new Error("An accepted submission reconciliation requires the existing PublishRecord");
     const timestamp = now();
-    const response = { ...existing.response, reconciliation: input.response, reconciliationStatus: "PENDING_REVIEW" };
+    const remoteStatus = input.remoteStatus ?? "SUBMIT_ACCEPTED";
+    const externalId = input.externalId ?? intent.externalId ?? existing.publishedExternalId;
+    const response = { ...existing.response, reconciliation: input.response, reconciliationStatus: remoteStatus === "SCHEDULED_ACCEPTED" ? "SCHEDULED" : "PENDING_REVIEW" };
     const transaction = this.db.transaction(() => {
-      this.db.prepare("UPDATE publish_records SET status='Submitted', success=0, response_json=?, verification_status='WaitingUser' WHERE id=?").run(json(response), existing.id);
-      this.db.prepare("UPDATE submission_intents SET state='Submitted', error_code=NULL, updated_at=? WHERE id=?").run(timestamp, intent.id);
-      this.db.prepare("UPDATE publish_jobs SET status='Submitted', external_id=NULL, publish_record_id=?, last_error_code=NULL, last_error_message=NULL, next_retry_at=NULL, finished_at=NULL WHERE id=? AND status='NeedsReconciliation'").run(existing.id, jobId);
+      this.db.prepare("UPDATE publish_records SET status='Submitted', success=0, response_json=?, verification_status='WaitingUser',remote_status=?,published_external_id=? WHERE id=?").run(json(redactSecretValue(response)), remoteStatus, externalId, existing.id);
+      this.db.prepare("UPDATE submission_intents SET state='Submitted', error_code=NULL,remote_status=?,reconciliation_required=1,external_id=?, updated_at=? WHERE id=?").run(remoteStatus, externalId, timestamp, intent.id);
+      this.db.prepare("UPDATE publish_jobs SET status='Submitted', external_id=?, publish_record_id=?, last_error_code=NULL,last_error_message=NULL,next_retry_at=NULL,finished_at=NULL WHERE id=?").run(externalId, existing.id, jobId);
     });
     transaction();
     return { job: this.getJob(jobId) as PublishJob, record: this.getPublishRecordByJob(jobId) as PublishRecord };
   }
 
   markSubmissionIntentUncertain(intentId: string, errorCode: string): PublishJob {
-    this.db.prepare("UPDATE submission_intents SET state='Unknown', error_code=?, updated_at=? WHERE id=?").run(errorCode, now(), intentId);
+    this.db.prepare("UPDATE submission_intents SET state='Unknown', error_code=?,remote_status='UNCERTAIN',reconciliation_required=1,updated_at=? WHERE id=?").run(errorCode, now(), intentId);
     const row = this.db.prepare("SELECT job_id FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
     if (!row) throw new Error("Submission intent not found");
     this.db.prepare("UPDATE publish_jobs SET status='NeedsReconciliation', last_error_code=?, next_retry_at=NULL, finished_at=? WHERE id=?").run(errorCode, now(), textValue(row.job_id));
     return this.getJob(textValue(row.job_id)) as PublishJob;
   }
 
+  updateSubmissionRemoteStatus(jobId: string, remoteStatus: PublishRemoteStatus, reconciliationRequired: boolean): void {
+    const intent = this.getSubmissionIntentByJob(jobId);
+    if (!intent) return;
+    this.db.prepare("UPDATE submission_intents SET remote_status=?,reconciliation_required=?,updated_at=? WHERE id=?").run(remoteStatus, reconciliationRequired ? 1 : 0, now(), intent.id);
+    this.db.prepare("UPDATE publish_records SET remote_status=? WHERE job_id=?").run(remoteStatus, jobId);
+  }
+
   resetSubmissionIntentForUserAction(intentId: string, errorCode: string): PublishJob {
+    const existing = this.db.prepare("SELECT final_submit_count,submit_boundary_entered_at FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
+    if (existing && (intValue(existing.final_submit_count) >= 1 || existing.submit_boundary_entered_at)) throw Object.assign(new Error("A final submit attempt cannot be reset for user action"), { code: "FINAL_SUBMIT_ALREADY_USED" });
     const timestamp = now();
-    this.db.prepare("UPDATE submission_intents SET state='Prepared', final_submit_count=0, error_code=?, updated_at=? WHERE id=? AND ((state='Prepared' AND final_submit_count=0) OR (state='Submitting' AND final_submit_count=1) OR (state='Unknown' AND final_submit_count=1 AND error_code='FINAL_SUBMIT_ALREADY_USED'))").run(errorCode, timestamp, intentId);
+    this.db.prepare("UPDATE submission_intents SET state='Prepared', error_code=?, updated_at=? WHERE id=? AND state='Prepared' AND final_submit_count=0 AND submit_boundary_entered_at IS NULL").run(errorCode, timestamp, intentId);
     const row = this.db.prepare("SELECT job_id FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
     if (!row) throw new Error("Submission intent not found");
     this.db.prepare("UPDATE publish_jobs SET status='NeedsUserAction', last_error_code=?, last_error_message=?, next_retry_at=NULL, finished_at=? WHERE id=?").run(errorCode, errorCode === "USER_ACTION_REQUIRED" ? "平台最终提交前仍需要用户完成字段或安全验证" : errorCode, timestamp, textValue(row.job_id));
@@ -2823,12 +2709,9 @@ export class AppRepository {
   }
 
   resetSubmissionIntentAfterPreviewOnly(intentId: string, errorCode: string): PublishJob {
-    const timestamp = now();
-    this.db.prepare("UPDATE submission_intents SET state='Prepared', final_submit_count=0, error_code=?, updated_at=? WHERE id=? AND state='Unknown' AND final_submit_count=1 AND error_code='SUBMISSION_UNCERTAIN'").run(errorCode, timestamp, intentId);
-    const row = this.db.prepare("SELECT job_id FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
-    if (!row) throw new Error("Submission intent not found");
-    this.db.prepare("UPDATE publish_jobs SET status='NeedsUserAction', last_error_code=?, last_error_message=?, next_retry_at=NULL, finished_at=? WHERE id=?").run(errorCode, errorCode, timestamp, textValue(row.job_id));
-    return this.getJob(textValue(row.job_id)) as PublishJob;
+    const existing = this.db.prepare("SELECT final_submit_count,submit_boundary_entered_at FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
+    if (existing && (intValue(existing.final_submit_count) >= 1 || existing.submit_boundary_entered_at)) throw Object.assign(new Error("A final submit attempt cannot be reset after preview"), { code: "FINAL_SUBMIT_ALREADY_USED" });
+    return this.resetSubmissionIntentForUserAction(intentId, errorCode);
   }
 
   markJobDryRunPassed(id: string): PublishJob {
@@ -2838,6 +2721,7 @@ export class AppRepository {
 
   markJobReconciledNotSubmitted(id: string): PublishJob {
     const intent = this.getSubmissionIntentByJob(id);
+    if (intent && (intent.finalSubmitCount >= 1 || intent.submitBoundaryEnteredAt || intent.state === "Unknown" || intent.remoteStatus === "UNCERTAIN")) throw Object.assign(new Error("Remote non-publication proof is required; this method cannot reopen an uncertain submit attempt"), { code: "FINAL_SUBMIT_ALREADY_USED" });
     if (intent) this.db.prepare("UPDATE submission_intents SET state='NotSubmitted', updated_at=? WHERE id=?").run(now(), intent.id);
     this.db.prepare("UPDATE publish_jobs SET status='Retry', next_retry_at=?, last_error_code=NULL, last_error_message=NULL, finished_at=NULL WHERE id=?").run(now(), id);
     return this.getJob(id) as PublishJob;
@@ -2850,8 +2734,9 @@ export class AppRepository {
 
   insertPublishRecord(input: Omit<PublishRecord, "id" | "publishedAt" | "dryRun" | "status"> & { dryRun?: boolean; status?: PublishRecord["status"] }): PublishRecord {
     const dryRun = input.dryRun ?? false;
-    const record: PublishRecord = { ...input, platformAccountId: input.platformAccountId ?? input.accountId, status: input.status ?? (dryRun ? "DryRun" : input.success ? "Published" : "Failed"), dryRun, id: randomUUID(), publishedAt: now(), publishMode: input.publishMode ?? (dryRun ? "ASSISTED" : "MANUAL"), automationType: input.automationType ?? "Manual", browserSessionIdHash: input.browserSessionIdHash ?? null, operator: input.operator ?? "desktop-user", verificationStatus: input.verificationStatus ?? (dryRun ? "WaitingUser" : input.success ? "Verified" : "Failed"), editorOpenedAt: input.editorOpenedAt ?? null, titleFilled: input.titleFilled ?? null, bodyFilled: input.bodyFilled ?? null, selectedImageAssetId: input.selectedImageAssetId ?? null, imageSelectionMode: input.imageSelectionMode ?? "none" };
-    this.db.prepare("INSERT INTO publish_records (id,job_id,account_id,platform_account_id,platform_key,article_id,published_url,published_external_id,success,response_json,published_at,dry_run,status,publish_mode,automation_type,browser_session_id_hash,operator,verification_status,editor_opened_at,title_filled,body_filled,selected_image_asset_id,image_selection_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(record.id, record.jobId, record.accountId, record.platformAccountId, record.platformKey, record.articleId, record.publishedUrl, record.publishedExternalId, record.success ? 1 : 0, json(record.response), record.publishedAt, record.dryRun ? 1 : 0, record.status, record.publishMode, record.automationType, record.browserSessionIdHash, record.operator, record.verificationStatus, record.editorOpenedAt, record.titleFilled === null || record.titleFilled === undefined ? null : record.titleFilled ? 1 : 0, record.bodyFilled === null || record.bodyFilled === undefined ? null : record.bodyFilled ? 1 : 0, record.selectedImageAssetId, record.imageSelectionMode);
+    const intent = this.getSubmissionIntentByJob(input.jobId);
+    const record: PublishRecord = { ...input, response: redactSecretValue(input.response) as Record<string, unknown>, platformAccountId: input.platformAccountId ?? input.accountId, status: input.status ?? (dryRun ? "DryRun" : input.success ? "Published" : "Failed"), dryRun, id: randomUUID(), publishedAt: now(), publishMode: input.publishMode ?? (dryRun ? "ASSISTED" : "MANUAL"), automationType: input.automationType ?? "Manual", browserSessionIdHash: input.browserSessionIdHash ?? null, operator: input.operator ?? "desktop-user", verificationStatus: input.verificationStatus ?? (dryRun ? "WaitingUser" : input.success ? "Verified" : "Failed"), editorOpenedAt: input.editorOpenedAt ?? null, titleFilled: input.titleFilled ?? null, bodyFilled: input.bodyFilled ?? null, selectedImageAssetId: input.selectedImageAssetId ?? null, imageSelectionMode: input.imageSelectionMode ?? "none", submissionAttemptId: input.submissionAttemptId ?? intent?.submissionAttemptId ?? null, remoteStatus: input.remoteStatus ?? intent?.remoteStatus ?? null };
+    this.db.prepare("INSERT INTO publish_records (id,job_id,account_id,platform_account_id,platform_key,article_id,published_url,published_external_id,success,response_json,published_at,dry_run,status,publish_mode,automation_type,browser_session_id_hash,operator,verification_status,editor_opened_at,title_filled,body_filled,selected_image_asset_id,image_selection_mode,submission_attempt_id,remote_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(record.id, record.jobId, record.accountId, record.platformAccountId, record.platformKey, record.articleId, record.publishedUrl, record.publishedExternalId, record.success ? 1 : 0, json(record.response), record.publishedAt, record.dryRun ? 1 : 0, record.status, record.publishMode, record.automationType, record.browserSessionIdHash, record.operator, record.verificationStatus, record.editorOpenedAt, record.titleFilled === null || record.titleFilled === undefined ? null : record.titleFilled ? 1 : 0, record.bodyFilled === null || record.bodyFilled === undefined ? null : record.bodyFilled ? 1 : 0, record.selectedImageAssetId, record.imageSelectionMode, record.submissionAttemptId, record.remoteStatus);
     return record;
   }
 
@@ -2861,20 +2746,23 @@ export class AppRepository {
   }
 
   updatePublishRecord(id: string, input: { status: PublishRecord["status"]; success: boolean; publishedUrl?: string | null; publishedExternalId?: string | null; response?: Record<string, unknown>; verificationStatus?: PublishRecord["verificationStatus"] }): PublishRecord {
-    this.db.prepare("UPDATE publish_records SET status=?,success=?,published_url=COALESCE(?,published_url),published_external_id=COALESCE(?,published_external_id),response_json=?,verification_status=COALESCE(?,verification_status) WHERE id=?").run(input.status, input.success ? 1 : 0, input.publishedUrl ?? null, input.publishedExternalId ?? null, json(input.response ?? {}), input.verificationStatus ?? null, id);
+    this.db.prepare("UPDATE publish_records SET status=?,success=?,published_url=COALESCE(?,published_url),published_external_id=COALESCE(?,published_external_id),response_json=?,verification_status=COALESCE(?,verification_status),submission_attempt_id=COALESCE(submission_attempt_id,(SELECT submission_attempt_id FROM submission_intents WHERE job_id=publish_records.job_id ORDER BY created_at DESC LIMIT 1)),remote_status=(SELECT remote_status FROM submission_intents WHERE job_id=publish_records.job_id ORDER BY created_at DESC LIMIT 1) WHERE id=?").run(input.status, input.success ? 1 : 0, input.publishedUrl ?? null, input.publishedExternalId ?? null, json(redactSecretValue(input.response ?? {})), input.verificationStatus ?? null, id);
     const row = this.db.prepare("SELECT * FROM publish_records WHERE id=?").get(id) as Row;
     return toRecord(row);
   }
 
-  reconcileJobAsPublished(jobId: string, input: { externalId: string; publishedUrl: string; response: Record<string, unknown> }): { job: PublishJob; record: PublishRecord } {
+  reconcileJobAsPublished(jobId: string, input: { externalId: string; publishedUrl: string | null; response: Record<string, unknown>; publicVerified?: boolean }): { job: PublishJob; record: PublishRecord } {
     const job = this.getJob(jobId);
-    if (!job || !["NeedsReconciliation", "Submitted"].includes(job.status)) throw new Error("Only a NeedsReconciliation or Submitted Job can be closed by read-only publish reconciliation");
+    if (!job || !["NeedsReconciliation", "Submitted", "Publishing"].includes(job.status)) throw new Error("Only a claimed submission can be closed by read-only publish reconciliation");
+    const intent = this.getSubmissionIntentByJob(jobId);
+    if (!intent || intent.finalSubmitCount < 1) throw new Error("Read-only publication confirmation requires a durable final submit claim");
+    const remoteStatus = input.publicVerified === false ? "PUBLISHED_MANAGEMENT" : "PUBLISHED_CONFIRMED";
+    const verificationStatus = input.publicVerified === false ? "WaitingUser" : "Verified";
+    if (intent) this.db.prepare("UPDATE submission_intents SET state='Submitted',external_id=?,remote_status=?,reconciliation_required=0,updated_at=? WHERE id=?").run(input.externalId, remoteStatus, now(), intent.id);
     const existing = this.getPublishRecordByJob(jobId);
     const record = existing
-      ? this.updatePublishRecord(existing.id, { status: "Published", success: true, publishedExternalId: input.externalId, publishedUrl: input.publishedUrl, response: input.response, verificationStatus: "Verified" })
-      : this.insertPublishRecord({ jobId, accountId: job.accountId, platformAccountId: job.platformAccountId, platformKey: job.platformKey, articleId: job.articleId, publishedUrl: input.publishedUrl, publishedExternalId: input.externalId, success: true, response: input.response, dryRun: false, status: "Published", publishMode: "ASSISTED", automationType: "BrowserAutomation", operator: "desktop-user", verificationStatus: "Verified" });
-    const intent = this.getSubmissionIntentByJob(jobId);
-    if (intent) this.db.prepare("UPDATE submission_intents SET state='Submitted',external_id=?,updated_at=? WHERE id=?").run(input.externalId, now(), intent.id);
+      ? this.updatePublishRecord(existing.id, { status: "Published", success: true, publishedExternalId: input.externalId, publishedUrl: input.publishedUrl, response: input.response, verificationStatus })
+      : this.insertPublishRecord({ jobId, accountId: job.accountId, platformAccountId: job.platformAccountId, platformKey: job.platformKey, articleId: job.articleId, publishedUrl: input.publishedUrl, publishedExternalId: input.externalId, success: true, response: input.response, dryRun: false, status: "Published", publishMode: "ASSISTED", automationType: "BrowserAutomation", operator: "desktop-user", verificationStatus });
     this.db.prepare("UPDATE publish_jobs SET status='Success',external_id=?,last_error_code=NULL,last_error_message=NULL,next_retry_at=NULL,finished_at=? WHERE id=?").run(input.externalId, now(), jobId);
     if (!existing?.success) {
       this.markArticlePublished(job.articleId);
@@ -2885,7 +2773,7 @@ export class AppRepository {
 
   markJobReconciledNotPublished(id: string, message: string, response: Record<string, unknown> = {}): PublishJob {
     const intent = this.getSubmissionIntentByJob(id);
-    if (intent) this.db.prepare("UPDATE submission_intents SET state='NotSubmitted',error_code='CONFIRMED_NOT_PUBLISHED',updated_at=? WHERE id=?").run(now(), intent.id);
+    if (intent) this.db.prepare("UPDATE submission_intents SET state='NotSubmitted',error_code='CONFIRMED_NOT_PUBLISHED',remote_status='FAILED_CONFIRMED',reconciliation_required=0,updated_at=? WHERE id=?").run(now(), intent.id);
     const existing = this.getPublishRecordByJob(id);
     if (existing) this.updatePublishRecord(existing.id, { status: "Failed", success: false, response: { ...existing.response, reconciliation: response, reconciliationStatus: "CONFIRMED_NOT_PUBLISHED" }, verificationStatus: "Failed" });
     this.db.prepare("UPDATE publish_jobs SET status='ReconciledNotPublished',last_error_code='CONFIRMED_NOT_PUBLISHED',last_error_message=?,next_retry_at=NULL,finished_at=? WHERE id=? AND status='NeedsReconciliation'").run(message, now(), id);
@@ -3259,39 +3147,6 @@ function toContentQualityReview(row: Row): ContentQualityReviewView { return { i
 function toContentQualityAudit(row: Row): ContentQualityAuditView { return { id: textValue(row.id), contentType: textValue(row.content_type) as ContentQualityContentType, contentId: textValue(row.content_id), operatorType: row.operator_type === "human" ? "human" : "system", previousStatus: textValue(row.previous_status) as ContentQualityStatus, newStatus: textValue(row.new_status) as ContentQualityStatus, reason: textValue(row.reason), timestamp: textValue(row.timestamp), contentHash: textValue(row.content_hash) }; }
 function toPlatformContentRules(row: Row): PlatformContentRules { const contentType = ["article", "video_script", "mixed"].includes(textValue(row.content_type)) ? textValue(row.content_type) as PlatformContentRules["contentType"] : "article"; return { platformKey: textValue(row.platform_key), titleMinLength: intValue(row.title_min_length), titleMaxLength: intValue(row.title_max_length), bodyMinLength: intValue(row.body_min_length), bodyMaxLength: intValue(row.body_max_length), summaryMaxLength: intValue(row.summary_max_length), maxTags: intValue(row.max_tags), maxImages: intValue(row.max_images), supportsLinks: boolValue(row.supports_links), supportsMarkdown: boolValue(row.supports_markdown), supportsHtml: boolValue(row.supports_html), contentType, source: typeof row.source === "string" ? row.source : null, lastVerifiedAt: typeof row.last_verified_at === "string" ? row.last_verified_at : null, verificationStatus: row.verification_status === "verified" ? "verified" : "unverified" }; }
 function toPlatformProfile(row: Row): PlatformProfile { return { platformKey: textValue(row.platform_key), style: textValue(row.style), titleLimit: intValue(row.title_limit), preferredMinWords: intValue(row.preferred_min_words), preferredMaxWords: intValue(row.preferred_max_words), minBodyLength: intValue(row.min_body_length), maxBodyLength: intValue(row.max_body_length), supportsCover: boolValue(row.supports_cover), coverRequired: boolValue(row.cover_required), coverSizes: stringArray(row.cover_sizes_json), maxImages: intValue(row.max_images) || 1, supportsTags: boolValue(row.supports_tags), maxTags: intValue(row.max_tags), supportsMarkdown: boolValue(row.supports_markdown), supportsHtml: boolValue(row.supports_html), supportsRichText: boolValue(row.supports_rich_text), sourceUrl: textValue(row.source_url), researchStatus: row.research_status as PlatformProfile["researchStatus"], lastVerifiedAt: typeof row.last_verified_at === "string" ? row.last_verified_at : null }; }
-function toPlatformAccountIdentityBinding(row: Row): PlatformAccountIdentityBinding {
-  return {
-    id: textValue(row.id),
-    platformKey: textValue(row.platform_key),
-    accountId: textValue(row.account_id),
-    externalCreatorId: textValue(row.external_creator_id),
-    displayName: typeof row.display_name === "string" ? row.display_name : null,
-    profileUrl: typeof row.profile_url === "string" ? row.profile_url : null,
-    bindingSource: textValue(row.binding_source) as PlatformAccountIdentityBinding["bindingSource"],
-    boundAt: textValue(row.bound_at),
-    createdAt: textValue(row.created_at),
-    updatedAt: textValue(row.updated_at)
-  };
-}
-function toOneShotPublicationAuthorization(row: Row): OneShotPublicationAuthorization {
-  return {
-    authorization: textValue(row.authorization) as OneShotPublicationAuthorization["authorization"],
-    state: textValue(row.state) as OneShotPublicationAuthorization["state"],
-    platformKey: textValue(row.platform_key) as OneShotPublicationAuthorization["platformKey"],
-    accountId: textValue(row.account_id) as OneShotPublicationAuthorization["accountId"],
-    operationId: textValue(row.operation_id),
-    mode: textValue(row.mode) as OneShotPublicationAuthorization["mode"],
-    publicationTransactionCount: intValue(row.publication_transaction_count),
-    publicationCommitActionCount: intValue(row.publication_commit_action_count),
-    finalSubmitAttemptCount: intValue(row.final_submit_attempt_count),
-    finalSubmitRetryCount: intValue(row.final_submit_retry_count),
-    finalSubmitActionStarted: boolValue(row.final_submit_action_started),
-    finalSubmitActionCompleted: boolValue(row.final_submit_action_completed),
-    createdAt: textValue(row.created_at),
-    updatedAt: textValue(row.updated_at),
-    consumedAt: typeof row.consumed_at === "string" ? row.consumed_at : null
-  };
-}
 function toPlatform(row: Row): Platform {
   const lifecycle = textValue(row.verification_status);
   const transport = (textValue(row.transport) || "manual") as Platform["transport"];
@@ -3335,7 +3190,7 @@ function selfTestLevel(value: unknown): PlatformSelfTestLevel { return ["L1_LOGI
 function selfTestResult(value: unknown): PlatformSelfTestResult { return ["NOT_TESTED", "TESTING", "PASSED", "PARTIAL_PASSED", "WAITING_FOR_USER", "FAILED", "NOT_SUPPORTED"].includes(textValue(value)) ? textValue(value) as PlatformSelfTestResult : "NOT_TESTED"; }
 function selfTestCleanupStatus(value: unknown): PlatformSelfTestCleanupStatus { return ["NOT_AVAILABLE", "AVAILABLE", "WAITING_FOR_CONFIRMATION", "CLEANED", "FAILED"].includes(textValue(value)) ? textValue(value) as PlatformSelfTestCleanupStatus : "NOT_AVAILABLE"; }
 function toPlatformSelfTestStep(row: Row): PlatformSelfTestStep { return { id: textValue(row.id), testRunId: textValue(row.test_run_id), platformKey: textValue(row.platform_key), platformAccountId: textValue(row.platform_account_id), testLevel: selfTestLevel(row.test_level), stepKey: textValue(row.step_key), startedAt: textValue(row.started_at), finishedAt: typeof row.finished_at === "string" ? row.finished_at : null, result: selfTestResult(row.result), errorCode: typeof row.error_code === "string" ? row.error_code : null, message: typeof row.message === "string" ? row.message : null, verificationSignal: typeof row.verification_signal === "string" ? row.verification_signal : null, externalId: typeof row.external_id === "string" ? row.external_id : null, externalUrl: typeof row.external_url === "string" ? row.external_url : null }; }
-function toPlatformSelfTestRun(row: Row, steps: PlatformSelfTestStep[]): PlatformSelfTestRun { const platformAccountId = textValue(row.platform_account_id); return { id: textValue(row.id), testRunId: textValue(row.test_run_id), platformKey: textValue(row.platform_key), accountId: platformAccountId, platformAccountId, requestedLevel: selfTestLevel(row.requested_level), overallResult: selfTestResult(row.overall_result), startedAt: textValue(row.started_at), finishedAt: typeof row.finished_at === "string" ? row.finished_at : null, lastTestedAt: textValue(row.last_tested_at), publishConfirmedAt: typeof row.publish_confirmed_at === "string" ? row.publish_confirmed_at : null, deleteConfirmedAt: typeof row.delete_confirmed_at === "string" ? row.delete_confirmed_at : null, testArticleId: typeof row.test_article_id === "string" ? row.test_article_id : null, publishJobId: typeof row.publish_job_id === "string" ? row.publish_job_id : null, publishRecordId: typeof row.publish_record_id === "string" ? row.publish_record_id : null, externalId: typeof row.external_id === "string" ? row.external_id : null, externalUrl: typeof row.external_url === "string" ? row.external_url : null, cleanupStatus: selfTestCleanupStatus(row.cleanup_status), cleanedAt: typeof row.cleaned_at === "string" ? row.cleaned_at : null, steps }; }
+function toPlatformSelfTestRun(row: Row, steps: PlatformSelfTestStep[]): PlatformSelfTestRun { return { id: textValue(row.id), testRunId: textValue(row.test_run_id), platformKey: textValue(row.platform_key), platformAccountId: textValue(row.platform_account_id), requestedLevel: selfTestLevel(row.requested_level), overallResult: selfTestResult(row.overall_result), startedAt: textValue(row.started_at), finishedAt: typeof row.finished_at === "string" ? row.finished_at : null, lastTestedAt: textValue(row.last_tested_at), publishConfirmedAt: typeof row.publish_confirmed_at === "string" ? row.publish_confirmed_at : null, deleteConfirmedAt: typeof row.delete_confirmed_at === "string" ? row.delete_confirmed_at : null, testArticleId: typeof row.test_article_id === "string" ? row.test_article_id : null, publishJobId: typeof row.publish_job_id === "string" ? row.publish_job_id : null, publishRecordId: typeof row.publish_record_id === "string" ? row.publish_record_id : null, externalId: typeof row.external_id === "string" ? row.external_id : null, externalUrl: typeof row.external_url === "string" ? row.external_url : null, cleanupStatus: selfTestCleanupStatus(row.cleanup_status), cleanedAt: typeof row.cleaned_at === "string" ? row.cleaned_at : null, steps }; }
 function toJob(row: Row): PublishJob { const imageSelectionMode = ["random", "manual", "none"].includes(textValue(row.image_selection_mode)) ? textValue(row.image_selection_mode) as PublishJob["imageSelectionMode"] : "none"; const finalPublishMode = ["PREPARE_ONLY", "CONFIRM_BEFORE_PUBLISH", "AUTO_PUBLISH"].includes(textValue(row.final_publish_mode)) ? textValue(row.final_publish_mode) as PublishJob["finalPublishMode"] : "CONFIRM_BEFORE_PUBLISH"; return { id: textValue(row.id), planId: typeof row.plan_id === "string" ? row.plan_id : null, accountId: textValue(row.account_id), platformAccountId: textValue(row.platform_account_id) || textValue(row.account_id), platformKey: textValue(row.platform_key), articleId: textValue(row.article_id), articleVariantId: typeof row.article_variant_id === "string" ? row.article_variant_id : null, scheduledAt: textValue(row.scheduled_at), status: row.status as PublishJob["status"], attemptCount: intValue(row.attempt_count), maxAttempts: intValue(row.max_attempts), nextRetryAt: typeof row.next_retry_at === "string" ? row.next_retry_at : null, lastErrorCode: typeof row.last_error_code === "string" ? row.last_error_code as PublishJob["lastErrorCode"] : null, lastErrorMessage: typeof row.last_error_message === "string" ? row.last_error_message : null, startedAt: typeof row.started_at === "string" ? row.started_at : null, finishedAt: typeof row.finished_at === "string" ? row.finished_at : null, createdAt: textValue(row.created_at), dryRun: boolValue(row.dry_run), manualConfirmationRequired: boolValue(row.manual_confirmation_required), finalPublishMode, confirmedAt: typeof row.confirmed_at === "string" ? row.confirmed_at : null, contentKind: row.content_kind === "video" ? "video" : "article", videoAssetId: typeof row.video_asset_id === "string" ? row.video_asset_id : null, selectedImageAssetId: typeof row.selected_image_asset_id === "string" ? row.selected_image_asset_id : null, imageSelectionMode }; }
 function toVideoAsset(row: Row): VideoAsset { return { id: textValue(row.id), localPath: textValue(row.local_path), fileName: textValue(row.file_name), mimeType: textValue(row.mime_type), size: intValue(row.size_bytes), ...(row.duration_ms === null || row.duration_ms === undefined ? {} : { durationMs: intValue(row.duration_ms) }), ...(row.width === null || row.width === undefined ? {} : { width: intValue(row.width) }), ...(row.height === null || row.height === undefined ? {} : { height: intValue(row.height) }), createdAt: textValue(row.created_at) }; }
 function toStoredVideoAsset(row: Row, db: Database.Database): StoredVideoAsset {
@@ -3346,6 +3201,6 @@ function toStoredVideoAsset(row: Row, db: Database.Database): StoredVideoAsset {
   const status: StoredVideoAssetStatus = records.some((record) => boolValue(record.success) && !boolValue(record.dry_run) && textValue(record.status) === "Published") ? "Published" : records.some((record) => textValue(record.status) === "Failed" || (!boolValue(record.success) && !boolValue(record.dry_run))) || jobs.some((job) => textValue(job.status) === "Failed") ? "Failed" : records.some((record) => boolValue(record.success) && boolValue(record.dry_run)) ? "DryRun" : jobs.length > 0 ? "Ready" : ["Draft", "Ready", "DryRun", "Published", "Failed"].includes(storedStatus) ? storedStatus : "Draft";
   return { ...toVideoAsset(row), brandId: typeof row.brand_id === "string" ? row.brand_id : null, title: textValue(row.title) || textValue(row.file_name), description: textValue(metadata.description), tags: Array.isArray(metadata.tags) ? metadata.tags.filter((item): item is string => typeof item === "string") : [], coverPath: typeof metadata.coverPath === "string" ? metadata.coverPath : null, coverAssetId: typeof metadata.coverAssetId === "string" ? metadata.coverAssetId : null, platformFields: nestedStringRecord(metadata.platformFields), status };
 }
-function toRecord(row: Row): PublishRecord { const status = ["DryRun", "Prepared", "Submitted", "Publishing", "Published", "Failed"].includes(textValue(row.status)) ? textValue(row.status) as PublishRecord["status"] : "Published"; const publishMode = ["AUTO", "ASSISTED", "MANUAL"].includes(textValue(row.publish_mode)) ? textValue(row.publish_mode) as PublishRecord["publishMode"] : "MANUAL"; const verificationStatus = ["NotTested", "WaitingUser", "Verified", "Failed"].includes(textValue(row.verification_status)) ? textValue(row.verification_status) as PublishRecord["verificationStatus"] : "NotTested"; const imageSelectionMode = ["random", "manual", "none"].includes(textValue(row.image_selection_mode)) ? textValue(row.image_selection_mode) as PublishRecord["imageSelectionMode"] : "none"; return { id: textValue(row.id), jobId: textValue(row.job_id), accountId: textValue(row.account_id), platformAccountId: textValue(row.platform_account_id) || textValue(row.account_id), platformKey: textValue(row.platform_key), articleId: textValue(row.article_id), publishedUrl: typeof row.published_url === "string" ? row.published_url : null, publishedExternalId: typeof row.published_external_id === "string" ? row.published_external_id : null, success: boolValue(row.success), status, response: parseJson<Record<string, unknown>>(row.response_json, {}), publishedAt: textValue(row.published_at), dryRun: boolValue(row.dry_run), publishMode, automationType: isPlatformCapability(row.automation_type) ? row.automation_type : "Manual", browserSessionIdHash: typeof row.browser_session_id_hash === "string" ? row.browser_session_id_hash : null, operator: textValue(row.operator) || "desktop-user", verificationStatus, editorOpenedAt: typeof row.editor_opened_at === "string" ? row.editor_opened_at : null, titleFilled: row.title_filled === null || row.title_filled === undefined ? null : boolValue(row.title_filled), bodyFilled: row.body_filled === null || row.body_filled === undefined ? null : boolValue(row.body_filled), selectedImageAssetId: typeof row.selected_image_asset_id === "string" ? row.selected_image_asset_id : null, imageSelectionMode }; }
+function toRecord(row: Row): PublishRecord { const status = ["DryRun", "Prepared", "Submitted", "Publishing", "Published", "Failed"].includes(textValue(row.status)) ? textValue(row.status) as PublishRecord["status"] : "Published"; const publishMode = ["AUTO", "ASSISTED", "MANUAL"].includes(textValue(row.publish_mode)) ? textValue(row.publish_mode) as PublishRecord["publishMode"] : "MANUAL"; const verificationStatus = ["NotTested", "WaitingUser", "Verified", "Failed"].includes(textValue(row.verification_status)) ? textValue(row.verification_status) as PublishRecord["verificationStatus"] : "NotTested"; const imageSelectionMode = ["random", "manual", "none"].includes(textValue(row.image_selection_mode)) ? textValue(row.image_selection_mode) as PublishRecord["imageSelectionMode"] : "none"; return { id: textValue(row.id), jobId: textValue(row.job_id), accountId: textValue(row.account_id), platformAccountId: textValue(row.platform_account_id) || textValue(row.account_id), platformKey: textValue(row.platform_key), articleId: textValue(row.article_id), publishedUrl: typeof row.published_url === "string" ? row.published_url : null, publishedExternalId: typeof row.published_external_id === "string" ? row.published_external_id : null, success: boolValue(row.success), status, response: parseJson<Record<string, unknown>>(row.response_json, {}), publishedAt: textValue(row.published_at), dryRun: boolValue(row.dry_run), publishMode, automationType: isPlatformCapability(row.automation_type) ? row.automation_type : "Manual", browserSessionIdHash: typeof row.browser_session_id_hash === "string" ? row.browser_session_id_hash : null, operator: textValue(row.operator) || "desktop-user", verificationStatus, editorOpenedAt: typeof row.editor_opened_at === "string" ? row.editor_opened_at : null, titleFilled: row.title_filled === null || row.title_filled === undefined ? null : boolValue(row.title_filled), bodyFilled: row.body_filled === null || row.body_filled === undefined ? null : boolValue(row.body_filled), selectedImageAssetId: typeof row.selected_image_asset_id === "string" ? row.selected_image_asset_id : null, imageSelectionMode, submissionAttemptId: typeof row.submission_attempt_id === "string" ? row.submission_attempt_id : null, remoteStatus: typeof row.remote_status === "string" ? row.remote_status as PublishRemoteStatus : null }; }
 function toNotification(row: Row): Notification { return { id: textValue(row.id), level: row.level as Notification["level"], title: textValue(row.title), message: textValue(row.message), relatedId: typeof row.related_id === "string" ? row.related_id : null, read: boolValue(row.read), createdAt: textValue(row.created_at) }; }
 function toLog(row: Row): ActivityLog { return { id: textValue(row.id), timestamp: textValue(row.created_at), level: row.level as ActivityLog["level"], module: textValue(row.module), code: textValue(row.code), message: textValue(row.message), context: parseJson<Record<string, unknown>>(row.context_json, {}) }; }

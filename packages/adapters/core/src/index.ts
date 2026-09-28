@@ -15,21 +15,16 @@ import type {
   ValidationResult
 } from "@publisher/domain";
 import { isAutomationAdapter, type AutomationAdapter } from "./automation";
-import type { OneShotPublicationGuard } from "./one-shot-publication";
-export * from "./one-shot-publication";
 
 export type BrowserPublishReconciliationStatus = "FOUND_PUBLISHED" | "CONFIRMED_NOT_PUBLISHED" | "STILL_UNCERTAIN";
 
 export interface BrowserPublishAttemptContext {
   jobId: string;
   submissionIntentId: string;
+  submissionAttemptId?: string;
   attempt: number;
-  /** Called immediately before the adapter triggers the real final-submit side effect. */
+  /** Must be called synchronously immediately before the real final-submit side effect; persists the one-shot boundary and throws if already used. */
   markSubmissionSideEffect?: () => void;
-  /** Present only for the explicitly owner-authorized, XHS one-shot publish path. */
-  oneShotPublicationGuard?: OneShotPublicationGuard;
-  /** Present only for the fixed Task10S action completing an already-uploaded retained editor. */
-  task10sRetainedEditor?: true;
 }
 
 export interface BrowserPublishPreflightResult {
@@ -49,10 +44,16 @@ export interface BrowserPublishReconciliationInput {
   finalSubmitCount?: number;
   expectedExternalId?: string | null;
   expectedPublishedUrl?: string | null;
+  /** Stable account identity persisted by the account connection flow. */
+  expectedCreatorId?: string;
+  /** Durable final-submit boundary time; never inferred from a title. */
+  submittedAt?: string;
 }
 
 export interface BrowserPublishReconciliationResult {
   status: BrowserPublishReconciliationStatus;
+  /** State of the uniquely matched account-owned management row, when available. */
+  remoteState?: "PUBLISHED" | "REVIEWING" | "REJECTED" | "DRAFT" | "SCHEDULED" | "NOT_FOUND" | "UNKNOWN" | "AMBIGUOUS";
   externalId?: string;
   publishedUrl?: string;
   titleMatch: boolean;
@@ -73,6 +74,8 @@ export interface PlatformAdapter {
   refreshLogin?(ctx: AccountContext): Promise<unknown>;
   getAccountProfile?(ctx: AccountContext): Promise<AccountProfile>;
   publishArticle(ctx: AccountContext, article: PublishArticleInput): Promise<PublishResult>;
+  /** Optional fail-closed availability check before Publisher creates a submission intent or crosses its submit boundary. */
+  assertFormalSubmitAvailable?(): void;
   /** Optional platform-specific no-click readiness check before the atomic submit claim. */
   prepareFinalSubmit?(ctx: AccountContext, article: PublishArticleInput): Promise<BrowserPublishPreflightResult>;
   /** Platform-specific L5 final submit. Generic adapters must remain fail-closed. */
@@ -88,6 +91,7 @@ export interface PlatformAdapter {
   /** Optional reviewed cleanup capability. It must never be called without a separate user confirmation. */
   deleteContent?(ctx: AccountContext, externalId: string): Promise<{ deleted: boolean; response: Record<string, unknown> }>;
   publishVideo?(ctx: AccountContext, video: PublishVideoInput): Promise<PublishResult>;
+  /** Read-only remote status lookup. This method must never submit or retry a publish request. */
   getPublishStatus?(ctx: AccountContext, externalId: string): Promise<PublishStatusResult>;
   validateArticle?(article: PublishArticleInput): Promise<ValidationResult>;
   validateVideo?(video: PublishVideoInput): Promise<ValidationResult>;
@@ -114,6 +118,8 @@ export class AdapterRegistry {
     if (new Set(credentialKeys).size !== credentialKeys.length) throw new Error(`Adapter credential schema contains duplicate keys: ${adapter.platformKey}`);
     if (adapter.manifest.transport !== "manual" && adapter.manifest.officialSources.length === 0) throw new Error(`Adapter official sources are required: ${adapter.platformKey}`);
     const registered = this.adapters.get(adapter.platformKey) ?? [];
+    if (adapter.manifest.preferredForAccountConnection && registered.some((candidate) => candidate.manifest.preferredForAccountConnection))
+      throw new Error(`Multiple preferred account connection adapters registered for platform: ${adapter.platformKey}`);
     const overlaps = registered.some((candidate) =>
       (candidate.manifest.supportsArticle && adapter.manifest.supportsArticle)
       || (candidate.manifest.supportsVideo && adapter.manifest.supportsVideo)
@@ -133,12 +139,16 @@ export class AdapterRegistry {
   }
 
   getForConnection(platformKey: string): PlatformAdapter {
+    const preferred = this.preferredConnectionAdapter(platformKey);
+    if (preferred) return preferred;
     const connectionAdapters = this.connectionAdapters(platformKey);
     if (connectionAdapters.length > 1) throw new Error(`Multiple account connection adapters registered for platform: ${platformKey}`);
     return connectionAdapters[0] ?? this.get(platformKey);
   }
 
   tryGetForConnection(platformKey: string): PlatformAdapter | null {
+    const preferred = this.preferredConnectionAdapter(platformKey);
+    if (preferred) return preferred;
     const connectionAdapters = this.connectionAdapters(platformKey);
     if (connectionAdapters.length > 1) throw new Error(`Multiple account connection adapters registered for platform: ${platformKey}`);
     return connectionAdapters[0] ?? this.tryGet(platformKey);
@@ -178,6 +188,10 @@ export class AdapterRegistry {
 
   private connectionAdapters(platformKey: string): AutomationAdapter[] {
     return (this.adapters.get(platformKey) ?? []).filter(isAutomationAdapter);
+  }
+
+  private preferredConnectionAdapter(platformKey: string): PlatformAdapter | null {
+    return (this.adapters.get(platformKey) ?? []).find((adapter) => adapter.manifest.preferredForAccountConnection) ?? null;
   }
 }
 

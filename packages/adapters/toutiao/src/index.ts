@@ -423,4 +423,5 @@ export class ToutiaoAdapter implements PlatformAdapter {
 
 export const ToutiaoOfficialAdapter = ToutiaoAdapter;
 export { ToutiaoArticleBrowserAdapter } from "./browser";
+export { ToutiaoArticlePublisher } from "./article-publisher";
 export default ToutiaoAdapter;

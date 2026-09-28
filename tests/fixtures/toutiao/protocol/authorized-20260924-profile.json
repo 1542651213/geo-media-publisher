@@ -1,0 +1,39 @@
+{
+  "source": "AUTHORIZED_SHADOW_CAPTURE",
+  "secretsRedacted": true,
+  "profileVersion": "toutiao-creator-web-20260924-read-only-v1",
+  "capturedAt": "2026-09-24T07:02:12.346Z",
+  "creatorHost": "mp.toutiao.com",
+  "authStrategy": {
+    "method": "GET",
+    "endpointPath": "/mp/agw/media/user_login_status_api",
+    "successHttpStatus": 200,
+    "successShape": "code=0,data.is_login=true",
+    "invalidShape": "NOT_CAPTURED"
+  },
+  "csrfStrategy": {
+    "observation": "REQUEST_HEADER_PRESENT_ON_READ_ONLY_GET",
+    "headerName": "x-secsdk-csrf-token",
+    "source": "UNKNOWN",
+    "articlePublishRequirement": "UNKNOWN"
+  },
+  "antiTokenStrategy": {
+    "method": "GET",
+    "endpointPath": "/tt-anti-token",
+    "responseShape": "data.token",
+    "articlePublishRequirement": "UNKNOWN"
+  },
+  "msTokenStrategy": {
+    "observation": "QUERY_PARAMETER_ON_MSSDK_BOOTSTRAP_POST",
+    "endpointPaths": ["/web/r/token", "/web/common"],
+    "origin": "UNKNOWN",
+    "articlePublishRequirement": "UNKNOWN"
+  },
+  "signerStrategy": {
+    "signatureParameter": "NOT_OBSERVED_ON_CREATOR_HOME",
+    "browserNativeSigner": "UNKNOWN",
+    "localSigner": "BLOCKED",
+    "productionPath": "BLOCKED"
+  },
+  "tokenLifetimes": "UNKNOWN"
+}

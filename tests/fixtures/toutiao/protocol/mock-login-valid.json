@@ -1,0 +1,22 @@
+{
+  "source": "MOCK_FIXTURE",
+  "secretsRedacted": true,
+  "capturedAt": "2026-09-24T03:00:00.000Z",
+  "platform": "toutiao",
+  "host": "mp.toutiao.com",
+  "endpointPath": "/fixture/session",
+  "method": "GET",
+  "status": 200,
+  "responseShapeVersion": "mock-unverified-v1",
+  "queryParameterNames": [],
+  "requestHeaderNames": ["cookie"],
+  "responseHeaderNames": ["content-type"],
+  "responseKeyShape": ["authenticated"],
+  "cookies": [],
+  "tokens": {
+    "csrf": { "present": false, "length": 0, "sha256": null },
+    "antiToken": { "present": false, "length": 0, "sha256": null },
+    "msToken": { "present": false, "length": 0, "sha256": null },
+    "aBogus": { "present": false, "length": 0, "sha256": null }
+  }
+}

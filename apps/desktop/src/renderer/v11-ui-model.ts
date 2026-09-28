@@ -89,7 +89,7 @@ export const publishStatusTone = (status: PublishJob["status"]): string => {
   return label === "已发布" ? "success" : label === "需要处理" ? "warning" : label === "发布中" ? "purple" : "muted";
 };
 
-export type AccountRuntimeView = Pick<Account, "enabled" | "loginStatus" | "platformKey"> & { accountStatus?: string; runtimeAuthState?: string | null };
+export type AccountRuntimeView = Pick<Account, "enabled" | "loginStatus" | "platformKey"> & { accountStatus?: string; runtimeAuthState?: string | null; imageTextCreatorReady?: boolean };
 
 export const accountStatusLabel = (account: Pick<Account, "loginStatus"> & { accountStatus?: string }): string => {
   if (account.accountStatus === "Unverified") return "待验证";
@@ -101,8 +101,10 @@ export const accountStatusLabel = (account: Pick<Account, "loginStatus"> & { acc
 
 export const isOnlineAccount = (account: AccountRuntimeView): boolean =>
   account.enabled
+  && (account.platformKey !== "douyin" || account.imageTextCreatorReady === true || account.loginStatus === "logged_in")
   && (account.platformKey !== "xiaohongshu" || account.runtimeAuthState === "AUTHENTICATED")
-  && (account.loginStatus === "logged_in" || account.accountStatus === "Connected");
+  && (account.platformKey !== "toutiao" || account.accountStatus === "Connected")
+  && (account.loginStatus === "logged_in" || account.accountStatus === "Connected" || account.platformKey === "douyin" && account.imageTextCreatorReady === true);
 
 export function connectedAccountsForPlatform<T extends AccountRuntimeView>(accounts: T[], platformKey: string): T[] {
   return accounts.filter((account) => account.platformKey === platformKey && isOnlineAccount(account));

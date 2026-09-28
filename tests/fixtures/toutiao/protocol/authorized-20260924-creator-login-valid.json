@@ -1,0 +1,83 @@
+{
+  "source": "AUTHORIZED_SHADOW_CAPTURE",
+  "secretsRedacted": true,
+  "capturedAt": "2026-09-24T07:02:12.346Z",
+  "platform": "toutiao",
+  "host": "mp.toutiao.com",
+  "endpointPath": "/mp/agw/media/user_login_status_api",
+  "method": "GET",
+  "status": 200,
+  "responseShapeVersion": "UNKNOWN",
+  "queryParameterNames": [
+    "is_new_register"
+  ],
+  "requestHeaderNames": [
+    "accept",
+    "cookie",
+    "referer",
+    "sec-ch-ua",
+    "sec-ch-ua-mobile",
+    "sec-ch-ua-platform",
+    "user-agent"
+  ],
+  "responseHeaderNames": [
+    "content-encoding",
+    "content-type",
+    "date",
+    "eagleid",
+    "reporting-endpoints",
+    "server",
+    "server-timing",
+    "strict-transport-security",
+    "timing-allow-origin",
+    "vary",
+    "via",
+    "x-envoy-response-flags",
+    "x-frame-options",
+    "x-tt-agw-login",
+    "x-tt-logid",
+    "x-tt-trace-host",
+    "x-tt-trace-id",
+    "x-tt-trace-tag"
+  ],
+  "responseKeyShape": [
+    "code",
+    "data",
+    "data.is_login",
+    "data.media",
+    "data.media.avatar_info_ok",
+    "data.media.can_renew_account",
+    "data.media.is_media",
+    "data.media.media_info_ok",
+    "data.media.media_status_ok",
+    "data.media.verified_info_ok",
+    "data.user",
+    "data.user.is_virtual_mobile",
+    "data.user.mobile_bind_ok",
+    "data.user.user_status_ok",
+    "message"
+  ],
+  "cookies": [],
+  "tokens": {
+    "csrf": {
+      "present": false,
+      "length": 0,
+      "sha256": null
+    },
+    "antiToken": {
+      "present": false,
+      "length": 0,
+      "sha256": null
+    },
+    "msToken": {
+      "present": false,
+      "length": 0,
+      "sha256": null
+    },
+    "aBogus": {
+      "present": false,
+      "length": 0,
+      "sha256": null
+    }
+  }
+}

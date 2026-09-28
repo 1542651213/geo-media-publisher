@@ -1,0 +1,69 @@
+{
+  "source": "AUTHORIZED_SHADOW_CAPTURE",
+  "secretsRedacted": true,
+  "capturedAt": "2026-09-24T07:02:14.492Z",
+  "platform": "toutiao",
+  "host": "mp.toutiao.com",
+  "endpointPath": "/tt-anti-token",
+  "method": "GET",
+  "status": 200,
+  "responseShapeVersion": "UNKNOWN",
+  "queryParameterNames": [],
+  "requestHeaderNames": [
+    "accept",
+    "cookie",
+    "referer",
+    "sec-ch-ua",
+    "sec-ch-ua-mobile",
+    "sec-ch-ua-platform",
+    "user-agent"
+  ],
+  "responseHeaderNames": [
+    "content-length",
+    "content-type",
+    "date",
+    "eagleid",
+    "reporting-endpoints",
+    "server",
+    "server-timing",
+    "strict-transport-security",
+    "timing-allow-origin",
+    "via",
+    "x-agw-info",
+    "x-frame-options",
+    "x-tt-logid",
+    "x-tt-trace-host",
+    "x-tt-trace-id",
+    "x-tt-trace-tag"
+  ],
+  "responseKeyShape": [
+    "code",
+    "errno",
+    "message",
+    "data",
+    "data.token"
+  ],
+  "cookies": [],
+  "tokens": {
+    "csrf": {
+      "present": false,
+      "length": 0,
+      "sha256": null
+    },
+    "antiToken": {
+      "present": true,
+      "length": 76,
+      "sha256": "c1db450ebd3130aeea33735529a87e74a2cd3d591aeb1363bf682f3586804d61"
+    },
+    "msToken": {
+      "present": false,
+      "length": 0,
+      "sha256": null
+    },
+    "aBogus": {
+      "present": false,
+      "length": 0,
+      "sha256": null
+    }
+  }
+}

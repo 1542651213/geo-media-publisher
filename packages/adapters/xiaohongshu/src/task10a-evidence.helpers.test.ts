@@ -256,42 +256,6 @@ describe("Task 10A evidence analyzer", () => {
     expect(result.sideEffectSummary.finalSubmitCount).toBe(1);
   });
 
-  it("maps structured Task10V identity proof and authorization convergence fields", () => {
-    const shared = { operationId: "task10v-proof", platformKey, accountId: accountA, contextDebugId: "context-v", pageDebugId: "page-v" };
-    const result = analyzeTask10AEvidence({
-      logText: logText([
-        event("2026-08-30T08:00:00.000Z", "XHS_CREATOR_IDENTITY_PROOF", {
-          ...shared,
-          EXPECTED_CREATOR_IDENTITY: "960803317",
-          OBSERVED_CREATOR_IDENTITY: { externalCreatorId: "960803317", stable: true },
-          ACCOUNT_IDENTITY_VERIFIED: true,
-          ACCOUNT_IDENTITY_MISMATCH: false
-        }),
-        event("2026-08-30T08:00:00.001Z", "XHS_IDENTITY_AUTHORIZATION_CONVERGED", {
-          ...shared,
-          ACCOUNT_IDENTITY_VERIFIED: true,
-          ACTIVE_UNUSED_AUTHORIZATION_COUNT: 1,
-          REUSABLE_ONE_SHOT_OPERATION_ID: "run-newest",
-          SUPERSEDED_UNUSED_AUTHORIZATION_COUNT: 1
-        })
-      ]),
-      platformKey,
-      accountId: accountA,
-      operationId: "task10v-proof",
-      publishDomainCounts: counts
-    });
-
-    expect(result).toMatchObject({
-      expectedCreatorIdentity: "960803317",
-      observedCreatorIdentity: { externalCreatorId: "960803317", stable: true },
-      accountIdentityVerified: true,
-      accountIdentityMismatch: false,
-      activeUnusedAuthorizationCount: 1,
-      reusableOneShotOperationId: "run-newest",
-      supersededUnusedAuthorizationCount: 1
-    });
-  });
-
   it("keeps clickable-surface diagnostics at zero final submits without an explicit submit marker", () => {
     const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
     const events = [
@@ -599,60 +563,6 @@ describe("Task 10A evidence analyzer", () => {
       postUploadTerminalStateReached: true,
       editorDiscoveryFailureCode: "TITLE_EDITOR_NOT_FOUND_POST_UPLOAD",
       failureCode: "TITLE_EDITOR_NOT_FOUND_POST_UPLOAD"
-    });
-  });
-
-  it("reports Task10T confirmation lifecycle without treating IPC errors as final submits", () => {
-    const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
-    const events = [
-      ...gateEvents(),
-      event("2026-08-30T08:00:01.020Z", "MIGRATION_DISCOVERY", { ...shared, latestMigrationId: "0023_v150_one_shot_publication_authorization.sql", maxDiscoveredVersion: "0023" }),
-      event("2026-08-30T08:00:01.021Z", "TASK10S_SCHEMA_READY", { ...shared, productionSchemaVersion: "0023", authTablePresent: true }),
-      event("2026-08-30T08:00:01.022Z", "CONFIRM_IPC_ATTEMPT", { ...shared, channel: "platform-self-test:confirm-one-shot-publish" }),
-      event("2026-08-30T08:00:01.023Z", "CONFIRM_IPC_ATTEMPT", { ...shared, channel: "platform-self-test:confirm-one-shot-publish" }),
-      event("2026-08-30T08:00:01.024Z", "IPC_HANDLER_ERROR", { ...shared, channel: "platform-self-test:confirm-one-shot-publish" }, "FINAL_SUBMIT failed while handling confirmation"),
-      event("2026-08-30T08:00:01.025Z", "ONE_SHOT_CONFIRM_STARTED", { ...shared }),
-      event("2026-08-30T08:00:01.026Z", "ONE_SHOT_CONFIRM_ROLLED_BACK", { ...shared, authorizationCreated: false, operationCreated: false }),
-      event("2026-08-30T08:00:01.027Z", "ONE_SHOT_CONFIRM_DUPLICATE_SUPPRESSED", { ...shared })
-    ];
-
-    const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
-
-    expect(result).toMatchObject({
-      productionSchemaVersion: "0023",
-      task10sAuthTablePresent: true,
-      confirmIpcAttemptCount: 3,
-      confirmDuplicateSuppressedCount: 1,
-      confirmTransactionStatus: "ROLLED_BACK",
-      authorizationCreated: "NO",
-      operationCreated: "NO",
-      publicationTransactionCount: 0,
-      sideEffectSummary: { finalSubmitCount: 0 }
-    });
-  });
-
-  it("reports Task10U reconciliation markers without counting them as publication activity", () => {
-    const shared = { operationId: "gate-a", platformKey, accountId: accountA, contextDebugId: "context-a", pageDebugId: "page-a" };
-    const events = [
-      ...gateEvents(),
-      event("2026-08-30T08:00:01.020Z", "PARTIAL_CONFIRMATION_STATE_DETECTED", { ...shared, testRunId: "orphan-1", authorizationCount: 0, operationCount: 0 }),
-      event("2026-08-30T08:00:01.021Z", "PARTIAL_CONFIRM_RECONCILIATION_STARTED", { ...shared, testRunId: "orphan-1" }),
-      event("2026-08-30T08:00:01.022Z", "PARTIAL_CONFIRM_RECONCILIATION_COMMITTED", { ...shared, testRunId: "orphan-1", mutationCount: 1, retryEligible: true, authorizationCreated: false, operationCreated: false, publicationTransactionCount: 0, finalSubmitCount: 0 }),
-      event("2026-08-30T08:00:01.023Z", "PARTIAL_CONFIRM_RECONCILIATION_RESULT", { ...shared, testRunId: "orphan-1", status: "RECONCILED_RETRYABLE", mutationCount: 1, retryEligible: true })
-    ];
-
-    const result = analyzeTask10AEvidence({ logText: logText(events), platformKey, accountId: accountA, publishDomainCounts: counts });
-
-    expect(result).toMatchObject({
-      partialConfirmationStateDetected: true,
-      partialConfirmReconciliationStarted: true,
-      partialConfirmReconciliationCommitted: true,
-      partialConfirmReconciliationRolledBack: false,
-      partialConfirmReconciliationResult: "RECONCILED_RETRYABLE",
-      oneShotConfirmRetryEligible: true,
-      reconciliationMutationCount: 1,
-      publicationTransactionCount: 0,
-      sideEffectSummary: { uploadCount: 0, contentMutationCount: 0, finalSubmitCount: 0 }
     });
   });
 });

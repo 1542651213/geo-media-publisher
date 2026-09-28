@@ -12,7 +12,7 @@ import type {
   ValidationResult
 } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
-import { assertBrowserSessionPageOwnership, BrowserSessionManager, browserExecutionModeFromSettings, browserSessionCredentialKey, browserSessionIdHash, PlatformAdapterError, userInitiatedActionFromSettings, type BrowserExecutionMode, type BrowserRuntimeEvent, type BrowserSession, type BrowserSessionCanonicalPage, type BrowserSessionCloseInfo, type BrowserSessionContextPage, type BrowserSessionContextPageLifecycleEvent, type BrowserSessionRuntimeSnapshot, type BrowserSessionRuntimeState, type BrowserSessionStorageMode, type SystemBrowserChannel } from "@publisher/adapters-core";
+import { assertBrowserSessionPageOwnership, BrowserSessionManager, browserExecutionModeFromSettings, browserSessionCredentialKey, browserSessionIdHash, PlatformAdapterError, userInitiatedActionFromSettings, type BrowserExecutionMode, type BrowserRuntimeEvent, type BrowserSession, type BrowserSessionCanonicalPage, type BrowserSessionCloseInfo, type BrowserSessionRuntimeSnapshot, type BrowserSessionRuntimeState, type BrowserSessionStorageMode, type SystemBrowserChannel } from "@publisher/adapters-core";
 import type { CredentialStore } from "@publisher/security";
 import type { AutomationAdapter, AutomationPrepareResult } from "@publisher/adapters-core";
 
@@ -328,6 +328,10 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     finally { this.finishConnection(identity); }
   }
 
+  async closeRuntimeSession(ctx: AccountContext): Promise<void> {
+    await this.closeActive(this.identity(ctx), { reason: "CONNECTION_RELEASE", callerOperation: "BrowserAutomationAdapter.closeRuntimeSession" });
+  }
+
   rebindAccountSession(from: AccountContext, to: AccountContext): void {
     const fromIdentity = this.identity(from);
     const toIdentity = this.identity(to);
@@ -400,13 +404,14 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
       platformKey: identity.platformKey,
       accountId: identity.accountId,
       sessionExists: false,
-      browserSessionIdentity: null,
       contextDebugId: runtimeState.contextDebugId,
       canonicalPageDebugId: null,
       browserConnected: null,
       contextExists: false,
       contextPageCount: null,
       canonicalPageExists: false,
+      canonicalPageHost: null,
+      canonicalPagePath: null,
       canonicalPageClosed: null,
       canonicalPageContextMatchesSession: null,
       runtimeAuthState: runtimeState.state,
@@ -483,28 +488,6 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     if (!pages.includes(page)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", `BrowserSession/Page mismatch：accountId=${ctx.accountId} 的 canonical Page 不属于当前 Context`);
     assertBrowserSessionPageOwnership(session, page);
     return { session, page, pageDebugId: session.pageDebugId ?? "unknown-page" };
-  }
-
-  /** Diagnostic-only enumeration of Pages already present in the owned Context. */
-  protected activeContextPages(ctx: AccountContext): readonly BrowserSessionContextPage[] | null {
-    const identity = this.identity(ctx);
-    const session = this.activeSession(identity);
-    if (!session || session.executionMode !== browserExecutionModeFromSettings(ctx.settings)) return null;
-    const pages = this.sessionManager.getContextPages(identity);
-    if (pages === null) return null;
-    for (const item of pages) {
-      if (item.session !== session) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "BrowserSession/Page mismatch：Context inventory returned a foreign Session");
-      assertBrowserSessionPageOwnership(session, item.page);
-    }
-    return pages;
-  }
-
-  /** Diagnostic-only creation events captured from the owned Context. */
-  protected activeContextPageLifecycleEvents(ctx: AccountContext): readonly BrowserSessionContextPageLifecycleEvent[] | null {
-    const identity = this.identity(ctx);
-    const session = this.activeSession(identity);
-    if (!session || session.executionMode !== browserExecutionModeFromSettings(ctx.settings)) return null;
-    return this.sessionManager.getContextPageLifecycleEvents(identity);
   }
 
   /** Diagnostic-only access for a platform adapter that needs to snapshot its own live session before close. */
@@ -585,7 +568,9 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
   private activeSession(identity: { platformKey: string; accountId: string }): BrowserSession | null {
     const manager = this.sessionManager as unknown as { getActiveSession?: (value: { platformKey: string; accountId: string }) => BrowserSession | null; clearActiveSession?: (value: { platformKey: string; accountId: string }) => void };
     const managed = manager.getActiveSession?.(identity) ?? null;
-    const session = managed ?? this.fallbackActiveSessions.get(`${identity.platformKey}:${identity.accountId}`) ?? null;
+    const key = `${identity.platformKey}:${identity.accountId}`;
+    if (typeof manager.getActiveSession === "function" && !managed) this.fallbackActiveSessions.delete(key);
+    const session = typeof manager.getActiveSession === "function" ? managed : this.fallbackActiveSessions.get(key) ?? null;
     if (session && this.isPageClosed(session.page)) {
       if (this.retainsContextAfterPageClose(identity)) {
         try {

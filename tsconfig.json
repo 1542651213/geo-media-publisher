@@ -14,6 +14,7 @@
     "baseUrl": ".",
     "paths": {
       "@publisher/domain": ["packages/domain/src/index.ts"],
+      "@publisher/domain/toutiao-hash": ["packages/domain/src/toutiao-hash.ts"],
       "@publisher/db": ["packages/db/src/index.ts"],
       "@publisher/ai": ["packages/ai/src/index.ts"],
       "@publisher/image": ["packages/image/src/index.ts"],
@@ -32,6 +33,7 @@
       "@publisher/adapters-youtube": ["packages/adapters/youtube/src/index.ts"],
       "@publisher/adapters-tiktok": ["packages/adapters/tiktok/src/index.ts"],
       "@publisher/adapters-toutiao": ["packages/adapters/toutiao/src/index.ts"],
+      "@publisher/adapters-toutiao/article-api": ["packages/adapters/toutiao/src/article-api/index.ts"],
       "@publisher/adapters-facebook": ["packages/adapters/facebook/src/index.ts"],
       "@publisher/adapters-weibo": ["packages/adapters/weibo/src/index.ts"],
       "@publisher/adapters-baijiahao": ["packages/adapters/baijiahao/src/index.ts"],
@@ -39,7 +41,6 @@
       "@publisher/adapters-sohu-media": ["packages/adapters/sohu-media/src/index.ts"],
       "@publisher/adapters-wechat-channels": ["packages/adapters/wechat-channels/src/index.ts"],
       "@publisher/adapters-xiaohongshu": ["packages/adapters/xiaohongshu/src/index.ts"],
-      "@publisher/adapters-xiaohongshu/*": ["packages/adapters/xiaohongshu/src/*"],
       "@publisher/adapters-qq-public": ["packages/adapters/qq-public/src/index.ts"]
       ,"@publisher/adapters-lieju": ["packages/adapters/lieju/src/index.ts"]
       ,"@publisher/adapters-cnblogs": ["packages/adapters/cnblogs/src/index.ts"]

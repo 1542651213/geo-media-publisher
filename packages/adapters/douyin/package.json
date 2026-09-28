@@ -3,8 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": { ".": "./src/index.ts", "./image-text-browser": "./src/image-text-browser.ts" },
   "dependencies": {
+    "@publisher/adapters-browser": "workspace:*",
     "@publisher/adapters-core": "workspace:*",
     "@publisher/domain": "workspace:*",
     "@publisher/security": "workspace:*"

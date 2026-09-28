@@ -1,31 +1,46 @@
 import { app, dialog, ipcMain, shell } from "electron";
-import { copyFileSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import { basename, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
+import { credentialFingerprint, prepareToutiaoArticleJob, ToutiaoCredentialBundleService } from "@publisher/adapters-toutiao/article-api";
+import { protocolShadowEnabled } from "@publisher/adapters-toutiao/article-api";
+import { ToutiaoArticleBrowserAdapter } from "@publisher/adapters-toutiao/browser";
+import { DouyinImageTextBrowserAdapter } from "@publisher/adapters-douyin/image-text-browser";
+import { freezeDouyinImageText } from "@publisher/domain/douyin-image-text";
 import { backupDatabase, validateDatabaseBackup, type AIBatchTarget, type AppRepository, type ContentStudioTaskPayload, type HumanReviewSubmitInput } from "@publisher/db";
 import type { AccountDisconnectResult, BatchGenerationInput, ContentStudioGenerationInput } from "../shared/api";
 import { AIProviderError, DeepSeekErrorMapper, DeepSeekProvider, FallbackAIProvider, MockAIProvider, OpenAICompatibleProvider, contentHash, type AIConnectionDiagnostic, type AIConnectionResult, type AIProvider } from "@publisher/ai";
 import { MockImageProvider, OpenAICompatibleImageProvider, persistGeneratedImage, type ImageProvider } from "@publisher/image";
 import { exportLogBundle } from "@publisher/logger";
-import { CredentialDecryptError, type CredentialStatus, type CredentialStore } from "@publisher/security";
-import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STUDIO_PLATFORM_KEYS, EXCEL_ADVANCED_ARTICLE_HEADERS, EXCEL_SIMPLE_ARTICLE_HEADERS, ONE_SHOT_REAL_PUBLISH_ACCEPTANCE, PROMOTION_STRENGTHS, SEARCH_INTENTS, checkGeneratedArticleQuality, selectRelevantBrandFacts, type AccountContext, type AccountProfile, type AccountStatus, type AIUsage, type CredentialField, type ContentStudioPlatformKey, type CreatorIdentityVerificationResult, type ExcelImportPreview, type ImageAsset } from "@publisher/domain";
+import { CredentialDecryptError, SafeStorageCredentialStore, type CredentialStatus, type CredentialStore } from "@publisher/security";
+import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STUDIO_PLATFORM_KEYS, EXCEL_ADVANCED_ARTICLE_HEADERS, EXCEL_SIMPLE_ARTICLE_HEADERS, PROMOTION_STRENGTHS, SEARCH_INTENTS, checkGeneratedArticleQuality, selectRelevantBrandFacts, type AccountContext, type AccountProfile, type AccountStatus, type AIUsage, type CredentialField, type ContentStudioPlatformKey, type ExcelImportPreview, type ImageAsset } from "@publisher/domain";
 import { BrowserRuntimeError, assertExternalLaunchAllowed, browserSessionCredentialKey, browserSessionIdHash, isAutomationAdapter, type AdapterRegistry, type AutomationAdapter, type ExternalLaunchTriggerSource, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
 import type { PublisherService, PersistentScheduler } from "@publisher/publisher";
-import type { XhsEditorLoadDiagnosticResult, XhsEditorNetworkDiagnosticResult } from "@publisher/adapters-xiaohongshu/browser";
 import { resumePersistentBatches, runPersistentBatchTask } from "./ai-batch";
 import { CONTENT_STUDIO_PROMPT_VERSION, resumeContentStudioTasks, runContentStudioTask } from "./content-studio";
 import { runQualityGate, runQualityGateForArticle, runQualityGateForVariant } from "./quality-gate";
 import { runQualityBenchmark } from "./quality-benchmark";
 import { OAuthSessionManager } from "./oauth-session-manager";
+import { ToutiaoSessionActivation } from "./toutiao-session-activation";
+import { runToutiaoProductionPreflight } from "./toutiao-production-preflight";
+import { auditMvp5OneShotCapture, claimControlledArticleNewCapture, claimControlledPublishRequestCapture,
+  claimMvp53OwnerRecapture, readMvp5LockedClaimEvidence } from "./toutiao-article-new-once";
+import { evaluateMvp5CaptureReadiness } from "./toutiao-capture-binding-readiness";
+import { ToutiaoCapturedRequestOneShot } from "./toutiao-captured-request-one-shot";
+import { synchronizeOwnedToutiaoCredential } from "./toutiao-owned-credential-binding";
 import { writeAdvancedExcelTemplate, writeSimpleExcelTemplate } from "./excel-templates";
 import { buildExcelImportErrorReportCsv, readExcelArticleFile } from "./excel-import";
 import { PlatformSelfTestService } from "./platform-self-test";
 import type { ProcessDiagnostics } from "./process-diagnostics";
 import { addAccountConnectionModes, browserAccountConnectionResult, browserAccountDisconnectResult } from "./account-connection";
 import { recordRuntimeHeartbeat } from "./runtime-observability";
+import { assertDouyinAcceptanceChannel } from "./douyin-acceptance-gate";
+import { selectDouyinBodyDiagnosticTarget } from "./douyin-body-diagnostic-gate";
+import { selectDouyinMusicDiagnosticTarget } from "./douyin-music-diagnostic-gate";
+import { assertDouyinR14ReadOnlyChannel } from "./douyin-r14-readonly-gate";
 
 const idSchema = z.string().min(1);
 function safeErrorCode(error: unknown): string {
@@ -81,11 +96,40 @@ export interface IpcDependencies {
 }
 
 let processDiagnostics: ProcessDiagnostics | null = null;
+let acceptanceRepository: AppRepository | null = null;
+const mvp5PausedChannels = new Set(["articles:prepare-publish", "jobs:run", "jobs:confirm", "jobs:retry", "jobs:prepare-existing-douyin",
+  "platform-self-test:run-post-upload-discovery", "platform-self-test:continue", "platform-self-test:run-level",
+  "platform-self-test:request-publish", "platform-self-test:confirm-publish"]);
 
 function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent, payload: unknown) => unknown): void {
   ipcMain.removeHandler(channel);
   ipcMain.handle(channel, async (event, payload) => {
     try {
+      const douyinR14JobId = process.env.DOUYIN_R1_14_READONLY_JOB_ID?.trim();
+      if (douyinR14JobId) assertDouyinR14ReadOnlyChannel(channel, payload, {
+        jobId: douyinR14JobId,
+        accountId: process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim() ?? "",
+        articleId: process.env.DOUYIN_R1_ACCEPTANCE_ARTICLE_ID?.trim() ?? "",
+        nativeSubmitEnabled: process.env.DOUYIN_IMAGE_TEXT_NATIVE_SUBMIT_ENABLED === "true"
+      });
+      if ((process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED === "true" || process.env.TOUTIAO_READONLY_PREFLIGHT === "true") && mvp5PausedChannels.has(channel))
+        throw new Error("TOUTIAO_MVP5_OTHER_PUBLISH_PATHS_PAUSED");
+      if (process.env.TOUTIAO_NATIVE_ACCEPTANCE_ACCOUNT_ID?.trim() && mvp5PausedChannels.has(channel)
+        && !["platform-self-test:request-publish", "platform-self-test:confirm-publish", "platform-self-test:continue"].includes(channel))
+        throw new Error("TOUTIAO_NATIVE_ACCEPTANCE_OTHER_PUBLISH_PATHS_PAUSED");
+      const douyinAcceptanceAccountId = process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim();
+      if (douyinAcceptanceAccountId && mvp5PausedChannels.has(channel)) {
+        const douyinAcceptanceArticleId = process.env.DOUYIN_R1_ACCEPTANCE_ARTICLE_ID?.trim();
+        if (!douyinAcceptanceArticleId) throw new Error("DOUYIN_ACCEPTANCE_ARTICLE_BINDING_REQUIRED");
+        if (!acceptanceRepository) throw new Error("DOUYIN_ACCEPTANCE_REPOSITORY_UNAVAILABLE");
+        assertDouyinAcceptanceChannel(channel, payload,
+          { accountId: douyinAcceptanceAccountId, articleId: douyinAcceptanceArticleId },
+          (id) => {
+            const job = acceptanceRepository?.getJob(id);
+            return job ? { id: job.id, accountId: job.accountId, articleId: job.articleId,
+              platformKey: job.platformKey, contentKind: job.contentKind ?? null } : null;
+          });
+      }
       return await handler(event, payload);
     } catch (error) {
       processDiagnostics?.recordIpcError(channel, error);
@@ -94,10 +138,16 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
   });
 }
 
-export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
+export function registerIpc(deps: IpcDependencies): void {
   processDiagnostics = deps.processDiagnostics ?? null;
+  acceptanceRepository = deps.repository;
   const { repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir, logger, credentials, aiCredentials } = deps;
-  const listPlatformViews = (): ReturnType<AppRepository["listPlatforms"]> => addAccountConnectionModes(repository.listPlatforms(), registry);
+  const capturedDouyinBodyDiagnosticJobs = new Set<string>();
+  const capturedDouyinMusicDiagnosticJobs = new Set<string>();
+  const listPlatformViews = (): ReturnType<AppRepository["listPlatforms"]> => addAccountConnectionModes(repository.listPlatforms(), registry).map((platform) =>
+    platform.platformKey === "douyin" ? { ...platform,
+      capabilities: { ...platform.capabilities, article: true, imagePost: true, maxImageCount: 1,
+        scheduledPublish: false, draft: false, tags: false } } : platform);
   const createUserAction = (triggerSource: Exclude<ExternalLaunchTriggerSource, "APP_STARTUP">): UserInitiatedAction => {
     const action = { userActionId: randomUUID(), triggerSource } satisfies UserInitiatedAction;
     assertExternalLaunchAllowed(action);
@@ -113,6 +163,10 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
       platformKey,
       settings: {
         triggerSource: action?.triggerSource ?? "APP_STARTUP",
+        ...(platformKey === "toutiao" && account.externalAccountId ? { expectedCreatorId: account.externalAccountId } : {}),
+        ...(platformKey === "douyin" && repository.getDouyinImageTextConnection(accountId)?.active
+          ? { expectedCreatorId: repository.getDouyinImageTextConnection(accountId)!.creatorId,
+            expectedLoginGeneration: repository.getDouyinImageTextConnection(accountId)!.loginGeneration } : {}),
         ...(action?.userActionId ? { userActionId: action.userActionId } : {})
       },
       secrets: resolveAccountSecrets(accountId, platformKey)
@@ -131,7 +185,33 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
     });
   };
   const oauthSessions = new OAuthSessionManager({ repository, registry, credentials, logger, accountContext });
-  const platformSelfTests = new PlatformSelfTestService({ repository, registry, publisher, resolveAccountSecrets, evidenceDirectory: join(dataDirectory, "evidence"), logger });
+  const toutiaoSessionActivation = new ToutiaoSessionActivation({
+    account: (accountId) => repository.listAccounts().find((item) => item.id === accountId && item.platformKey === "toutiao") ?? null,
+    hasStoredSession: (accountId) => credentials.has(browserSessionCredentialKey({ platformKey: "toutiao", accountId })),
+    snapshot: (accountId) => {
+      const adapter = registry.getForConnection("toutiao");
+      if (!isAutomationAdapter(adapter) || !adapter.getBrowserRuntimeSnapshot) throw new Error("TOUTIAO_BROWSER_RUNTIME_UNAVAILABLE");
+      return adapter.getBrowserRuntimeSnapshot(accountContext(accountId, "toutiao"));
+    },
+    openBackend: (accountId) => {
+      const adapter = registry.getForConnection("toutiao");
+      if (!isAutomationAdapter(adapter)) throw new Error("TOUTIAO_BROWSER_RUNTIME_UNAVAILABLE");
+      return adapter.openBackend(accountContext(accountId, "toutiao", createUserAction("OPEN_BACKEND")));
+    },
+    beginLogin: (accountId) => {
+      const adapter = registry.getForConnection("toutiao");
+      if (!isAutomationAdapter(adapter)) throw new Error("TOUTIAO_BROWSER_RUNTIME_UNAVAILABLE");
+      return adapter.beginLogin(accountContext(accountId, "toutiao", createUserAction("CONNECT_ACCOUNT")));
+    },
+    closeRuntime: async (accountId) => {
+      const adapter = registry.getForConnection("toutiao");
+      if (!isAutomationAdapter(adapter) || !adapter.closeRuntimeSession) throw new Error("TOUTIAO_BROWSER_RUNTIME_UNAVAILABLE");
+      await adapter.closeRuntimeSession(accountContext(accountId, "toutiao"));
+    },
+    onHeartbeat: (status) => logger.info("ACCOUNT", "TOUTIAO_RUNTIME_HEARTBEAT", "头条 BrowserSession 运行时心跳", { accountId: status.accountId, sessionExists: status.sessionExists, contextExists: status.contextExists, canonicalPageExists: status.canonicalPageExists, contextOwnsPage: status.contextOwnsPage, pageAlive: status.pageAlive, pageHost: status.pageHost, runtimeState: status.runtimeState, lastHeartbeatAt: status.lastHeartbeatAt })
+  });
+  const platformSelfTests = new PlatformSelfTestService({ repository, registry, publisher, resolveAccountSecrets, logger,
+    toutiaoNativeAcceptanceAccountId: process.env.TOUTIAO_NATIVE_ACCEPTANCE_ACCOUNT_ID?.trim() });
   const validateVideoAsset = async (assetId: string, platformKey: string): Promise<{ asset: NonNullable<ReturnType<AppRepository["getManagedVideoAsset"]>>; validation: { valid: boolean; errors: string[]; warnings: string[] } }> => {
     const asset = repository.getManagedVideoAsset(assetId);
     if (!asset) throw new Error("视频素材不存在");
@@ -402,13 +482,21 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
     return result.filePath;
   });
   register("articles:prepare-publish", async (_event, payload) => {
-    const input = z.object({ articleId: idSchema, platformKey: idSchema, platformAccountId: idSchema, publishMode: z.enum(["ASSISTED", "MANUAL"]).optional(), finalPublishMode: z.enum(["PREPARE_ONLY", "CONFIRM_BEFORE_PUBLISH", "AUTO_PUBLISH"]).optional(), selectedImageAssetId: idSchema.nullable().optional(), imageSelectionMode: z.enum(["random", "manual", "none"]).optional() }).parse(payload);
+    const input = z.object({ articleId: idSchema, platformKey: idSchema, platformAccountId: idSchema, publishMode: z.enum(["ASSISTED", "MANUAL"]).optional(), finalPublishMode: z.enum(["PREPARE_ONLY", "CONFIRM_BEFORE_PUBLISH", "AUTO_PUBLISH"]).optional(), selectedImageAssetId: idSchema.nullable().optional(), imageSelectionMode: z.enum(["random", "manual", "none"]).optional(), douyinImageTextSettings: z.object({ version: z.literal(1), visibility: z.literal("public"), timing: z.literal("immediate") }).optional(), toutiaoArticleSettings: z.object({ version: z.literal(1), coverMode: z.enum(["auto", "none", "single", "multiple"]), coverImages: z.array(idSchema), articleAdType: z.enum(["none", "platform_default"]), remoteScheduledAt: z.string().nullable() }).optional() }).parse(payload);
     const configuredMode = repository.getSettings().finalPublishMode;
     const finalPublishMode = input.finalPublishMode ?? (configuredMode === "prepare_only" ? "PREPARE_ONLY" : configuredMode === "auto_publish" ? "AUTO_PUBLISH" : "CONFIRM_BEFORE_PUBLISH");
-    const job = repository.createArticlePublishJob({ ...input, finalPublishMode });
+    const articleAdapter = registry.getForContent(input.platformKey, "article");
+    const isApiPlatform = articleAdapter.manifest.transport === "official_api" || articleAdapter.manifest.transport === "web_api";
+    const isToutiaoArticleApi = input.platformKey === "toutiao" && articleAdapter.manifest.transport === "web_api";
+    const job = isToutiaoArticleApi
+      ? repository.createToutiaoArticlePublishJob({ ...input, finalPublishMode, settings: input.toutiaoArticleSettings })
+      : repository.createArticlePublishJob({ ...input, finalPublishMode, articleTransport: isApiPlatform ? "api" : "browser" });
     logger.info("QUALITY_GATE", "CONTENT_REVIEW_MODE_APPLIED", "文章按当前内容审核模式进入发布流程", { articleId: input.articleId, platformKey: input.platformKey, contentReviewMode: repository.getContentReviewMode() });
-    const platform = repository.listPlatforms().find((item) => item.platformKey === input.platformKey);
-    const isApiPlatform = platform?.integrationMode === "API";
+    if (isToutiaoArticleApi) {
+      const prepared = prepareToutiaoArticleJob(repository, job.id);
+      logger.info("PUBLISHER", "TOUTIAO_ARTICLE_PREPARED", "头条图文离线准备完成", { jobId: job.id, payloadHash: prepared.payloadHash, settingsSnapshotVersion: prepared.payload.settingsSnapshotVersion });
+      if (finalPublishMode !== "AUTO_PUBLISH") return { job, record: null, message: "头条图文已离线准备；API 提交尚未实现。" };
+    }
     if (finalPublishMode === "PREPARE_ONLY" && isApiPlatform) return { job, record: null, message: "内容已准备并写入任务；只准备内容模式不会调用平台发布 API。" };
     const action = createUserAction("START_PUBLISH");
     if (finalPublishMode === "AUTO_PUBLISH" && isApiPlatform) {
@@ -498,28 +586,564 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
     if (!adapter || !isAutomationAdapter(adapter) || !adapter.getBrowserRuntimeSnapshot) throw new Error("该平台没有可读取的 BrowserSession runtime snapshot");
     recordRuntimeHeartbeat(logger, "accounts:session-heartbeat");
     const snapshot = adapter.getBrowserRuntimeSnapshot(accountContext(account.id, account.platformKey));
-    logger.info("ACCOUNT", "CANONICAL_SESSION_HEARTBEAT", "只读读取 account-scoped BrowserSession live objects", { phase: input.phase ?? "MANUAL", heartbeatSequence: input.heartbeatSequence ?? randomUUID(), loginGeneration: input.loginGeneration ?? null, ...snapshot });
+    const { canonicalPagePath: _canonicalPagePath, ...safeSnapshot } = snapshot;
+    logger.info("ACCOUNT", "CANONICAL_SESSION_HEARTBEAT", "只读读取 account-scoped BrowserSession live objects", { phase: input.phase ?? "MANUAL", heartbeatSequence: input.heartbeatSequence ?? randomUUID(), loginGeneration: input.loginGeneration ?? null, ...safeSnapshot });
     return snapshot;
+  });
+  register("accounts:get-runtime-session-status", (_event, payload) => {
+    const input = z.object({ accountId: idSchema, platformKey: z.literal("toutiao") }).parse(payload);
+    return toutiaoSessionActivation.status(input.accountId);
+  });
+  register("accounts:activate-session", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema, platformKey: z.literal("toutiao") }).parse(payload);
+    const result = await toutiaoSessionActivation.activate(input.accountId);
+    logger.info("ACCOUNT", "TOUTIAO_SESSION_ACTIVATION", "头条账号 BrowserSession 激活结果", { accountId: input.accountId, outcome: result.outcome, runtimeState: result.runtimeState, reasonCode: result.reasonCode, sessionExists: result.sessionExists, contextExists: result.contextExists, canonicalPageExists: result.canonicalPageExists, contextOwnsPage: result.contextOwnsPage, pageAlive: result.pageAlive, pageHost: result.pageHost, lastHeartbeatAt: result.lastHeartbeatAt });
+    return result;
+  });
+  register("accounts:activate-douyin-image-text", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    const account = repository.getAccountById(input.accountId, "douyin");
+    if (!account || account.archivedAt) throw new Error("Douyin account is unavailable");
+    const binding = repository.getDouyinImageTextConnection(input.accountId);
+    if (!binding?.active) return { status: "BINDING_REQUIRED" as const, creatorId: null, pageHost: null, sessionIdHash: null };
+    if (!credentials.has(browserSessionCredentialKey({ platformKey: "douyin", accountId: input.accountId })))
+      return { status: "NO_STORED_AUTH" as const, creatorId: null, pageHost: null, sessionIdHash: null };
+    const adapter = registry.getForContent("douyin", "article");
+    if (!(adapter instanceof DouyinImageTextBrowserAdapter)) throw new Error("Douyin image/text BrowserNative route is unavailable");
+    const result = await adapter.activateStoredCreatorSession(accountContext(input.accountId, "douyin", createUserAction("OPEN_BACKEND")),
+      Boolean(process.env.DOUYIN_R1_14_READONLY_JOB_ID && process.env.DOUYIN_R1_14_READONLY_JOB_ID.trim()
+        && process.env.DOUYIN_IMAGE_TEXT_NATIVE_SUBMIT_ENABLED !== "true"));
+    logger.info("ACCOUNT", "DOUYIN_IMAGE_TEXT_SESSION_ACTIVATION", "抖音图文受控会话激活检查", {
+      accountId: input.accountId, status: result.status, pageHost: result.pageHost, sessionIdHash: result.sessionIdHash });
+    return result;
+  });
+  register("accounts:readiness-douyin-image-text", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    const account = repository.getAccountById(input.accountId, "douyin");
+    if (!account || account.archivedAt || !repository.getDouyinImageTextConnection(input.accountId)?.active)
+      throw new Error("Douyin Creator binding is unavailable");
+    const adapter = registry.getForContent("douyin", "article");
+    if (!(adapter instanceof DouyinImageTextBrowserAdapter)) throw new Error("Douyin image/text BrowserNative route is unavailable");
+    const readiness = await adapter.inspectOwnedCreatorReadiness(accountContext(input.accountId, "douyin"));
+    if (process.env.DOUYIN_BODY_DIAGNOSTIC_ENABLED === "true") {
+      const configuredJobId = process.env.DOUYIN_BODY_DIAGNOSTIC_JOB_ID?.trim() ?? "";
+      if (!capturedDouyinBodyDiagnosticJobs.has(configuredJobId)) {
+        const job = configuredJobId ? repository.getJob(configuredJobId) : null;
+        const article = job ? repository.getArticle(job.articleId) : null;
+        const target = selectDouyinBodyDiagnosticTarget({ enabled: true,
+          configuredAccountId: process.env.DOUYIN_BODY_DIAGNOSTIC_ACCOUNT_ID?.trim() ?? null,
+          configuredJobId: configuredJobId || null, requestedAccountId: input.accountId,
+          job, article, connection: repository.getDouyinImageTextConnection(input.accountId),
+          payload: job ? repository.getPublishPayload(job.id) : {},
+          intentPresent: Boolean(job && repository.getSubmissionIntentByJob(job.id)),
+          recordPresent: Boolean(job && repository.getPublishRecordByJob(job.id)) });
+        if (!target || !article) throw new Error("DOUYIN_BODY_DIAGNOSTIC_TARGET_MISSING");
+        const image = repository.getImageAsset(target.imageAssetId);
+        if (!image || image.brandId !== article.brandId) throw new Error("DOUYIN_BODY_DIAGNOSTIC_IMAGE_BINDING_MISMATCH");
+        const frozen = await freezeDouyinImageText({ articleId: article.id, accountId: input.accountId,
+          creatorId: target.binding.creatorId, title: article.title, body: article.body,
+          imagePaths: [image.filePath], topics: [], visibility: "public", scheduledAt: null });
+        if (frozen.sourceContentHash !== target.sourceContentHash
+          || frozen.imageHashes[0] !== target.binding.imageSha256)
+          throw new Error("DOUYIN_BODY_DIAGNOSTIC_CONTENT_BINDING_MISMATCH");
+        const diagnostic = await adapter.inspectCurrentImageTextBodyReadOnly(
+          accountContext(input.accountId, "douyin"), target.binding, target.expectedBody);
+        const diagnosticDir = join(dataDirectory, "diagnostics");
+        mkdirSync(diagnosticDir, { recursive: true });
+        const evidencePath = join(diagnosticDir, `douyin-body-${job!.id}-${randomUUID()}.json`);
+        writeFileSync(evidencePath, JSON.stringify({ version: 1, capturedAt: new Date().toISOString(), diagnostic }), "utf8");
+        capturedDouyinBodyDiagnosticJobs.add(job!.id);
+        logger.info("ACCOUNT", "DOUYIN_BODY_DIAGNOSTIC_CAPTURED", "抖音图文只读正文诊断已保存", {
+          accountId: input.accountId, jobId: job!.id, artifactPath: evidencePath,
+          identityMode: diagnostic.identityVerificationMode, candidateCount: diagnostic.body.candidateCount });
+      }
+    }
+    if (process.env.DOUYIN_MUSIC_DIAGNOSTIC_ENABLED === "true") {
+      const configuredJobId = process.env.DOUYIN_MUSIC_DIAGNOSTIC_JOB_ID?.trim() ?? "";
+      if (!capturedDouyinMusicDiagnosticJobs.has(configuredJobId)) {
+        const job = configuredJobId ? repository.getJob(configuredJobId) : null;
+        const target = selectDouyinMusicDiagnosticTarget({
+          configuredAccountId: process.env.DOUYIN_MUSIC_DIAGNOSTIC_ACCOUNT_ID?.trim() ?? null,
+          configuredJobId: configuredJobId || null, requestedAccountId: input.accountId, job,
+          connection: repository.getDouyinImageTextConnection(input.accountId),
+          intent: job ? repository.getSubmissionIntentByJob(job.id) : null,
+          record: job ? repository.getPublishRecordByJob(job.id) : null
+        });
+        const diagnostic = await adapter.inspectCurrentImageTextMusicReadOnly(
+          accountContext(input.accountId, "douyin"), target);
+        const diagnosticDir = join(dataDirectory, "diagnostics");
+        mkdirSync(diagnosticDir, { recursive: true });
+        const evidencePath = join(diagnosticDir, `douyin-music-${target.jobId}-${randomUUID()}.json`);
+        writeFileSync(evidencePath, JSON.stringify({ version: 1, capturedAt: new Date().toISOString(), diagnostic }), "utf8");
+        capturedDouyinMusicDiagnosticJobs.add(target.jobId);
+        logger.info("ACCOUNT", "DOUYIN_MUSIC_DIAGNOSTIC_CAPTURED", "抖音图文只读音乐诊断已保存", {
+          accountId: input.accountId, jobId: target.jobId, artifactPath: evidencePath,
+          classification: diagnostic.music.classification });
+      }
+    }
+    return readiness;
+  });
+  register("accounts:preflight-douyin-management", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    const account = repository.getAccountById(input.accountId, "douyin");
+    if (!account || account.archivedAt || !repository.getDouyinImageTextConnection(input.accountId)?.active)
+      throw new Error("Douyin Creator binding is unavailable");
+    const adapter = registry.getForContent("douyin", "article");
+    if (!(adapter instanceof DouyinImageTextBrowserAdapter)) throw new Error("Douyin image/text BrowserNative route is unavailable");
+    const result = await adapter.preflightManagementReadOnly(accountContext(input.accountId, "douyin"));
+    logger.info("ACCOUNT", "DOUYIN_MANAGEMENT_OWNED_PAGE_PREFLIGHT", "抖音同一受控 Page 的作品管理只读预检", {
+      accountId: input.accountId, ready: result.ready, managementUrl: result.managementUrl,
+      returnUrl: result.returnUrl, stateLabels: result.stateLabels, searchControlCount: result.searchControlCount,
+      imageEntryCount: result.imageEntryCount });
+    return result;
+  });
+  register("accounts:inspect-douyin-management", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    const binding = repository.getDouyinImageTextConnection(input.accountId);
+    if (!binding?.active) throw new Error("Douyin Creator binding is unavailable");
+    const adapter = registry.getForContent("douyin", "article");
+    if (!(adapter instanceof DouyinImageTextBrowserAdapter)) throw new Error("Douyin image/text BrowserNative route is unavailable");
+    const result = await adapter.inspectCurrentManagementPage(accountContext(input.accountId, "douyin"));
+    logger.info("ACCOUNT", "DOUYIN_MANAGEMENT_READONLY_SMOKE", "抖音图文作品管理只读检查", {
+      accountId: input.accountId, ready: result.ready, pageHost: result.pageHost, pagePath: result.pagePath,
+      searchControlCount: result.searchControlCount, stateLabels: result.stateLabels, visibleRowCount: result.visibleRowCount });
+    return result;
+  });
+  register("accounts:inspect-douyin-management-topology", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema, jobId: idSchema }).parse(payload);
+    if (process.env.DOUYIN_R1_14_READONLY_JOB_ID?.trim() !== input.jobId
+      || process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim() !== input.accountId
+      || process.env.DOUYIN_IMAGE_TEXT_NATIVE_SUBMIT_ENABLED === "true")
+      throw new Error("DOUYIN_R14_READONLY_RUNTIME_REQUIRED");
+    const job = repository.getJob(input.jobId);
+    const article = job ? repository.getArticle(job.articleId) : null;
+    const intent = repository.getSubmissionIntentByJob(input.jobId);
+    const record = repository.getPublishRecordByJob(input.jobId);
+    const account = repository.getAccountById(input.accountId, "douyin");
+    const connection = repository.getDouyinImageTextConnection(input.accountId);
+    if (!job || job.platformKey !== "douyin" || job.contentKind === "video"
+      || job.accountId !== input.accountId || job.articleId !== process.env.DOUYIN_R1_ACCEPTANCE_ARTICLE_ID?.trim()
+      || !article || !account || account.archivedAt || !connection?.active
+      || !intent || intent.finalSubmitCount !== 1 || !intent.submitBoundaryEnteredAt
+      || !intent.externalId || !/^\d{10,30}$/u.test(intent.externalId)
+      || !record || record.jobId !== job.id || record.articleId !== article.id
+      || record.accountId !== input.accountId || record.publishedExternalId !== intent.externalId)
+      throw new Error("DOUYIN_R14_READONLY_TARGET_BINDING_INVALID");
+    const adapter = registry.getForContent("douyin", "article");
+    if (!(adapter instanceof DouyinImageTextBrowserAdapter)) throw new Error("DOUYIN_R14_READONLY_ADAPTER_UNAVAILABLE");
+    const marker = /DYCORE[A-Za-z0-9]{4,32}/u.exec(article.body)?.[0];
+    const result = await adapter.inspectManagementTopologyReadOnly(accountContext(input.accountId, "douyin"),
+      intent.externalId, article.title, marker, intent.submitBoundaryEnteredAt ?? undefined);
+    logger.info("ACCOUNT", "DOUYIN_MANAGEMENT_TOPOLOGY_READONLY", "抖音作品管理受控页面结构只读检查", {
+      accountId: input.accountId, jobId: input.jobId, creatorId: result.creatorId, pagePath: result.pagePath,
+      visibleAnchorCount: result.visibleAnchorCount, rowCandidateCount: result.rowCandidateCount,
+      statusControlCount: result.statusControls.length, scrollContainerCount: result.scrollContainers.length });
+    return result;
+  });
+  register("accounts:inspect-douyin-editor", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    const binding = repository.getDouyinImageTextConnection(input.accountId);
+    if (!binding?.active) throw new Error("Douyin Creator binding is unavailable");
+    const adapter = registry.getForContent("douyin", "article");
+    if (!(adapter instanceof DouyinImageTextBrowserAdapter)) throw new Error("Douyin image/text BrowserNative route is unavailable");
+    const result = await adapter.inspectCurrentImageEditor(accountContext(input.accountId, "douyin"));
+    logger.info("ACCOUNT", "DOUYIN_EDITOR_READONLY_INSPECTION", "抖音图文编辑器只读检查", {
+      accountId: input.accountId, pagePath: result.pagePath, creatorId: result.creatorId, imageCount: result.imageCount,
+      imageLoaded: result.imageLoaded, titleLength: result.titleLength, bodyLength: result.bodyLength,
+      visibility: result.settings?.visibility, timing: result.settings?.timing });
+    return result;
+  });
+  register("accounts:close-runtime-session", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema, platformKey: z.literal("toutiao") }).parse(payload);
+    return toutiaoSessionActivation.close(input.accountId);
+  });
+  register("toutiao:protocol-shadow", async (_event, payload) => {
+    if (!protocolShadowEnabled(process.env)) throw new Error("TOUTIAO_PROTOCOL_SHADOW_DISABLED");
+    const input = z.object({ accountId: idSchema, mode: z.enum(["HOME", "EDITOR", "SIGNER_CONTRACT", "SIGNER_INPUT", "BRIDGE", "CONTROLLED_ARTICLE_NEW"]).optional() }).parse(payload);
+    const status = toutiaoSessionActivation.status(input.accountId);
+    if (status.storedAuthorization !== "AUTHORIZED_SAVED" || status.runtimeState !== "ACTIVE") throw new Error("TOUTIAO_SHADOW_SESSION_UNAVAILABLE");
+    const adapter = registry.getForConnection("toutiao");
+    if (!(adapter instanceof ToutiaoArticleBrowserAdapter)) throw new Error("TOUTIAO_SHADOW_BROWSER_ADAPTER_REQUIRED");
+    if (input.mode === "CONTROLLED_ARTICLE_NEW") {
+      if (process.env.TOUTIAO_ARTICLE_NEW_CAPTURE_ENABLED !== "true") throw new Error("TOUTIAO_ARTICLE_NEW_CAPTURE_DISABLED");
+      claimControlledArticleNewCapture(dataDirectory);
+    }
+    return adapter.runReadOnlyProtocolShadow(accountContext(input.accountId, "toutiao"), input.mode);
+  });
+  register("toutiao:publish-request-capture", async (_event, payload) => {
+    if (!protocolShadowEnabled(process.env) || process.env.TOUTIAO_PUBLISH_REQUEST_CAPTURE_ENABLED !== "true")
+      throw new Error("TOUTIAO_PUBLISH_CAPTURE_DISABLED");
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    const status = toutiaoSessionActivation.status(input.accountId);
+    if (status.storedAuthorization !== "AUTHORIZED_SAVED" || status.runtimeState !== "ACTIVE"
+      || !status.sessionExists || !status.contextExists || !status.canonicalPageExists || !status.contextOwnsPage || !status.pageAlive
+      || status.pageHost !== "mp.toutiao.com") throw new Error("TOUTIAO_CAPTURE_SESSION_UNAVAILABLE");
+    const adapter = registry.getForConnection("toutiao");
+    if (!(adapter instanceof ToutiaoArticleBrowserAdapter)) throw new Error("TOUTIAO_CAPTURE_BROWSER_ADAPTER_REQUIRED");
+    claimControlledPublishRequestCapture(dataDirectory);
+    return adapter.runGuardedPublishRequestCapture(accountContext(input.accountId, "toutiao"));
+  });
+  register("toutiao:production-readiness", async (_event, payload) => {
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    const account = repository.getAccountById(input.accountId, "toutiao");
+    const adapter = registry.getForContent("toutiao", "article");
+    if (!(adapter instanceof ToutiaoArticleBrowserAdapter)) throw new Error("TOUTIAO_NATIVE_ROUTE_REQUIRED");
+    const ctx = accountContext(input.accountId, "toutiao", createUserAction("OPEN_BACKEND"));
+    const result = await runToutiaoProductionPreflight({ account,
+      readonlyMode: process.env.TOUTIAO_READONLY_PREFLIGHT === "true",
+      formalExecutionActive: repository.getGlobalFormalPublishExecution() !== null,
+      activate: () => toutiaoSessionActivation.activate(input.accountId),
+      auth: () => adapter.checkOwnedCreatorSession(ctx),
+      identity: () => adapter.inspectOwnedCreatorIdentity(ctx),
+      smoke: () => adapter.deepReconcileOwnedManagement(ctx, account?.externalAccountId ?? "", {
+        title: "__read_only_readiness_no_submission__", submittedAt: new Date().toISOString(), remoteId: null })
+    });
+    return { ...result, mainCodeSha256: createHash("sha256").update(readFileSync(join(__dirname, "main.js"))).digest("hex"),
+      formalSubmitEnabled: process.env.TOUTIAO_BROWSER_NATIVE_SUBMIT_ENABLED === "true",
+      experimentalBrowserAssistedApiEnabled: process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED === "true" };
+  });
+  register("toutiao:mvp5-build-identity", () => {
+    if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true") throw new Error("TOUTIAO_MVP5_ONE_SHOT_DISABLED");
+    return { mainCodeSha256: createHash("sha256").update(readFileSync(join(__dirname, "main.js"))).digest("hex"),
+      packageVersion: app.getVersion(), packaged: app.isPackaged };
+  });
+  register("toutiao:mvp5-binding-readiness", async (_event, payload) => {
+    if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true" || !protocolShadowEnabled(process.env))
+      throw new Error("TOUTIAO_MVP5_READINESS_DISABLED");
+    const input = z.object({ accountId: idSchema, jobId: idSchema }).parse(payload);
+    const expectedCreatorId = process.env.TOUTIAO_MVP5_EXPECTED_CREATOR_ID;
+    if (input.accountId !== process.env.TOUTIAO_MVP5_ACCOUNT_ID || !expectedCreatorId || !/^\d+$/u.test(expectedCreatorId))
+      throw new Error("TOUTIAO_MVP5_TARGET_IDENTITY_NOT_CONFIGURED");
+    const adapter = registry.getForConnection("toutiao");
+    if (!(adapter instanceof ToutiaoArticleBrowserAdapter) || !(credentials instanceof SafeStorageCredentialStore))
+      throw new Error("TOUTIAO_MVP5_RUNTIME_UNAVAILABLE");
+    // Activation restores the saved account-owned Context but never touches the old capture ticket.
+    const activation = await toutiaoSessionActivation.activate(input.accountId);
+    const ctx = accountContext(input.accountId, "toutiao");
+    const snapshot = adapter.getBrowserRuntimeSnapshot(ctx);
+    const runtimeActive = activation.runtimeState === "ACTIVE" && activation.contextOwnsPage && activation.pageAlive;
+    const remoteAuthState = runtimeActive ? await adapter.checkOwnedCreatorSession(ctx) : "UNKNOWN";
+    const remoteCreatorId = runtimeActive && remoteAuthState === "VALID"
+      ? await adapter.inspectOwnedCreatorIdentity(ctx) : null;
+    const account = repository.getAccountById(input.accountId, "toutiao");
+    const job = repository.getJob(input.jobId);
+    const article = job ? repository.getArticle(job.articleId) : null;
+    const preparation = repository.getToutiaoArticlePreparation(input.jobId);
+    const metadata = repository.getToutiaoCredentialMetadata(input.accountId);
+    const intent = repository.getSubmissionIntentByJob(input.jobId);
+    const record = repository.getPublishRecordByJob(input.jobId);
+    const ticket = auditMvp5OneShotCapture(dataDirectory, {
+      accountId: input.accountId, jobId: input.jobId, articleId: article?.id ?? "",
+      contentBindingHash: preparation?.contentBindingHash ?? ""
+    }, intent?.finalSubmitCount ?? 0);
+    let bundle: ReturnType<ToutiaoCredentialBundleService["read"]> = null;
+    let credentialReadError = false;
+    try { bundle = new ToutiaoCredentialBundleService(credentials, repository).read(input.accountId); }
+    catch { credentialReadError = true; }
+    let runtimeCookiesChangedSinceBundle: boolean | null = null;
+    if (runtimeActive && remoteAuthState === "VALID" && bundle && !credentialReadError) {
+      try {
+        const current = await adapter.snapshotOwnedCreatorCookies(ctx);
+        runtimeCookiesChangedSinceBundle = credentialFingerprint({ ...bundle, cookieMaterial: current })
+          !== credentialFingerprint(bundle);
+      } catch { runtimeCookiesChangedSinceBundle = null; }
+    }
+    const result = evaluateMvp5CaptureReadiness({ expectedAccountId: input.accountId, expectedCreatorId,
+      account, job, article, preparation, metadata, credentialReadError,
+      bundle: bundle ? { version: bundle.version, loginGeneration: bundle.loginGeneration,
+        sessionIdentity: bundle.sessionIdentity, state: bundle.state, validatedAt: bundle.validatedAt } : null,
+      runtime: { accountId: input.accountId, runtimeState: activation.runtimeState,
+        sessionExists: activation.sessionExists, contextExists: activation.contextExists,
+        canonicalPageExists: activation.canonicalPageExists, contextOwnsPage: activation.contextOwnsPage,
+        pageAlive: activation.pageAlive, pageHost: activation.pageHost, contextDebugId: snapshot.contextDebugId },
+      remoteAuthState, remoteCreatorId, runtimeCookiesChangedSinceBundle, ticket,
+      intentCount: intent ? 1 : 0, recordCount: record ? 1 : 0 });
+    logger.info("TOUTIAO", "MVP5_BINDING_READINESS", "Read-only capture binding readiness", {
+      accountId: input.accountId, jobId: input.jobId, ticketState: result.ticketState,
+      reasonCodes: result.reasonCodes, recaptureEligibility: result.recaptureEligibility });
+    return { ...result, ownerLoginRequired: activation.outcome === "OWNER_LOGIN_REQUIRED",
+      runtimeState: activation.runtimeState, remoteAuthState,
+      bundleVersion: metadata?.bundleVersion ?? null, loginGeneration: metadata?.loginGeneration ?? null };
+  });
+  register("toutiao:mvp5-management-diagnostic", async (_event, payload) => {
+    if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true") throw new Error("TOUTIAO_MVP5_ONE_SHOT_DISABLED");
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    const expectedCreatorId = process.env.TOUTIAO_MVP5_EXPECTED_CREATOR_ID;
+    if (input.accountId !== process.env.TOUTIAO_MVP5_ACCOUNT_ID || !expectedCreatorId)
+      throw new Error("TOUTIAO_MVP5_TARGET_IDENTITY_NOT_CONFIGURED");
+    const adapter = registry.getForConnection("toutiao");
+    if (!(adapter instanceof ToutiaoArticleBrowserAdapter)) throw new Error("TOUTIAO_MVP5_RUNTIME_UNAVAILABLE");
+    return adapter.inspectOwnedManagementList(accountContext(input.accountId, "toutiao"), expectedCreatorId, null);
+  });
+  register("toutiao:mvp5-runtime-preflight", async (_event, payload) => {
+    if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true" || !protocolShadowEnabled(process.env))
+      throw new Error("TOUTIAO_MVP5_ONE_SHOT_DISABLED");
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    const expectedAccountId = process.env.TOUTIAO_MVP5_ACCOUNT_ID;
+    const expectedCreatorId = process.env.TOUTIAO_MVP5_EXPECTED_CREATOR_ID;
+    if (!expectedAccountId || input.accountId !== expectedAccountId || !expectedCreatorId || !/^\d+$/u.test(expectedCreatorId))
+      throw new Error("TOUTIAO_MVP5_TARGET_IDENTITY_NOT_CONFIGURED");
+    if (existsSync(join(dataDirectory, "diagnostics", "toutiao-mvp-5-one-shot.claim")))
+      throw new Error("TOUTIAO_MVP5_CAPTURE_ALREADY_CLAIMED_READONLY_RECONCILIATION_ONLY");
+    const adapter = registry.getForConnection("toutiao");
+    if (!(adapter instanceof ToutiaoArticleBrowserAdapter) || !(credentials instanceof SafeStorageCredentialStore))
+      throw new Error("TOUTIAO_MVP5_RUNTIME_UNAVAILABLE");
+    const activation = await toutiaoSessionActivation.activate(input.accountId);
+    if (activation.runtimeState !== "ACTIVE" || !activation.contextOwnsPage || !activation.pageAlive
+      || activation.pageHost !== "mp.toutiao.com") throw new Error("TOUTIAO_MVP5_SESSION_NOT_ACTIVE");
+    const ctx = accountContext(input.accountId, "toutiao");
+    const remoteAuthState = await adapter.checkOwnedCreatorSession(ctx);
+    if (remoteAuthState !== "VALID") throw new Error("TOUTIAO_MVP5_REMOTE_AUTH_UNVERIFIED");
+    const creatorId = await adapter.inspectOwnedCreatorIdentity(ctx);
+    if (creatorId !== expectedCreatorId) throw new Error("TOUTIAO_MVP5_ACCOUNT_IDENTITY_MISMATCH");
+    const management = await adapter.inspectOwnedManagementList(ctx, expectedCreatorId, null);
+    if (!management.listStructureVerified || !management.accountIdentityVerified)
+      throw new Error("TOUTIAO_MVP5_READONLY_RECONCILIATION_UNAVAILABLE");
+    const backupDir = join(dataDirectory, "backups");
+    mkdirSync(backupDir, { recursive: true });
+    const backupPath = join(backupDir, `toutiao-mvp5-preflight-${new Date().toISOString().replace(/[:.]/gu, "-")}.db`);
+    await backupDatabase(repository.db, backupPath);
+    if (!validateDatabaseBackup(backupPath).valid) throw new Error("TOUTIAO_MVP5_BACKUP_FAILED");
+    const binding = synchronizeOwnedToutiaoCredential(repository,
+      new ToutiaoCredentialBundleService(credentials, repository), {
+        accountId: input.accountId, creatorId, remoteAuthState, runtimeActive: true,
+        contextOwnsPage: true, cookies: await adapter.snapshotOwnedCreatorCookies(ctx),
+        validatedAt: new Date().toISOString()
+      }, expectedCreatorId);
+    return { sessionActive: true, accountIdentityMatch: true, managementListStructureVerified: true,
+      blockedReadOnlySmokeMutations: management.blockedMutationCount,
+      bundleVersion: binding.bundleVersion, loginGeneration: binding.loginGeneration,
+      credentialChanged: binding.changed, backupVerified: true };
+  });
+  register("toutiao:mvp5-prepare-test-job", async (_event, payload) => {
+    if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true" || !protocolShadowEnabled(process.env))
+      throw new Error("TOUTIAO_MVP5_ONE_SHOT_DISABLED");
+    const input = z.object({ accountId: idSchema }).parse(payload);
+    if (input.accountId !== process.env.TOUTIAO_MVP5_ACCOUNT_ID
+      || existsSync(join(dataDirectory, "diagnostics", "toutiao-mvp-5-one-shot.claim")))
+      throw new Error("TOUTIAO_MVP5_TARGET_OR_QUOTA_INVALID");
+    const expectedCreatorId = process.env.TOUTIAO_MVP5_EXPECTED_CREATOR_ID;
+    const account = repository.getAccountById(input.accountId, "toutiao");
+    const runtime = toutiaoSessionActivation.status(input.accountId);
+    const metadata = repository.getToutiaoCredentialMetadata(input.accountId);
+    const adapter = registry.getForConnection("toutiao");
+    const backups = existsSync(join(dataDirectory, "backups"))
+      ? readdirSync(join(dataDirectory, "backups")).filter((name) => name.startsWith("toutiao-mvp5-preflight-") && name.endsWith(".db")) : [];
+    if (!expectedCreatorId || account?.externalAccountId !== expectedCreatorId
+      || runtime.runtimeState !== "ACTIVE" || !runtime.contextOwnsPage || !runtime.pageAlive
+      || !metadata || metadata.credentialState !== "VALID" || !metadata.validatedAt
+      || !(adapter instanceof ToutiaoArticleBrowserAdapter)
+      || !(credentials instanceof SafeStorageCredentialStore) || backups.length === 0
+      || !validateDatabaseBackup(join(dataDirectory, "backups", backups.sort().at(-1)!)).valid)
+      throw new Error("TOUTIAO_MVP5_PREPARE_PRECONDITION_FAILED");
+    const ctx = accountContext(input.accountId, "toutiao");
+    if (await adapter.checkOwnedCreatorSession(ctx) !== "VALID"
+      || await adapter.inspectOwnedCreatorIdentity(ctx) !== expectedCreatorId)
+      throw new Error("TOUTIAO_MVP5_PREPARE_IDENTITY_UNVERIFIED");
+    new ToutiaoCredentialBundleService(credentials, repository).assertBound(input.accountId,
+      metadata.bundleVersion, metadata.loginGeneration, "pre_submit");
+    const existing = repository.listPlatformSelfTestRuns(account.platformAccountId ?? account.id)
+      .find((run) => run.publishJobId && repository.getArticle(repository.getJob(run.publishJobId)?.articleId ?? "")?.title
+        .startsWith("GMP头条单次测试"));
+    if (existing?.publishJobId) return { jobId: existing.publishJobId, testRunId: existing.testRunId,
+      articleId: repository.getJob(existing.publishJobId)?.articleId ?? null, reused: true };
+    const run = repository.createPlatformSelfTestRun({ platformAccountId: account.platformAccountId ?? account.id,
+      requestedLevel: "L5_PUBLISH" });
+    repository.confirmPlatformSelfTestPublish(run.testRunId);
+    const title = `GMP头条单次测试${new Date().toISOString().replace(/[-:.TZ]/gu, "").slice(2, 14)}`;
+    const body = "本文仅用于验证 GEO Media Publisher 的单次发布与只读确认流程。室内环境治理服务应先评估现场条件，再依据实际检测结果制定方案。";
+    const job = repository.createPlatformSelfTestPublishJob({ testRunId: run.testRunId, title, body, dryRun: false });
+    repository.freezeToutiaoArticleSettings(job.id, { version: 1, coverMode: "none", coverImages: [],
+      articleAdType: "none", remoteScheduledAt: null });
+    prepareToutiaoArticleJob(repository, job.id);
+    return { jobId: job.id, testRunId: run.testRunId, articleId: job.articleId, reused: false };
+  });
+  register("toutiao:mvp5-one-shot", async (_event, payload) => {
+    if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true" || !protocolShadowEnabled(process.env))
+      throw new Error("TOUTIAO_MVP5_ONE_SHOT_DISABLED");
+    const input = z.object({ accountId: idSchema, jobId: idSchema }).parse(payload);
+    const expectedCreatorId = process.env.TOUTIAO_MVP5_EXPECTED_CREATOR_ID;
+    if (process.env.TOUTIAO_MVP5_ACCOUNT_ID !== input.accountId || !expectedCreatorId || !/^\d+$/u.test(expectedCreatorId))
+      throw new Error("TOUTIAO_MVP5_TARGET_IDENTITY_NOT_CONFIGURED");
+    const job = repository.getJob(input.jobId);
+    if (!job || !job.articleId || job.accountId !== input.accountId || job.platformKey !== "toutiao")
+      throw new Error("TOUTIAO_MVP5_JOB_ACCOUNT_MISMATCH");
+    const testArticle = repository.getArticle(job.articleId);
+    if (!testArticle || testArticle.source !== "test" || !testArticle.sourceNote?.startsWith("platform-self-test:")
+      || !testArticle.title.startsWith("GMP头条单次测试") || job.dryRun)
+      throw new Error("TOUTIAO_MVP5_TRANSPARENT_SELF_TEST_REQUIRED");
+    const account = repository.getAccountById(input.accountId, "toutiao");
+    const originalRunId = testArticle.sourceNote.slice("platform-self-test:".length);
+    const originalRun = repository.getPlatformSelfTestRun(originalRunId);
+    if (!account || !originalRun || originalRun.publishJobId !== job.id || originalRun.testArticleId !== testArticle.id
+      || originalRun.platformAccountId !== (account.platformAccountId ?? account.id)
+      || originalRun.platformKey !== "toutiao" || !originalRun.publishConfirmedAt)
+      throw new Error("TOUTIAO_MVP53_ORIGINAL_PUBLISH_AUTHORIZATION_UNVERIFIED");
+    const adapter = registry.getForConnection("toutiao");
+    if (!(adapter instanceof ToutiaoArticleBrowserAdapter) || !(credentials instanceof SafeStorageCredentialStore))
+      throw new Error("TOUTIAO_MVP5_RUNTIME_UNAVAILABLE");
+    if (repository.getAccountById(input.accountId, "toutiao")?.externalAccountId !== expectedCreatorId
+      || await adapter.checkOwnedCreatorSession(accountContext(input.accountId, "toutiao")) !== "VALID"
+      || await adapter.inspectOwnedCreatorIdentity(accountContext(input.accountId, "toutiao")) !== expectedCreatorId)
+      throw new Error("TOUTIAO_MVP5_RUNTIME_IDENTITY_UNVERIFIED");
+    const managementSmoke = await adapter.inspectOwnedManagementList(accountContext(input.accountId, "toutiao"), expectedCreatorId, null);
+    if (!managementSmoke.listStructureVerified || !managementSmoke.accountIdentityVerified)
+      throw new Error("TOUTIAO_MVP5_READONLY_RECONCILIATION_UNAVAILABLE");
+    const sessionBound = (accountId: string): boolean => {
+      const status = toutiaoSessionActivation.status(accountId);
+      return status.accountId === accountId && status.storedAuthorization === "AUTHORIZED_SAVED"
+        && status.runtimeState === "ACTIVE" && status.sessionExists && status.contextExists
+        && status.canonicalPageExists && status.contextOwnsPage && status.pageAlive && status.pageHost === "mp.toutiao.com";
+    };
+    const service = new ToutiaoCapturedRequestOneShot(repository,
+      new ToutiaoCredentialBundleService(credentials, repository), undefined, undefined, sessionBound,
+      async (accountId) => {
+        if (accountId !== input.accountId || !sessionBound(accountId)) throw new Error("TOUTIAO_MVP5_SESSION_CHANGED");
+        const currentCtx = accountContext(accountId, "toutiao");
+        if (await adapter.checkOwnedCreatorSession(currentCtx) !== "VALID"
+          || await adapter.inspectOwnedCreatorIdentity(currentCtx) !== expectedCreatorId)
+          throw new Error("TOUTIAO_MVP5_SESSION_IDENTITY_CHANGED");
+        return adapter.snapshotOwnedCreatorCookies(currentCtx);
+      }, (accountId) => accountId === input.accountId && sessionBound(accountId)
+        ? adapter.getBrowserRuntimeSnapshot(accountContext(accountId, "toutiao")).contextDebugId : null);
+    const preparation = repository.getToutiaoArticlePreparation(input.jobId);
+    if (!preparation?.contentBindingHash) throw new Error("TOUTIAO_MVP5_PREPARATION_MISSING");
+    const articleId = job.articleId;
+    if (!articleId) throw new Error("TOUTIAO_MVP5_ARTICLE_MISSING");
+    const contentBindingHash = preparation.contentBindingHash;
+    if (!contentBindingHash) throw new Error("TOUTIAO_MVP5_PREPARATION_MISSING");
+    const ticketBinding = { accountId: input.accountId, jobId: input.jobId, articleId, contentBindingHash };
+    const predecessor = readMvp5LockedClaimEvidence(dataDirectory, ticketBinding);
+    if (!predecessor || auditMvp5OneShotCapture(dataDirectory, ticketBinding, 0).state !== "LOCKED")
+      throw new Error("TOUTIAO_MVP53_OLD_TICKET_NOT_LOCKED");
+    if (existsSync(join(dataDirectory, "diagnostics", "toutiao-mvp-5-3-owner-recapture.claim"))
+      || repository.getSubmissionIntentByJob(input.jobId) || repository.getPublishRecordByJob(input.jobId))
+      throw new Error("TOUTIAO_MVP53_RECAPTURE_OR_SUBMIT_ALREADY_CLAIMED");
+    const targetCheck = await adapter.inspectOwnedManagementList(accountContext(input.accountId, "toutiao"),
+      expectedCreatorId, { title: testArticle.title, submittedAt: predecessor.claimedAt,
+        remoteId: null, accountIdentityVerified: true });
+    if (!targetCheck.listStructureVerified || !targetCheck.accountIdentityVerified || !targetCheck.match
+      || targetCheck.structure.targetTitleAnchorCount > 0 || targetCheck.match.state !== "NOT_FOUND")
+      throw new Error("TOUTIAO_MVP53_EXISTING_OR_UNVERIFIED_TARGET");
+    const ownerConfirmation = await dialog.showMessageBox({
+      type: "warning", title: "头条 MVP-5.3：重新捕获与单次发布确认",
+      message: "请确认同一头条测试任务的唯一一次重新捕获与剩余发布额度",
+      detail: `账号 ID：${input.accountId}\nCreator ID：${expectedCreatorId}\n原 Job：${input.jobId}\n原发布授权：platform-self-test:${originalRunId}\n文章：${testArticle.title}\n内容绑定 Hash：${contentBindingHash}\n旧票据：${predecessor.ticketId}\n\n仅新建一张 Capture 票据，旧票据保持锁定；article/new 最多一次，不存草稿、不上传。浏览器原 publish 请求必须中止，Main/Node 最多正式发送一次并只读回查。未知结果不重试、不回退浏览器。`,
+      buttons: ["取消", "同意本次重新捕获及剩余一次发布"], cancelId: 0, defaultId: 0, noLink: true
+    });
+    if (ownerConfirmation.response !== 1) throw new Error("TOUTIAO_MVP53_OWNER_RECAPTURE_AUTHORIZATION_REQUIRED");
+    const ownerApprovalReference = `main-dialog:${randomUUID()}`;
+    const approvedAt = new Date().toISOString();
+    await adapter.installMvp5PublishQuarantine(accountContext(input.accountId, "toutiao"));
+    const result = await service.captureAndSubmit(input.jobId, accountContext(input.accountId, "toutiao"), adapter,
+      () => {
+        const currentIntent = repository.getSubmissionIntentByJob(input.jobId);
+        const currentRecord = repository.getPublishRecordByJob(input.jobId);
+        claimMvp53OwnerRecapture(dataDirectory, ticketBinding, { ownerApprovalReference, approvedAt,
+          originalPublishAuthorizationReference: `platform-self-test:${originalRunId}`,
+          finalSubmitCount: currentIntent?.finalSubmitCount ?? 0,
+          intentCount: currentIntent ? 1 : 0, recordCount: currentRecord ? 1 : 0 });
+      });
+    if (result.bindingReasonCode) logger.warn("TOUTIAO", "MVP5_CAPTURE_BINDING_FAILED", "Captured request rejected before submit", {
+      accountId: input.accountId, jobId: input.jobId, requestHash: result.requestHash,
+      bindingReasonCode: result.bindingReasonCode });
+    return result;
+  });
+  register("toutiao:mvp5-reconcile", async (_event, payload) => {
+    if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true") throw new Error("TOUTIAO_MVP5_ONE_SHOT_DISABLED");
+    const input = z.object({ accountId: idSchema, jobId: idSchema }).parse(payload);
+    const expectedCreatorId = process.env.TOUTIAO_MVP5_EXPECTED_CREATOR_ID;
+    if (input.accountId !== process.env.TOUTIAO_MVP5_ACCOUNT_ID || !expectedCreatorId)
+      throw new Error("TOUTIAO_MVP5_TARGET_IDENTITY_NOT_CONFIGURED");
+    const job = repository.getJob(input.jobId);
+    const article = job ? repository.getArticle(job.articleId) : null;
+    const intent = repository.getSubmissionIntentByJob(input.jobId);
+    const record = repository.getPublishRecordByJob(input.jobId);
+    if (!job || job.platformKey !== "toutiao" || job.accountId !== input.accountId || !article
+      || !intent || intent.finalSubmitCount !== 1 || !record)
+      throw new Error("TOUTIAO_MVP5_RECONCILIATION_TARGET_INVALID");
+    const adapter = registry.getForConnection("toutiao");
+    if (!(adapter instanceof ToutiaoArticleBrowserAdapter)) throw new Error("TOUTIAO_MVP5_RUNTIME_UNAVAILABLE");
+    const activation = await toutiaoSessionActivation.activate(input.accountId);
+    if (activation.runtimeState !== "ACTIVE" || !activation.contextOwnsPage || !activation.pageAlive)
+      return { state: "UNKNOWN" as const, reasonCode: "SESSION_UNAVAILABLE" };
+    const ctx = accountContext(input.accountId, "toutiao");
+    if (await adapter.checkOwnedCreatorSession(ctx) !== "VALID"
+      || await adapter.inspectOwnedCreatorIdentity(ctx) !== expectedCreatorId)
+      return { state: "UNKNOWN" as const, reasonCode: "IDENTITY_UNVERIFIED" };
+    try {
+      const observed = await adapter.inspectOwnedManagementList(ctx, expectedCreatorId, {
+        title: article.title, submittedAt: intent.submitBoundaryEnteredAt ?? intent.updatedAt,
+        remoteId: intent.externalId, accountIdentityVerified: true
+      });
+      if (!observed.listStructureVerified || !observed.match)
+        return { state: "UNKNOWN" as const, reasonCode: "MANAGEMENT_LIST_UNAVAILABLE" };
+      const match = observed.match;
+      if (match.state === "REVIEWING" && job.status === "NeedsReconciliation") {
+        repository.reconcileJobAsSubmitted(job.id, { response: { readOnly: true, platformStatus: "REVIEWING",
+          externalId: match.externalId, matchedRowCount: match.matchedRowCount } });
+      }
+      if (match.state === "PUBLISHED" && match.externalId && match.publicUrl) {
+        const verification = await adapter.verifyOwnedPublicArticle(ctx, article,
+          match.externalId, match.publicUrl);
+        if (verification.verified) {
+          repository.reconcileJobAsPublished(job.id, { externalId: match.externalId,
+            publishedUrl: match.publicUrl, response: { readOnly: true, verified: true,
+              urlReachable: true, titleMatch: true, bodyMatch: true } });
+          return { state: "PUBLISHED_CONFIRMED" as const, reasonCode: "PUBLIC_PAGE_VERIFIED",
+            externalId: match.externalId, publicUrl: match.publicUrl };
+        }
+        return { state: "UNKNOWN" as const, reasonCode: "PUBLIC_PAGE_UNVERIFIED",
+          externalId: match.externalId, publicUrl: match.publicUrl };
+      }
+      return { state: match.state, reasonCode: match.state === "NOT_FOUND" ? "NO_MATCH_NOT_NEGATIVE_PROOF"
+        : match.state === "AMBIGUOUS" ? "MULTIPLE_TARGET_ROWS" : "TARGET_ROW_CLASSIFIED",
+        externalId: match.externalId, publicUrl: match.publicUrl };
+    } catch {
+      return { state: "UNKNOWN" as const, reasonCode: "READONLY_RECONCILIATION_ERROR" };
+    }
+  });
+  /** Reconciliation-only: derives the target from the durable Job/Intent, never reaches capture or replay. */
+  register("toutiao:mvp5-deep-reconcile-only", async (_event, payload) => {
+    if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true") throw new Error("TOUTIAO_MVP5_ONE_SHOT_DISABLED");
+    const input = z.object({ accountId: idSchema, jobId: idSchema }).parse(payload);
+    const expectedCreatorId = process.env.TOUTIAO_MVP5_EXPECTED_CREATOR_ID;
+    if (input.accountId !== process.env.TOUTIAO_MVP5_ACCOUNT_ID || !expectedCreatorId)
+      throw new Error("TOUTIAO_RECONCILIATION_TARGET_IDENTITY_NOT_CONFIGURED");
+    const job = repository.getJob(input.jobId);
+    const article = job ? repository.getArticle(job.articleId) : null;
+    const intent = repository.getSubmissionIntentByJob(input.jobId);
+    if (!job || job.platformKey !== "toutiao" || job.accountId !== input.accountId || !article
+      || !intent || intent.finalSubmitCount !== 1)
+      throw new Error("TOUTIAO_RECONCILIATION_TARGET_INVALID");
+    const adapter = registry.getForConnection("toutiao");
+    if (!(adapter instanceof ToutiaoArticleBrowserAdapter)) throw new Error("TOUTIAO_RECONCILIATION_RUNTIME_UNAVAILABLE");
+    const activation = await toutiaoSessionActivation.activate(input.accountId);
+    if (activation.runtimeState !== "ACTIVE" || !activation.contextOwnsPage || !activation.pageAlive)
+      throw new Error("TOUTIAO_RECONCILIATION_SESSION_UNAVAILABLE");
+    const ctx = accountContext(input.accountId, "toutiao");
+    if (await adapter.checkOwnedCreatorSession(ctx) !== "VALID"
+      || await adapter.inspectOwnedCreatorIdentity(ctx) !== expectedCreatorId)
+      throw new Error("TOUTIAO_RECONCILIATION_IDENTITY_UNVERIFIED");
+    const result = await adapter.deepReconcileOwnedManagement(ctx, expectedCreatorId, {
+      title: article.title, submittedAt: intent.submitBoundaryEnteredAt ?? intent.updatedAt,
+      remoteId: intent.externalId && intent.externalId !== "0" ? intent.externalId : null
+    });
+    const match = result.match;
+    const publicVerification = match.state === "PUBLISHED" && match.externalId && match.publicUrl
+      ? await adapter.verifyOwnedPublicArticle(ctx, article, match.externalId, match.publicUrl) : null;
+    const finalState = publicVerification?.verified ? "PUBLISHED_CONFIRMED"
+      : match.state === "REVIEWING" ? "FOUND_REVIEWING"
+        : match.state === "REJECTED" ? "FOUND_REJECTED"
+          : match.state === "DRAFT" ? "FOUND_DRAFT"
+            : match.state !== "NOT_FOUND" ? "FOUND_OTHER_REMOTE_STATE" : "NEEDS_RECONCILIATION";
+    return { ...result, finalState, accountIdentityMatch: true, publicVerification };
   });
   register("accounts:pre-submit-gate", async (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);
     const adapter = registry.getForConnection(input.platformKey);
     if (!isAutomationAdapter(adapter) || !adapter.inspectPublishEditor) throw new Error("该平台没有 side-effect-free 编辑器 Gate 能力");
     return adapter.inspectPublishEditor(accountContext(input.accountId, input.platformKey, createUserAction("PRE_SUBMIT_GATE")));
-  });
-  register("accounts:editor-load-diagnostic", async (_event, payload) => {
-    const input = z.object({ accountId: idSchema, platformKey: z.literal("xiaohongshu") }).parse(payload);
-    const adapter = registry.getForConnection(input.platformKey);
-    if (!isAutomationAdapter(adapter) || typeof (adapter as AutomationAdapter & { inspectEditorLoad?: unknown }).inspectEditorLoad !== "function") throw new Error("小红书没有可用的 editor load diagnostic 能力");
-    const loadDiagnosticAdapter = adapter as AutomationAdapter & { inspectEditorLoad: (ctx: AccountContext) => Promise<XhsEditorLoadDiagnosticResult> };
-    return loadDiagnosticAdapter.inspectEditorLoad(accountContext(input.accountId, input.platformKey, createUserAction("PRE_SUBMIT_GATE")));
-  });
-  register("accounts:editor-network-diagnostic", async (_event, payload) => {
-    const input = z.object({ accountId: idSchema, platformKey: z.literal("xiaohongshu") }).parse(payload);
-    const adapter = registry.getForConnection(input.platformKey);
-    if (!isAutomationAdapter(adapter) || typeof (adapter as AutomationAdapter & { inspectEditorNetworkFailure?: unknown }).inspectEditorNetworkFailure !== "function") throw new Error("小红书没有可用的 editor network diagnostic 能力");
-    const networkDiagnosticAdapter = adapter as AutomationAdapter & { inspectEditorNetworkFailure: (ctx: AccountContext) => Promise<XhsEditorNetworkDiagnosticResult> };
-    return networkDiagnosticAdapter.inspectEditorNetworkFailure(accountContext(input.accountId, input.platformKey, createUserAction("PRE_SUBMIT_GATE")));
   });
   const readCredentialStatus = (accountId: string, platformKey: string): { configured: boolean; expired: boolean; fields: Array<CredentialField & { configured: boolean }> } => {
     const account = repository.listAccounts().find((item) => item.id === accountId);
@@ -540,11 +1164,18 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
     }
     return repository.listAccounts().map((account) => {
       const registeredAdapter = registry.tryGetForConnection(account.platformKey);
+      const douyinImageTextAdapter = account.platformKey === "douyin" ? registry.getForContent("douyin", "article") : null;
+      const douyinImageTextConnection = account.platformKey === "douyin" ? repository.getDouyinImageTextConnection(account.id) : null;
+      const douyinImageTextRuntime = douyinImageTextAdapter && isAutomationAdapter(douyinImageTextAdapter)
+        ? douyinImageTextAdapter.getBrowserRuntimeState?.(accountContext(account.id, "douyin"))?.state : null;
+      const toutiaoRuntime = account.platformKey === "toutiao" ? toutiaoSessionActivation.status(account.id) : null;
       const browserConnecting = registeredAdapter ? isAutomationAdapter(registeredAdapter) && registeredAdapter.isConnectionPending(accountContext(account.id, account.platformKey)) : false;
       const runtimeAuthState = account.platformKey === "xiaohongshu" && registeredAdapter && isAutomationAdapter(registeredAdapter)
         ? registeredAdapter.getBrowserRuntimeState?.(accountContext(account.id, account.platformKey))?.state ?? null
         : null;
-      const accountStatus: AccountStatus = account.platformKey === "xiaohongshu"
+      const accountStatus: AccountStatus = account.platformKey === "toutiao" && account.loginStatus === "logged_in"
+        ? toutiaoRuntime?.runtimeState === "ACTIVE" ? "Connected" : "Unverified"
+        : account.platformKey === "xiaohongshu"
         ? runtimeAuthState === "AUTHENTICATED" ? "Connected"
           : runtimeAuthState === "CHECKING" ? "Connecting"
             : runtimeAuthState === "NEEDS_USER_ACTION" || runtimeAuthState === "DISCONNECTED" ? "NeedsLogin"
@@ -555,6 +1186,7 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
         : account.loginStatus === "logged_in" ? "Connected" : account.loginStatus === "expired" ? "Expired" : account.loginStatus === "needs_user_action" ? (browserConnecting || oauthSessions.isPending(account.id, account.platformKey)) ? "Connecting" : "NeedsLogin" : account.loginStatus === "unknown" ? "Error" : "NotConnected";
       return {
       account,
+      imageTextCreatorReady: Boolean(douyinImageTextConnection?.active && douyinImageTextRuntime === "AUTHENTICATED"),
       platform: platforms.find((item) => item.platformKey === account.platformKey) ?? null,
       credentialStatus: readCredentialStatus(account.id, account.platformKey),
       lastDryRunAt: lastDryRunAt.get(`${account.id}:${account.platformKey}`) ?? null,
@@ -601,8 +1233,9 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
     return readCredentialStatus(input.accountId, input.platformKey);
   });
   register("accounts:begin-login", async (_event, payload) => {
-    const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);
-    const adapter = registry.getForConnection(input.platformKey);
+    const input = z.object({ accountId: idSchema, platformKey: idSchema, contentKind: z.enum(["article", "video"]).optional() }).parse(payload);
+    if (input.contentKind && (input.platformKey !== "douyin" || input.contentKind !== "article")) throw new Error("Unsupported content-specific account login route");
+    const adapter = input.contentKind === "article" ? registry.getForContent("douyin", "article") : registry.getForConnection(input.platformKey);
     const action = createUserAction("CONNECT_ACCOUNT");
     if (input.platformKey === "cnblogs") {
       const status = await adapter.checkLogin(accountContext(input.accountId, input.platformKey, action));
@@ -611,7 +1244,7 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
       return { sessionId: `cnblogs-pat-${Date.now()}`, requiresUserAction: status !== "logged_in", opened: false, authStrategy: adapter.manifest.authStrategy, callbackStrategy: adapter.manifest.callbackStrategy, message: status === "logged_in" ? "博客园 PAT 连接验证通过" : "博客园 PAT 尚未通过连接验证" };
     }
     if (isAutomationAdapter(adapter)) {
-      repository.updateAccount(input.accountId, { loginStatus: "needs_user_action", pausedReason: "等待用户在官方浏览器完成登录和安全验证" });
+      if (input.contentKind !== "article") repository.updateAccount(input.accountId, { loginStatus: "needs_user_action", pausedReason: "等待用户在官方浏览器完成登录和安全验证" });
       try {
         return await adapter.connectAccount(accountContext(input.accountId, input.platformKey, action));
       } catch (error) {
@@ -625,16 +1258,16 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
     return oauthSessions.begin(input.accountId, input.platformKey, action);
   });
   register("accounts:complete-login", async (_event, payload) => {
-    const input = z.object({ accountId: idSchema, platformKey: idSchema, callbackUrl: z.string().max(8192), pendingLogin: z.object({ accountId: idSchema, platformKey: idSchema }).optional() }).parse(payload);
+    const input = z.object({ accountId: idSchema, platformKey: idSchema, contentKind: z.enum(["article", "video"]).optional(), callbackUrl: z.string().max(8192), pendingLogin: z.object({ accountId: idSchema, platformKey: idSchema, contentKind: z.enum(["article", "video"]).optional() }).optional() }).parse(payload);
+    if (input.contentKind && (input.platformKey !== "douyin" || input.contentKind !== "article")) throw new Error("Unsupported content-specific account login route");
     const action = createUserAction("CONNECT_ACCOUNT");
     logger.info("ACCOUNT", "COMPLETE_LOGIN_REQUEST", "收到 Renderer 完成登录请求", { platformKey: input.platformKey, accountId: input.accountId, userActionId: action.userActionId, pendingLogin: input.pendingLogin ?? null, timestamp: new Date().toISOString() });
-    if (input.pendingLogin && (input.pendingLogin.accountId !== input.accountId || input.pendingLogin.platformKey !== input.platformKey)) {
+    if (input.pendingLogin && (input.pendingLogin.accountId !== input.accountId || input.pendingLogin.platformKey !== input.platformKey || input.pendingLogin.contentKind !== input.contentKind)) {
       logger.warn("ACCOUNT", "COMPLETE_LOGIN_ACCOUNT_ID_MISMATCH", "Renderer pendingLogin 与 IPC 请求不一致，已停止 Adapter 调查", { requestedAccountId: input.accountId, requestedPlatformKey: input.platformKey, pendingLoginAccountId: input.pendingLogin.accountId, pendingLoginPlatformKey: input.pendingLogin.platformKey, userActionId: action.userActionId });
       logger.info("ACCOUNT", "COMPLETE_CONNECTION_ENTERED", "Adapter 未进入：Renderer accountId mismatch", { entered: false, accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId });
       throw new Error("COMPLETE_LOGIN_ACCOUNT_ID_MISMATCH: Renderer pendingLogin 与请求账号不一致");
     }
-    const adapter = registry.getForConnection(input.platformKey);
-    if (input.platformKey === "xiaohongshu") platformSelfTests.invalidateXhsContextIdentityAttestation(input.accountId);
+    const adapter = input.contentKind === "article" ? registry.getForContent("douyin", "article") : registry.getForConnection(input.platformKey);
     if (isAutomationAdapter(adapter)) {
       const completedContext = accountContext(input.accountId, input.platformKey, action);
       const debugState = adapter.getBrowserConnectionDebugState?.(completedContext);
@@ -648,32 +1281,28 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
         throw error;
       }
       if (status !== "logged_in") {
-        repository.updateAccount(input.accountId, { loginStatus: "needs_user_action", pausedReason: "浏览器仍停留在登录或安全验证页面" });
+        if (input.contentKind !== "article") repository.updateAccount(input.accountId, { loginStatus: "needs_user_action", pausedReason: "浏览器仍停留在登录或安全验证页面" });
         const result = { configured: false, accountStatus: "NeedsLogin" as const, authorizationStatus: "Unknown" as const, accountId: null, accountName: null, scopes: [], expiresAt: null };
         logger.info("ACCOUNT", "COMPLETE_LOGIN_RESPONSE", "主进程完成登录结果", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, status, reason: "CHECK_LOGIN_NOT_PASSED", errorCode: null, resultContract: { configured: result.configured, accountStatus: result.accountStatus, authorizationStatus: result.authorizationStatus } });
         return result;
       }
-      let identityProof: CreatorIdentityVerificationResult | null = null;
-      if (input.platformKey === "xiaohongshu") {
-        identityProof = await platformSelfTests.bootstrapXhsCreatorIdentity(input.accountId);
-        logger.info("ACCOUNT", "COMPLETE_LOGIN_IDENTITY_PROOF", "complete-login 已复用 Task10W canonical Creator 身份证明", {
-          accountId: input.accountId,
-          platformKey: input.platformKey,
-          userActionId: action.userActionId,
-          canonicalContextId: identityProof.canonicalContextId,
-          canonicalPageId: identityProof.canonicalPageId,
-          expectedCreatorId: identityProof.expectedExternalCreatorId,
-          observedCreatorId: identityProof.observed.externalCreatorId,
-          verified: identityProof.verified,
-          mismatch: identityProof.mismatch,
-          pageUrlConsistency: identityProof.pageUrlConsistency,
-          routeClass: identityProof.routeClass
-        });
-        if (!identityProof.verified) throw Object.assign(new Error("ACCOUNT_IDENTITY_UNVERIFIED: complete-login 的 Creator 身份证明未通过"), { code: "ACCOUNT_IDENTITY_UNVERIFIED" });
-      }
       const profile = adapter.getAccountProfile ? await adapter.getAccountProfile(completedContext) : undefined;
-      if (input.platformKey === "xiaohongshu" && identityProof && profile?.accountId && profile.accountId !== identityProof.observed.externalCreatorId) {
-        throw Object.assign(new Error("小红书 Adapter profile Creator ID 与已证明身份不一致，拒绝回写"), { code: "XHS_CREATOR_IDENTITY_MISMATCH" });
+      if (input.platformKey === "douyin" && input.contentKind === "article") {
+        if (!profile?.accountId) throw new Error("Douyin Creator stable identity is required");
+        const prior = repository.getDouyinImageTextConnection(input.accountId);
+        if (prior?.active && prior.creatorId !== profile.accountId)
+          throw new Error("Douyin Creator identity changed; disconnect the old image-text binding before connecting another account");
+        await adapter.persistConnectionSession?.(completedContext);
+        const sessionEvidence = await adapter.getBrowserSessionEvidence?.(completedContext);
+        if (!sessionEvidence || sessionEvidence.accountId !== input.accountId || sessionEvidence.platformKey !== "douyin")
+          throw new Error("Douyin account-scoped Browser Session evidence is missing");
+        const binding = repository.saveDouyinImageTextConnection({ accountId: input.accountId,
+          creatorId: profile.accountId, browserSessionIdHash: sessionEvidence.sessionIdHash });
+        await adapter.releaseConnectionPage?.(completedContext);
+        logger.info("ACCOUNT", "DOUYIN_IMAGE_TEXT_LOGIN_VERIFIED", "抖音图文账号身份和受控浏览器会话已绑定", {
+          accountId: input.accountId, creatorId: profile.accountId, loginGeneration: binding.loginGeneration,
+          browserSessionIdHash: sessionEvidence.sessionIdHash });
+        return browserAccountConnectionResult(repository.getAccountById(input.accountId, "douyin")!);
       }
       const archivedAccount = profile?.accountId ? repository.findArchivedAccountByExternalIdForConnection(input.accountId, input.platformKey, profile.accountId) : null;
       const effectiveAccountId = archivedAccount?.id ?? input.accountId;
@@ -681,7 +1310,6 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
       if (archivedAccount) {
         if (!adapter.rebindAccountSession) throw new Error("无法安全恢复归档账号：Adapter 不支持 Session 重绑定");
         repository.restoreArchivedAccountByExternalId(input.platformKey, profile?.accountId ?? "");
-        if (input.platformKey === "xiaohongshu") platformSelfTests.invalidateXhsContextIdentityAttestation(effectiveAccountId);
         adapter.rebindAccountSession(completedContext, effectiveContext);
       }
       await adapter.persistConnectionSession?.(effectiveContext);
@@ -713,10 +1341,12 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
     return oauthSessions.refresh(input.accountId, input.platformKey);
   });
   register("accounts:cancel-login", async (_event, payload) => {
-    const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);
-    const adapter = registry.getForConnection(input.platformKey);
+    const input = z.object({ accountId: idSchema, platformKey: idSchema, contentKind: z.literal("article").optional() }).parse(payload);
+    if (input.contentKind && input.platformKey !== "douyin") throw new Error("Unsupported content-specific account login route");
+    const adapter = input.contentKind === "article" ? registry.getForContent("douyin", "article") : registry.getForConnection(input.platformKey);
     if (!isAutomationAdapter(adapter) || !adapter.cancelConnection) throw new Error("该平台没有可取消的浏览器连接会话");
     await adapter.cancelConnection(accountContext(input.accountId, input.platformKey, createUserAction("CONNECT_ACCOUNT")));
+    if (input.contentKind === "article") return { loginStatus: repository.getAccountById(input.accountId, input.platformKey)?.loginStatus ?? "unknown" };
     repository.updateAccount(input.accountId, { loginStatus: "logged_out", pausedReason: "连接已取消" });
     return { loginStatus: "logged_out" as const };
   });
@@ -726,6 +1356,11 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
     if (!account) throw new Error("账号与平台不匹配");
     const adapter = registry.getForConnection(input.platformKey);
     const action = createUserAction("CONNECT_ACCOUNT");
+    if (input.platformKey === "douyin") {
+      const imageAdapter = registry.getForContent("douyin", "article");
+      if (isAutomationAdapter(imageAdapter)) await imageAdapter.logout(accountContext(input.accountId, "douyin", action, true));
+      repository.disconnectDouyinImageTextConnection(input.accountId);
+    }
     let result: AccountDisconnectResult;
     if (isAutomationAdapter(adapter)) {
       const context = accountContext(input.accountId, input.platformKey, action, true);
@@ -792,75 +1427,12 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
   register("platform-self-test:get", (_event, payload) => repository.getPlatformSelfTestRun(z.object({ testRunId: idSchema }).parse(payload).testRunId));
   register("platform-self-test:run-safe", async (_event, payload) => platformSelfTests.runSafe(z.object({ platformAccountId: idSchema }).parse(payload).platformAccountId));
   register("platform-self-test:run-post-upload-discovery", async (_event, payload) => { const input = z.object({ platformAccountId: idSchema, mode: z.literal("POST_UPLOAD_DISCOVERY_ONLY") }).parse(payload); return platformSelfTests.runPostUploadDiscovery(input.platformAccountId, input.mode); });
-  register("platform-self-test:run-publish-flow-exploration", async (_event, payload) => { const input = z.object({ platformAccountId: idSchema, mode: z.literal("XHS_PUBLISH_FLOW_EXPLORATION") }).parse(payload); return platformSelfTests.runPublishFlowExploration(input.platformAccountId, input.mode); });
   register("platform-self-test:continue", async (_event, payload) => platformSelfTests.continue(z.object({ testRunId: idSchema }).parse(payload).testRunId));
   register("platform-self-test:run-level", async (_event, payload) => { const input = z.object({ platformAccountId: idSchema, level: z.enum(["L1_LOGIN", "L2_EDITOR", "L3_CONTENT_FILL", "L4_DRAFT", "L5_PUBLISH"]) }).parse(payload); return platformSelfTests.runLevel(input.platformAccountId, input.level); });
   register("platform-self-test:health-check", async () => platformSelfTests.healthCheckConnectedAccounts());
   register("platform-self-test:request-publish", (_event, payload) => platformSelfTests.requestPublish(z.object({ platformAccountId: idSchema }).parse(payload).platformAccountId));
   register("platform-self-test:confirm-publish", async (_event, payload) => { const input = z.object({ testRunId: idSchema, testVideoPath: z.string().max(8192).optional() }).parse(payload); return platformSelfTests.confirmPublish(input.testRunId, input.testVideoPath); });
   register("platform-self-test:cancel-publish", (_event, payload) => platformSelfTests.cancelPublish(z.object({ testRunId: idSchema }).parse(payload).testRunId));
-  register("platform-self-test:request-one-shot-publish", (_event, payload) => platformSelfTests.requestOneShotPublish(z.object({ platformAccountId: idSchema }).parse(payload).platformAccountId));
-  register("platform-self-test:prepare-one-shot-prepublish", async (_event, payload) => platformSelfTests.prepareOneShotPrepublish(z.object({ testRunId: idSchema }).parse(payload).testRunId));
-  register("platform-self-test:confirm-one-shot-publish", async (_event, payload) => {
-    const input = z.object({ testRunId: idSchema }).parse(payload);
-    const run = repository.getPlatformSelfTestRun(input.testRunId);
-    const account = run ? repository.listAccounts().find((item) => (item.platformAccountId ?? item.id) === run.platformAccountId && item.platformKey === run.platformKey) : undefined;
-    logger.info("PLATFORM_SELF_TEST", "CONFIRM_IPC_ATTEMPT", "收到一次性发布确认 IPC 请求", {
-      testRunId: input.testRunId,
-      operationId: input.testRunId,
-      platformKey: run?.platformKey,
-      accountId: account?.id,
-      platformAccountId: run?.platformAccountId,
-      channel: "platform-self-test:confirm-one-shot-publish"
-    });
-    return platformSelfTests.confirmOneShotPublish(input.testRunId);
-  });
-  register("platform-self-test:cancel-one-shot-publish", (_event, payload) => platformSelfTests.cancelOneShotPublish(z.object({ testRunId: idSchema }).parse(payload).testRunId));
-  register("platform-self-test:reconcile-failed-one-shot-confirmation", (_event, payload) => {
-    const input = z.object({ testRunId: idSchema, platformKey: z.literal("xiaohongshu"), accountId: idSchema }).parse(payload);
-    logger.info("PLATFORM_SELF_TEST", "PARTIAL_CONFIRM_RECONCILIATION_IPC_ATTEMPT", "收到指定一次性确认 partial state reconciliation 请求", { testRunId: input.testRunId, platformKey: input.platformKey, accountId: input.accountId, mode: ONE_SHOT_REAL_PUBLISH_ACCEPTANCE });
-    return platformSelfTests.reconcileFailedOneShotConfirmation(input);
-  });
-  register("platform-self-test:verify-xhs-creator-identity", async (_event, payload) => {
-    const input = z.object({ accountId: idSchema }).parse(payload);
-    logger.info("PLATFORM_SELF_TEST", "XHS_CREATOR_IDENTITY_PROOF_STARTED", "开始只读读取现有 canonical Page 的小红书 Creator 身份", { platformKey: "xiaohongshu", accountId: input.accountId });
-    return platformSelfTests.verifyXhsCreatorIdentity(input.accountId);
-  });
-  register("platform-self-test:probe-xhs-canonical-page", async (_event, payload) => {
-    const input = z.object({ accountId: idSchema }).parse(payload);
-    logger.info("PLATFORM_SELF_TEST", "XHS_CANONICAL_PAGE_RUNTIME_PROBE_STARTED", "开始只读读取现有小红书 canonical Page runtime", { platformKey: "xiaohongshu", accountId: input.accountId });
-    return platformSelfTests.inspectCanonicalXhsPageRuntime(input.accountId);
-  });
-  register("platform-self-test:inspect-current-xhs-image-editor-readiness", async (_event, payload) => {
-    const input = z.object({ accountId: idSchema }).parse(payload);
-    logger.info("PLATFORM_SELF_TEST", "XHS_CURRENT_IMAGE_EDITOR_READINESS_STARTED", "开始只读读取现有 retained canonical Page 的小红书图文编辑器 readiness", { platformKey: "xiaohongshu", accountId: input.accountId });
-    return platformSelfTests.inspectCurrentXiaohongshuImageEditorReadiness(input.accountId);
-  });
-  register("platform-self-test:inspect-current-xhs-publish-editor-dom", async (_event, payload) => {
-    const input = z.object({ accountId: idSchema }).parse(payload);
-    logger.info("PLATFORM_SELF_TEST", "XHS_PUBLISH_EDITOR_DOM_DIAGNOSTIC_STARTED", "开始只读读取现有 canonical XHS publish editor bounded DOM", { platformKey: "xiaohongshu", accountId: input.accountId });
-    return platformSelfTests.inspectCurrentXiaohongshuPublishEditorDom(input.accountId);
-  });
-  register("platform-self-test:inspect-current-xhs-publish-editor-semantic-candidates", async (_event, payload) => {
-    const input = z.object({ accountId: idSchema }).parse(payload);
-    logger.info("PLATFORM_SELF_TEST", "XHS_PUBLISH_EDITOR_SEMANTIC_DIAGNOSTIC_STARTED", "开始只读读取现有 canonical XHS publish editor semantic candidates", { platformKey: "xiaohongshu", accountId: input.accountId });
-    return platformSelfTests.inspectCurrentXiaohongshuPublishEditorSemanticCandidates(input.accountId);
-  });
-  register("platform-self-test:inspect-current-xhs-post-upload-reconciliation", async (_event, payload) => {
-    const input = z.object({ accountId: idSchema }).parse(payload);
-    logger.info("PLATFORM_SELF_TEST", "XHS_POST_UPLOAD_RECONCILIATION_STARTED", "开始只读读取现有 retained canonical XHS post-upload editor reconciliation", { platformKey: "xiaohongshu", accountId: input.accountId });
-    return platformSelfTests.inspectCurrentXiaohongshuPostUploadReconciliation(input.accountId);
-  });
-  register("platform-self-test:inspect-current-xhs-file-input-state", async (_event, payload) => {
-    const input = z.object({ accountId: idSchema }).parse(payload);
-    logger.info("PLATFORM_SELF_TEST", "XHS_FILE_INPUT_STATE_STARTED", "开始只读读取现有 retained canonical XHS file-input state", { platformKey: "xiaohongshu", accountId: input.accountId });
-    return platformSelfTests.inspectCurrentXiaohongshuFileInputState(input.accountId);
-  });
-  register("platform-self-test:verify-and-converge-xhs-identity", async (_event, payload) => {
-    const input = z.object({ accountId: idSchema, ownerApproved: z.boolean().optional() }).parse(payload);
-    logger.info("PLATFORM_SELF_TEST", "XHS_IDENTITY_CONVERGENCE_STARTED", "开始小红书 Creator 身份证明与未消费一次性授权收敛", { platformKey: "xiaohongshu", accountId: input.accountId, ownerApproved: input.ownerApproved === true });
-    return platformSelfTests.verifyAndConvergeXhsIdentity(input.accountId, input.ownerApproved === true);
-  });
   register("platform-self-test:confirm-delete", async (_event, payload) => platformSelfTests.confirmDelete(z.object({ testRunId: idSchema }).parse(payload).testRunId));
 
   register("plans:list", () => repository.listPlans());
@@ -881,10 +1453,41 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
     return repository.createVideoPublishJob({ accountId: input.accountId, platformKey: input.platformKey, articleId: input.articleId, videoAssetId: input.videoAssetId, title: asset.title, description: asset.description, tags: asset.tags, coverPath: asset.coverPath ?? undefined, platformFields: asset.platformFields, scheduledAt: input.scheduledAt ?? new Date().toISOString(), dryRun: true, manualConfirmationRequired: true });
   });
   register("jobs:list", (_event, payload) => repository.listJobs(z.object({ status: z.string().optional() }).optional().parse(payload)));
+  register("jobs:prepare-existing-douyin", async (_event, payload) => {
+    const id = z.object({ id: idSchema }).parse(payload).id;
+    if (process.env.DOUYIN_BODY_DIAGNOSTIC_ENABLED !== "true"
+      || process.env.DOUYIN_BODY_DIAGNOSTIC_JOB_ID?.trim() !== id
+      || !process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim()
+      || !process.env.DOUYIN_R1_ACCEPTANCE_ARTICLE_ID?.trim())
+      throw new Error("DOUYIN_EXACT_DIAGNOSTIC_JOB_REQUIRED");
+    const job = repository.getJob(id);
+    if (!job || job.platformKey !== "douyin" || job.contentKind === "video"
+      || job.accountId !== process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim()
+      || job.articleId !== process.env.DOUYIN_R1_ACCEPTANCE_ARTICLE_ID?.trim()
+      || job.status !== "AwaitingConfirmation" || job.attemptCount !== 0
+      || repository.getSubmissionIntentByJob(id) || repository.getPublishRecordByJob(id)
+      || repository.getPublishPayload(id).douyinImageSelection)
+      throw new Error("DOUYIN_EXACT_PREBOUNDARY_JOB_REQUIRED");
+    return publisher.prepareArticle(id, createUserAction("START_PUBLISH"));
+  });
   register("jobs:run", async (_event, payload) => { const id = z.object({ id: idSchema }).parse(payload).id; const job = repository.getJob(id); const source = job && ["NeedsUserAction", "WaitingForUser"].includes(job.status) ? "CONTINUE_PENDING_ACTION" as const : "START_PUBLISH" as const; return publisher.executeJob(id, createUserAction(source)); });
   register("jobs:confirm", (_event, payload) => { const input = z.object({ id: idSchema, dryRun: z.boolean().default(false) }).parse(payload); return repository.confirmJob(input.id, input.dryRun); });
   register("jobs:reconcile", async (_event, payload) => publisher.reconcileJob(z.object({ id: idSchema }).parse(payload).id, createUserAction("CONTINUE_PENDING_ACTION")));
-  register("jobs:reconcile-browser", async (_event, payload) => publisher.reconcileBrowserJob(z.object({ id: idSchema }).parse(payload).id, createUserAction("CONTINUE_PENDING_ACTION")));
+  register("jobs:reconcile-browser", async (_event, payload) => {
+    const id = z.object({ id: idSchema }).parse(payload).id;
+    if (process.env.DOUYIN_R1_14_READONLY_JOB_ID?.trim()) {
+      const job = repository.getJob(id);
+      const intent = repository.getSubmissionIntentByJob(id);
+      const record = repository.getPublishRecordByJob(id);
+      if (id !== process.env.DOUYIN_R1_14_READONLY_JOB_ID?.trim() || !job || job.platformKey !== "douyin"
+        || job.accountId !== process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim()
+        || job.articleId !== process.env.DOUYIN_R1_ACCEPTANCE_ARTICLE_ID?.trim()
+        || !intent || intent.finalSubmitCount !== 1 || !intent.externalId
+        || !record || record.publishedExternalId !== intent.externalId)
+        throw new Error("DOUYIN_R14_READONLY_RECONCILIATION_TARGET_INVALID");
+    }
+    return publisher.reconcileBrowserJob(id, createUserAction("CONTINUE_PENDING_ACTION"));
+  });
   register("jobs:reconcile-not-submitted", (_event, payload) => repository.markJobReconciledNotSubmitted(z.object({ id: idSchema }).parse(payload).id));
   register("jobs:retry", (_event, payload) => { const id = z.object({ id: idSchema }).parse(payload).id; return repository.updateJobFailure(id, "Retry", "UNKNOWN", "用户手动重试", new Date().toISOString()); });
   register("jobs:recover", () => repository.recoverRunningJobs());
@@ -933,7 +1536,6 @@ export function registerIpc(deps: IpcDependencies): PlatformSelfTestService {
   void resumeRunningBatches(repository, logger, coverDir, aiCredentials);
   void resumeContentStudioTasks(repository, logger, { createAiProvider: () => createAiProvider(repository, aiCredentials, logger) });
   void scheduler;
-  return platformSelfTests;
 }
 
 function settingString(repository: AppRepository, key: string, fallback: string): string { const value = repository.getSettings()[key]; return typeof value === "string" ? value : fallback; }

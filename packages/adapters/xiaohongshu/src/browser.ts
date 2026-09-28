@@ -1,6 +1,6 @@
-import type { AccountContext, AccountProfile, CreatorIdentityProof, CurrentRuntimeIdentityProof, LoginSession, LoginStatus, PublishArticleInput, PublishResult, PublishStatusResult, ValidationResult } from "@publisher/domain";
+import type { AccountContext, AccountProfile, LoginSession, LoginStatus, PublishArticleInput, ValidationResult } from "@publisher/domain";
 import { randomUUID } from "node:crypto";
-import { classifyOneShotPostSubmitObservation, reconcileOneShotPublication, type AutomationPrepareResult, type BrowserPublishAttemptContext, type BrowserPublishReconciliationInput, type BrowserPublishReconciliationResult, type BrowserRuntimeAuthState, type BrowserSession, type BrowserSessionRuntimeSnapshot, type ControlledPostUploadDiscoveryResult, OneShotPublicationGuardError, type OneShotConfirmationCandidate, type OneShotFinalSubmitPreflight, type OneShotPublicationGuard, type OneShotPostSubmitObservation, type OneShotRealPublishAcceptanceInput, type OneShotRealPublishAcceptanceResult, type PreSubmitGateFailureCode, type PreSubmitGateFailureStage, type PreSubmitGateResult, type PreSubmitGateStatus, type PublishFlowExplorationBudgets, type PublishFlowExplorationCounters, type PublishFlowExplorationInput, type PublishFlowExplorationResult } from "@publisher/adapters-core";
+import { type AutomationPrepareResult, type BrowserRuntimeAuthState, type BrowserSession, type BrowserSessionRuntimeSnapshot, type ControlledPostUploadDiscoveryResult, type PreSubmitGateFailureCode, type PreSubmitGateFailureStage, type PreSubmitGateResult, type PreSubmitGateStatus } from "@publisher/adapters-core";
 import { BrowserAutomationAdapter, BrowserAutomationError, type BrowserAutomationAdapterOptions, type BrowserPlatformDefinition, type BrowserSessionScopeEvidence } from "@publisher/adapters-browser";
 import type { Locator, Page } from "playwright-core";
 import { collectXhsAuthStateMetadata, collectXhsPreNavigationAuthStateMetadata, createXhsDiagnosticFingerprintKey, type XhsAuthStateMetadata } from "./auth-state-diagnostics";
@@ -14,19 +14,11 @@ import {
   type XiaohongshuPublishSemanticNodeCollection
 } from "./creator-home-diagnostics";
 import {
-  activateXiaohongshuImagePostEntry,
-  collectPublishEntryDomDiagnostics,
   collectPublishClickableSurfaceDiagnostics,
-  inspectXiaohongshuImagePostEntry,
   type XiaohongshuClickableSurfaceDiagnostics,
   type XiaohongshuClickableSurfaceResolution,
   type XiaohongshuExactPublishSemanticTarget,
-  type XiaohongshuImagePostEntryActivationResult,
-  type XiaohongshuImagePostEntryInspection,
-  type XiaohongshuPageCapabilitiesSafe,
-  type XiaohongshuPageEvaluationFailureReason,
   type XiaohongshuPublishAncestorDiagnostic,
-  type XiaohongshuPublishEntryDomRuntimeDiagnostic,
   type XiaohongshuPublishEventListenerInspection,
   type XiaohongshuPublishEventListenerTarget,
   type XiaohongshuPublishHitTestDiagnostic
@@ -46,7 +38,6 @@ import {
   assertPreUploadImageEditorContract,
   inspectPostUploadImageEditor,
   type ImageEditorControlDiscovery,
-  type ImageEditorBoundingBox,
   type ImageEditorContentType,
   type ImageEditorDiagnostic,
   type ImageEditorInspectionStatus,
@@ -60,256 +51,11 @@ import {
   type ImageEditorPostUploadControlsStatus,
   type ImageEditorReadinessSample,
   type ImageEditorSemanticNode,
-  type ImageEditorSelectedTab,
   type ImageEditorSettingsDiscovery,
   type ImageEditorShellStatus,
-  type ImageEditorTabPresence,
   type ImageEditorUploadCapabilityStatus,
   type ImageEditorUploadControlRelationship
 } from "./image-editor-discovery";
-import {
-  assertExplorationSafety,
-  canSpendBudget,
-  DEFAULT_XHS_PUBLISH_FLOW_EXPLORATION_BUDGETS,
-  recordBudgetUse,
-  selectSafeIntermediateAction,
-  type XhsIntermediateActionCandidate
-} from "./publish-flow-exploration";
-import { isXiaohongshuIdentitySourcePath, readXiaohongshuCreatorIdentity, verifyIdentityOnPage, type XiaohongshuIdentityDomDiagnosticMatch, type XiaohongshuCreatorIdentityCandidate, type XiaohongshuPageScopedIdentityVerification } from "./identity";
-import { isExactXhsPublishEditorRoute, runXhsEditorLoadDiagnostic, type XhsEditorLoadDiagnosticResult } from "./editor-load-diagnostic";
-import { runXhsEditorNetworkFailureDiagnostic, type XhsEditorNetworkDiagnosticResult } from "./editor-network-diagnostic";
-import { emptyXiaohongshuContextPageInventory, inspectXiaohongshuContextPage, type XiaohongshuContextPageInventory } from "./context-page-inventory";
-import { emptyXiaohongshuPublishEditorDomRuntimeDiagnostic, inspectXiaohongshuPublishEditorDom, type XiaohongshuPublishEditorDomRuntimeDiagnostic } from "./publish-editor-dom-diagnostic";
-import { emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic, inspectXiaohongshuPublishEditorSemanticCandidates, type XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic } from "./publish-editor-semantic-diagnostic";
-import { emptyXiaohongshuGlobalExactPublishDomRuntimeDiagnostic, inspectXiaohongshuGlobalExactPublishDom, type XiaohongshuGlobalExactPublishDomRuntimeDiagnostic } from "./global-exact-publish-diagnostic";
-import { inspectTask10sClosedShadowPublishSurface, runTask10sClosedShadowFinalSubmit } from "./task10s-closed-shadow-final-submit";
-import { evaluateTask10sRetainedEditorGate } from "./task10s-retained-editor-completion";
-import { emptyXiaohongshuPostUploadReconciliationDomSnapshot, inspectXiaohongshuPostUploadReconciliationDom, reconcileXiaohongshuPostUploadSnapshot, type XiaohongshuPostUploadReconciliationResult } from "./post-upload-reconciliation-diagnostic";
-import { classifyXiaohongshuPostUploadTerminalReadiness, type XiaohongshuPostUploadTerminalReadiness } from "./post-upload-terminal-readiness";
-import { containsExpectedXiaohongshuSafeFixture, inspectXiaohongshuFileInputState, type XiaohongshuFileInputFixtureMatch, type XiaohongshuFileInputSafeNode } from "./file-input-diagnostic";
-import { readXiaohongshuUploadInputImmediately, type XiaohongshuUploadFileExpectation, type XiaohongshuUploadInputImmediateReadback } from "./upload-delivery-diagnostic";
-import { ensureXhsIdentityPage, type IdentityPageEnsureResult } from "./ensure-identity-page";
-import { normalizeXiaohongshuEditorText } from "./editor-text-normalization";
-import { createXhsNativeFilePickerRecovery, recoverNativeFilePicker, type NativeFilePickerRecoveryResult } from "./native-file-picker-recovery";
-import { stabilizeAfterNativeFilePickerCancel, type PickerCancelFinalControl, type PickerCancelStabilizationResult } from "./picker-cancel-stabilization";
-export { normalizeXiaohongshuEditorText } from "./editor-text-normalization";
-export type { XiaohongshuPostUploadBoundingRect, XiaohongshuPostUploadFinalSubmitProof, XiaohongshuPostUploadImageItemSafe, XiaohongshuPostUploadReconciliationDomSnapshot, XiaohongshuPostUploadReconciliationResult, XiaohongshuPostUploadReconciliationState } from "./post-upload-reconciliation-diagnostic";
-export { classifyXiaohongshuPostUploadTerminalReadiness } from "./post-upload-terminal-readiness";
-export type { XiaohongshuPostUploadTerminalReadiness, XiaohongshuPostUploadTerminalReadinessBlocker, XiaohongshuPostUploadTerminalReadinessInput } from "./post-upload-terminal-readiness";
-export type { XiaohongshuFileInputAncestorFingerprint, XiaohongshuFileInputDomSnapshot, XiaohongshuFileInputFileSafeMetadata, XiaohongshuFileInputFixtureMatch, XiaohongshuFileInputSafeNode } from "./file-input-diagnostic";
-export type { XiaohongshuUploadFileExpectation, XiaohongshuUploadFileMetadata, XiaohongshuUploadFileReadback, XiaohongshuUploadFixtureMatch, XiaohongshuUploadInputFingerprint, XiaohongshuUploadInputImmediateReadback } from "./upload-delivery-diagnostic";
-export type { XhsEditorLoadDiagnosticResult } from "./editor-load-diagnostic";
-export type { XhsEditorNetworkDiagnosticResult } from "./editor-network-diagnostic";
-export type { XiaohongshuContextPageInventory, XiaohongshuContextPageInventoryEntry, XiaohongshuContextPageDomSnapshot, XiaohongshuDocumentReadyState, XiaohongshuVisibilityState } from "./context-page-inventory";
-export type { IdentityPageEnsureAction, IdentityPageEnsureContext, IdentityPageEnsurePage, IdentityPageEnsureResult } from "./ensure-identity-page";
-export type { XiaohongshuPublishEditorDomRuntimeDiagnostic } from "./publish-editor-dom-diagnostic";
-export type { XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic } from "./publish-editor-semantic-diagnostic";
-export type { XiaohongshuGlobalExactPublishAncestorSafe, XiaohongshuGlobalExactPublishBoundingRect, XiaohongshuGlobalExactPublishClickableSignal, XiaohongshuGlobalExactPublishDomRuntimeDiagnostic, XiaohongshuGlobalExactPublishDomSnapshot, XiaohongshuGlobalExactPublishNodeSafe, XiaohongshuGlobalExactPublishUnique } from "./global-exact-publish-diagnostic";
-export { verifyIdentityOnPage } from "./identity";
-export type { XiaohongshuPageIdentityScope, XiaohongshuPageScopedIdentityProof, XiaohongshuPageScopedIdentityVerification } from "./identity";
-
-export interface XiaohongshuCurrentImageEditorReadiness {
-  inspectionStatus: "PASS" | "FAIL";
-  failureCode: string | null;
-  accountId: string;
-  contextDebugId: string | null;
-  pageId: string | null;
-  sessionExists: boolean;
-  browserConnected: boolean;
-  contextExists: boolean;
-  pageExists: boolean;
-  pageClosed: boolean;
-  pageContextMatchesSession: boolean;
-  origin: string | null;
-  pathname: string | null;
-  source: string | null;
-  from: string | null;
-  target: string | null;
-  sanitizedUrl: string | null;
-  readyState: string | null;
-  editorShellPresent: boolean;
-  uploadVideoTabPresent: boolean;
-  uploadImageTabPresent: boolean;
-  longFormTabPresent: boolean;
-  podcastTabPresent: boolean;
-  currentSelectedTab: ImageEditorSelectedTab | null;
-  imageUploadControlPresent: boolean;
-  titleControlPresent: boolean;
-  bodyControlPresent: boolean;
-  finalSubmitControlPresent: boolean;
-  contentType: ImageEditorContentType;
-  imageEditorPhase: ImageEditorPhase;
-  preUploadPhaseResult: "PASS" | "FAIL";
-  preUploadFailureCode: string | null;
-  preUploadFailureStage: string | null;
-  preUploadMissingSignal: string | null;
-  readinessSamples: readonly ImageEditorReadinessSample[];
-}
-
-export interface XiaohongshuCurrentPostUploadReconciliation extends XiaohongshuPostUploadReconciliationResult {
-  inspectionStatus: "PASS" | "FAIL";
-  failureCode: string | null;
-  accountId: string;
-  contextDebugId: string | null;
-  pageId: string | null;
-  sessionExists: boolean;
-  browserConnected: boolean;
-  contextExists: boolean;
-  pageExists: boolean;
-  pageClosed: boolean;
-  pageContextMatchesSession: boolean;
-  source: string | null;
-  from: string | null;
-  target: string | null;
-  sanitizedUrl: string | null;
-}
-
-export interface XiaohongshuCurrentPostUploadTerminalReadiness extends XiaohongshuCurrentPostUploadReconciliation {
-  terminalReadiness: XiaohongshuPostUploadTerminalReadiness;
-}
-
-export interface XiaohongshuCurrentFileInputState {
-  inspectionStatus: "PASS" | "FAIL";
-  failureCode: string | null;
-  accountId: string;
-  contextDebugId: string | null;
-  pageId: string | null;
-  sessionExists: boolean;
-  browserConnected: boolean;
-  contextExists: boolean;
-  pageExists: boolean;
-  pageClosed: boolean;
-  pageContextMatchesSession: boolean;
-  origin: string | null;
-  pathname: string | null;
-  sanitizedUrl: string | null;
-  readyState: string | null;
-  matchCount: number;
-  inputs: readonly XiaohongshuFileInputSafeNode[];
-  fileInputContainsExpectedFixture: XiaohongshuFileInputFixtureMatch;
-}
-
-export interface XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic {
-  inspectionStatus: "PASS" | "FAIL";
-  failureCode: string | null;
-  accountId: string;
-  contextDebugId: string | null;
-  pageId: string | null;
-  sessionExists: boolean;
-  browserConnected: boolean;
-  contextExists: boolean;
-  pageExists: boolean;
-  pageClosed: boolean;
-  pageContextMatchesSession: boolean;
-  origin: string | null;
-  pathname: string | null;
-  sanitizedUrl: string | null;
-  cdpSessionCreated: "YES" | "NO" | "NOT_PROVEN";
-  cdpGetDocumentSuccess: "YES" | "NO" | "NOT_PROVEN";
-  cdpGetDocumentDepth: -1;
-  cdpGetDocumentPierce: true;
-  piercedXhsPublishBtnCount: number;
-  hostNodeName: "XHS-PUBLISH-BTN" | null;
-  hostAttributesSafe: {
-    isPublish: string | null;
-    isSaveDraft: string | null;
-    submitText: string | null;
-    saveText: string | null;
-    submitDisabled: string | null;
-    submitLoading: string | null;
-  } | null;
-  hostIsPublish: string | null;
-  hostSubmitText: string | null;
-  hostSubmitDisabled: string | null;
-  hostSubmitLoading: string | null;
-  hostDescendantButtonCount: number;
-  exactPublishNativeButtonCount: number;
-  buttonNodeName: "BUTTON" | null;
-  buttonTextSafe: "发布" | null;
-  buttonType: string | null;
-  buttonClassSafe: string | null;
-  buttonAriaDisabled: string | null;
-  buttonAriaBusy: string | null;
-  buttonBoxModelPresent: "YES" | "NO" | "NOT_PROVEN";
-  buttonCenterXSafe: number | null;
-  buttonCenterYSafe: number | null;
-  finalSubmitControlPresent: "YES" | "NO" | "NOT_PROVEN";
-  finalSubmitControlEnabled: "YES" | "NO" | "NOT_PROVEN";
-  closedShadowFinalSubmitSurface: "PASS" | "FAIL";
-  saveDraftSurfacePresent: "NOT_INSPECTED";
-  finalResolverSelectedSaveDraft: "NO";
-}
-
-function emptyCurrentFileInputState(accountId: string, overrides: Partial<XiaohongshuCurrentFileInputState> = {}): XiaohongshuCurrentFileInputState {
-  return {
-    inspectionStatus: "FAIL",
-    failureCode: "BROWSER_SESSION_UNAVAILABLE",
-    accountId,
-    contextDebugId: null,
-    pageId: null,
-    sessionExists: false,
-    browserConnected: false,
-    contextExists: false,
-    pageExists: false,
-    pageClosed: false,
-    pageContextMatchesSession: false,
-    origin: null,
-    pathname: null,
-    sanitizedUrl: null,
-    readyState: null,
-    matchCount: 0,
-    inputs: [],
-    fileInputContainsExpectedFixture: "NOT_PROVEN",
-    ...overrides
-  };
-}
-
-function emptyClosedShadowFinalSubmitRuntimeDiagnostic(accountId: string, overrides: Partial<XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic> = {}): XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic {
-  return {
-    inspectionStatus: "FAIL",
-    failureCode: "BROWSER_SESSION_UNAVAILABLE",
-    accountId,
-    contextDebugId: null,
-    pageId: null,
-    sessionExists: false,
-    browserConnected: false,
-    contextExists: false,
-    pageExists: false,
-    pageClosed: true,
-    pageContextMatchesSession: false,
-    origin: null,
-    pathname: null,
-    sanitizedUrl: null,
-    cdpSessionCreated: "NOT_PROVEN",
-    cdpGetDocumentSuccess: "NOT_PROVEN",
-    cdpGetDocumentDepth: -1,
-    cdpGetDocumentPierce: true,
-    piercedXhsPublishBtnCount: 0,
-    hostNodeName: null,
-    hostAttributesSafe: null,
-    hostIsPublish: null,
-    hostSubmitText: null,
-    hostSubmitDisabled: null,
-    hostSubmitLoading: null,
-    hostDescendantButtonCount: 0,
-    exactPublishNativeButtonCount: 0,
-    buttonNodeName: null,
-    buttonTextSafe: null,
-    buttonType: null,
-    buttonClassSafe: null,
-    buttonAriaDisabled: null,
-    buttonAriaBusy: null,
-    buttonBoxModelPresent: "NOT_PROVEN",
-    buttonCenterXSafe: null,
-    buttonCenterYSafe: null,
-    finalSubmitControlPresent: "NOT_PROVEN",
-    finalSubmitControlEnabled: "NOT_PROVEN",
-    closedShadowFinalSubmitSurface: "FAIL",
-    saveDraftSurfacePresent: "NOT_INSPECTED",
-    finalResolverSelectedSaveDraft: "NO",
-    ...overrides
-  };
-}
 export {
   collectCreatorHomeTopology,
   collectPublishSemanticNodes,
@@ -317,20 +63,13 @@ export {
   observeCreatorHomeReadiness
 } from "./creator-home-diagnostics";
 export {
-  activateXiaohongshuImagePostEntry,
-  collectPublishEntryDomDiagnostics,
   collectExactPublishSemanticTargets,
   collectPublishAncestorChainDiagnostics,
   collectPublishClickableSurfaceDiagnostics,
-  collectExactImagePostMenuItems,
-  collectPublishNoteDropdownTriggerDiagnostics,
   collectPublishEventListenerDiagnostics,
   collectPublishHitTestDiagnostics,
-  resolvePublishClickableSurfaces,
-  resolvePublishNoteDropdownTrigger,
-  resolveExactImagePostMenuItem
+  resolvePublishClickableSurfaces
 } from "./publish-clickable-surface";
-export { inspectXiaohongshuImagePostEntry } from "./publish-clickable-surface";
 export {
   classifyPublishNotePostClickState,
   clickPublishNoteNavigationSurface,
@@ -360,10 +99,6 @@ export type {
   XiaohongshuClickableSurfaceStatus,
   XiaohongshuExactPublishSemanticTarget,
   XiaohongshuPublishAncestorDiagnostic,
-  XiaohongshuPublishDropdownTriggerDiagnostic,
-  XiaohongshuPublishDropdownTriggerResolution,
-  XiaohongshuImagePostMenuItemDiagnostic,
-  XiaohongshuImagePostMenuItemResolution,
   XiaohongshuPublishBoundingBox,
   XiaohongshuPublishEventListenerEntry,
   XiaohongshuPublishEventListenerInspection,
@@ -371,23 +106,7 @@ export type {
   XiaohongshuPublishHitTestDiagnostic,
   XiaohongshuPublishHitTestElement,
   XiaohongshuPublishHitTestAncestorRelation,
-  XiaohongshuPublishInteractionEvent,
-  XiaohongshuPublishEntryDomDiagnostics,
-  XiaohongshuPublishEntryDomElementDiagnostic,
-  XiaohongshuPublishEntryDomLabel,
-  XiaohongshuPublishEntryDomLabelDiagnostic,
-  XiaohongshuPublishEntryDomMatchDiagnostic,
-  XiaohongshuPublishEntryDomRuntimeDiagnostic,
-  XiaohongshuImagePostEntryActivationResult,
-  XiaohongshuImagePostEntryAncestorDiagnostic,
-  XiaohongshuImagePostEntryBoundingBox,
-  XiaohongshuImagePostEntryFailureCode,
-  XiaohongshuImagePostEntryInspection,
-  XiaohongshuImagePostEntryInspectionPayload,
-  XiaohongshuPageCapabilitiesSafe,
-  XiaohongshuPageEvaluationFailureReason,
-  XiaohongshuImagePostEntryStyleDiagnostic,
-  XiaohongshuImagePostEntryTargetDiagnostic
+  XiaohongshuPublishInteractionEvent
 } from "./publish-clickable-surface";
 export type {
   PublishNoteNavigationClickResult,
@@ -408,8 +127,8 @@ const XIAOHONGSHU_PUBLISH_ENTRY_CANDIDATE_SELECTOR = 'a, button, [role="button"]
 const XIAOHONGSHU_PUBLISH_ENTRY_CANDIDATE_MAX = 20;
 const XIAOHONGSHU_CONTENT_TYPE_ENTRY_SELECTOR = 'button[data-testid*="content-type-image" i], [role="button"][data-testid*="content-type-image" i], a[data-testid*="content-type-image" i]';
 const XIAOHONGSHU_FILE_SELECTOR = 'input[type="file"]';
+const XIAOHONGSHU_PREVIEW_SELECTOR = 'img[class*="preview" i], img[src*="xhscdn" i], [class*="preview" i], [data-testid*="upload-result" i], [class*="uploaded" i]';
 const XIAOHONGSHU_UPLOAD_BUSY_SELECTOR = '[aria-busy="true"], [class*="loading" i], [class*="uploading" i], progress';
-const TASK10S_SAFE_FIXTURE_EXPECTATION: XiaohongshuUploadFileExpectation = { name: "task10s-safe-test.png", size: 19226, type: "image/png" };
 const XIAOHONGSHU_TITLE_SELECTOR = 'input[placeholder*="标题"], input[aria-label*="标题"], input[name*="title" i], input[id*="title" i]';
 const XIAOHONGSHU_TITLE_FALLBACK_SELECTOR = 'textarea[placeholder*="标题"], textarea[aria-label*="标题"], textarea[name*="title" i], textarea[id*="title" i]';
 const XIAOHONGSHU_BODY_SELECTOR = '[contenteditable="true"][role="textbox"], [contenteditable="true"][data-placeholder], textarea[aria-label*="正文"], textarea[name*="body" i], textarea[id*="body" i]';
@@ -437,7 +156,7 @@ const definition: BrowserPlatformDefinition = {
     article: true,
     imagePost: true,
     video: false,
-    controlledSelfTestModes: ["POST_UPLOAD_DISCOVERY_ONLY", "XHS_PUBLISH_FLOW_EXPLORATION"],
+    controlledSelfTestModes: ["POST_UPLOAD_DISCOVERY_ONLY"],
     coverImage: false,
     tags: true,
     categories: false,
@@ -478,85 +197,10 @@ export interface XiaohongshuFinalSubmitControlEvidence {
   secondConfirmation: "present" | "absent" | "unknown";
 }
 
-export type XiaohongshuCanonicalPageRuntimeProbeFailureStage =
-  | "CANONICAL_PAGE_LOOKUP"
-  | "PAGE_OWNERSHIP"
-  | "PLAYWRIGHT_URL"
-  | "DOM_LOCATION_EVALUATE"
-  | "URL_CONSISTENCY"
-  | "IDENTITY_OBSERVATION";
-
-export interface XiaohongshuIdentitySourceCandidate {
-  sourceType: "PUBLIC_PROFILE_LINK" | "VISIBLE_ACCOUNT_TEXT" | "PUBLIC_DATA_IDENTIFIER" | "ACCOUNT_SURFACE";
-  stableIdentifierPresent: boolean;
-  identifierFieldName: "externalCreatorId" | "profileUrl" | null;
-  sensitiveDataRequired: false;
-  readOnlySafe: true;
-  confidence: "HIGH" | "MEDIUM" | "LOW";
-  tagName: string | null;
-  text: string | null;
-  href: string | null;
-  role: string | null;
-  dataIdentifierField: string | null;
-  visible: boolean;
-  source?: XiaohongshuCreatorIdentityCandidate["source"];
-  rawValue?: string;
-  normalizedCreatorId?: string;
-  semanticAnchor?: XiaohongshuCreatorIdentityCandidate["semanticAnchor"];
-}
-
-export interface XiaohongshuCanonicalPageRuntimeProbe {
-  probeStatus: "PASS" | "FAIL";
-  failureStage: XiaohongshuCanonicalPageRuntimeProbeFailureStage | null;
-  failureCode: string | null;
-  failureErrorClass: string | null;
-  canonicalContextId: string | null;
-  canonicalPageId: string | null;
-  probedContextId: string | null;
-  probedPageId: string | null;
-  pageContextMatchesSession: boolean;
-  createdNewPage: false;
-  browserConnected: boolean;
-  pageClosed: boolean;
-  runtimeAuthState: BrowserRuntimeAuthState;
-  playwrightPageUrl: string | null;
-  domLocationHref: string | null;
-  domLocationEvaluateStatus: "PASS" | "FAIL" | "NOT_RUN";
-  domLocationEvaluateErrorClass: string | null;
-  pageUrlConsistency: "PASS" | "FAIL" | "NOT_VERIFIED";
-  routeClass: XiaohongshuCreatorIdentityRouteClass;
-  identityObservationStatus: "PASS" | "NOT_VERIFIED" | "FAIL" | "NOT_RUN";
-  identitySourceCandidates: XiaohongshuIdentitySourceCandidate[];
-  identityDomDiagnosticMatchCount: number;
-  identityDomDiagnosticMatches: XiaohongshuIdentityDomDiagnosticMatch[];
-  observedCreatorIdRaw: string | null;
-  observedCreatorIdNormalized: string | null;
-  observedDisplayName: string | null;
-  observedProfileUrl: string | null;
-}
-
 export interface XiaohongshuAccountIdentityEvidence {
   externalAccountId: string | null;
   displayName: string | null;
   profileUrl: string | null;
-  identitySourceCandidates?: XiaohongshuIdentitySourceCandidate[];
-  identityDomDiagnosticMatchCount?: number;
-  identityDomDiagnosticMatches?: XiaohongshuIdentityDomDiagnosticMatch[];
-}
-
-export type XiaohongshuCreatorIdentityRouteClass = "CREATOR_HOME" | "PUBLISH_EDITOR" | "CREATOR_CONTENT" | "OTHER_CREATOR_PAGE" | "LOGIN" | "SECURITY_VERIFICATION" | "UNKNOWN";
-
-export interface XiaohongshuCreatorIdentityObservation {
-  canonicalContextId: string;
-  canonicalPageId: string;
-  canonicalPageUrl: string;
-  domLocationHref: string;
-  pageUrlConsistency: "PASS" | "FAIL";
-  routeClass: XiaohongshuCreatorIdentityRouteClass;
-  runtimeAuthState: BrowserRuntimeAuthState;
-  browserConnected: boolean;
-  pageClosed: boolean;
-  proof: CreatorIdentityProof;
 }
 
 export interface XiaohongshuLoginEvidence {
@@ -629,7 +273,7 @@ export interface XiaohongshuCanonicalPageOperationEvidence {
   operationId: string;
   platformKey: "xiaohongshu";
   accountId: string;
-  action: "CHECK_LOGIN" | "PRE_SUBMIT_GATE" | "CONTROLLED_POST_UPLOAD_DISCOVERY" | "XHS_PUBLISH_FLOW_EXPLORATION";
+  action: "CHECK_LOGIN" | "PRE_SUBMIT_GATE" | "CONTROLLED_POST_UPLOAD_DISCOVERY";
   contextDebugId: string;
   pageDebugId: string;
   pageRole: "CANONICAL_AUTHENTICATED";
@@ -661,7 +305,7 @@ export type XiaohongshuEditorEntryStepName =
 export type XiaohongshuEditorNavigationTrigger = "DIRECT_GOTO" | "PUBLISH_ENTRY_CLICK" | "CONTENT_TYPE_CLICK" | "PLATFORM_REDIRECT" | "UNKNOWN";
 
 export interface XiaohongshuEditorEntryDiagnostic {
-  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED" | "PUBLISH_EXACT_TARGETS_OBSERVED" | "PUBLISH_TARGET_ANCESTOR_CHAINS" | "PUBLISH_CLICK_SURFACE_DIAGNOSTICS" | "PUBLISH_HIT_TEST_OBSERVED" | "PUBLISH_EVENT_LISTENERS_OBSERVED" | "PUBLISH_NOTE_SURFACE_RESOLVED" | "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED" | "PUBLISH_NOTE_NAVIGATION_CLICK_STARTED" | "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED" | "IMAGE_POST_ENTRY_INSPECTION" | "IMAGE_POST_ENTRY_ACTIVATION" | "POST_PUBLISH_NOTE_STATE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_STARTED" | "IMAGE_EDITOR_READINESS_SAMPLE" | "IMAGE_EDITOR_SHELL_READY" | "IMAGE_EDITOR_SHELL_NOT_READY" | "IMAGE_EDITOR_SHELL_TIMEOUT" | "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED" | "IMAGE_EDITOR_CONTROLS_DISCOVERED" | "IMAGE_EDITOR_PHASE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_COMPLETED" | "IMAGE_EDITOR_INSPECTION_FAILED" | "PRE_UPLOAD_GATE_INSPECTION_STARTED" | "PRE_UPLOAD_GATE_RESULT" | "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED" | "IMAGE_UPLOAD_STARTED" | "IMAGE_UPLOAD_INPUT_READBACK" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED" | "POST_UPLOAD_EDITOR_READINESS_STARTED" | "POST_UPLOAD_EDITOR_READINESS_SAMPLE" | "POST_UPLOAD_EDITOR_SEMANTIC_INVENTORY_OBSERVED" | "POST_UPLOAD_EDITOR_INTERACTIVE_TOPOLOGY_OBSERVED" | "POST_UPLOAD_EDITOR_MODAL_STATE_OBSERVED" | "POST_UPLOAD_EDITOR_MEDIA_PREVIEW_OBSERVED" | "POST_UPLOAD_EDITOR_PHASE_OBSERVED" | "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED" | "POST_UPLOAD_EDITOR_INSPECTION_FAILED" | "POST_UPLOAD_EDITOR_INSPECTION_COMPLETED" | "XHS_PUBLISH_FLOW_TIMELINE" | "XHS_PUBLISH_FLOW_COMPLETED" | "XHS_PUBLISH_FLOW_BLOCKED" | "XHS_PUBLISH_FLOW_INTERMEDIATE_ACTION";
+  code: "PRE_SUBMIT_GATE_INSPECTION_STARTED" | "EDITOR_NAVIGATION_HELPER_INVOCATION_STARTED" | "EDITOR_ENTRY_STARTED" | "EDITOR_ENTRY_STEP" | "EDITOR_NAVIGATION_FAILED" | "PUBLISH_ENTRY_CANDIDATES_OBSERVED" | "CREATOR_HOME_READINESS_SAMPLE" | "CREATOR_HOME_TOPOLOGY_OBSERVED" | "PUBLISH_SEMANTIC_NODES_OBSERVED" | "FRAME_TOPOLOGY_OBSERVED" | "SHADOW_TOPOLOGY_OBSERVED" | "ACCESSIBILITY_PUBLISH_SIGNALS_OBSERVED" | "PUBLISH_EXACT_TARGETS_OBSERVED" | "PUBLISH_TARGET_ANCESTOR_CHAINS" | "PUBLISH_CLICK_SURFACE_DIAGNOSTICS" | "PUBLISH_HIT_TEST_OBSERVED" | "PUBLISH_EVENT_LISTENERS_OBSERVED" | "PUBLISH_NOTE_SURFACE_RESOLVED" | "PUBLISH_NOTE_SURFACE_PRECLICK_REVALIDATED" | "PUBLISH_NOTE_NAVIGATION_CLICK_STARTED" | "PUBLISH_NOTE_NAVIGATION_CLICK_COMPLETED" | "POST_PUBLISH_NOTE_STATE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_STARTED" | "IMAGE_EDITOR_READINESS_SAMPLE" | "IMAGE_EDITOR_SHELL_READY" | "IMAGE_EDITOR_SHELL_NOT_READY" | "IMAGE_EDITOR_SHELL_TIMEOUT" | "IMAGE_EDITOR_CONTENT_TYPE_OBSERVED" | "IMAGE_EDITOR_CONTROLS_DISCOVERED" | "IMAGE_EDITOR_PHASE_OBSERVED" | "IMAGE_EDITOR_INSPECTION_COMPLETED" | "IMAGE_EDITOR_INSPECTION_FAILED" | "PRE_UPLOAD_GATE_INSPECTION_STARTED" | "PRE_UPLOAD_GATE_RESULT" | "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED" | "IMAGE_UPLOAD_STARTED" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED" | "POST_UPLOAD_EDITOR_READINESS_STARTED" | "POST_UPLOAD_EDITOR_READINESS_SAMPLE" | "POST_UPLOAD_EDITOR_SEMANTIC_INVENTORY_OBSERVED" | "POST_UPLOAD_EDITOR_INTERACTIVE_TOPOLOGY_OBSERVED" | "POST_UPLOAD_EDITOR_MEDIA_PREVIEW_OBSERVED" | "POST_UPLOAD_EDITOR_MODAL_STATE_OBSERVED" | "POST_UPLOAD_EDITOR_PHASE_OBSERVED" | "POST_UPLOAD_EDITOR_CONTROLS_DISCOVERED" | "POST_UPLOAD_EDITOR_INSPECTION_FAILED" | "POST_UPLOAD_EDITOR_INSPECTION_COMPLETED";
   timestamp: string;
   operationId: string;
   platformKey: "xiaohongshu";
@@ -731,7 +375,6 @@ export interface XiaohongshuEditorEntryDiagnostic {
   hitTestDiagnostics?: readonly XiaohongshuPublishHitTestDiagnostic[];
   publishNoteSurface?: XiaohongshuClickableSurfaceResolution;
   imagePostSurface?: XiaohongshuClickableSurfaceResolution;
-  publishNoteDropdownTrigger?: XiaohongshuClickableSurfaceDiagnostics["publishNoteDropdownTrigger"];
   clickableSurfaceStatus?: XiaohongshuClickableSurfaceDiagnostics["clickableSurfaceStatus"];
   clickableSurfaceFailureCode?: XiaohongshuClickableSurfaceDiagnostics["clickableSurfaceFailureCode"];
   clickableSurfaceConfidence?: XiaohongshuClickableSurfaceDiagnostics["clickableSurfaceConfidence"];
@@ -742,9 +385,9 @@ export interface XiaohongshuEditorEntryDiagnostic {
   gateContentMutationCount?: 0;
   gateUploadCount?: 0;
   gateFinalSubmitCount?: 0;
-  finalSubmitCount?: number;
+  finalSubmitCount?: 0;
   navigationClickCount?: number;
-  action?: "PUBLISH_NOTE_NAVIGATION_CLICK" | "IMAGE_UPLOAD_MUTATION" | "IMAGE_UPLOAD_INPUT_READBACK" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED" | "XHS_PUBLISH_FLOW_INTERMEDIATE_ACTION";
+  action?: "PUBLISH_NOTE_NAVIGATION_CLICK" | "IMAGE_UPLOAD_MUTATION" | "IMAGE_UPLOAD_COMPLETED" | "IMAGE_UPLOAD_FAILED";
   status?: string;
   revalidated?: boolean;
   exactSemanticText?: string;
@@ -757,21 +400,7 @@ export interface XiaohongshuEditorEntryDiagnostic {
   eventListenerSignal?: string | null;
   targetIdentity?: Record<string, unknown>;
   surfaceIdentity?: Record<string, unknown>;
-  dropdownTriggerIdentity?: Record<string, unknown>;
-  dropdownTriggerStatus?: XiaohongshuClickableSurfaceDiagnostics["publishNoteDropdownTrigger"]["status"];
   navigationTransition?: boolean;
-  publishNoteDropdownClickCount?: 0 | 1;
-  imagePostMenuItemClickCount?: 0 | 1;
-  uploadVideoMenuItemClickCount?: 0;
-  imagePostEntryInspection?: XiaohongshuImagePostEntryInspection;
-  imagePostEntryActivation?: XiaohongshuImagePostEntryActivationResult;
-  pageCapabilitiesSafe?: XiaohongshuPageCapabilitiesSafe;
-  evaluationFailureReason?: XiaohongshuPageEvaluationFailureReason;
-  exactTextMatchCount?: number;
-  safeToTestClick?: boolean;
-  imagePostEntryClickCount?: number;
-  observedTarget?: "image" | "video" | null;
-  imagePostEntryRouteReadback?: "PASS" | "FAIL";
   imagePostSurfaceAfterPublishNote?: XiaohongshuClickableSurfaceResolution;
   postPublishNoteState?: PublishNotePostClickState;
   shellStatus?: ImageEditorShellStatus;
@@ -801,8 +430,6 @@ export interface XiaohongshuEditorEntryDiagnostic {
   mediaPreviewDiagnostics?: ImageEditorMediaPreviewDiagnostics;
   modalDiagnostics?: ImageEditorModalDiagnostics;
   intermediateActionCandidates?: readonly ImageEditorIntermediateActionCandidate[];
-  requiredValidationSignals?: readonly string[];
-  forbiddenActionSignalPresent?: boolean;
   postUploadTerminalStateReached?: boolean;
   postUploadIntermediateState?: ImageEditorPhase | null;
   postUploadReadinessDurationMs?: number;
@@ -822,21 +449,8 @@ export interface XiaohongshuEditorEntryDiagnostic {
   uploadBusy?: boolean;
   previewReady?: boolean;
   mutationType?: "IMAGE_UPLOAD_ONLY";
-  selfTestMode?: "POST_UPLOAD_DISCOVERY_ONLY" | "XHS_PUBLISH_FLOW_EXPLORATION";
-  uploadMutationCount?: number;
-  fileInputImmediateReadbackStatus?: "PASS" | "FAIL";
-  fileInputFilesLength?: number;
-  fileInputExpectedFixtureMatch?: "YES" | "NO" | "NOT_REQUIRED";
-  fileInputImmediateReadback?: XiaohongshuUploadInputImmediateReadback;
-  previewDetector?: "POST_UPLOAD_EDITOR_SCOPED";
-  uploadAttemptIndex?: number;
-  finalSubmitVisible?: boolean;
-  finalSubmitEnabled?: boolean;
-  finalSubmitHitTestValid?: boolean;
-  titleReadbackVerified?: boolean;
-  bodyReadbackVerified?: boolean;
-  intermediateActionClickCount?: number;
-  timelineEntry?: Record<string, unknown>;
+  selfTestMode?: "POST_UPLOAD_DISCOVERY_ONLY";
+  uploadMutationCount?: 1;
   requestedCount?: number;
   previewCount?: number;
   verified?: boolean;
@@ -1041,89 +655,12 @@ async function inputValue(locator: Locator): Promise<string> {
   return typeof candidate.inputValue === "function" ? candidate.inputValue().catch(() => "") : innerText(locator);
 }
 
-async function isChecked(locator: Locator): Promise<boolean> {
-  const candidate = locator as unknown as { isChecked?: () => Promise<boolean> };
-  if (typeof candidate.isChecked === "function") return candidate.isChecked().catch(() => false);
-  return (await attribute(locator, "aria-checked")) === "true" || (await attribute(locator, "checked")) !== "";
-}
-
-function emptyExplorationCounters(): PublishFlowExplorationCounters {
-  return {
-    navigationRestartCount: 0,
-    refreshCount: 0,
-    uploadAttempts: 0,
-    uploadMutationCount: 0,
-    uploadRetryCount: 0,
-    intermediateActionClickCount: 0,
-    titleMutationCount: 0,
-    bodyMutationCount: 0,
-    settingsMutationCount: 0,
-    contentMutationCount: 0,
-    finalSubmitCount: 0
-  };
-}
-
-function emptyExplorationFieldEvidence(): { attempted: boolean; mutationCount: number; strategyCount: number; readbackVerified: boolean } {
-  return { attempted: false, mutationCount: 0, strategyCount: 0, readbackVerified: false };
-}
-
-function normalizeExplorationBudgets(overrides: Partial<PublishFlowExplorationBudgets> | undefined): PublishFlowExplorationBudgets {
-  const supplied = overrides ?? {};
-  const bounded = (value: number | undefined, fallback: number): number => Number.isFinite(value) ? Math.max(0, Math.trunc(value as number)) : fallback;
-  return {
-    maxDurationMs: bounded(supplied.maxDurationMs, DEFAULT_XHS_PUBLISH_FLOW_EXPLORATION_BUDGETS.maxDurationMs),
-    maxNavigationRestarts: bounded(supplied.maxNavigationRestarts, DEFAULT_XHS_PUBLISH_FLOW_EXPLORATION_BUDGETS.maxNavigationRestarts),
-    maxUploadAttempts: bounded(supplied.maxUploadAttempts, DEFAULT_XHS_PUBLISH_FLOW_EXPLORATION_BUDGETS.maxUploadAttempts),
-    maxIntermediateActionClicks: bounded(supplied.maxIntermediateActionClicks, DEFAULT_XHS_PUBLISH_FLOW_EXPLORATION_BUDGETS.maxIntermediateActionClicks),
-    maxRefreshCount: bounded(supplied.maxRefreshCount, DEFAULT_XHS_PUBLISH_FLOW_EXPLORATION_BUDGETS.maxRefreshCount),
-    maxTitleMutations: bounded(supplied.maxTitleMutations, DEFAULT_XHS_PUBLISH_FLOW_EXPLORATION_BUDGETS.maxTitleMutations),
-    maxBodyMutations: bounded(supplied.maxBodyMutations, DEFAULT_XHS_PUBLISH_FLOW_EXPLORATION_BUDGETS.maxBodyMutations)
-  };
-}
-
-function toExplorationIntermediateCandidate(candidate: ImageEditorIntermediateActionCandidate): XhsIntermediateActionCandidate {
-  return {
-    candidateId: candidate.candidateId,
-    tagName: candidate.tagName,
-    normalizedText: candidate.normalizedText ?? candidate.semanticSignal,
-    role: candidate.role,
-    semanticSignal: candidate.semanticSignal,
-    visible: candidate.visible,
-    enabled: candidate.enabled,
-    boundingBox: candidate.boundingBox ?? null,
-    nearestInteractiveAncestorTag: candidate.nearestInteractiveAncestorTag ?? null,
-    nearestInteractiveAncestorRole: candidate.nearestInteractiveAncestorRole ?? null,
-    pointerEvents: candidate.pointerEvents ?? "unknown",
-    hitTestValid: candidate.hitTestValid === true
-  };
-}
-
-function boxesOverlap(left: ImageEditorBoundingBox, right: ImageEditorBoundingBox): boolean {
-  return left.x < right.x + right.width
-    && left.x + left.width > right.x
-    && left.y < right.y + right.height
-    && left.y + left.height > right.y;
-}
-
-async function locatorBoundingBox(locator: Locator): Promise<ImageEditorBoundingBox | null> {
-  const candidate = locator as unknown as { boundingBox?: () => Promise<ImageEditorBoundingBox | null> };
-  if (typeof candidate.boundingBox !== "function") return null;
-  return candidate.boundingBox().catch(() => null);
-}
-
-async function locatorHitTestValid(locator: Locator, box: ImageEditorBoundingBox | null): Promise<boolean> {
-  if (!box) return false;
-  const candidate = locator as unknown as { evaluate?: (pageFunction: (element: unknown, point: { x: number; y: number }) => unknown, arg: { x: number; y: number }) => Promise<unknown> };
-  if (typeof candidate.evaluate !== "function") return true;
-  try {
-    return await candidate.evaluate((element, point) => {
-      if (!(element instanceof Element)) return false;
-      const hit = document.elementFromPoint(point.x, point.y);
-      return hit === element || Boolean(hit && (element.contains(hit) || hit.contains(element)));
-    }, { x: box.x + box.width / 2, y: box.y + box.height / 2 }) === true;
-  } catch {
-    return false;
-  }
+export function normalizeXiaohongshuEditorText(value: string): string {
+  const stripped = Array.from(value.normalize("NFKC")).filter((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return (code === 0x0a || code === 0x0d) || (code > 0x1f && code !== 0x7f && code !== 0xad && code !== 0x200b && code !== 0x200c && code !== 0x200d && code !== 0x2060 && code !== 0xfeff);
+  }).join("");
+  return stripped.replaceAll("\r\n", "\n").replaceAll("\r", "\n").replace(/[ ]+/gu, " ").trim();
 }
 
 const XIAOHONGSHU_PUBLISH_ENTRY_LABELS = new Set([
@@ -1364,249 +901,24 @@ function emptyPageEvidence(page: XhsDocument): XiaohongshuPageEvidence {
     bodyPresent: true,
     bodyTextLength: 0,
     login: { available: false, url, creatorHost: false, creatorHomePath: false, explicitLoginUrl: /\/login(?:[/?#]|$)|\/signin(?:[/?#]|$)|passport|auth/iu.test(url), verificationUrl: /captcha|security[-_/]?check|sms[-_/]?verify|qr[-_/]?login|risk[-_/]?control/iu.test(url), publishNoteVisible: false, noteManagementVisible: false, dataDashboardVisible: false, accountStatusVisible: false, profileAreaVisible: false, visibleLoginForm: false, visibleQrLogin: false, visibleSmsVerification: false, visibleCaptcha: false, visibleSlider: false, visibleSecurityModal: false, positiveSignals: [], blockingSignals: [] },
-    identity: { externalAccountId: null, externalAccountIdCandidates: [], displayName: null, profileUrl: null, identitySourceCandidates: [], identityDomDiagnosticMatchCount: 0, identityDomDiagnosticMatches: [] }
+    identity: { externalAccountId: null, externalAccountIdCandidates: [], displayName: null, profileUrl: null }
   };
 }
 
 function sanitizePageUrl(page: Page): string {
-  return sanitizeUrlString(page.url());
-}
-
-function sanitizeUrlString(value: string): string {
   try {
-    const parsed = new URL(value);
+    const parsed = new URL(page.url());
     return `${parsed.origin}${parsed.pathname}`;
   } catch {
     return "about:blank";
   }
 }
 
-function safeXiaohongshuRouteMetadata(value: string): Pick<XiaohongshuCurrentImageEditorReadiness, "origin" | "pathname" | "source" | "from" | "target" | "sanitizedUrl"> {
-  try {
-    const parsed = new URL(value);
-    const safeQueryValue = (key: string): string | null => {
-      const queryValue = parsed.searchParams.get(key);
-      if (!queryValue) return null;
-      const normalized = queryValue.normalize("NFKC").trim();
-      return normalized.length > 0 && normalized.length <= 80 ? normalized : null;
-    };
-    return {
-      origin: parsed.origin,
-      pathname: parsed.pathname,
-      source: safeQueryValue("source"),
-      from: safeQueryValue("from"),
-      target: safeQueryValue("target"),
-      sanitizedUrl: `${parsed.origin}${parsed.pathname}`
-    };
-  } catch {
-    return { origin: null, pathname: null, source: null, from: null, target: null, sanitizedUrl: null };
-  }
-}
-
-function inferredImageEditorTabs(inspection: { contentType: ImageEditorContentType; tabPresence?: ImageEditorTabPresence; preUploadSemanticNodes: readonly ImageEditorSemanticNode[] }): ImageEditorTabPresence {
-  if (inspection.tabPresence) return inspection.tabPresence;
-  const has = (pattern: RegExp): boolean => inspection.preUploadSemanticNodes.some((node) => pattern.test(node.normalizedText));
-  const uploadImageTabPresent = has(/上传图文/iu);
-  const uploadVideoTabPresent = has(/上传视频/iu);
-  const longFormTabPresent = has(/写长文/iu);
-  const podcastTabPresent = has(/发播客/iu);
-  return {
-    uploadVideoTabPresent,
-    uploadImageTabPresent,
-    longFormTabPresent,
-    podcastTabPresent,
-    currentSelectedTab: inspection.contentType === "IMAGE_POST" && uploadImageTabPresent ? "上传图文" : inspection.contentType === "VIDEO" && uploadVideoTabPresent ? "上传视频" : null
-  };
-}
-
-function emptyCurrentImageEditorReadiness(accountId: string, overrides: Partial<XiaohongshuCurrentImageEditorReadiness> = {}): XiaohongshuCurrentImageEditorReadiness {
-  return {
-    inspectionStatus: "FAIL",
-    failureCode: "BROWSER_SESSION_UNAVAILABLE",
-    accountId,
-    contextDebugId: null,
-    pageId: null,
-    sessionExists: false,
-    browserConnected: false,
-    contextExists: false,
-    pageExists: false,
-    pageClosed: true,
-    pageContextMatchesSession: false,
-    origin: null,
-    pathname: null,
-    source: null,
-    from: null,
-    target: null,
-    sanitizedUrl: null,
-    readyState: null,
-    editorShellPresent: false,
-    uploadVideoTabPresent: false,
-    uploadImageTabPresent: false,
-    longFormTabPresent: false,
-    podcastTabPresent: false,
-    currentSelectedTab: null,
-    imageUploadControlPresent: false,
-    titleControlPresent: false,
-    bodyControlPresent: false,
-    finalSubmitControlPresent: false,
-    contentType: "UNKNOWN",
-    imageEditorPhase: "IMAGE_POST_UNKNOWN",
-    preUploadPhaseResult: "FAIL",
-    preUploadFailureCode: null,
-    preUploadFailureStage: null,
-    preUploadMissingSignal: null,
-    readinessSamples: [],
-    ...overrides
-  };
-}
-
-function emptyCurrentPostUploadReconciliation(accountId: string, overrides: Partial<XiaohongshuCurrentPostUploadReconciliation> = {}): XiaohongshuCurrentPostUploadReconciliation {
-  const snapshot = emptyXiaohongshuPostUploadReconciliationDomSnapshot();
-  return {
-    ...reconcileXiaohongshuPostUploadSnapshot(snapshot),
-    inspectionStatus: "FAIL",
-    failureCode: "BROWSER_SESSION_UNAVAILABLE",
-    accountId,
-    contextDebugId: null,
-    pageId: null,
-    sessionExists: false,
-    browserConnected: false,
-    contextExists: false,
-    pageExists: false,
-    pageClosed: true,
-    pageContextMatchesSession: false,
-    source: null,
-    from: null,
-    target: null,
-    sanitizedUrl: null,
-    ...overrides
-  };
-}
-
-function sameUrlOriginAndPath(first: string, second: string): boolean {
-  try {
-    const left = new URL(first);
-    const right = new URL(second);
-    return left.origin === right.origin && left.pathname === right.pathname;
-  } catch {
-    return false;
-  }
-}
-
-function identitySourceCandidatesFromEvidence(identity: XiaohongshuPageEvidence["identity"]): XiaohongshuIdentitySourceCandidate[] {
-  if (identity.identitySourceCandidates && identity.identitySourceCandidates.length > 0) return identity.identitySourceCandidates;
-  const candidates: XiaohongshuIdentitySourceCandidate[] = [];
-  if (identity.profileUrl) candidates.push({
-    sourceType: "PUBLIC_PROFILE_LINK",
-    stableIdentifierPresent: Boolean(stableExternalAccountId(identity.profileUrl)),
-    identifierFieldName: "profileUrl",
-    sensitiveDataRequired: false,
-    readOnlySafe: true,
-    confidence: "HIGH",
-    tagName: "A",
-    text: identity.displayName,
-    href: sanitizePublicProfileUrl(identity.profileUrl),
-    role: null,
-    dataIdentifierField: null,
-    visible: true,
-    source: "CREATOR_PROFILE_LINK",
-    rawValue: stableExternalAccountId(identity.profileUrl) ?? "",
-    normalizedCreatorId: stableExternalAccountId(identity.profileUrl) ?? "",
-    semanticAnchor: "xiaohongshu-profile-link"
-  });
-  if (identity.externalAccountId) candidates.push({
-    sourceType: "ACCOUNT_SURFACE",
-    stableIdentifierPresent: true,
-    identifierFieldName: "externalCreatorId",
-    sensitiveDataRequired: false,
-    readOnlySafe: true,
-    confidence: "HIGH",
-    tagName: null,
-    text: identity.displayName,
-    href: null,
-    role: null,
-    dataIdentifierField: null,
-    visible: true,
-    source: "CREATOR_HOME_ACCOUNT_LABEL",
-    rawValue: identity.externalAccountId,
-    normalizedCreatorId: identity.externalAccountId,
-    semanticAnchor: "xiaohongshu-account-id-label"
-  });
-  return candidates;
-}
-
-function normalizeExternalCreatorId(value: string | null): string | null {
-  const normalized = value?.trim() ?? "";
-  return normalized.length > 0 ? normalized : null;
-}
-
-function emptyCanonicalPageRuntimeProbe(overrides: Partial<XiaohongshuCanonicalPageRuntimeProbe> = {}): XiaohongshuCanonicalPageRuntimeProbe {
-  return {
-    probeStatus: "FAIL",
-    failureStage: null,
-    failureCode: null,
-    failureErrorClass: null,
-    canonicalContextId: null,
-    canonicalPageId: null,
-    probedContextId: null,
-    probedPageId: null,
-    pageContextMatchesSession: false,
-    createdNewPage: false,
-    browserConnected: false,
-    pageClosed: true,
-    runtimeAuthState: "UNVERIFIED",
-    playwrightPageUrl: null,
-    domLocationHref: null,
-    domLocationEvaluateStatus: "NOT_RUN",
-    domLocationEvaluateErrorClass: null,
-    pageUrlConsistency: "NOT_VERIFIED",
-    routeClass: "UNKNOWN",
-    identityObservationStatus: "NOT_RUN",
-    identitySourceCandidates: [],
-    identityDomDiagnosticMatchCount: 0,
-    identityDomDiagnosticMatches: [],
-    observedCreatorIdRaw: null,
-    observedCreatorIdNormalized: null,
-    observedDisplayName: null,
-    observedProfileUrl: null,
-    ...overrides
-  };
-}
-
-function sanitizePublicProfileUrl(value: string | null): string | null {
-  if (!value) return null;
-  try {
-    const parsed = new URL(value, XIAOHONGSHU_CREATOR_HOME);
-    const id = stableExternalAccountId(parsed.toString());
-    return id ? `${parsed.origin}${parsed.pathname}` : null;
-  } catch {
-    return null;
-  }
-}
-
-function classifyXiaohongshuCreatorIdentityRoute(url: string, login: boolean, verification: boolean): XiaohongshuCreatorIdentityRouteClass {
-  if (login) return "LOGIN";
-  if (verification) return "SECURITY_VERIFICATION";
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== "creator.xiaohongshu.com") return "UNKNOWN";
-    if (/^\/publish\/publish(?:[/?#]|$)/iu.test(parsed.pathname)) return "PUBLISH_EDITOR";
-    if (/\/(?:publish\/manage|content|note|notes)(?:[/?#]|$)/iu.test(parsed.pathname)) return "CREATOR_CONTENT";
-    if (/^\/(?:new\/home)?$/iu.test(parsed.pathname)) return "CREATOR_HOME";
-    return "OTHER_CREATOR_PAGE";
-  } catch {
-    return "UNKNOWN";
-  }
-}
-
-async function readXiaohongshuPageEvidence(page: Page, options: { failOnEvaluateError?: boolean } = {}): Promise<XiaohongshuPageEvidence> {
+async function readXiaohongshuPageEvidence(page: Page): Promise<XiaohongshuPageEvidence> {
   const candidate = page as unknown as { evaluate?: <T>(pageFunction: () => T) => Promise<T> };
-  if (typeof candidate.evaluate !== "function") {
-    if (options.failOnEvaluateError) throw Object.assign(new Error("Page.evaluate is unavailable"), { name: "PageEvaluateUnavailableError" });
-    return emptyPageEvidence(page);
-  }
+  if (typeof candidate.evaluate !== "function") return emptyPageEvidence(page);
   try {
-    const evaluated = await candidate.evaluate(() => {
+    return await candidate.evaluate(() => {
       const compact = (value: string): string => value.normalize("NFKC").replace(/[\s]+/gu, " ").trim();
       const verificationPattern = /captcha|human|security|risk|验证码|人机|安全验证|风控|滑块|二维码|扫码/iu;
       const loginPattern = /登录|验证码|手机号|短信|密码/iu;
@@ -1636,6 +948,60 @@ async function readXiaohongshuPageEvidence(page: Page, options: { failOnEvaluate
       if (visibleTextContains(/数据看板/iu)) positiveSignals.push("数据看板");
       if (visibleTextContains(/小红书创作服务平台/iu)) positiveSignals.push("创作服务平台");
       if (visibleTextContains(/账号状态正常/iu)) positiveSignals.push("账号状态正常");
+
+      const externalAccountIdCandidates: string[] = [];
+      const profileLinks: Array<{ id: string; url: string; name: string }> = [];
+      const names: string[] = [];
+      const addName = (value: string): void => {
+        const name = compact(value).replace(/^(?:昵称|账号昵称)[:：]?/iu, "").trim();
+        if (!name || /^(?:昵称|账号昵称|小红书账号|账号状态正常)$/iu.test(name) || name.length > 100) return;
+        if (!names.includes(name)) names.push(name);
+      };
+      const accountIdFromText = (value: string): string | null => {
+        const match = compact(value).match(/小红书账号(?:\s*(?:ID|id))?\s*[:：]?\s*([A-Za-z0-9][A-Za-z0-9_-]{2,63})/u);
+        return match?.[1] ?? null;
+      };
+      const stableIdFromHref = (href: string): string | null => {
+        try {
+          const parsed = new URL(href, location.href);
+          const match = parsed.pathname.match(/\/user\/profile\/([^/?#]+)/iu) ?? parsed.pathname.match(/\/user\/([^/?#]+)/iu);
+          const value = match?.[1]?.trim() ?? "";
+          return value && !/^(?:profile|home|index)$/iu.test(value) ? value : null;
+        } catch {
+          return null;
+        }
+      };
+      for (const element of elements) {
+        const descriptor = descriptorOf(element);
+        let current: Element | null = element;
+        for (let depth = 0; depth < 5 && current; depth += 1, current = current.parentElement) {
+          const text = textOf(current);
+          if (text.length <= 240) {
+            const id = accountIdFromText(text);
+            if (id && !externalAccountIdCandidates.includes(id)) externalAccountIdCandidates.push(id);
+            const nickname = text.match(/(?:昵称|账号昵称)\s*[:：]?\s*([^|｜\n]{2,100})/iu)?.[1];
+            if (nickname) addName(nickname);
+          }
+        }
+        if (/nickname|账号昵称|昵称|个人主页/iu.test(descriptor)) {
+          const text = textOf(element);
+          const nickname = text.match(/(?:昵称|账号昵称)\s*[:：]?\s*([^|｜\n]{2,100})/iu)?.[1];
+          if (nickname) addName(nickname);
+          else if (text && !/nickname|账号昵称|昵称|个人主页/iu.test(text)) addName(text);
+        }
+        if (element.tagName.toLowerCase() === "a") {
+          const href = element.getAttribute("href") || "";
+          const id = stableIdFromHref(href);
+          if (id) {
+            const url = new URL(href, location.href).toString();
+            profileLinks.push({ id, url, name: textOf(element) });
+            if (!externalAccountIdCandidates.includes(id)) externalAccountIdCandidates.push(id);
+            addName(textOf(element));
+          }
+        }
+      }
+      const distinctNames = [...new Set(names)];
+      if (distinctNames.length > 0) positiveSignals.push("账号身份");
 
       const blockingSignals: string[] = [];
       let visibleLoginForm = false;
@@ -1677,48 +1043,16 @@ async function readXiaohongshuPageEvidence(page: Page, options: { failOnEvaluate
       const creatorHomePath = /^\/(?:new\/home)?$/iu.test(parsedUrl.pathname);
       const explicitLoginUrl = /\/(?:login|signin|auth|passport)(?:[/?#]|$)/iu.test(parsedUrl.pathname);
       const verificationUrl = /captcha|security[-_/]?check|sms[-_/]?verify|qr[-_/]?login|risk[-_/]?control/iu.test(url);
+      const profile = profileLinks.find((candidate) => candidate.id === externalAccountIdCandidates[0]);
       return {
         available: true,
         bodyPresent: Boolean(document.body),
         bodyTextLength: document.body?.innerText.length ?? 0,
-        login: { available: true, url, creatorHost, creatorHomePath, explicitLoginUrl, verificationUrl, publishNoteVisible: positiveSignals.includes("发布笔记"), noteManagementVisible: positiveSignals.includes("笔记管理"), dataDashboardVisible: positiveSignals.includes("数据看板"), accountStatusVisible: positiveSignals.includes("账号状态正常"), profileAreaVisible: false, visibleLoginForm, visibleQrLogin, visibleSmsVerification, visibleCaptcha, visibleSlider, visibleSecurityModal, positiveSignals: [...new Set(positiveSignals)], blockingSignals: [...new Set(blockingSignals)] },
-        identity: { externalAccountId: null, externalAccountIdCandidates: [], displayName: null, profileUrl: null, identitySourceCandidates: [] }
+        login: { available: true, url, creatorHost, creatorHomePath, explicitLoginUrl, verificationUrl, publishNoteVisible: positiveSignals.includes("发布笔记"), noteManagementVisible: positiveSignals.includes("笔记管理"), dataDashboardVisible: positiveSignals.includes("数据看板"), accountStatusVisible: positiveSignals.includes("账号状态正常"), profileAreaVisible: distinctNames.length > 0 || externalAccountIdCandidates.length > 0 || profileLinks.length > 0, visibleLoginForm, visibleQrLogin, visibleSmsVerification, visibleCaptcha, visibleSlider, visibleSecurityModal, positiveSignals: [...new Set(positiveSignals)], blockingSignals: [...new Set(blockingSignals)] },
+        identity: { externalAccountId: externalAccountIdCandidates.length === 1 ? externalAccountIdCandidates[0] : null, externalAccountIdCandidates: [...new Set(externalAccountIdCandidates)], displayName: distinctNames.length === 1 ? distinctNames[0] : (profile?.name ? compact(profile.name) : null), profileUrl: profile?.url ?? null }
       };
     });
-    const boundedIdentity = await readXiaohongshuCreatorIdentity(page);
-    const identitySourceCandidates: XiaohongshuIdentitySourceCandidate[] = boundedIdentity.candidates.map((candidate) => ({
-      sourceType: candidate.source === "CREATOR_PROFILE_LINK" ? "PUBLIC_PROFILE_LINK" : "VISIBLE_ACCOUNT_TEXT",
-      stableIdentifierPresent: true,
-      identifierFieldName: "externalCreatorId",
-      sensitiveDataRequired: false,
-      readOnlySafe: true,
-      confidence: "HIGH",
-      tagName: candidate.source === "CREATOR_PROFILE_LINK" ? "A" : "SPAN",
-      text: candidate.rawValue,
-      href: candidate.source === "CREATOR_PROFILE_LINK" ? boundedIdentity.profileUrl : null,
-      role: null,
-      dataIdentifierField: null,
-      visible: true,
-      source: candidate.source,
-      rawValue: candidate.rawValue,
-      normalizedCreatorId: candidate.normalizedCreatorId,
-      semanticAnchor: candidate.semanticAnchor
-    }));
-    return {
-      ...evaluated,
-      login: { ...evaluated.login, profileAreaVisible: evaluated.login.profileAreaVisible || Boolean(boundedIdentity.displayName || boundedIdentity.normalizedCreatorId) },
-      identity: {
-        externalAccountId: boundedIdentity.status === "PASS" ? boundedIdentity.observedCreatorIdRaw : null,
-        externalAccountIdCandidates: boundedIdentity.candidates.map((candidate) => candidate.normalizedCreatorId),
-        displayName: evaluated.identity.displayName ?? boundedIdentity.displayName,
-        profileUrl: evaluated.identity.profileUrl ?? boundedIdentity.profileUrl,
-        identitySourceCandidates,
-        identityDomDiagnosticMatchCount: boundedIdentity.diagnostic.matchCount,
-        identityDomDiagnosticMatches: boundedIdentity.diagnostic.matches
-      }
-    };
-  } catch (error) {
-    if (options.failOnEvaluateError) throw error;
+  } catch {
     return emptyPageEvidence(page);
   }
 }
@@ -1790,12 +1124,6 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     return super.connectAccount(ctx);
   }
 
-  override async completeConnection(ctx: AccountContext): Promise<LoginStatus> {
-    const status = await super.completeConnection(ctx);
-    if (status === "logged_in") this.sessionManager.setRuntimeAuthState({ platformKey: this.platformKey, accountId: ctx.accountId }, "AUTHENTICATED", null);
-    return status;
-  }
-
   override async validateArticle(article: PublishArticleInput): Promise<ValidationResult> {
     const base = await super.validateArticle(article);
     const errors = [...base.errors];
@@ -1832,926 +1160,6 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     }, "checkLogin");
   }
 
-  /**
-   * Read-only runtime evidence on the retained canonical Page. This deliberately
-   * does not navigate, open an operation Page, or mutate the XHS editor.
-   */
-  async inspectCanonicalPageRuntime(ctx: AccountContext): Promise<XiaohongshuCanonicalPageRuntimeProbe> {
-    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
-      let canonical: Awaited<ReturnType<typeof this.activeCanonicalPage>>;
-      try {
-        canonical = await this.activeCanonicalPage(ctx);
-      } catch (error) {
-        return emptyCanonicalPageRuntimeProbe({
-          failureStage: "PAGE_OWNERSHIP",
-          failureCode: "CANONICAL_PAGE_OWNERSHIP",
-          failureErrorClass: error instanceof Error ? error.name : "UnknownError"
-        });
-      }
-      if (!canonical) return emptyCanonicalPageRuntimeProbe({
-        failureStage: "CANONICAL_PAGE_LOOKUP",
-        failureCode: "CANONICAL_PAGE_UNAVAILABLE"
-      });
-
-      const { session, page, pageDebugId } = canonical;
-      const canonicalContextId = session.contextDebugId ?? "unknown-context";
-      const canonicalPageId = pageDebugId;
-      const runtimeAuthState = this.getBrowserRuntimeState(ctx).state;
-      const browserConnected = this.isBrowserConnected(session);
-      const pageClosed = this.isCanonicalPageClosed(page);
-      const pageContextMatchesSession = !pageClosed
-        && this.pageContextMatchesSession(session, page)
-        && (typeof session.context.pages !== "function" || session.context.pages().includes(page));
-      const base = {
-        canonicalContextId,
-        canonicalPageId,
-        probedContextId: canonicalContextId,
-        probedPageId: canonicalPageId,
-        pageContextMatchesSession,
-        createdNewPage: false as const,
-        browserConnected,
-        pageClosed,
-        runtimeAuthState
-      };
-      if (pageClosed) return emptyCanonicalPageRuntimeProbe({
-        ...base,
-        failureStage: "CANONICAL_PAGE_LOOKUP",
-        failureCode: "CANONICAL_PAGE_CLOSED"
-      });
-      if (!pageContextMatchesSession) return emptyCanonicalPageRuntimeProbe({
-        ...base,
-        failureStage: "PAGE_OWNERSHIP",
-        failureCode: "CANONICAL_PAGE_OWNERSHIP"
-      });
-      if (!browserConnected) return emptyCanonicalPageRuntimeProbe({
-        ...base,
-        failureStage: "CANONICAL_PAGE_LOOKUP",
-        failureCode: "BROWSER_DISCONNECTED"
-      });
-      let rawPageUrl: string;
-      try {
-        rawPageUrl = page.url();
-      } catch (error) {
-        return emptyCanonicalPageRuntimeProbe({
-          ...base,
-          failureStage: "PLAYWRIGHT_URL",
-          failureCode: "PLAYWRIGHT_URL_READ_FAILED",
-          failureErrorClass: error instanceof Error ? error.name : "UnknownError"
-        });
-      }
-      const playwrightPageUrl = sanitizeUrlString(rawPageUrl);
-      const routeClass = classifyXiaohongshuCreatorIdentityRoute(rawPageUrl, this.isLoginPage(rawPageUrl), this.isVerificationUrl(rawPageUrl));
-      const evaluatePage = page as unknown as { evaluate?: <T>(pageFunction: () => T) => Promise<T> };
-      if (typeof evaluatePage.evaluate !== "function") return emptyCanonicalPageRuntimeProbe({
-        ...base,
-        probeStatus: "FAIL",
-        failureStage: "DOM_LOCATION_EVALUATE",
-        failureCode: "DOM_LOCATION_EVALUATE_UNAVAILABLE",
-        playwrightPageUrl,
-        routeClass,
-        domLocationEvaluateStatus: "FAIL",
-        domLocationEvaluateErrorClass: "PageEvaluateUnavailableError"
-      });
-
-      let rawDomLocationHref: string;
-      try {
-        rawDomLocationHref = String(await evaluatePage.evaluate(() => location.href));
-      } catch (error) {
-        return emptyCanonicalPageRuntimeProbe({
-          ...base,
-          failureStage: "DOM_LOCATION_EVALUATE",
-          failureCode: "DOM_LOCATION_EVALUATE_FAILED",
-          failureErrorClass: error instanceof Error ? error.name : "UnknownError",
-          playwrightPageUrl,
-          routeClass,
-          domLocationEvaluateStatus: "FAIL",
-          domLocationEvaluateErrorClass: error instanceof Error ? error.name : "UnknownError"
-        });
-      }
-      const domLocationHref = sanitizeUrlString(rawDomLocationHref);
-      const pageUrlConsistency = sameUrlOriginAndPath(rawPageUrl, rawDomLocationHref) ? "PASS" : "FAIL";
-      if (pageUrlConsistency === "FAIL") {
-        // Keep the URL mismatch as the authoritative probe failure, while
-        // retaining the legacy identity observation for callers of
-        // readCanonicalCreatorIdentity. This remains read-only and uses the
-        // same canonical Page; Task10V consumes the structured failure.
-        let identity: XiaohongshuPageEvidence["identity"] | null = null;
-        try {
-          identity = (await readXiaohongshuPageEvidence(page, { failOnEvaluateError: true })).identity;
-        } catch {
-          identity = null;
-        }
-        return emptyCanonicalPageRuntimeProbe({
-          ...base,
-          failureStage: "URL_CONSISTENCY",
-          failureCode: "CANONICAL_PAGE_URL_MISMATCH",
-          playwrightPageUrl,
-          domLocationHref,
-          domLocationEvaluateStatus: "PASS",
-          pageUrlConsistency,
-          routeClass,
-          identityObservationStatus: identity ? (identity.externalAccountId ? "PASS" : "NOT_VERIFIED") : "FAIL",
-          identitySourceCandidates: identity ? identitySourceCandidatesFromEvidence(identity) : [],
-          identityDomDiagnosticMatchCount: identity?.identityDomDiagnosticMatchCount ?? 0,
-          identityDomDiagnosticMatches: identity?.identityDomDiagnosticMatches ?? [],
-          observedCreatorIdRaw: identity?.externalAccountId ?? null,
-          observedCreatorIdNormalized: normalizeExternalCreatorId(identity?.externalAccountId ?? null),
-          observedDisplayName: identity?.displayName ?? null,
-          observedProfileUrl: identity ? sanitizePublicProfileUrl(identity.profileUrl) : null
-        });
-      }
-
-      let evidence: XiaohongshuPageEvidence;
-      try {
-        evidence = await readXiaohongshuPageEvidence(page, { failOnEvaluateError: true });
-      } catch (error) {
-        return emptyCanonicalPageRuntimeProbe({
-          ...base,
-          failureStage: "IDENTITY_OBSERVATION",
-          failureCode: "IDENTITY_EVALUATE_FAILED",
-          failureErrorClass: error instanceof Error ? error.name : "UnknownError",
-          playwrightPageUrl,
-          domLocationHref,
-          domLocationEvaluateStatus: "PASS",
-          pageUrlConsistency,
-          routeClass,
-          identityObservationStatus: "FAIL"
-        });
-      }
-      const identity = evidence.identity;
-      const observedCreatorIdRaw = identity.externalAccountId;
-      const observedCreatorIdNormalized = normalizeExternalCreatorId(observedCreatorIdRaw);
-      return {
-        probeStatus: "PASS",
-        failureStage: null,
-        failureCode: null,
-        failureErrorClass: null,
-        ...base,
-        playwrightPageUrl,
-        domLocationHref,
-        domLocationEvaluateStatus: "PASS",
-        domLocationEvaluateErrorClass: null,
-        pageUrlConsistency,
-        routeClass,
-        identityObservationStatus: observedCreatorIdNormalized ? "PASS" : "NOT_VERIFIED",
-        identitySourceCandidates: identitySourceCandidatesFromEvidence(identity),
-        identityDomDiagnosticMatchCount: identity.identityDomDiagnosticMatchCount ?? 0,
-        identityDomDiagnosticMatches: identity.identityDomDiagnosticMatches ?? [],
-        observedCreatorIdRaw,
-        observedCreatorIdNormalized,
-        observedDisplayName: identity.displayName,
-        observedProfileUrl: sanitizePublicProfileUrl(identity.profileUrl)
-      };
-    }, "inspectCanonicalPageRuntime");
-  }
-
-  /**
-   * Read-only inventory of every Page already present in the account-owned
-   * BrowserContext. This method never creates, closes, navigates, reloads, or
-   * mutates a Page and never accepts a Page identity from the Renderer.
-   */
-  async inspectXhsContextPages(ctx: AccountContext): Promise<XiaohongshuContextPageInventory> {
-    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
-      const session = this.activeBrowserSession(ctx);
-      const base = emptyXiaohongshuContextPageInventory({
-        accountId: ctx.accountId,
-        contextDebugId: session?.contextDebugId,
-        runtimeAuthState: this.getBrowserRuntimeState(ctx).state,
-        browserConnected: session ? this.isBrowserConnected(session) : false
-      });
-      let pages: Awaited<ReturnType<typeof this.activeContextPages>>;
-      try {
-        pages = this.activeContextPages(ctx);
-      } catch (error) {
-        return { ...base, failureCode: error instanceof Error ? error.name : "CONTEXT_PAGE_OWNERSHIP" };
-      }
-      if (!pages || !session) return base;
-      const inspectedPages = await Promise.all(pages.map((page) => inspectXiaohongshuContextPage(page, pages)));
-      return {
-        ...base,
-        inventoryStatus: "PASS",
-        failureCode: null,
-        contextDebugId: session.contextDebugId ?? "unknown-context",
-        pageCount: inspectedPages.length,
-        canonicalPageId: inspectedPages.find((page) => page.isCanonical)?.pageId ?? null,
-        pages: inspectedPages,
-        pageCreationEvents: [...(this.activeContextPageLifecycleEvents(ctx) ?? [])]
-      };
-    }, "inspectXhsContextPages");
-  }
-
-  /** Ensure an identity-capable Page exists in the current account-owned Context without touching the editor. */
-  async ensureXhsIdentityPage(ctx: AccountContext): Promise<IdentityPageEnsureResult> {
-    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
-      const session = this.activeBrowserSession(ctx);
-      if (!session || !this.isBrowserConnected(session)) {
-        return { status: "BLOCKED", failureCode: "BROWSER_SESSION_UNAVAILABLE", action: null, identityPage: null, identityPageUrl: null, editorPage: null, editorPageUrl: null, sameBrowserContext: false };
-      }
-      let pages: Awaited<ReturnType<typeof this.activeContextPages>>;
-      try {
-        pages = this.activeContextPages(ctx);
-      } catch {
-        return { status: "BLOCKED", failureCode: "CONTEXT_PAGES_UNAVAILABLE", action: null, identityPage: null, identityPageUrl: null, editorPage: null, editorPageUrl: null, sameBrowserContext: false };
-      }
-      if (!pages) {
-        return { status: "BLOCKED", failureCode: "CONTEXT_PAGES_UNAVAILABLE", action: null, identityPage: null, identityPageUrl: null, editorPage: null, editorPageUrl: null, sameBrowserContext: false };
-      }
-      return ensureXhsIdentityPage({ context: session.context, editorPage: session.page });
-    }, "ensureXhsIdentityPage");
-  }
-
-  /**
-   * Establish identity from the unique already-open identity-capable Page in
-   * this account-owned Context. The canonical Page may be a publish editor;
-   * identity is bound to the Session and Context, never to that Page.
-   */
-  async verifyIdentityOnContextPage(ctx: AccountContext): Promise<XiaohongshuPageScopedIdentityVerification> {
-    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
-      const session = this.activeBrowserSession(ctx);
-      if (!session) return { status: "FAIL", failureCode: "BROWSER_SESSION_UNAVAILABLE", proof: null };
-      if (!this.isBrowserConnected(session)) return { status: "FAIL", failureCode: "BROWSER_SESSION_DISCONNECTED", proof: null };
-
-      let pages: Awaited<ReturnType<typeof this.activeContextPages>>;
-      try {
-        pages = this.activeContextPages(ctx);
-      } catch {
-        return { status: "FAIL", failureCode: "CONTEXT_PAGE_OWNERSHIP_FAILURE", proof: null };
-      }
-      if (!pages) return { status: "FAIL", failureCode: "CONTEXT_PAGE_UNAVAILABLE", proof: null };
-
-      const identityPages = pages.filter((entry) => {
-        try {
-          if (entry.page.isClosed() || !this.pageContextMatchesSession(session, entry.page)) return false;
-          const parsed = new URL(entry.page.url());
-          return parsed.origin === "https://creator.xiaohongshu.com" && isXiaohongshuIdentitySourcePath(parsed.pathname);
-        } catch {
-          return false;
-        }
-      });
-      if (identityPages.length === 0) return { status: "FAIL", failureCode: "IDENTITY_PAGE_NOT_FOUND", proof: null };
-      if (identityPages.length !== 1) return { status: "FAIL", failureCode: "IDENTITY_PAGE_AMBIGUOUS", proof: null };
-
-      const identityPage = identityPages[0];
-      if (!identityPage) return { status: "FAIL", failureCode: "IDENTITY_PAGE_NOT_FOUND", proof: null };
-      return verifyIdentityOnPage(identityPage.page, {
-        browserSessionId: session.runtimeSessionIdentity,
-        contextId: session.contextDebugId ?? "",
-        pageId: identityPage.pageDebugId
-      });
-    }, "verifyIdentityOnContextPage");
-  }
-
-  /**
-   * Read-only readiness inspection of the retained canonical Page. The caller
-   * supplies only the account context; Page identity, route validation, and
-   * the editor inspection all stay inside Main/Adapter-owned state.
-   */
-  async inspectCurrentXiaohongshuImageEditorReadiness(ctx: AccountContext): Promise<XiaohongshuCurrentImageEditorReadiness> {
-    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
-      const activeSession = this.activeBrowserSession(ctx);
-      if (!activeSession) return emptyCurrentImageEditorReadiness(ctx.accountId, { failureCode: "BROWSER_SESSION_UNAVAILABLE" });
-
-      const sessionBase = {
-        accountId: ctx.accountId,
-        contextDebugId: activeSession.contextDebugId ?? null,
-        pageId: activeSession.pageDebugId ?? null,
-        sessionExists: true,
-        browserConnected: this.isBrowserConnected(activeSession),
-        contextExists: Boolean(activeSession.context && typeof activeSession.context.pages === "function"),
-        pageExists: false,
-        pageClosed: this.isCanonicalPageClosed(activeSession.page),
-        pageContextMatchesSession: false
-      };
-      let canonical: Awaited<ReturnType<typeof this.activeCanonicalPage>> = null;
-      try {
-        canonical = await this.activeCanonicalPage(ctx);
-      } catch {
-        return emptyCurrentImageEditorReadiness(ctx.accountId, { ...sessionBase, failureCode: "CANONICAL_PAGE_OWNERSHIP_FAILURE" });
-      }
-      if (!canonical) {
-        return emptyCurrentImageEditorReadiness(ctx.accountId, {
-          ...sessionBase,
-          failureCode: sessionBase.pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_UNAVAILABLE"
-        });
-      }
-
-      const { session, page, pageDebugId } = canonical;
-      const browserConnected = this.isBrowserConnected(session);
-      const contextExists = Boolean(session.context && typeof session.context.pages === "function");
-      const pageClosed = this.isCanonicalPageClosed(page);
-      let pageExists = false;
-      if (contextExists) {
-        try { pageExists = session.context.pages().includes(page); } catch { pageExists = false; }
-      }
-      const pageContextMatchesSession = !pageClosed && this.pageContextMatchesSession(session, page) && pageExists;
-      const base = {
-        accountId: ctx.accountId,
-        contextDebugId: session.contextDebugId ?? null,
-        pageId: pageDebugId,
-        sessionExists: true,
-        browserConnected,
-        contextExists,
-        pageExists,
-        pageClosed,
-        pageContextMatchesSession
-      };
-      const fail = (failureCode: string, overrides: Partial<XiaohongshuCurrentImageEditorReadiness> = {}): XiaohongshuCurrentImageEditorReadiness => emptyCurrentImageEditorReadiness(ctx.accountId, { ...base, failureCode, ...overrides });
-      if (!browserConnected) return fail("BROWSER_SESSION_DISCONNECTED");
-      if (!contextExists || !pageExists || !pageContextMatchesSession) return fail(pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_OWNERSHIP_FAILURE");
-
-      let rawUrl: string;
-      try { rawUrl = page.url(); } catch { return fail("CANONICAL_PAGE_URL_UNAVAILABLE"); }
-      const route = safeXiaohongshuRouteMetadata(rawUrl);
-      const canonicalRoute = route.origin === "https://creator.xiaohongshu.com" && route.pathname === "/publish/publish";
-      if (!canonicalRoute) return fail("CANONICAL_PAGE_NOT_XHS_IMAGE_EDITOR_ROUTE", { ...route });
-
-      const inspection = await inspectImagePostEditorPhase(page, {
-        operationId: randomUUID(),
-        platformKey: "xiaohongshu",
-        accountId: ctx.accountId,
-        contextDebugId: session.contextDebugId ?? "unknown-context",
-        pageDebugId: session.pageDebugId ?? "unknown-page"
-      });
-      const preUpload = assertPreUploadImageEditorContract(inspection);
-      const latestSample = inspection.readinessSamples[inspection.readinessSamples.length - 1] ?? null;
-      const tabs = inferredImageEditorTabs(inspection);
-      return {
-        ...base,
-        inspectionStatus: "PASS",
-        failureCode: null,
-        pageId: pageDebugId,
-        ...route,
-        readyState: latestSample?.readyState ?? null,
-        editorShellPresent: latestSample?.shellSignal === true,
-        uploadVideoTabPresent: tabs.uploadVideoTabPresent,
-        uploadImageTabPresent: tabs.uploadImageTabPresent,
-        longFormTabPresent: tabs.longFormTabPresent,
-        podcastTabPresent: tabs.podcastTabPresent,
-        currentSelectedTab: tabs.currentSelectedTab,
-        imageUploadControlPresent: inspection.uploadCapabilityStatus === "PRESENT" && inspection.uploadCapabilityPresent,
-        titleControlPresent: inspection.phaseTopology.titleCandidateCount > 0,
-        bodyControlPresent: inspection.phaseTopology.bodyCandidateCount > 0,
-        finalSubmitControlPresent: inspection.phaseTopology.finalSubmitCandidateCount > 0,
-        contentType: inspection.contentType,
-        imageEditorPhase: inspection.phase,
-        preUploadPhaseResult: preUpload.status,
-        preUploadFailureCode: preUpload.failureCode ?? null,
-        preUploadFailureStage: preUpload.failureStage ?? null,
-        preUploadMissingSignal: preUpload.missingSignal ?? null,
-        readinessSamples: inspection.readinessSamples
-      };
-    }, "inspectCurrentXiaohongshuImageEditorReadiness");
-  }
-
-  /**
-   * Read-only bounded DOM evidence on the retained canonical XHS publish Page.
-   * The Page/evaluate boundary is entirely Main-owned and accepts no Renderer input.
-   */
-  async inspectCurrentXiaohongshuPublishEditorDom(ctx: AccountContext): Promise<XiaohongshuPublishEditorDomRuntimeDiagnostic> {
-    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
-      const activeSession = this.activeBrowserSession(ctx);
-      if (!activeSession) return emptyXiaohongshuPublishEditorDomRuntimeDiagnostic(ctx.accountId);
-
-      const sessionBase = {
-        accountId: ctx.accountId,
-        contextDebugId: activeSession.contextDebugId ?? null,
-        pageId: activeSession.pageDebugId ?? null,
-        sessionExists: true,
-        browserConnected: this.isBrowserConnected(activeSession),
-        contextExists: Boolean(activeSession.context && typeof activeSession.context.pages === "function"),
-        pageExists: false,
-        pageClosed: this.isCanonicalPageClosed(activeSession.page),
-        pageContextMatchesSession: false
-      };
-
-      let canonical: Awaited<ReturnType<typeof this.activeCanonicalPage>> = null;
-      try {
-        canonical = await this.activeCanonicalPage(ctx);
-      } catch {
-        return emptyXiaohongshuPublishEditorDomRuntimeDiagnostic(ctx.accountId, { ...sessionBase, failureCode: "CANONICAL_PAGE_OWNERSHIP_FAILURE" });
-      }
-      if (!canonical) {
-        return emptyXiaohongshuPublishEditorDomRuntimeDiagnostic(ctx.accountId, {
-          ...sessionBase,
-          failureCode: sessionBase.pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_UNAVAILABLE"
-        });
-      }
-
-      const { session, page, pageDebugId } = canonical;
-      const browserConnected = this.isBrowserConnected(session);
-      const contextExists = Boolean(session.context && typeof session.context.pages === "function");
-      const pageClosed = this.isCanonicalPageClosed(page);
-      let pageExists = false;
-      if (contextExists) {
-        try { pageExists = session.context.pages().includes(page); } catch { pageExists = false; }
-      }
-      const pageContextMatchesSession = !pageClosed && this.pageContextMatchesSession(session, page) && pageExists;
-      const base = {
-        accountId: ctx.accountId,
-        contextDebugId: session.contextDebugId ?? null,
-        pageId: pageDebugId,
-        sessionExists: true,
-        browserConnected,
-        contextExists,
-        pageExists,
-        pageClosed,
-        pageContextMatchesSession
-      };
-      const fail = (failureCode: XiaohongshuPublishEditorDomRuntimeDiagnostic["failureCode"], overrides: Partial<XiaohongshuPublishEditorDomRuntimeDiagnostic> = {}): XiaohongshuPublishEditorDomRuntimeDiagnostic => emptyXiaohongshuPublishEditorDomRuntimeDiagnostic(ctx.accountId, { ...base, failureCode, ...overrides });
-      if (!browserConnected) return fail("BROWSER_SESSION_DISCONNECTED");
-      if (!contextExists || !pageExists || !pageContextMatchesSession) return fail(pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_OWNERSHIP_FAILURE");
-
-      let rawUrl: string;
-      try { rawUrl = page.url(); } catch { return fail("CANONICAL_PAGE_URL_UNAVAILABLE"); }
-      const route = safeXiaohongshuRouteMetadata(rawUrl);
-      if (route.origin !== "https://creator.xiaohongshu.com" || route.pathname !== "/publish/publish") {
-        return fail("CANONICAL_PAGE_NOT_XHS_IMAGE_EDITOR_ROUTE", { ...route });
-      }
-
-      try {
-        const snapshot = await inspectXiaohongshuPublishEditorDom(page);
-        return {
-          ...base,
-          inspectionStatus: "PASS",
-          failureCode: null,
-          ...route,
-          ...snapshot
-        };
-      } catch {
-        return fail("PAGE_EVALUATION_FAILED", { ...route });
-      }
-    }, "inspectCurrentXiaohongshuPublishEditorDom");
-  }
-
-  /**
-   * Read-only semantic candidate evidence on the retained canonical XHS
-   * publish Page. The candidate resolver is fixed inside Main and accepts no
-   * Renderer-provided selector, text, URL, Page, or Context identity.
-   */
-  async inspectCurrentXiaohongshuPublishEditorSemanticCandidates(ctx: AccountContext): Promise<XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic> {
-    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
-      const activeSession = this.activeBrowserSession(ctx);
-      if (!activeSession) return emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic(ctx.accountId);
-
-      const sessionBase = {
-        accountId: ctx.accountId,
-        contextDebugId: activeSession.contextDebugId ?? null,
-        pageId: activeSession.pageDebugId ?? null,
-        sessionExists: true,
-        browserConnected: this.isBrowserConnected(activeSession),
-        contextExists: Boolean(activeSession.context && typeof activeSession.context.pages === "function"),
-        pageExists: false,
-        pageClosed: this.isCanonicalPageClosed(activeSession.page),
-        pageContextMatchesSession: false
-      };
-
-      let canonical: Awaited<ReturnType<typeof this.activeCanonicalPage>> = null;
-      try {
-        canonical = await this.activeCanonicalPage(ctx);
-      } catch {
-        return emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic(ctx.accountId, { ...sessionBase, failureCode: "CANONICAL_PAGE_OWNERSHIP_FAILURE" });
-      }
-      if (!canonical) {
-        return emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic(ctx.accountId, {
-          ...sessionBase,
-          failureCode: sessionBase.pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_UNAVAILABLE"
-        });
-      }
-
-      const { session, page, pageDebugId } = canonical;
-      const browserConnected = this.isBrowserConnected(session);
-      const contextExists = Boolean(session.context && typeof session.context.pages === "function");
-      const pageClosed = this.isCanonicalPageClosed(page);
-      let pageExists = false;
-      if (contextExists) {
-        try { pageExists = session.context.pages().includes(page); } catch { pageExists = false; }
-      }
-      const pageContextMatchesSession = !pageClosed && this.pageContextMatchesSession(session, page) && pageExists;
-      const base = {
-        accountId: ctx.accountId,
-        contextDebugId: session.contextDebugId ?? null,
-        pageId: pageDebugId,
-        sessionExists: true,
-        browserConnected,
-        contextExists,
-        pageExists,
-        pageClosed,
-        pageContextMatchesSession
-      };
-      const fail = (failureCode: XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic["failureCode"], overrides: Partial<XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic> = {}): XiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic => emptyXiaohongshuPublishEditorSemanticCandidatesRuntimeDiagnostic(ctx.accountId, { ...base, failureCode, ...overrides });
-      if (!browserConnected) return fail("BROWSER_SESSION_DISCONNECTED");
-      if (!contextExists || !pageExists || !pageContextMatchesSession) return fail(pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_OWNERSHIP_FAILURE");
-
-      let rawUrl: string;
-      try { rawUrl = page.url(); } catch { return fail("CANONICAL_PAGE_URL_UNAVAILABLE"); }
-      const route = safeXiaohongshuRouteMetadata(rawUrl);
-      if (route.origin !== "https://creator.xiaohongshu.com" || route.pathname !== "/publish/publish") {
-        return fail("CANONICAL_PAGE_NOT_XHS_IMAGE_EDITOR_ROUTE", { ...route });
-      }
-
-      try {
-        const snapshot = await inspectXiaohongshuPublishEditorSemanticCandidates(page);
-        return {
-          ...base,
-          inspectionStatus: "PASS",
-          failureCode: null,
-          ...route,
-          ...snapshot
-        };
-      } catch {
-        return fail("PAGE_EVALUATION_FAILED", { ...route });
-      }
-    }, "inspectCurrentXiaohongshuPublishEditorSemanticCandidates");
-  }
-
-  /**
-   * Read-only fixed Task10S evidence for the publish host's closed shadow
-   * surface. The existing resolver owns all CDP tree traversal and matching.
-   */
-  async inspectCurrentXiaohongshuClosedShadowFinalSubmit(ctx: AccountContext): Promise<XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic> {
-    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
-      const activeSession = this.activeBrowserSession(ctx);
-      if (!activeSession) return emptyClosedShadowFinalSubmitRuntimeDiagnostic(ctx.accountId);
-
-      const sessionBase = {
-        accountId: ctx.accountId,
-        contextDebugId: activeSession.contextDebugId ?? null,
-        pageId: activeSession.pageDebugId ?? null,
-        sessionExists: true,
-        browserConnected: this.isBrowserConnected(activeSession),
-        contextExists: Boolean(activeSession.context && typeof activeSession.context.pages === "function"),
-        pageExists: false,
-        pageClosed: this.isCanonicalPageClosed(activeSession.page),
-        pageContextMatchesSession: false
-      };
-
-      let canonical: Awaited<ReturnType<typeof this.activeCanonicalPage>> = null;
-      try {
-        canonical = await this.activeCanonicalPage(ctx);
-      } catch {
-        return emptyClosedShadowFinalSubmitRuntimeDiagnostic(ctx.accountId, { ...sessionBase, failureCode: "CANONICAL_PAGE_OWNERSHIP_FAILURE" });
-      }
-      if (!canonical) {
-        return emptyClosedShadowFinalSubmitRuntimeDiagnostic(ctx.accountId, {
-          ...sessionBase,
-          failureCode: sessionBase.pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_UNAVAILABLE"
-        });
-      }
-
-      const { session, page, pageDebugId } = canonical;
-      const browserConnected = this.isBrowserConnected(session);
-      const contextExists = Boolean(session.context && typeof session.context.pages === "function");
-      const pageClosed = this.isCanonicalPageClosed(page);
-      let pageExists = false;
-      if (contextExists) {
-        try { pageExists = session.context.pages().includes(page); } catch { pageExists = false; }
-      }
-      const pageContextMatchesSession = !pageClosed && this.pageContextMatchesSession(session, page) && pageExists;
-      const base = {
-        accountId: ctx.accountId,
-        contextDebugId: session.contextDebugId ?? null,
-        pageId: pageDebugId,
-        sessionExists: true,
-        browserConnected,
-        contextExists,
-        pageExists,
-        pageClosed,
-        pageContextMatchesSession
-      };
-      const fail = (failureCode: string, overrides: Partial<XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic> = {}): XiaohongshuClosedShadowFinalSubmitRuntimeDiagnostic => emptyClosedShadowFinalSubmitRuntimeDiagnostic(ctx.accountId, { ...base, failureCode, ...overrides });
-      if (!browserConnected) return fail("BROWSER_SESSION_DISCONNECTED");
-      if (!contextExists || !pageExists || !pageContextMatchesSession) return fail(pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_OWNERSHIP_FAILURE");
-
-      let rawUrl: string;
-      try { rawUrl = page.url(); } catch { return fail("CANONICAL_PAGE_URL_UNAVAILABLE"); }
-      const route = safeXiaohongshuRouteMetadata(rawUrl);
-      if (route.origin !== "https://creator.xiaohongshu.com" || route.pathname !== "/publish/publish") {
-        return fail("CANONICAL_PAGE_NOT_XHS_IMAGE_EDITOR_ROUTE", { ...route });
-      }
-
-      const resolution = await inspectTask10sClosedShadowPublishSurface(page);
-      const host = resolution.host;
-      const button = resolution.innerButton;
-      const buttonRect = button?.boundingRect ?? null;
-      const cdpSessionCreated = resolution.failureCode === "TASK10S_CDP_SESSION_UNAVAILABLE" ? "NO" : "YES";
-      const cdpGetDocumentSuccess = resolution.failureCode === null ? "YES" : resolution.failureCode === "CDP_DOM_DOCUMENT_UNAVAILABLE" ? "NO" : "NOT_PROVEN";
-      return {
-        ...base,
-        inspectionStatus: "PASS",
-        failureCode: resolution.failureCode,
-        ...route,
-        cdpSessionCreated,
-        cdpGetDocumentSuccess,
-        cdpGetDocumentDepth: -1,
-        cdpGetDocumentPierce: true,
-        piercedXhsPublishBtnCount: resolution.hostMatchCount,
-        hostNodeName: host?.tagName ?? null,
-        hostAttributesSafe: host ? {
-          isPublish: host.isPublish,
-          isSaveDraft: host.isSaveDraft,
-          submitText: host.submitText,
-          saveText: host.saveText,
-          submitDisabled: host.submitDisabled,
-          submitLoading: host.submitLoading
-        } : null,
-        hostIsPublish: host?.isPublish ?? null,
-        hostSubmitText: host?.submitText ?? null,
-        hostSubmitDisabled: host?.submitDisabled ?? null,
-        hostSubmitLoading: host?.submitLoading ?? null,
-        hostDescendantButtonCount: resolution.innerButtonMatchCount,
-        exactPublishNativeButtonCount: resolution.innerButtonMatchCount,
-        buttonNodeName: button?.tagName ?? null,
-        buttonTextSafe: button?.exactText ?? null,
-        buttonType: button?.type ?? null,
-        buttonClassSafe: button?.classNameSafe ?? null,
-        buttonAriaDisabled: button?.ariaDisabled ?? null,
-        buttonAriaBusy: button?.ariaBusy ?? null,
-        buttonBoxModelPresent: button ? (buttonRect ? "YES" : "NO") : "NOT_PROVEN",
-        buttonCenterXSafe: buttonRect ? buttonRect.x + buttonRect.width / 2 : null,
-        buttonCenterYSafe: buttonRect ? buttonRect.y + buttonRect.height / 2 : null,
-        finalSubmitControlPresent: resolution.present ? "YES" : "NO",
-        finalSubmitControlEnabled: resolution.enabled ? "YES" : resolution.present ? "NO" : "NOT_PROVEN",
-        closedShadowFinalSubmitSurface: resolution.present && resolution.enabled ? "PASS" : "FAIL",
-        saveDraftSurfacePresent: "NOT_INSPECTED",
-        finalResolverSelectedSaveDraft: "NO"
-      };
-    }, "inspectCurrentXiaohongshuClosedShadowFinalSubmit");
-  }
-
-  /**
-   * Read-only document-global exact 发布 evidence on the retained canonical
-   * XHS publish Page. This is diagnostic-only and deliberately separate from
-   * the production final-submit control resolver.
-   */
-  async inspectCurrentXiaohongshuGlobalExactPublishDom(ctx: AccountContext): Promise<XiaohongshuGlobalExactPublishDomRuntimeDiagnostic> {
-    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
-      const activeSession = this.activeBrowserSession(ctx);
-      if (!activeSession) return emptyXiaohongshuGlobalExactPublishDomRuntimeDiagnostic(ctx.accountId);
-
-      const sessionBase = {
-        accountId: ctx.accountId,
-        contextDebugId: activeSession.contextDebugId ?? null,
-        pageId: activeSession.pageDebugId ?? null,
-        sessionExists: true,
-        browserConnected: this.isBrowserConnected(activeSession),
-        contextExists: Boolean(activeSession.context && typeof activeSession.context.pages === "function"),
-        pageExists: false,
-        pageClosed: this.isCanonicalPageClosed(activeSession.page),
-        pageContextMatchesSession: false
-      };
-
-      let canonical: Awaited<ReturnType<typeof this.activeCanonicalPage>> = null;
-      try {
-        canonical = await this.activeCanonicalPage(ctx);
-      } catch {
-        return emptyXiaohongshuGlobalExactPublishDomRuntimeDiagnostic(ctx.accountId, { ...sessionBase, failureCode: "CANONICAL_PAGE_OWNERSHIP_FAILURE" });
-      }
-      if (!canonical) {
-        return emptyXiaohongshuGlobalExactPublishDomRuntimeDiagnostic(ctx.accountId, {
-          ...sessionBase,
-          failureCode: sessionBase.pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_UNAVAILABLE"
-        });
-      }
-
-      const { session, page, pageDebugId } = canonical;
-      const browserConnected = this.isBrowserConnected(session);
-      const contextExists = Boolean(session.context && typeof session.context.pages === "function");
-      const pageClosed = this.isCanonicalPageClosed(page);
-      let pageExists = false;
-      if (contextExists) {
-        try { pageExists = session.context.pages().includes(page); } catch { pageExists = false; }
-      }
-      const pageContextMatchesSession = !pageClosed && this.pageContextMatchesSession(session, page) && pageExists;
-      const base = {
-        accountId: ctx.accountId,
-        contextDebugId: session.contextDebugId ?? null,
-        pageId: pageDebugId,
-        sessionExists: true,
-        browserConnected,
-        contextExists,
-        pageExists,
-        pageClosed,
-        pageContextMatchesSession
-      };
-      const fail = (failureCode: XiaohongshuGlobalExactPublishDomRuntimeDiagnostic["failureCode"], overrides: Partial<XiaohongshuGlobalExactPublishDomRuntimeDiagnostic> = {}): XiaohongshuGlobalExactPublishDomRuntimeDiagnostic => emptyXiaohongshuGlobalExactPublishDomRuntimeDiagnostic(ctx.accountId, { ...base, failureCode, ...overrides });
-      if (!browserConnected) return fail("BROWSER_SESSION_DISCONNECTED");
-      if (!contextExists || !pageExists || !pageContextMatchesSession) return fail(pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_OWNERSHIP_FAILURE");
-
-      let rawUrl: string;
-      try { rawUrl = page.url(); } catch { return fail("CANONICAL_PAGE_URL_UNAVAILABLE"); }
-      const route = safeXiaohongshuRouteMetadata(rawUrl);
-      if (route.origin !== "https://creator.xiaohongshu.com" || route.pathname !== "/publish/publish") {
-        return fail("CANONICAL_PAGE_NOT_XHS_IMAGE_EDITOR_ROUTE", { ...route });
-      }
-
-      try {
-        const snapshot = await inspectXiaohongshuGlobalExactPublishDom(page);
-        return {
-          ...base,
-          inspectionStatus: "PASS",
-          failureCode: null,
-          ...route,
-          ...snapshot
-        };
-      } catch {
-        return fail("PAGE_EVALUATION_FAILED", { ...route });
-      }
-    }, "inspectCurrentXiaohongshuGlobalExactPublishDom");
-  }
-
-  /**
-   * Read-only reconciliation of the retained post-upload editor. This is
-   * deliberately separate from the pre-upload contract and never performs a
-   * retry, click, navigation, content fill, or file mutation.
-   */
-  async inspectCurrentXiaohongshuPostUploadReconciliation(ctx: AccountContext): Promise<XiaohongshuCurrentPostUploadReconciliation> {
-    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
-      const activeSession = this.activeBrowserSession(ctx);
-      if (!activeSession) return emptyCurrentPostUploadReconciliation(ctx.accountId);
-
-      const sessionBase = {
-        accountId: ctx.accountId,
-        contextDebugId: activeSession.contextDebugId ?? null,
-        pageId: activeSession.pageDebugId ?? null,
-        sessionExists: true,
-        browserConnected: this.isBrowserConnected(activeSession),
-        contextExists: Boolean(activeSession.context && typeof activeSession.context.pages === "function"),
-        pageExists: false,
-        pageClosed: this.isCanonicalPageClosed(activeSession.page),
-        pageContextMatchesSession: false
-      };
-      let canonical: Awaited<ReturnType<typeof this.activeCanonicalPage>> = null;
-      try {
-        canonical = await this.activeCanonicalPage(ctx);
-      } catch {
-        return emptyCurrentPostUploadReconciliation(ctx.accountId, { ...sessionBase, failureCode: "CANONICAL_PAGE_OWNERSHIP_FAILURE" });
-      }
-      if (!canonical) {
-        return emptyCurrentPostUploadReconciliation(ctx.accountId, {
-          ...sessionBase,
-          failureCode: sessionBase.pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_UNAVAILABLE"
-        });
-      }
-
-      const { session, page, pageDebugId } = canonical;
-      const browserConnected = this.isBrowserConnected(session);
-      const contextExists = Boolean(session.context && typeof session.context.pages === "function");
-      const pageClosed = this.isCanonicalPageClosed(page);
-      let pageExists = false;
-      if (contextExists) {
-        try { pageExists = session.context.pages().includes(page); } catch { pageExists = false; }
-      }
-      const pageContextMatchesSession = !pageClosed && this.pageContextMatchesSession(session, page) && pageExists;
-      const base = {
-        accountId: ctx.accountId,
-        contextDebugId: session.contextDebugId ?? null,
-        pageId: pageDebugId,
-        sessionExists: true,
-        browserConnected,
-        contextExists,
-        pageExists,
-        pageClosed,
-        pageContextMatchesSession
-      };
-      const fail = (failureCode: string, overrides: Partial<XiaohongshuCurrentPostUploadReconciliation> = {}): XiaohongshuCurrentPostUploadReconciliation => emptyCurrentPostUploadReconciliation(ctx.accountId, { ...base, failureCode, ...overrides });
-      if (!browserConnected) return fail("BROWSER_SESSION_DISCONNECTED");
-      if (!contextExists || !pageExists || !pageContextMatchesSession) return fail(pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_OWNERSHIP_FAILURE");
-
-      let rawUrl: string;
-      try { rawUrl = page.url(); } catch { return fail("CANONICAL_PAGE_URL_UNAVAILABLE"); }
-      const route = safeXiaohongshuRouteMetadata(rawUrl);
-      if (route.origin !== "https://creator.xiaohongshu.com" || route.pathname !== "/publish/publish") {
-        return fail("CANONICAL_PAGE_NOT_XHS_IMAGE_EDITOR_ROUTE", { ...route, origin: route.origin ?? "", pathname: route.pathname ?? "" });
-      }
-
-      try {
-        const snapshot = await inspectXiaohongshuPostUploadReconciliationDom(page);
-        if (snapshot.origin !== route.origin || snapshot.pathname !== route.pathname) return fail("PAGE_ROUTE_CHANGED_DURING_DIAGNOSTIC", { ...route, origin: route.origin ?? "", pathname: route.pathname ?? "" });
-        const reconciliation = reconcileXiaohongshuPostUploadSnapshot(snapshot);
-        return {
-          ...base,
-          inspectionStatus: "PASS",
-          failureCode: null,
-          ...route,
-          ...reconciliation
-        };
-      } catch {
-        return fail("PAGE_EVALUATION_FAILED", { ...route, origin: route.origin ?? "", pathname: route.pathname ?? "" });
-      }
-    }, "inspectCurrentXiaohongshuPostUploadReconciliation");
-  }
-
-  /**
-   * Read-only file-input delivery diagnostic for the retained canonical Page.
-   * It does not accept a file path and never performs a file or UI mutation.
-   */
-  async inspectCurrentXiaohongshuFileInputState(ctx: AccountContext): Promise<XiaohongshuCurrentFileInputState> {
-    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
-      const activeSession = this.activeBrowserSession(ctx);
-      if (!activeSession) return emptyCurrentFileInputState(ctx.accountId);
-
-      const sessionBase = {
-        accountId: ctx.accountId,
-        contextDebugId: activeSession.contextDebugId ?? null,
-        pageId: activeSession.pageDebugId ?? null,
-        sessionExists: true,
-        browserConnected: this.isBrowserConnected(activeSession),
-        contextExists: Boolean(activeSession.context && typeof activeSession.context.pages === "function"),
-        pageExists: false,
-        pageClosed: this.isCanonicalPageClosed(activeSession.page),
-        pageContextMatchesSession: false
-      };
-      let canonical: Awaited<ReturnType<typeof this.activeCanonicalPage>> = null;
-      try {
-        canonical = await this.activeCanonicalPage(ctx);
-      } catch {
-        return emptyCurrentFileInputState(ctx.accountId, { ...sessionBase, failureCode: "CANONICAL_PAGE_OWNERSHIP_FAILURE" });
-      }
-      if (!canonical) {
-        return emptyCurrentFileInputState(ctx.accountId, {
-          ...sessionBase,
-          failureCode: sessionBase.pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_UNAVAILABLE"
-        });
-      }
-
-      const { session, page, pageDebugId } = canonical;
-      const browserConnected = this.isBrowserConnected(session);
-      const contextExists = Boolean(session.context && typeof session.context.pages === "function");
-      const pageClosed = this.isCanonicalPageClosed(page);
-      let pageExists = false;
-      if (contextExists) {
-        try { pageExists = session.context.pages().includes(page); } catch { pageExists = false; }
-      }
-      const pageContextMatchesSession = !pageClosed && this.pageContextMatchesSession(session, page) && pageExists;
-      const base = {
-        accountId: ctx.accountId,
-        contextDebugId: session.contextDebugId ?? null,
-        pageId: pageDebugId,
-        sessionExists: true,
-        browserConnected,
-        contextExists,
-        pageExists,
-        pageClosed,
-        pageContextMatchesSession
-      };
-      const fail = (failureCode: string, overrides: Partial<XiaohongshuCurrentFileInputState> = {}): XiaohongshuCurrentFileInputState => emptyCurrentFileInputState(ctx.accountId, { ...base, failureCode, ...overrides });
-      if (!browserConnected) return fail("BROWSER_SESSION_DISCONNECTED");
-      if (!contextExists || !pageExists || !pageContextMatchesSession) return fail(pageClosed ? "CANONICAL_PAGE_CLOSED" : "CANONICAL_PAGE_OWNERSHIP_FAILURE");
-
-      let rawUrl: string;
-      try { rawUrl = page.url(); } catch { return fail("CANONICAL_PAGE_URL_UNAVAILABLE"); }
-      const route = safeXiaohongshuRouteMetadata(rawUrl);
-      if (route.origin !== "https://creator.xiaohongshu.com" || route.pathname !== "/publish/publish") {
-        return fail("CANONICAL_PAGE_NOT_XHS_IMAGE_EDITOR_ROUTE", { origin: route.origin ?? null, pathname: route.pathname ?? null, sanitizedUrl: sanitizePageUrl(page) });
-      }
-
-      try {
-        const snapshot = await inspectXiaohongshuFileInputState(page);
-        if (snapshot.origin !== route.origin || snapshot.pathname !== route.pathname) return fail("PAGE_ROUTE_CHANGED_DURING_DIAGNOSTIC", { origin: snapshot.origin, pathname: snapshot.pathname, sanitizedUrl: sanitizePageUrl(page) });
-        return {
-          ...base,
-          inspectionStatus: "PASS",
-          failureCode: null,
-          origin: snapshot.origin,
-          pathname: snapshot.pathname,
-          sanitizedUrl: sanitizePageUrl(page),
-          readyState: snapshot.readyState,
-          matchCount: snapshot.matchCount,
-          inputs: snapshot.inputs,
-          fileInputContainsExpectedFixture: containsExpectedXiaohongshuSafeFixture(snapshot.inputs)
-        };
-      } catch {
-        return fail("PAGE_EVALUATION_FAILED", { origin: route.origin ?? null, pathname: route.pathname ?? null, sanitizedUrl: sanitizePageUrl(page) });
-      }
-    }, "inspectCurrentXiaohongshuFileInputState");
-  }
-
-  /** Read-only identity proof on the retained canonical Page. */
-  async readCanonicalCreatorIdentity(ctx: AccountContext): Promise<XiaohongshuCreatorIdentityObservation> {
-    const probe = await this.inspectCanonicalPageRuntime(ctx);
-    const stable = probe.identityObservationStatus === "PASS" && probe.identitySourceCandidates.some((candidate) => candidate.stableIdentifierPresent);
-    const proof: CreatorIdentityProof = {
-      platformKey: "xiaohongshu",
-      externalCreatorId: probe.observedCreatorIdNormalized,
-      displayName: probe.observedDisplayName,
-      profileUrl: probe.observedProfileUrl,
-      source: probe.observedProfileUrl ? "CREATOR_PROFILE_LINK" : probe.observedCreatorIdNormalized ? "CREATOR_ACCOUNT_SURFACE" : "CREATOR_ACCOUNT_SURFACE",
-      stable
-    };
-    return {
-      canonicalContextId: probe.canonicalContextId ?? "unknown-context",
-      canonicalPageId: probe.canonicalPageId ?? "unknown-page",
-      canonicalPageUrl: probe.playwrightPageUrl ?? "about:blank",
-      domLocationHref: probe.domLocationHref ?? "about:blank",
-      pageUrlConsistency: probe.pageUrlConsistency === "PASS" ? "PASS" : "FAIL",
-      routeClass: probe.routeClass,
-      runtimeAuthState: probe.runtimeAuthState,
-      browserConnected: probe.browserConnected,
-      pageClosed: probe.pageClosed,
-      proof
-    };
-  }
-
   /** Diagnostic correlation for the main-process CONNECTION_TEST log; it never changes checkLogin behavior. */
   consumeCompletedCheckLoginOperationId(accountId: string): string | null {
     const key = `${this.platformKey}:${accountId}`;
@@ -2775,50 +1183,19 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, () => this.inspectPublishEditorOnCanonicalPage(ctx), "preSubmitGate");
   }
 
-  /** Read-only bounded inspection of exact Creator Home publish-entry labels. */
-  async inspectXhsPublishEntryDom(ctx: AccountContext): Promise<XiaohongshuPublishEntryDomRuntimeDiagnostic> {
-    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
-      const activeSession = this.activeBrowserSession(ctx);
-      const canonical = await this.activeCanonicalPage(ctx).catch(() => null);
-      const empty = (failureCode: XiaohongshuPublishEntryDomRuntimeDiagnostic["failureCode"]): XiaohongshuPublishEntryDomRuntimeDiagnostic => ({
-        inspectionStatus: "FAIL",
-        failureCode,
-        accountId: ctx.accountId,
-        contextDebugId: activeSession?.contextDebugId ?? null,
-        pageId: activeSession?.pageDebugId ?? null,
-        pageContextMatchesSession: false,
-        browserConnected: activeSession ? this.isBrowserConnected(activeSession) : false,
-        pageClosed: activeSession ? this.isCanonicalPageClosed(activeSession.page) : true,
-        pageOrigin: "",
-        pathname: "",
-        publishNote: { label: "发布笔记", matchCount: 0, matches: [], clickableAncestorCount: 0, target: null, ancestors: [], uniqueClickableAncestor: null },
-        imagePost: { label: "发布图文笔记", matchCount: 0, matches: [], clickableAncestorCount: 0, target: null, ancestors: [], uniqueClickableAncestor: null },
-        uploadImage: { label: "上传图文", matchCount: 0, matches: [], clickableAncestorCount: 0, target: null, ancestors: [], uniqueClickableAncestor: null },
-        diagnosticClickCount: 0,
-        navigationCount: 0
-      });
-      if (!canonical) return empty("CANONICAL_PAGE_UNAVAILABLE");
-      const pageContextMatchesSession = this.pageContextMatchesSession(canonical.session, canonical.page);
-      if (!pageContextMatchesSession) return { ...empty("CANONICAL_PAGE_OWNERSHIP_FAILURE"), contextDebugId: canonical.session.contextDebugId ?? null, pageId: canonical.pageDebugId, pageContextMatchesSession: false, browserConnected: this.isBrowserConnected(canonical.session), pageClosed: this.isCanonicalPageClosed(canonical.page) };
-      if (!this.isBrowserConnected(canonical.session)) return { ...empty("BROWSER_SESSION_DISCONNECTED"), contextDebugId: canonical.session.contextDebugId ?? null, pageId: canonical.pageDebugId, pageContextMatchesSession: true, pageClosed: this.isCanonicalPageClosed(canonical.page) };
-      const diagnostic = await collectPublishEntryDomDiagnostics(canonical.page);
-      return { ...diagnostic, inspectionStatus: "PASS", failureCode: null, accountId: ctx.accountId, contextDebugId: canonical.session.contextDebugId ?? null, pageId: canonical.pageDebugId, pageContextMatchesSession: true, browserConnected: true, pageClosed: this.isCanonicalPageClosed(canonical.page) };
-    }, "inspectPublishEntryDom");
-  }
-
   /**
    * Controlled first-upload proof. This is intentionally separate from
    * preparePublish: it may mutate only the image input once, then stops at
    * post-upload discovery without filling content or submitting anything.
    */
-  async runControlledPostUploadDiscovery(ctx: AccountContext, input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE"; onUploadMutationStarted?: () => void }): Promise<ControlledPostUploadDiscoveryResult> {
+  async runControlledPostUploadDiscovery(ctx: AccountContext, input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE" }): Promise<ControlledPostUploadDiscoveryResult> {
     const operationId = randomUUID();
     return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, () => this.runControlledPostUploadDiscoveryOnCanonicalPage(ctx, input, operationId), "controlledPostUploadDiscovery");
   }
 
   private async runControlledPostUploadDiscoveryOnCanonicalPage(
     ctx: AccountContext,
-    input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE"; onUploadMutationStarted?: () => void },
+    input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE" },
     operationId: ReturnType<typeof randomUUID>
   ): Promise<ControlledPostUploadDiscoveryResult> {
     const initialCanonical = await this.activeCanonicalPage(ctx).catch(() => null);
@@ -2896,10 +1273,10 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     });
 
     try {
-      const imageEvidence = await this.uploadImages(canonical.page, [input.imagePath], { ctx, session: canonical.session, metadata, selfTestMode: "POST_UPLOAD_DISCOVERY_ONLY", expectedFileMetadata: TASK10S_SAFE_FIXTURE_EXPECTATION, onMutationStarted: input.onUploadMutationStarted });
+      const imageEvidence = await this.uploadImages(canonical.page, [input.imagePath], { ctx, session: canonical.session, metadata, selfTestMode: "POST_UPLOAD_DISCOVERY_ONLY" });
       const uploadCompletionObserved = imageEvidence.verified === true;
       if (!uploadCompletionObserved) return failure("UPLOAD_COMPLETION_NOT_OBSERVED", "EDITOR_DISCOVERY", "upload-completion", 1);
-      const postUploadInspection = await inspectPostUploadImageEditor(canonical.page, metadata, { nativeFilePickerRecovery: createXhsNativeFilePickerRecovery(canonical.page, { profilePath: canonical.session.profilePath, browserChannel: canonical.session.browserChannel ?? null }), emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
+      const postUploadInspection = await inspectPostUploadImageEditor(canonical.page, metadata, { emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
       const postUploadPassed = postUploadInspection.status === "READY" && postUploadInspection.phase === "IMAGE_POST_POST_UPLOAD_EDITOR" && postUploadInspection.postUploadControlsStatus === "READY";
       const result: ControlledPostUploadDiscoveryResult = {
         mode: "POST_UPLOAD_DISCOVERY_ONLY",
@@ -2936,683 +1313,11 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     }
   }
 
-  /**
-   * Bounded end-to-end exploration. This is deliberately separate from
-   * preparePublish: it may fill only explicit test content and can discover the
-   * final submit surface, but it never invokes or simulates submission.
-   */
-  async runPublishFlowExploration(ctx: AccountContext, input: PublishFlowExplorationInput): Promise<PublishFlowExplorationResult> {
-    const operationId = input.operationId?.trim() || randomUUID();
-    return this.accountOperationMutex.run(
-      `${this.platformKey}:${ctx.accountId}`,
-      () => this.runPublishFlowExplorationOnCanonicalPage(ctx, input, operationId),
-      "publishFlowExploration"
-    );
-  }
-
-  /**
-   * Recreates the editor surface for an already-persisted Prepared Job. This
-   * is deliberately separate from the diagnostic fresh-flow entry point: it
-   * accepts trusted Article content from Main, performs one bounded upload,
-   * and stops before any publication boundary.
-   */
-  async recoverPreparedEditor(ctx: AccountContext, input: PublishFlowExplorationInput): Promise<PublishFlowExplorationResult> {
-    const operationId = input.operationId?.trim() || randomUUID();
-    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
-      const pages = this.activeContextPages(ctx) ?? [];
-      const editorExists = pages.some((entry) => {
-        if (entry.page.isClosed()) return false;
-        try {
-          const parsed = new URL(entry.page.url());
-          return parsed.origin === "https://creator.xiaohongshu.com" && parsed.pathname === "/publish/publish";
-        } catch {
-          return false;
-        }
-      });
-      if (editorExists) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "EDITOR_ALREADY_EXISTS");
-      return this.runPublishFlowExplorationOnCanonicalPage(ctx, {
-        ...input,
-        operationId,
-        postUploadReadinessStrategy: "TERMINAL_CLASSIFIER",
-        budgets: {
-          ...input.budgets,
-          maxDurationMs: 60_000,
-          maxNavigationRestarts: 0,
-          maxUploadAttempts: 1,
-          maxIntermediateActionClicks: 1,
-          maxRefreshCount: 0,
-          maxTitleMutations: 1,
-          maxBodyMutations: 1
-        }
-      }, operationId);
-    }, "preparedEditorRecovery");
-  }
-
-  /**
-   * Explicit Task10S adapter boundary. Callers must still create the formal
-   * Job/SubmissionIntent/PublishRecord lifecycle; this low-level method only
-   * exists for adapter contract tests and owner-approved orchestration.
-   */
-  async runOneShotRealPublishAcceptance(ctx: AccountContext, input: OneShotRealPublishAcceptanceInput & { oneShotPublicationGuard: OneShotPublicationGuard }): Promise<OneShotRealPublishAcceptanceResult> {
-    const operationId = input.authorization.operationId;
-    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
-      const exploration = await this.runPublishFlowExplorationOnCanonicalPage(ctx, { ...input, operationId }, operationId);
-      const base = input.oneShotPublicationGuard.authorization;
-      if (exploration.status !== "PASS_READY_FOR_FINAL_SUBMIT") {
-        return {
-          operationId,
-          status: "BLOCKED",
-          authorizationState: base.state === "CONSUMED" ? "CONSUMED" : "AUTHORIZED_UNUSED",
-          publicationTransactionCount: base.publicationTransactionCount,
-          publicationCommitActionCount: base.publicationCommitActionCount,
-          finalSubmitAttemptCount: base.finalSubmitAttemptCount,
-          finalSubmitRetryCount: 0,
-          finalSubmitActionStarted: base.finalSubmitActionStarted,
-          finalSubmitActionCompleted: base.finalSubmitActionCompleted,
-          postSubmitObservation: { status: "NOT_STARTED", blocker: exploration.blocker },
-          publicationReconciled: false,
-          externalId: null,
-          externalUrl: null,
-          publicPageVerified: false,
-          response: { exploration }
-        };
-      }
-      const article: PublishArticleInput = { articleId: operationId, title: input.title, body: input.body, summary: "", tags: [], images: [input.imagePath] };
-      try {
-        const submitted = await this.performOneShotFinalSubmit(ctx, article, input.oneShotPublicationGuard, {
-          jobId: operationId,
-          submissionIntentId: operationId,
-          attempt: 1
-        });
-        const auth = input.oneShotPublicationGuard.markFinalSubmitCompleted();
-        return {
-          operationId,
-          status: "PUBLISHED_VERIFIED",
-          authorizationState: "CONSUMED",
-          publicationTransactionCount: auth.publicationTransactionCount,
-          publicationCommitActionCount: auth.publicationCommitActionCount,
-          finalSubmitAttemptCount: auth.finalSubmitAttemptCount,
-          finalSubmitRetryCount: 0,
-          finalSubmitActionStarted: auth.finalSubmitActionStarted,
-          finalSubmitActionCompleted: auth.finalSubmitActionCompleted,
-          postSubmitObservation: submitted.response.postSubmitObservation as Record<string, unknown>,
-          publicationReconciled: submitted.response.publicPageVerified === true,
-          externalId: submitted.externalId ?? null,
-          externalUrl: submitted.publishedUrl ?? null,
-          publicPageVerified: submitted.response.publicPageVerified === true,
-          response: submitted.response
-        };
-      } catch (error) {
-        const auth = input.oneShotPublicationGuard.authorization;
-        return {
-          operationId,
-          status: error instanceof BrowserAutomationError && error.code === "CONTENT_REJECTED" ? "PLATFORM_REJECTED" : auth.finalSubmitActionStarted ? "NEEDS_RECONCILIATION" : "BLOCKED",
-          authorizationState: auth.state === "CONSUMED" ? "CONSUMED" : "AUTHORIZED_UNUSED",
-          publicationTransactionCount: auth.publicationTransactionCount,
-          publicationCommitActionCount: auth.publicationCommitActionCount,
-          finalSubmitAttemptCount: auth.finalSubmitAttemptCount,
-          finalSubmitRetryCount: 0,
-          finalSubmitActionStarted: auth.finalSubmitActionStarted,
-          finalSubmitActionCompleted: auth.finalSubmitActionCompleted,
-          postSubmitObservation: { status: "ERROR", message: error instanceof Error ? error.message : String(error) },
-          publicationReconciled: false,
-          externalId: null,
-          externalUrl: null,
-          publicPageVerified: false,
-          response: { error: error instanceof Error ? error.message : String(error) }
-        };
-      }
-    }, "oneShotRealPublishAcceptance");
-  }
-
-  private async runPublishFlowExplorationOnCanonicalPage(
-    ctx: AccountContext,
-    input: PublishFlowExplorationInput,
-    operationId: string
-  ): Promise<PublishFlowExplorationResult> {
-    const startedAt = Date.now();
-    const budgets = normalizeExplorationBudgets(input.budgets);
-    let counters = emptyExplorationCounters();
-    const timeline: Array<{ timestamp: string; url: string; phase: string; action: string; result: string }> = [];
-    const states: Array<Record<string, unknown>> = [];
-    const actions: Array<Record<string, unknown>> = [];
-    const selectors: Array<Record<string, unknown>> = [];
-    let titleEvidence = emptyExplorationFieldEvidence();
-    let bodyEvidence = emptyExplorationFieldEvidence();
-    let requiredSettings: { status: string; mutations: readonly Record<string, unknown>[] } = { status: "NOT_REQUIRED", mutations: [] };
-    let finalSubmit: { status: string; visible: boolean; enabled: boolean; hitTestValid: boolean; label?: string } = { status: "NOT_DISCOVERED", visible: false, enabled: false, hitTestValid: false };
-    let nativeFilePickerRecoveryResult: NativeFilePickerRecoveryResult | null = null;
-    let pickerCancelStabilization: PickerCancelStabilizationResult | null = null;
-    let forbiddenMutationObserved = false;
-    let blocker: string | null = null;
-    let canonical = await this.activeCanonicalPage(ctx).catch(() => null);
-    const initialCanonical = canonical;
-    const sameInitialPage = Boolean(canonical && this.pageContextMatchesSession(canonical.session, canonical.page));
-
-    const addTimeline = (phase: string, action: string, result: string, page: Page | null = canonical?.page ?? null): void => {
-      const entry = { timestamp: new Date().toISOString(), url: page ? sanitizePageUrl(page) : "about:blank", phase, action, result };
-      timeline.push(entry);
-      this.emitEditorEntryDiagnostic({
-        code: "XHS_PUBLISH_FLOW_TIMELINE",
-        timestamp: entry.timestamp,
-        operationId,
-        platformKey: "xiaohongshu",
-        accountId: ctx.accountId,
-        ...(canonical ? { contextDebugId: canonical.session.contextDebugId ?? "unknown-context", pageDebugId: canonical.pageDebugId, pageRole: "CANONICAL_AUTHENTICATED" as const, pageSource: "EXISTING_CANONICAL_PAGE" as const } : {}),
-        createdNewPage: false,
-        timelineEntry: entry,
-        status: result,
-        sanitizedUrl: entry.url,
-        finalSubmitCount: counters.finalSubmitCount,
-        intermediateActionClickCount: counters.intermediateActionClickCount
-      });
-    };
-
-    const buildResult = (status: PublishFlowExplorationResult["status"]): PublishFlowExplorationResult => {
-      const result: PublishFlowExplorationResult = {
-        mode: "XHS_PUBLISH_FLOW_EXPLORATION",
-        status,
-        operationId,
-        platformKey: this.platformKey,
-        accountId: ctx.accountId,
-        imageSource: input.imageSource,
-        sameCanonicalPage: Boolean(initialCanonical && canonical && initialCanonical.page === canonical.page),
-        sameContext: Boolean(initialCanonical && canonical && initialCanonical.session.context === canonical.session.context),
-        timeline,
-        states,
-        actions,
-        selectors,
-        counters,
-        uploadAttempts: counters.uploadAttempts,
-        uploadMutationCount: counters.uploadMutationCount,
-        uploadRetryCount: counters.uploadRetryCount,
-        intermediateActionClickCount: counters.intermediateActionClickCount,
-        titleMutationCount: counters.titleMutationCount,
-        bodyMutationCount: counters.bodyMutationCount,
-        settingsMutationCount: counters.settingsMutationCount,
-        contentMutationCount: counters.contentMutationCount,
-        finalSubmitCount: 0,
-        budgets,
-        title: titleEvidence,
-        titleReadbackVerified: titleEvidence.readbackVerified,
-        body: bodyEvidence,
-        bodyReadbackVerified: bodyEvidence.readbackVerified,
-        requiredSettings,
-        finalSubmit,
-        ...(pickerCancelStabilization ? {
-          afterPickerCancelUrl: pickerCancelStabilization.afterPickerCancelUrl,
-          afterPickerCancelWaitMs: pickerCancelStabilization.afterPickerCancelWaitMs,
-          finalControlDiscoveryRetryCount: pickerCancelStabilization.finalControlDiscoveryRetryCount,
-          finalControlFoundAfterWait: pickerCancelStabilization.finalControlFoundAfterWait
-        } : {}),
-        forbiddenMutationObserved,
-        blocker,
-        ...(blocker ? { failureCode: blocker, failureStage: "EXPLORATION", missingSignal: blocker } : {}),
-        readyForFinalSubmit: status === "PASS_READY_FOR_FINAL_SUBMIT",
-        evidence: {
-          runtimeAuthState: this.getBrowserRuntimeState(ctx).state,
-          canonicalContextMatch: sameInitialPage,
-          canonicalPageMatch: Boolean(initialCanonical && canonical && initialCanonical.page === canonical.page),
-          canonicalPageSurvivesUpload: Boolean(canonical && !this.isCanonicalPageClosed(canonical.page)),
-          preUploadState: states[0] ?? null,
-          postUploadStates: states.slice(1),
-          selectors,
-          actions,
-          forbiddenMutationObserved
-        }
-      };
-      try {
-        assertExplorationSafety(result);
-      } catch {
-        result.status = "SAFETY_BOUNDARY_VIOLATION";
-        result.readyForFinalSubmit = false;
-      }
-      if (canonical) {
-        this.emitCanonicalPageOperation(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "COMPLETED", result.sameContext, undefined, "XHS_PUBLISH_FLOW_EXPLORATION", result.failureCode ? { failureCode: result.failureCode as PreSubmitGateFailureCode, failureStage: result.failureStage as PreSubmitGateFailureStage, missingSignal: result.missingSignal } : undefined);
-      }
-      this.emitEditorEntryDiagnostic({
-        code: result.status === "PASS_READY_FOR_FINAL_SUBMIT" ? "XHS_PUBLISH_FLOW_COMPLETED" : "XHS_PUBLISH_FLOW_BLOCKED",
-        timestamp: new Date().toISOString(),
-        operationId,
-        platformKey: "xiaohongshu",
-        accountId: ctx.accountId,
-        ...(canonical ? { contextDebugId: canonical.session.contextDebugId ?? "unknown-context", pageDebugId: canonical.pageDebugId, pageRole: "CANONICAL_AUTHENTICATED" as const, pageSource: "EXISTING_CANONICAL_PAGE" as const } : {}),
-        createdNewPage: false,
-        sanitizedUrl: canonical ? sanitizePageUrl(canonical.page) : "about:blank",
-        status: result.status,
-        finalSubmitCount: 0,
-        intermediateActionClickCount: counters.intermediateActionClickCount,
-        titleReadbackVerified: result.titleReadbackVerified,
-        bodyReadbackVerified: result.bodyReadbackVerified,
-        uploadMutationCount: counters.uploadMutationCount,
-        timelineEntry: { blocker: result.blocker, elapsedMs: Date.now() - startedAt }
-      });
-      return result;
-    };
-
-    addTimeline("AUTHENTICATED", "AUTH_CHECK", sameInitialPage && this.getBrowserRuntimeState(ctx).state === "AUTHENTICATED" ? "PASS" : "BLOCKED");
-    if (!canonical || !sameInitialPage) {
-      blocker = "CANONICAL_PAGE_OWNERSHIP_FAILURE";
-      return buildResult("BLOCKED");
-    }
-    if (this.getBrowserRuntimeState(ctx).state !== "AUTHENTICATED") {
-      blocker = "AUTH_REQUIRED";
-      return buildResult("BLOCKED");
-    }
-    if (input.imageSource !== "SAFE_TEST_FIXTURE") {
-      blocker = "UNAPPROVED_IMAGE_SOURCE";
-      return buildResult("BLOCKED");
-    }
-    addTimeline("CREATOR_HOME", "PUBLISH_FLOW_START", "OBSERVE");
-
-    const preUploadGate = await this.inspectPublishEditorOnCanonicalPage(
-      ctx,
-      operationId,
-      false,
-      "XHS_PUBLISH_FLOW_EXPLORATION",
-      { readinessWindowMs: 10_000, readinessSampleIntervalMs: 80 }
-    );
-    canonical = await this.activeCanonicalPage(ctx).catch(() => null);
-    const sameAfterNavigation = Boolean(initialCanonical && canonical && initialCanonical.page === canonical.page && initialCanonical.session.context === canonical.session.context);
-    states.push({
-      phase: preUploadGate.imageEditorPhase ?? "IMAGE_POST_UNKNOWN",
-      status: preUploadGate.status,
-      preUploadGateStatus: preUploadGate.preUploadGateStatus ?? "FAIL",
-      contentType: preUploadGate.contentType,
-      contentTypeReady: preUploadGate.contentTypeReady,
-      uploadCapabilityPresent: preUploadGate.uploadCapabilityPresent ?? false,
-      sanitizedUrl: preUploadGate.sanitizedUrl
-    });
-    addTimeline("IMAGE_POST_PRE_UPLOAD", "PUBLISH_NOTE_NAVIGATION", preUploadGate.status === "ready" && sameAfterNavigation ? "PASS" : "BLOCKED");
-    if (!canonical || !sameAfterNavigation) {
-      blocker = "CANONICAL_PAGE_OWNERSHIP_FAILURE";
-      return buildResult("BLOCKED");
-    }
-    if (preUploadGate.status !== "ready" || preUploadGate.preUploadGateStatus !== "PASS" || preUploadGate.imageEditorPhase !== "IMAGE_POST_PRE_UPLOAD" || preUploadGate.uploadCapabilityPresent !== true) {
-      blocker = preUploadGate.failureCode ?? "PRE_UPLOAD_PHASE_NOT_READY";
-      return buildResult("BLOCKED");
-    }
-    if (Date.now() - startedAt > budgets.maxDurationMs) {
-      blocker = "EXPLORATION_TIMEOUT";
-      return buildResult("BLOCKED");
-    }
-
-    const metadata = {
-      operationId,
-      platformKey: "xiaohongshu" as const,
-      accountId: ctx.accountId,
-      contextDebugId: canonical.session.contextDebugId ?? "unknown-context",
-      pageDebugId: canonical.pageDebugId
-    };
-    this.emitStagedEditorDiagnostic(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "PREPARE_PUBLISH_MUTATION_BOUNDARY_ENTERED", {
-      expectedPhase: "IMAGE_POST_PRE_UPLOAD",
-      observedPhase: "IMAGE_POST_PRE_UPLOAD",
-      phase: "IMAGE_POST_PRE_UPLOAD",
-      preSubmitGatePhase: "PRE_UPLOAD",
-      preUploadGateStatus: "PASS",
-      preUploadMutationRevalidated: true,
-      postUploadControlsStatus: "NOT_APPLICABLE_BEFORE_UPLOAD",
-      preSubmitGatePassMeaning: "SAFE_TO_ENTER_IMAGE_UPLOAD_ONLY_EXPLORATION_STAGE",
-      uploadCapabilityPresent: true,
-      mutationType: "IMAGE_UPLOAD_ONLY",
-      selfTestMode: "XHS_PUBLISH_FLOW_EXPLORATION",
-      sanitizedUrl: sanitizePageUrl(canonical.page)
-    });
-
-    let uploadCompleted = false;
-    while (!uploadCompleted) {
-      if (!canSpendBudget(counters, budgets, "uploadAttempts")) {
-        blocker = "MAX_SAFE_IMAGE_UPLOAD_ATTEMPTS_EXCEEDED";
-        return buildResult("BLOCKED");
-      }
-      const uploadCanonical = await this.activeCanonicalPage(ctx).catch(() => null);
-      if (!uploadCanonical || uploadCanonical.page !== canonical.page || uploadCanonical.session.context !== canonical.session.context) {
-        blocker = "CANONICAL_PAGE_OWNERSHIP_FAILURE";
-        return buildResult("BLOCKED");
-      }
-      counters = recordBudgetUse(counters, "uploadAttempts");
-      const uploadAttemptIndex = counters.uploadAttempts;
-      addTimeline("IMAGE_UPLOAD", `UPLOAD_ATTEMPT_${counters.uploadAttempts}`, "STARTED");
-      try {
-        const imageEvidence = await this.uploadImages(canonical.page, [input.imagePath], { ctx, session: canonical.session, metadata, selfTestMode: "XHS_PUBLISH_FLOW_EXPLORATION", uploadAttemptIndex, expectedFileMetadata: TASK10S_SAFE_FIXTURE_EXPECTATION, onMutationStarted: () => { counters = { ...counters, uploadMutationCount: counters.uploadMutationCount + 1 }; } });
-        states.push({ phase: "IMAGE_UPLOAD", ...imageEvidence });
-        uploadCompleted = imageEvidence.verified === true;
-        counters = { ...counters, uploadRetryCount: Math.max(0, counters.uploadAttempts - 1) };
-        addTimeline("IMAGE_UPLOAD", `UPLOAD_ATTEMPT_${counters.uploadAttempts}`, uploadCompleted ? "COMPLETED" : "FAILED");
-      } catch (error) {
-        counters = { ...counters, uploadRetryCount: Math.max(0, counters.uploadAttempts - 1) };
-        addTimeline("IMAGE_UPLOAD", `UPLOAD_ATTEMPT_${counters.uploadAttempts}`, "FAILED");
-        if (!canSpendBudget(counters, budgets, "uploadAttempts")) {
-          blocker = error instanceof Error ? error.message : "IMAGE_UPLOAD_FAILED";
-          return buildResult("BLOCKED");
-        }
-      }
-    }
-    if (!uploadCompleted) {
-      blocker = "UPLOAD_COMPLETION_NOT_OBSERVED";
-      return buildResult("BLOCKED");
-    }
-
-    const nativeFilePickerRecovery = createXhsNativeFilePickerRecovery(canonical.page, { profilePath: canonical.session.profilePath, browserChannel: canonical.session.browserChannel ?? null });
-
-    if (input.postUploadReadinessStrategy === "TERMINAL_CLASSIFIER") {
-      try {
-        const nativePickerRecovery = await recoverNativeFilePicker(nativeFilePickerRecovery);
-        nativeFilePickerRecoveryResult = nativePickerRecovery;
-        states.push({ phase: "NATIVE_FILE_PICKER_RECOVERY", ...nativePickerRecovery });
-        addTimeline("POST_UPLOAD_EDITOR_DISCOVERY", "NATIVE_FILE_PICKER_RECOVERY", nativePickerRecovery.status === "BLOCKED" ? "BLOCKED" : nativePickerRecovery.status === "CANCELLED" ? "CANCELLED" : "NOT_DETECTED");
-        if (nativePickerRecovery.status === "BLOCKED") {
-          blocker = "NATIVE_FILE_PICKER_CANCEL_FAILED";
-          return buildResult("BLOCKED");
-        }
-        const postUploadSnapshot = await inspectXiaohongshuPostUploadReconciliationDom(canonical.page);
-        const postUploadReconciliation = reconcileXiaohongshuPostUploadSnapshot(postUploadSnapshot);
-        const terminalReadiness = classifyXiaohongshuPostUploadTerminalReadiness({
-          originalPostUploadState: postUploadReconciliation.postUploadState,
-          editorScopedImageAssetCount: postUploadReconciliation.imageAssetRenderedCount,
-          imageCounterTextSafe: postUploadReconciliation.imageCounterTextSafe,
-          titleControlPresent: postUploadReconciliation.titleControlPresent,
-          bodyControlPresent: postUploadReconciliation.bodyControlPresent,
-          uploadErrorSignalPresent: postUploadReconciliation.explicitUploadErrorSignals.length > 0,
-          busySignalPresent: postUploadReconciliation.processingSignalPresent
-        });
-        states.push({
-          phase: "POST_UPLOAD_TERMINAL_READINESS",
-          ...terminalReadiness,
-          imageAssetRenderedCount: terminalReadiness.editorScopedImageAssetCount,
-          imageCounterTextSafe: terminalReadiness.imageCounterTextSafe,
-          uploadErrorSignal: terminalReadiness.uploadErrorSignalPresent,
-          busySignal: terminalReadiness.busySignalPresent
-        });
-        addTimeline("POST_UPLOAD_TERMINAL_READINESS", "R38_TERMINAL_READINESS_CLASSIFIER", terminalReadiness.ready ? "PASS" : "BLOCKED");
-        if (!terminalReadiness.ready) {
-          blocker = terminalReadiness.blockerCodes.length > 0
-            ? `POST_UPLOAD_TERMINAL_READINESS_BLOCKED:${terminalReadiness.blockerCodes.join(",")}`
-            : "POST_UPLOAD_TERMINAL_READINESS_NOT_READY";
-          return buildResult("BLOCKED");
-        }
-      } catch (error) {
-        blocker = error instanceof Error ? `POST_UPLOAD_TERMINAL_READINESS_DIAGNOSTIC_FAILED:${error.message}` : "POST_UPLOAD_TERMINAL_READINESS_DIAGNOSTIC_FAILED";
-        return buildResult("BLOCKED");
-      }
-    } else {
-      let postUploadInspection = await inspectPostUploadImageEditor(canonical.page, metadata, {
-        nativeFilePickerRecovery,
-        readinessWindowMs: Math.max(0, Math.min(10_000, budgets.maxDurationMs - (Date.now() - startedAt))),
-        readinessSampleIntervalMs: 80,
-        emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic)
-      });
-      nativeFilePickerRecoveryResult = postUploadInspection.nativeFilePickerRecovery === "CANCELLED"
-        ? { status: "CANCELLED", detected: postUploadInspection.nativeFilePickerDetected, cancelled: true, failureCode: null, pickerWindowIdBefore: postUploadInspection.nativeFilePickerWindowIdBefore, pickerWindowIdAfter: postUploadInspection.nativeFilePickerWindowIdAfter, pickerOpenBefore: postUploadInspection.nativeFilePickerOpenBefore, pickerOpenAfter: postUploadInspection.nativeFilePickerOpenAfter, cancelActionSent: postUploadInspection.nativeFilePickerCancelActionSent, cancelEffectVerified: postUploadInspection.nativeFilePickerCancelEffectVerified }
-        : postUploadInspection.nativeFilePickerRecovery === "BLOCKED"
-          ? { status: "BLOCKED", detected: postUploadInspection.nativeFilePickerDetected, cancelled: false, failureCode: "NATIVE_FILE_PICKER_CANCEL_FAILED", pickerWindowIdBefore: postUploadInspection.nativeFilePickerWindowIdBefore, pickerWindowIdAfter: postUploadInspection.nativeFilePickerWindowIdAfter, pickerOpenBefore: postUploadInspection.nativeFilePickerOpenBefore, pickerOpenAfter: postUploadInspection.nativeFilePickerOpenAfter, cancelActionSent: postUploadInspection.nativeFilePickerCancelActionSent, cancelEffectVerified: postUploadInspection.nativeFilePickerCancelEffectVerified }
-          : { status: "NOT_DETECTED", detected: false, cancelled: false, failureCode: null, pickerWindowIdBefore: postUploadInspection.nativeFilePickerWindowIdBefore, pickerWindowIdAfter: postUploadInspection.nativeFilePickerWindowIdAfter, pickerOpenBefore: postUploadInspection.nativeFilePickerOpenBefore, pickerOpenAfter: postUploadInspection.nativeFilePickerOpenAfter, cancelActionSent: postUploadInspection.nativeFilePickerCancelActionSent, cancelEffectVerified: postUploadInspection.nativeFilePickerCancelEffectVerified };
-      states.push(postUploadInspection as unknown as Record<string, unknown>);
-      if (postUploadInspection.forbiddenActionSignalPresent === true) {
-        forbiddenMutationObserved = true;
-        blocker = "FORBIDDEN_DESTRUCTIVE_ACTION_SIGNAL";
-        return buildResult("SAFETY_BOUNDARY_VIOLATION");
-      }
-      if (postUploadInspection.nativeFilePickerRecovery === "BLOCKED") {
-        blocker = postUploadInspection.failureCode ?? "POST_UPLOAD_PHASE_NOT_READY";
-        return buildResult("BLOCKED");
-      }
-      const intermediateActions: Array<Record<string, unknown>> = [];
-      let intermediateActionCount = 0;
-      while (postUploadInspection.intermediateState !== "NONE") {
-        const phase = postUploadInspection.phase;
-        const candidates = (postUploadInspection.intermediateActionCandidates ?? []).map(toExplorationIntermediateCandidate);
-        const resolution = selectSafeIntermediateAction(candidates, phase);
-        if (resolution.status !== "FOUND_UNIQUE" || !resolution.candidate) {
-          blocker = resolution.status === "AMBIGUOUS" ? "INTERMEDIATE_ACTION_AMBIGUOUS" : "INTERMEDIATE_ACTION_NOT_FOUND";
-          break;
-        }
-        if (!canSpendBudget(counters, budgets, "intermediateActionClickCount")) {
-          blocker = "MAX_INTERMEDIATE_ACTION_CLICKS_EXCEEDED";
-          break;
-        }
-        const actionLocator = await this.resolveIntermediateActionLocator(canonical.page, resolution.candidate);
-        const latestCanonical = await this.activeCanonicalPage(ctx).catch(() => null);
-        if (!latestCanonical || latestCanonical.page !== canonical.page || latestCanonical.session.context !== canonical.session.context) {
-          blocker = "CANONICAL_PAGE_OWNERSHIP_FAILURE";
-          break;
-        }
-        if (!actionLocator) {
-          blocker = "INTERMEDIATE_ACTION_SELECTOR_DRIFT";
-          break;
-        }
-        counters = recordBudgetUse(counters, "intermediateActionClickCount");
-        const actionBefore = { stateBefore: phase, semanticText: resolution.candidate.normalizedText, candidateStatus: resolution.status, candidateId: resolution.candidate.candidateId };
-        try {
-          await actionLocator.click();
-          intermediateActionCount += 1;
-          addTimeline(phase, `INTERMEDIATE_ACTION_${intermediateActionCount}`, "CLICKED");
-          const actionEntry = { index: intermediateActionCount, ...actionBefore, clickResult: "CLICKED" };
-          intermediateActions.push(actionEntry);
-          actions.push(actionEntry);
-          this.emitEditorEntryDiagnostic({ code: "XHS_PUBLISH_FLOW_INTERMEDIATE_ACTION", timestamp: new Date().toISOString(), operationId, platformKey: "xiaohongshu", accountId: ctx.accountId, contextDebugId: canonical.session.contextDebugId ?? "unknown-context", pageDebugId: canonical.pageDebugId, pageRole: "CANONICAL_AUTHENTICATED", pageSource: "EXISTING_CANONICAL_PAGE", createdNewPage: false, action: "XHS_PUBLISH_FLOW_INTERMEDIATE_ACTION", status: "CLICKED", phase, intermediateActionClickCount: counters.intermediateActionClickCount, finalSubmitCount: 0 });
-          postUploadInspection = await inspectPostUploadImageEditor(canonical.page, metadata, { nativeFilePickerRecovery, readinessWindowMs: Math.max(0, Math.min(10_000, budgets.maxDurationMs - (Date.now() - startedAt))), readinessSampleIntervalMs: 80, emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
-          states.push(postUploadInspection as unknown as Record<string, unknown>);
-          if (postUploadInspection.forbiddenActionSignalPresent === true) {
-            forbiddenMutationObserved = true;
-            blocker = "FORBIDDEN_DESTRUCTIVE_ACTION_SIGNAL";
-            break;
-          }
-          if (postUploadInspection.nativeFilePickerRecovery === "BLOCKED") {
-            blocker = postUploadInspection.failureCode ?? "POST_UPLOAD_PHASE_NOT_READY";
-            break;
-          }
-          const after = intermediateActions[intermediateActions.length - 1];
-          if (after) after.stateAfter = postUploadInspection.phase;
-        } catch (error) {
-          const actionEntry = { index: intermediateActionCount + 1, ...actionBefore, clickResult: "FAILED", error: error instanceof Error ? error.message : String(error) };
-          intermediateActions.push(actionEntry);
-          actions.push(actionEntry);
-          blocker = "INTERMEDIATE_ACTION_FAILED";
-          break;
-        }
-        if (Date.now() - startedAt > budgets.maxDurationMs) {
-          blocker = "EXPLORATION_TIMEOUT";
-          break;
-        }
-      }
-      if (intermediateActionCount !== counters.intermediateActionClickCount) counters = { ...counters, intermediateActionClickCount: intermediateActionCount };
-      addTimeline("POST_UPLOAD_INTERMEDIATE_STEPS", "SAFE_FLOW_ACTIONS", blocker ? "BLOCKED" : "PASS");
-      if (blocker || postUploadInspection.phase !== "IMAGE_POST_POST_UPLOAD_EDITOR") return buildResult("BLOCKED");
-    }
-
-    const title = await this.exploreEditorField(canonical.page, "title", input.title, budgets.maxTitleMutations);
-    counters = { ...counters, titleMutationCount: title.mutationCount, contentMutationCount: counters.contentMutationCount + title.mutationCount };
-    titleEvidence = title.evidence;
-    selectors.push({ field: "title", status: title.status, strategyCount: title.evidence.strategyCount });
-    addTimeline("TITLE", "TEST_CONTENT_FILL_AND_READBACK", title.evidence.readbackVerified ? "PASS" : "BLOCKED");
-    if (!title.evidence.readbackVerified) {
-      blocker = title.status;
-      return buildResult("BLOCKED");
-    }
-
-    const body = await this.exploreEditorField(canonical.page, "body", input.body, budgets.maxBodyMutations);
-    counters = { ...counters, bodyMutationCount: body.mutationCount, contentMutationCount: counters.contentMutationCount + body.mutationCount };
-    bodyEvidence = body.evidence;
-    selectors.push({ field: "body", status: body.status, strategyCount: body.evidence.strategyCount });
-    addTimeline("BODY", "TEST_CONTENT_FILL_AND_READBACK", body.evidence.readbackVerified ? "PASS" : "BLOCKED");
-    if (!body.evidence.readbackVerified) {
-      blocker = body.status;
-      return buildResult("BLOCKED");
-    }
-
-    const requiredFields = await this.inspectRequiredFields(canonical.page);
-    const missingRequiredFields = requiredFields.filter((field) => field.empty);
-    if (missingRequiredFields.length > 0) {
-      const requiredSettingResult = await this.satisfyRequiredSettings(canonical.page, 3);
-      requiredSettings = requiredSettingResult;
-      counters = { ...counters, settingsMutationCount: requiredSettingResult.mutations.length };
-      const remainingRequiredFields = await this.inspectRequiredFields(canonical.page);
-      if (requiredSettingResult.status !== "PASS" || remainingRequiredFields.some((field) => field.empty)) {
-        blocker = "REQUIRED_FIELDS_NOT_VERIFIED";
-        return buildResult("BLOCKED");
-      }
-    } else {
-      requiredSettings = { status: "PASS_NO_REQUIRED_MUTATION", mutations: [] };
-    }
-    addTimeline("REQUIRED_FIELDS", "READ_ONLY_VALIDATION", "PASS");
-    const settings = await this.inspectPublishSettings(canonical.page);
-    selectors.push({ field: "settings", status: classifyXiaohongshuPublishSettings(settings), requiredCount: settings.filter((setting) => setting.required).length });
-
-    if (nativeFilePickerRecoveryResult?.status === "CANCELLED") {
-      pickerCancelStabilization = await stabilizeAfterNativeFilePickerCancel(canonical.page, {
-        maxWaitMs: Math.max(0, Math.min(10_000, budgets.maxDurationMs - (Date.now() - startedAt))),
-        retryIntervalMs: 80,
-        stableSampleCount: 2,
-        clearOpenPickerMarker: async () => {
-          const evaluatePage = canonical!.page as unknown as { evaluate?: <T>(pageFunction: () => T) => Promise<T> };
-          if (typeof evaluatePage.evaluate !== "function") return false;
-          try {
-            return Boolean(await evaluatePage.evaluate(() => {
-              const current = new URL(window.location.href);
-              if (current.searchParams.get("openFilePicker") === "true") {
-                current.searchParams.delete("openFilePicker");
-                const nextUrl = `${current.pathname}${current.search}${current.hash}`;
-                window.history.replaceState(window.history.state, document.title, nextUrl);
-                window.dispatchEvent(new PopStateEvent("popstate"));
-              }
-              return new URL(window.location.href).searchParams.get("openFilePicker") !== "true";
-            }));
-          } catch {
-            return false;
-          }
-        },
-        discoverFinalControl: async () => this.inspectClosedShadowFinalSubmitForExploration(canonical.page)
-      });
-      states.push({ phase: "PICKER_CANCEL_STABILIZATION", ...pickerCancelStabilization });
-      addTimeline("POST_UPLOAD_EDITOR_DISCOVERY", "PICKER_CANCEL_STABILIZATION", pickerCancelStabilization.finalControlFoundAfterWait ? "PASS" : "BLOCKED");
-      finalSubmit = pickerCancelStabilization.finalControl;
-    } else {
-      finalSubmit = await this.inspectFinalSubmitForExploration(canonical.page);
-    }
-    selectors.push({ field: "finalSubmit", ...finalSubmit });
-    addTimeline("FINAL_SUBMIT_READY", "READ_ONLY_CONTROL_DISCOVERY", finalSubmit.status === "FOUND_UNIQUE" && finalSubmit.visible && finalSubmit.enabled && finalSubmit.hitTestValid ? "PASS" : "BLOCKED");
-    if (finalSubmit.status !== "FOUND_UNIQUE" || !finalSubmit.visible || !finalSubmit.enabled || !finalSubmit.hitTestValid) {
-      blocker = ["DISABLED", "NOT_VISIBLE", "HITTEST_INVALID"].includes(finalSubmit.status)
-        ? "FINAL_SUBMIT_NOT_READY"
-        : finalSubmit.status === "AMBIGUOUS" ? "FINAL_SUBMIT_CONTROL_AMBIGUOUS" : "FINAL_SUBMIT_CONTROL_NOT_FOUND";
-      return buildResult("BLOCKED");
-    }
-    blocker = null;
-    return buildResult("PASS_READY_FOR_FINAL_SUBMIT");
-  }
-
-  private async resolveIntermediateActionLocator(page: Page, candidate: XhsIntermediateActionCandidate): Promise<Locator | null> {
-    const controls = page.locator("button, [role=\"button\"], a, [role=\"tab\"]");
-    for (let index = 0; index < await locatorCount(controls); index += 1) {
-      const control = locatorAt(controls, index);
-      if (!(await isVisible(control)) || !(await isEnabled(control))) continue;
-      const label = normalizeXiaohongshuEditorText((await innerText(control)) || (await attribute(control, "aria-label")) || (await attribute(control, "title")));
-      if (!label || !(label === candidate.normalizedText || label.includes(candidate.normalizedText) || candidate.normalizedText.includes(label))) continue;
-      const box = await locatorBoundingBox(control);
-      if (!box || !candidate.boundingBox || !boxesOverlap(box, candidate.boundingBox)) continue;
-      const hitTestValid = await locatorHitTestValid(control, box);
-      if (!hitTestValid) continue;
-      const pointerEvents = await attribute(control, "data-pointer-events");
-      if (pointerEvents === "none") continue;
-      return control;
-    }
-    return null;
-  }
-
-  private async exploreEditorField(page: Page, field: "title" | "body", value: string, maxMutations: number): Promise<{ status: string; mutationCount: number; evidence: { attempted: boolean; mutationCount: number; strategyCount: number; readbackVerified: boolean; readbackLength?: number } }> {
-    const limit = Math.max(0, maxMutations);
-    let mutationCount = 0;
-    let strategyCount = 0;
-    while (mutationCount < limit) {
-      strategyCount += 1;
-      try {
-        const editor = await this.discoverUniqueEditor(page, field);
-        mutationCount += 1;
-        await editor.fill(value);
-        const readback = await readEditor(editor, field);
-        const verified = readback === normalizeXiaohongshuEditorText(value);
-        if (verified) return { status: "FOUND_UNIQUE", mutationCount, evidence: { attempted: true, mutationCount, strategyCount, readbackVerified: true, readbackLength: readback.length } };
-      } catch (error) {
-        return { status: error instanceof XiaohongshuGateError ? error.gateCode : `${field.toUpperCase()}_WRITE_FAILED`, mutationCount, evidence: { attempted: mutationCount > 0, mutationCount, strategyCount, readbackVerified: false } };
-      }
-    }
-    return { status: `${field.toUpperCase()}_READBACK_FAILED`, mutationCount, evidence: { attempted: mutationCount > 0, mutationCount, strategyCount, readbackVerified: false } };
-  }
-
-  private async inspectFinalSubmitForExploration(page: Page): Promise<{ status: string; visible: boolean; enabled: boolean; hitTestValid: boolean; label?: string }> {
-    const controls = page.locator(XIAOHONGSHU_FINAL_SUBMIT_SELECTOR);
-    const matches: Array<{ label: string; visible: boolean; enabled: boolean; hitTestValid: boolean }> = [];
-    for (let index = 0; index < await locatorCount(controls); index += 1) {
-      const control = locatorAt(controls, index);
-      const label = normalizeXiaohongshuEditorText((await innerText(control)) || (await attribute(control, "aria-label")) || (await attribute(control, "title")));
-      if (!XIAOHONGSHU_FINAL_SUBMIT_PATTERN.test(label) || XIAOHONGSHU_VIDEO_PATTERN.test(label)) continue;
-      const visible = await isVisible(control);
-      const enabled = await isEnabled(control);
-      const box = await locatorBoundingBox(control);
-      const hitTestValid = visible && box !== null && await locatorHitTestValid(control, box);
-      matches.push({ label, visible, enabled, hitTestValid });
-    }
-    if (matches.length === 0) return { status: "NOT_FOUND", visible: false, enabled: false, hitTestValid: false };
-    if (matches.length > 1) return { status: "AMBIGUOUS", visible: false, enabled: false, hitTestValid: false };
-    const match = matches[0]!;
-    if (!match.visible) return { status: "NOT_VISIBLE", ...match };
-    if (!match.enabled) return { status: "DISABLED", ...match };
-    if (!match.hitTestValid) return { status: "HITTEST_INVALID", ...match };
-    return { status: "FOUND_UNIQUE", ...match };
-  }
-
-  private async inspectClosedShadowFinalSubmitForExploration(page: Page): Promise<PickerCancelFinalControl> {
-    const resolution = await inspectTask10sClosedShadowPublishSurface(page);
-    const visible = Boolean(resolution.host?.rendered && resolution.innerButton?.rendered);
-    const status = resolution.present
-      ? resolution.enabled ? "FOUND_UNIQUE" : "DISABLED"
-      : resolution.status === "AMBIGUOUS" ? "AMBIGUOUS" : "NOT_FOUND";
-    return {
-      status,
-      visible,
-      enabled: resolution.enabled,
-      hitTestValid: resolution.present && resolution.enabled && resolution.innerButton?.boundingRect !== null,
-      ...(resolution.innerButton?.exactText ? { label: resolution.innerButton.exactText } : {})
-    };
-  }
-
-  private async satisfyRequiredSettings(page: Page, mutationBudget: number): Promise<{ status: string; mutations: readonly Record<string, unknown>[] }> {
-    const required = page.locator(XIAOHONGSHU_REQUIRED_SELECTOR);
-    const mutations: Array<Record<string, unknown>> = [];
-    for (let index = 0; index < await locatorCount(required); index += 1) {
-      const field = locatorAt(required, index);
-      if (!(await isVisible(field)) || !(await isEnabled(field))) continue;
-      const label = normalizeXiaohongshuEditorText((await attribute(field, "aria-label")) || (await attribute(field, "placeholder")) || (await innerText(field)));
-      const role = (await attribute(field, "role")).toLowerCase();
-      const type = (await attribute(field, "type")).toLowerCase();
-      const checked = await isChecked(field);
-      if (mutations.length >= mutationBudget) return { status: "MUTATION_BUDGET_EXCEEDED", mutations };
-      if (type === "checkbox" || type === "radio" || role === "checkbox" || role === "radio") {
-        if (checked) continue;
-        const clickable = field as unknown as { click?: () => Promise<void> };
-        if (typeof clickable.click !== "function") return { status: "REQUIRED_SETTING_NOT_INTERACTIVE", mutations };
-        await clickable.click();
-        mutations.push({ index, label, action: "CHECK_REQUIRED_SETTING" });
-        continue;
-      }
-      if (!/话题|tag|topic/iu.test(label)) return { status: "REQUIRED_SETTING_NEEDS_OWNER_INPUT", mutations };
-      const fillable = field as unknown as { fill?: (value: string) => Promise<void> };
-      if (typeof fillable.fill !== "function") return { status: "REQUIRED_SETTING_NOT_INTERACTIVE", mutations };
-      await fillable.fill("#自动化测试");
-      const readback = normalizeXiaohongshuEditorText(await inputValue(field));
-      if (readback !== "#自动化测试") return { status: "REQUIRED_SETTING_READBACK_FAILED", mutations };
-      mutations.push({ index, label, action: "FILL_REQUIRED_TOPIC", readbackVerified: true });
-    }
-    return { status: "PASS", mutations };
-  }
-
   private async inspectPublishEditorOnCanonicalPage(
     ctx: AccountContext,
-    operationId: string = randomUUID(),
+    operationId: ReturnType<typeof randomUUID> = randomUUID(),
     completeOperation = true,
-    operationAction: "PRE_SUBMIT_GATE" | "CONTROLLED_POST_UPLOAD_DISCOVERY" | "XHS_PUBLISH_FLOW_EXPLORATION" = "PRE_SUBMIT_GATE",
-    inspectionOptions: { readinessWindowMs?: number; readinessSampleIntervalMs?: number } = {}
+    operationAction: "PRE_SUBMIT_GATE" | "CONTROLLED_POST_UPLOAD_DISCOVERY" = "PRE_SUBMIT_GATE"
   ): Promise<PreSubmitGateResult> {
     const key = `${this.platformKey}:${ctx.accountId}`;
     let canonical: Awaited<ReturnType<typeof this.activeCanonicalPage>> = null;
@@ -3737,7 +1442,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         accountId: ctx.accountId,
         contextDebugId: canonical.session.contextDebugId ?? "unknown-context",
         pageDebugId: canonical.pageDebugId
-      }, { ...inspectionOptions, emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
+      }, { emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
       const preUploadContract = assertPreUploadImageEditorContract(editorPhaseInspection);
       this.emitStagedEditorDiagnostic(ctx, canonical.session, canonical.page, canonical.pageDebugId, operationId, "PRE_UPLOAD_GATE_RESULT", {
         expectedPhase: preUploadContract.expectedPhase,
@@ -3936,7 +1641,6 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       mutationType: diagnostic.mutationType,
       selfTestMode: diagnostic.selfTestMode,
       uploadMutationCount: diagnostic.uploadMutationCount,
-      uploadAttemptIndex: diagnostic.uploadAttemptIndex,
       uploadBusy: diagnostic.uploadBusy,
       previewReady: diagnostic.previewReady,
       contentType: diagnostic.contentType,
@@ -3964,8 +1668,6 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       postUploadIntermediateState: diagnostic.postUploadIntermediateState,
       postUploadReadinessDurationMs: diagnostic.postUploadReadinessDurationMs,
       postUploadReadinessSampleCount: diagnostic.postUploadReadinessSampleCount,
-      requiredValidationSignals: diagnostic.requiredValidationSignals,
-      forbiddenActionSignalPresent: diagnostic.forbiddenActionSignalPresent,
       imageEditorStatus: diagnostic.status,
       failureCode: diagnostic.failureCode,
       failureStage: diagnostic.failureStage,
@@ -4005,22 +1707,12 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const validation = await this.validateArticle(article);
     if (!validation.valid) throw new BrowserAutomationError("CONTENT_REJECTED", validation.errors.join("；"));
 
-    const runtimeIdentityProof = ctx.runtimeIdentityProof;
-    if (runtimeIdentityProof) {
-      const currentCanonical = await this.activeCanonicalPage(ctx);
-      if (!currentCanonical) throw new XiaohongshuGateError("ACCOUNT_IDENTITY_UNVERIFIED", "USER_ACTION_REQUIRED", "当前 canonical Page 不存在，拒绝消费 runtime identity proof");
-      this.assertRuntimeIdentityProof(ctx, runtimeIdentityProof, currentCanonical.session.contextDebugId, currentCanonical.pageDebugId);
-    }
     const opened = await this.openBackendPage(ctx, XIAOHONGSHU_CREATOR_HOME);
-    if (runtimeIdentityProof) this.assertRuntimeIdentityProof(ctx, runtimeIdentityProof, opened.session.contextDebugId, opened.session.pageDebugId ?? "unknown-page");
     const page = opened.page;
     const evidence = await readXiaohongshuPageEvidence(page);
-    this.assertProfilePageCanBeRead(evidence, runtimeIdentityProof);
+    this.assertProfilePageCanBeRead(evidence);
     const gates: string[] = ["account_identity"];
     const identity = await this.inspectAccountIdentity(page, evidence);
-    if (runtimeIdentityProof && (identity.externalAccountId !== runtimeIdentityProof.observedExternalCreatorId || identity.identitySourceCandidates?.length !== 1)) {
-      throw new XiaohongshuGateError("ACCOUNT_IDENTITY_UNVERIFIED", "USER_ACTION_REQUIRED", "当前页面 identity evidence 与 runtime identity proof 不一致");
-    }
 
     const operationId = randomUUID();
     await this.navigateToImagePostEditor(page, operationId, ctx.accountId, { context: opened.session.context }, "PREPARE_PUBLISH");
@@ -4079,7 +1771,6 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const imageEvidence = await this.uploadImages(page, article.images ?? [], { ctx, session: opened.session, metadata: editorMetadata });
     gates.push("image_upload");
     const postUploadInspection = await inspectPostUploadImageEditor(page, editorMetadata, {
-      nativeFilePickerRecovery: createXhsNativeFilePickerRecovery(page, { profilePath: opened.session.profilePath, browserChannel: opened.session.browserChannel ?? null }),
       emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic)
     });
     if (postUploadInspection.status !== "READY") {
@@ -4133,7 +1824,6 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         login: "PASS",
         imagePostEntry: "verified",
         imageUploaded: true,
-        events: ["IMAGE_UPLOAD_STARTED", "IMAGE_UPLOAD_PASSED"],
         imageUploadEvidence: imageEvidence,
         titleEditor: "verified",
         titleReadback: true,
@@ -4157,429 +1847,12 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     };
   }
 
-  async finalSubmit(ctx: AccountContext, article: PublishArticleInput, attempt: BrowserPublishAttemptContext): Promise<PublishResult> {
-    const guard = attempt.oneShotPublicationGuard;
-    if (!guard) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书最终发布只允许通过 OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH guard；探索路径不会提交");
-    return this.accountOperationMutex.run(
-      `${this.platformKey}:${ctx.accountId}`,
-      () => attempt.task10sRetainedEditor
-        ? this.performTask10sRetainedEditorCompletion(ctx, article, guard, attempt)
-        : this.performOneShotFinalSubmit(ctx, article, guard, attempt),
-      attempt.task10sRetainedEditor ? "task10sRetainedEditorCompletion" : "oneShotFinalSubmit"
-    );
-  }
-
-  async verifyPublished(ctx: AccountContext, article: PublishArticleInput, result: Pick<PublishResult, "externalId" | "publishedUrl">): Promise<PublishStatusResult> {
-    const externalId = result.externalId?.trim() ?? "";
-    const publishedUrl = result.publishedUrl?.trim() ?? "";
-    if (!externalId || !publishedUrl) return { status: "failed", externalId: externalId || undefined, publishedUrl: publishedUrl || undefined, response: { publicPageVerified: false, titleMatch: false, bodyMatch: false }, errorCode: "EXTERNAL_EVIDENCE_INCOMPLETE", errorMessage: "小红书真实发布缺少 External ID 或 URL" };
-    const canonical = await this.activeCanonicalPage(ctx);
-    if (!canonical) return { status: "failed", externalId, publishedUrl, response: { publicPageVerified: false, titleMatch: false, bodyMatch: false }, errorCode: "RECONCILIATION_UNCERTAIN", errorMessage: "小红书公开结果验证需要当前 canonical Page" };
-    try {
-      await canonical.page.goto(publishedUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-      await waitForProbe(canonical.page);
-      const pageText = await bodyText(canonical.page);
-      const titleMatch = pageText.includes(article.title);
-      const bodyMatch = pageText.includes(article.body);
-      const publicPageVerified = this.publicResultFromUrl(canonical.page.url())?.externalId === externalId && titleMatch && bodyMatch;
-      return { status: publicPageVerified ? "published" : "failed", externalId, publishedUrl: canonical.page.url(), response: { publicPageVerified, titleMatch, bodyMatch, pageUrl: sanitizePageUrl(canonical.page) }, ...(publicPageVerified ? {} : { errorCode: "RECONCILIATION_UNCERTAIN" as const, errorMessage: "小红书公开页未同时证明 External ID、标题和正文" }) };
-    } catch (error) {
-      return { status: "failed", externalId, publishedUrl, response: { publicPageVerified: false, titleMatch: false, bodyMatch: false }, errorCode: "RECONCILIATION_UNCERTAIN", errorMessage: error instanceof Error ? error.message : "小红书公开结果验证失败" };
-    }
-  }
-
-  async reconcile(ctx: AccountContext, input: BrowserPublishReconciliationInput): Promise<BrowserPublishReconciliationResult> {
-    const canonical = await this.activeCanonicalPage(ctx);
-    if (!canonical) return { status: "STILL_UNCERTAIN", titleMatch: false, accountMatch: false, timeWindowMatch: false, response: { adapter: this.platformKey, readOnly: true, evidence: "canonical_page_unavailable" }, message: "当前没有可用于小红书只读回查的 canonical Page" };
-    try {
-      const pageText = await bodyText(canonical.page);
-      const publicResult = this.publicResultFromUrl(canonical.page.url());
-      const titleMatch = pageText.includes(input.title);
-      const accountMatch = pageText.includes(input.accountName);
-      const timeWindowMatch = input.waitWindowSatisfied === true || input.submissionIntentState === "Submitted";
-      const thumbnailMatch = Boolean(publicResult);
-      const result = reconcileOneShotPublication({ titleMatch, accountMatch, timeWindowMatch, thumbnailMatch, externalId: publicResult?.externalId ?? input.expectedExternalId ?? undefined, publishedUrl: publicResult?.publishedUrl ?? input.expectedPublishedUrl ?? undefined });
-      if (result.reconciled && result.externalId && result.publishedUrl) return { status: "FOUND_PUBLISHED", externalId: result.externalId, publishedUrl: result.publishedUrl, titleMatch, accountMatch, timeWindowMatch, response: { adapter: this.platformKey, readOnly: true, publicationReconciled: true, publicPageVerified: true }, message: "小红书只读回查取得了标题、账号、时间窗口和缩略图信号" };
-      return { status: "STILL_UNCERTAIN", titleMatch, accountMatch, timeWindowMatch, response: { adapter: this.platformKey, readOnly: true, publicationReconciled: false, publicPageVerified: false }, message: "小红书只读回查证据不足，保持 NeedsReconciliation" };
-    } catch (error) {
-      return { status: "STILL_UNCERTAIN", titleMatch: false, accountMatch: false, timeWindowMatch: false, response: { adapter: this.platformKey, readOnly: true, error: error instanceof Error ? error.message : String(error) }, message: "小红书只读回查失败，保持 NeedsReconciliation" };
-    }
-  }
-
-  private async performTask10sRetainedEditorCompletion(ctx: AccountContext, article: PublishArticleInput, guard: OneShotPublicationGuard, attempt: BrowserPublishAttemptContext): Promise<PublishResult> {
-    if (!article.title.trim() || !article.body.trim()) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "Task10S retained-editor action 要求 Prepared Job Article 提供标题和正文");
-    const canonical = await this.activeCanonicalPage(ctx);
-    if (!canonical || this.isCanonicalPageClosed(canonical.page) || !this.pageContextMatchesSession(canonical.session, canonical.page)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "Task10S retained-editor action 要求当前 canonical Context/Page");
-    if (!isExactXhsPublishEditorRoute(canonical.page.url())) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "Task10S retained-editor action 要求 /publish/publish 路由");
-    if (!this.isBrowserConnected(canonical.session) || this.getBrowserRuntimeState(ctx).state !== "AUTHENTICATED") throw new BrowserAutomationError("USER_ACTION_REQUIRED", "Task10S retained-editor action 要求 authenticated BrowserSession");
-
-    const postUploadSnapshot = await inspectXiaohongshuPostUploadReconciliationDom(canonical.page);
-    const postUpload = reconcileXiaohongshuPostUploadSnapshot(postUploadSnapshot);
-    if (postUpload.origin !== "https://creator.xiaohongshu.com" || postUpload.pathname !== "/publish/publish") throw new BrowserAutomationError("USER_ACTION_REQUIRED", "Task10S retained-editor action 的 post-upload route proof 失败");
-    if (postUpload.postUploadState !== "EDITOR_READY" || postUpload.imageAssetRenderedCount < 1 || !postUpload.titleControlPresent || !postUpload.bodyControlPresent || !postUpload.noExplicitUploadError) {
-      throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "USER_ACTION_REQUIRED", "Task10S retained-editor action 未取得 post-upload editor-ready proof", { failureCode: "POST_UPLOAD_PHASE_NOT_READY", failureStage: "EDITOR_DISCOVERY", missingSignal: "editor-scoped-image-title-body" });
-    }
-
-    const initialGlobalDiagnostic = await inspectXiaohongshuGlobalExactPublishDom(canonical.page);
-    const initialPublishSurface = await inspectTask10sClosedShadowPublishSurface(canonical.page);
-    if (!initialPublishSurface.present) throw new XiaohongshuGateError("FINAL_SUBMIT_CONTROL_NOT_VERIFIED", "USER_ACTION_REQUIRED", `Task10S closed-shadow 发布 surface 未通过：${initialPublishSurface.failureCode ?? initialPublishSurface.status}；main-document exact count=${initialGlobalDiagnostic.globalExactPublishTextMatchCount}`);
-
-    const titleEditor = await this.discoverUniqueEditor(canonical.page, "title");
-    const titleReadback = await readEditor(titleEditor, "title");
-    const bodyEditor = await this.discoverUniqueEditor(canonical.page, "body");
-    const bodyReadback = await readEditor(bodyEditor, "body");
-    const requiredFieldsPass = !(await this.inspectRequiredFields(canonical.page)).some((field) => field.empty);
-    const finalGlobalDiagnostic = await inspectXiaohongshuGlobalExactPublishDom(canonical.page);
-    const finalPublishSurface = await inspectTask10sClosedShadowPublishSurface(canonical.page);
-    const runtimeSnapshot = this.getBrowserRuntimeSnapshot(ctx);
-    const contextIdentityAttestationPass = Boolean(
-      ctx.runtimeIdentityAttestation?.verified === true
-      && new Date(ctx.runtimeIdentityAttestation.expiresAt).getTime() > Date.now()
-      && runtimeSnapshot.browserConnected === true
-      && runtimeSnapshot.runtimeAuthState === "AUTHENTICATED"
-      && runtimeSnapshot.browserSessionIdentity === ctx.runtimeIdentityAttestation.browserSessionIdentity
-      && runtimeSnapshot.contextDebugId === ctx.runtimeIdentityAttestation.browserContextIdentity
-      && canonical.session.runtimeSessionIdentity === ctx.runtimeIdentityAttestation.browserSessionIdentity
-      && canonical.session.contextDebugId === ctx.runtimeIdentityAttestation.browserContextIdentity
-    );
-    const gate = evaluateTask10sRetainedEditorGate({
-      // A reopened server-backed draft is proved by the current page DOM;
-      // historical upload attempts are deliberately not a completion gate.
-      uploadAttemptCount: 0,
-      setInputFilesCallCount: 0,
-      postUploadState: postUpload.postUploadState,
-      imageAssetRenderedCount: postUpload.imageAssetRenderedCount,
-      imageCounterTextSafe: postUpload.imageCounterTextSafe,
-      titleControlPresent: postUpload.titleControlPresent,
-      bodyControlPresent: postUpload.bodyControlPresent,
-      noExplicitUploadError: postUpload.noExplicitUploadError,
-      initialPublishSurface,
-      trustedArticleTitle: article.title,
-      trustedArticleBody: article.body,
-      titleReadback,
-      bodyReadback,
-      requiredFieldsPass,
-      finalPublishSurface,
-      contextIdentityAttestationPass,
-      sameContext: this.pageContextMatchesSession(canonical.session, canonical.page),
-      authorizationState: guard.authorization.state,
-      finalSubmitClickCount: 0
-    });
-    if (gate.status !== "READY_TO_SUBMIT") throw new XiaohongshuGateError("FINAL_SUBMIT_CONTROL_NOT_VERIFIED", "USER_ACTION_REQUIRED", `Task10S retained-editor final gate 未通过：${gate.failureCode ?? "UNKNOWN"}`);
-
-    if (!finalPublishSurface.present || !finalPublishSurface.enabled) throw new XiaohongshuGateError("FINAL_SUBMIT_CONTROL_NOT_VERIFIED", "USER_ACTION_REQUIRED", `Task10S closed-shadow 发布 surface 未通过最终 enabled 校验：${finalPublishSurface.failureCode ?? finalPublishSurface.status}；main-document exact count=${finalGlobalDiagnostic.globalExactPublishTextMatchCount}`);
-    const preflight: OneShotFinalSubmitPreflight = {
-      authorization: guard.authorization.authorization,
-      authorizationState: guard.authorization.state,
-      platformKey: "xiaohongshu",
-      accountId: guard.authorization.accountId,
-      operationId: guard.authorization.operationId,
-      mode: guard.authorization.mode,
-      authenticated: true,
-      sameCanonicalContext: this.pageContextMatchesSession(canonical.session, canonical.page),
-      sameCanonicalPage: canonical.session.page === canonical.page,
-      mutexOwned: this.accountOperationMutex.getState(`${this.platformKey}:${ctx.accountId}`).operationInProgress,
-      editorPhase: "IMAGE_POST_POST_UPLOAD_EDITOR",
-      safeFixtureUploaded: true,
-      titleReadbackVerified: gate.titleReadbackExact,
-      bodyReadbackVerified: gate.bodyReadbackExact,
-      requiredFieldsPass,
-      loginPagePresent: this.isLoginPage(canonical.page.url()),
-      securityVerificationPresent: this.isVerificationUrl(canonical.page.url()),
-      finalSubmitControl: {
-        status: "FOUND_UNIQUE",
-        visible: Boolean(finalPublishSurface.host?.rendered && finalPublishSurface.innerButton?.rendered),
-        enabled: finalPublishSurface.enabled,
-        hitTestValid: Boolean(finalPublishSurface.innerButton?.boundingRect),
-        label: "发布"
-      }
-    };
-    const beforeUrl = canonical.page.url();
-    try {
-      const clickResult = await runTask10sClosedShadowFinalSubmit(canonical.page, guard, preflight, attempt.markSubmissionSideEffect);
-      if (clickResult.status !== "CLICK_DISPATCHED") throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", `Task10S closed-shadow 最终发布 action 已开始但 click 未正常返回：${clickResult.failureCode ?? clickResult.status}`);
-    } catch (error) {
-      if (guard.hasFinalMousePressStarted()) await guard.markSubmissionReconciliationRequired().catch(() => undefined);
-      if (error instanceof OneShotPublicationGuardError) throw new BrowserAutomationError("USER_ACTION_REQUIRED", `${error.code}: 未执行 Task10S 最终发布`);
-      throw error;
-    }
-    let observation: OneShotPostSubmitObservation;
-    let publicResult: { externalId: string; publishedUrl: string } | null = null;
-    try {
-      const confirmation = await this.inspectOneShotConfirmationControl(canonical.page);
-      if (confirmation.status === "AMBIGUOUS") throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "Task10S 发布后出现多个确认 modal 候选，未盲点");
-      if (confirmation.status === "FOUND_UNIQUE" && confirmation.candidate) {
-        try {
-          await guard.confirmModal(confirmation.candidate, async () => confirmation.locator.click());
-        } catch (error) {
-          if (error instanceof OneShotPublicationGuardError) throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", `${error.code}: Task10S 确认 modal 未通过安全校验`);
-          throw error;
-        }
-      }
-      observation = await this.observeOneShotPostSubmit(canonical.page, beforeUrl);
-      const observationStatus = classifyOneShotPostSubmitObservation(observation);
-      if (observationStatus === "PLATFORM_REJECTED") throw new BrowserAutomationError("CONTENT_REJECTED", `小红书平台拒绝了 Task10S 测试发布：${observation.platformError ?? "未提供原因"}`);
-      if (observationStatus !== "PUBLISHED_VERIFIED") throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "Task10S 提交结果不明确；只允许进入只读 reconciliation，不得重试");
-      publicResult = this.publicResultFromUrl(canonical.page.url());
-      if (!publicResult) throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "Task10S 提交后未取得可靠 External ID/URL；禁止再次提交");
-      guard.markFinalSubmitCompleted();
-    } catch (error) {
-      await guard.markSubmissionReconciliationRequired().catch(() => undefined);
-      throw error;
-    }
-    return {
-      success: true,
-      status: "published",
-      externalId: publicResult.externalId,
-      publishedUrl: publicResult.publishedUrl,
-      response: {
-        adapter: this.platformKey,
-        stage: "task10s_retained_editor_final_submitted",
-        ownerFinalSubmitAuthorization: "OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH",
-        finalSubmitAuthorizationState: guard.authorization.state,
-        finalSubmitPreflight: preflight,
-        publicationTransactionCount: guard.authorization.publicationTransactionCount,
-        publicationCommitActionCount: guard.authorization.publicationCommitActionCount,
-        finalSubmitAttemptCount: guard.authorization.finalSubmitAttemptCount,
-        finalSubmitRetryCount: 0,
-        finalSubmitActionStarted: guard.authorization.finalSubmitActionStarted,
-        finalSubmitActionCompleted: guard.authorization.finalSubmitActionCompleted,
-        postSubmitObservation: observation,
-        publicationReconciled: true,
-        externalId: publicResult.externalId,
-        externalUrl: publicResult.publishedUrl,
-        publicPageVerified: true,
-        imageUploaded: true,
-        titleFilled: true,
-        bodyFilled: true,
-        uploadCallCount: 0,
-        beforeUrl,
-        afterUrl: canonical.page.url(),
-        finalSubmitCount: 1
-      }
-    };
-  }
-
-  private async performOneShotFinalSubmit(ctx: AccountContext, article: PublishArticleInput, guard: OneShotPublicationGuard, attempt: BrowserPublishAttemptContext): Promise<PublishResult> {
-    const canonical = await this.activeCanonicalPage(ctx);
-    if (!canonical || this.isCanonicalPageClosed(canonical.page) || !this.pageContextMatchesSession(canonical.session, canonical.page)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书 canonical Context/Page 不可用，未执行最终发布");
-    const preflight = await this.buildOneShotFinalSubmitPreflight(ctx, article, canonical, guard);
-    const finalControl = await this.inspectOneShotFinalSubmitControl(canonical.page);
-    const beforeUrl = canonical.page.url();
-    try {
-      await guard.startFinalSubmit(preflight, async () => {
-        attempt.markSubmissionSideEffect?.();
-        try {
-          await finalControl.locator.click();
-        } catch (error) {
-          throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", `小红书最终发布 action 已开始但 click 未正常返回：${error instanceof Error ? error.message : String(error)}`);
-        }
-      });
-    } catch (error) {
-      if (error instanceof OneShotPublicationGuardError) throw new BrowserAutomationError("USER_ACTION_REQUIRED", `${error.code}: 未执行小红书最终发布`);
-      throw error;
-    }
-
-    const confirmation = await this.inspectOneShotConfirmationControl(canonical.page);
-    if (confirmation.status === "AMBIGUOUS") throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "小红书发布后出现多个确认 modal 候选，未盲点");
-    if (confirmation.status === "FOUND_UNIQUE" && confirmation.candidate) {
-      try {
-        await guard.confirmModal(confirmation.candidate, async () => confirmation.locator.click());
-      } catch (error) {
-        if (error instanceof OneShotPublicationGuardError) throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", `${error.code}: 小红书确认 modal 未通过安全校验`);
-        throw error;
-      }
-    }
-
-    const observation = await this.observeOneShotPostSubmit(canonical.page, beforeUrl);
-    const observationStatus = classifyOneShotPostSubmitObservation(observation);
-    if (observationStatus === "PLATFORM_REJECTED") throw new BrowserAutomationError("CONTENT_REJECTED", `小红书平台拒绝了测试发布：${observation.platformError ?? "未提供原因"}`);
-    if (observationStatus !== "PUBLISHED_VERIFIED") throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "小红书提交结果不明确；只允许进入只读 reconciliation，不得重试");
-    const publicResult = this.publicResultFromUrl(canonical.page.url());
-    if (!publicResult) throw new BrowserAutomationError("SUBMISSION_UNCERTAIN", "小红书提交后未取得可靠 External ID/URL；禁止再次提交");
-    guard.markFinalSubmitCompleted();
-    return {
-      success: true,
-      status: "published",
-      externalId: publicResult.externalId,
-      publishedUrl: publicResult.publishedUrl,
-      response: {
-        adapter: this.platformKey,
-        stage: "one_shot_final_submitted",
-        ownerFinalSubmitAuthorization: "OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH",
-        finalSubmitAuthorizationState: guard.authorization.state,
-        finalSubmitPreflight: preflight,
-        publicationTransactionCount: guard.authorization.publicationTransactionCount,
-        publicationCommitActionCount: guard.authorization.publicationCommitActionCount,
-        finalSubmitAttemptCount: guard.authorization.finalSubmitAttemptCount,
-        finalSubmitRetryCount: 0,
-        finalSubmitActionStarted: guard.authorization.finalSubmitActionStarted,
-        finalSubmitActionCompleted: guard.authorization.finalSubmitActionCompleted,
-        postSubmitObservation: observation,
-        publicationReconciled: true,
-        externalId: publicResult.externalId,
-        externalUrl: publicResult.publishedUrl,
-        publicPageVerified: true,
-        OWNER_FINAL_SUBMIT_AUTHORIZATION: "OWNER_AUTHORIZED_ONE_SHOT_TEST_PUBLISH",
-        FINAL_SUBMIT_AUTHORIZATION_STATE: guard.authorization.state,
-        FINAL_SUBMIT_PREFLIGHT: "PASS",
-        PUBLICATION_TRANSACTION_COUNT: guard.authorization.publicationTransactionCount,
-        PUBLICATION_COMMIT_ACTION_COUNT: guard.authorization.publicationCommitActionCount,
-        FINAL_SUBMIT_ATTEMPT_COUNT: guard.authorization.finalSubmitAttemptCount,
-        FINAL_SUBMIT_RETRY_COUNT: 0,
-        FINAL_SUBMIT_ACTION_STARTED: guard.authorization.finalSubmitActionStarted,
-        FINAL_SUBMIT_ACTION_COMPLETED: guard.authorization.finalSubmitActionCompleted,
-        POST_SUBMIT_OBSERVATION: observation,
-        PUBLICATION_RECONCILED: true,
-        EXTERNAL_ID: publicResult.externalId,
-        EXTERNAL_URL: publicResult.publishedUrl,
-        PUBLIC_PAGE_VERIFIED: true,
-        beforeUrl,
-        afterUrl: canonical.page.url(),
-        finalSubmitCount: 1
-      }
-    };
-  }
-
-  private async buildOneShotFinalSubmitPreflight(ctx: AccountContext, article: PublishArticleInput, canonical: { session: BrowserSession; page: Page }, guard: OneShotPublicationGuard): Promise<OneShotFinalSubmitPreflight> {
-    const authorization = guard.authorization;
-    const metadata = { operationId: authorization.operationId, platformKey: "xiaohongshu" as const, accountId: ctx.accountId, contextDebugId: canonical.session.contextDebugId ?? "unknown-context", pageDebugId: canonical.session.pageDebugId ?? "unknown-page" };
-    const inspection = await inspectPostUploadImageEditor(canonical.page, metadata, { emit: (diagnostic) => this.emitImageEditorDiagnostic(diagnostic) });
-    const titleEditor = await this.discoverUniqueEditor(canonical.page, "title");
-    const bodyEditor = await this.discoverUniqueEditor(canonical.page, "body");
-    const titleReadbackVerified = await readEditor(titleEditor, "title") === normalizeXiaohongshuEditorText(article.title);
-    const bodyReadbackVerified = await readEditor(bodyEditor, "body") === normalizeXiaohongshuEditorText(article.body);
-    const requiredFieldsPass = !(await this.inspectRequiredFields(canonical.page)).some((field) => field.empty);
-    const finalControl = await this.inspectOneShotFinalSubmitControl(canonical.page);
-    return {
-      authorization: authorization.authorization,
-      authorizationState: authorization.state,
-      platformKey: "xiaohongshu",
-      accountId: authorization.accountId,
-      operationId: authorization.operationId,
-      mode: authorization.mode,
-      authenticated: this.getBrowserRuntimeState(ctx).state === "AUTHENTICATED",
-      sameCanonicalContext: this.pageContextMatchesSession(canonical.session, canonical.page),
-      sameCanonicalPage: canonical.session.page === canonical.page,
-      mutexOwned: this.accountOperationMutex.getState(`${this.platformKey}:${ctx.accountId}`).operationInProgress,
-      editorPhase: inspection.phase as "IMAGE_POST_POST_UPLOAD_EDITOR",
-      safeFixtureUploaded: article.images?.length === 1 && ctx.settings.oneShotImageSource === "SAFE_TEST_FIXTURE",
-      titleReadbackVerified,
-      bodyReadbackVerified,
-      requiredFieldsPass,
-      loginPagePresent: this.isLoginPage(canonical.page.url()),
-      securityVerificationPresent: this.isVerificationUrl(canonical.page.url()),
-      finalSubmitControl: { status: finalControl.status, visible: finalControl.visible, enabled: finalControl.enabled, hitTestValid: finalControl.hitTestValid, label: finalControl.label }
-    };
-  }
-
-  private async inspectOneShotFinalSubmitControl(page: Page): Promise<{ locator: Locator; status: "FOUND_UNIQUE" | "NOT_FOUND" | "AMBIGUOUS" | "NOT_VISIBLE" | "DISABLED" | "HITTEST_INVALID"; visible: boolean; enabled: boolean; hitTestValid: boolean; label?: string }> {
-    const controls = page.locator(XIAOHONGSHU_FINAL_SUBMIT_SELECTOR);
-    const matches: Array<{ locator: Locator; label: string; visible: boolean; enabled: boolean; hitTestValid: boolean }> = [];
-    for (let index = 0; index < await locatorCount(controls); index += 1) {
-      const locator = locatorAt(controls, index);
-      const label = normalizeXiaohongshuEditorText((await innerText(locator)) || (await attribute(locator, "aria-label")) || (await attribute(locator, "title")));
-      if (!XIAOHONGSHU_FINAL_SUBMIT_PATTERN.test(label) || XIAOHONGSHU_VIDEO_PATTERN.test(label)) continue;
-      const visible = await isVisible(locator);
-      const enabled = await isEnabled(locator);
-      const box = await locatorBoundingBox(locator);
-      matches.push({ locator, label, visible, enabled, hitTestValid: visible && box !== null && await locatorHitTestValid(locator, box) });
-    }
-    if (matches.length === 0) return { locator: controls, status: "NOT_FOUND", visible: false, enabled: false, hitTestValid: false };
-    if (matches.length > 1) return { locator: matches[0]!.locator, status: "AMBIGUOUS", visible: false, enabled: false, hitTestValid: false };
-    const match = matches[0]!;
-    if (!match.visible) return { ...match, status: "NOT_VISIBLE" };
-    if (!match.enabled) return { ...match, status: "DISABLED" };
-    if (!match.hitTestValid) return { ...match, status: "HITTEST_INVALID" };
-    return { ...match, status: "FOUND_UNIQUE" };
-  }
-
-  private async inspectOneShotConfirmationControl(page: Page): Promise<{ status: "NONE" | "FOUND_UNIQUE" | "AMBIGUOUS"; locator: Locator; candidate?: OneShotConfirmationCandidate }> {
-    const modals = page.locator('[role="dialog"], [aria-modal="true"], [class*="modal" i], [class*="dialog" i]');
-    const matches: Array<{ locator: Locator; candidate: OneShotConfirmationCandidate }> = [];
-    for (let modalIndex = 0; modalIndex < await locatorCount(modals); modalIndex += 1) {
-      const modal = locatorAt(modals, modalIndex);
-      if (!(await isVisible(modal))) continue;
-      const controls = modal.locator('button, [role="button"]');
-      for (let controlIndex = 0; controlIndex < await locatorCount(controls); controlIndex += 1) {
-        const locator = locatorAt(controls, controlIndex);
-        const semanticIntent = normalizeXiaohongshuEditorText((await innerText(locator)) || (await attribute(locator, "aria-label")) || (await attribute(locator, "title")));
-        if (!/确认发布|继续发布|confirm\s*publish/iu.test(semanticIntent)) continue;
-        const visible = await isVisible(locator);
-        const enabled = await isEnabled(locator);
-        const box = await locatorBoundingBox(locator);
-        matches.push({ locator, candidate: { candidateId: `modal-${modalIndex}-control-${controlIndex}`, modalId: `modal-${modalIndex}`, semanticIntent, sameModal: true, unique: true, visible, enabled, hitTestValid: visible && enabled && box !== null && await locatorHitTestValid(locator, box) } });
-      }
-    }
-    if (matches.length === 0) return { status: "NONE", locator: page.locator("body") };
-    if (matches.length !== 1) return { status: "AMBIGUOUS", locator: matches[0]!.locator };
-    return { status: "FOUND_UNIQUE", locator: matches[0]!.locator, candidate: matches[0]!.candidate };
-  }
-
-  private async observeOneShotPostSubmit(page: Page, beforeUrl: string): Promise<OneShotPostSubmitObservation> {
-    const startedAt = Date.now();
-    let observation: OneShotPostSubmitObservation = { urlChanged: false, successToast: false, editorExited: false, successPage: false, creatorContentMatched: "UNKNOWN", platformError: null };
-    while (Date.now() - startedAt <= 10_000) {
-      const currentUrl = page.url();
-      const text = await bodyText(page);
-      const urlChanged = currentUrl !== beforeUrl;
-      const successToast = /发布成功|提交成功|发布完成|successfully published/iu.test(text);
-      const editorExited = !this.isEditorRoute(currentUrl);
-      const successPage = /\/explore\/|\/discovery\/item\/|success|published/iu.test(currentUrl);
-      const platformError = /发布失败|提交失败|审核拒绝|publish failed|rejected/iu.exec(text)?.[0] ?? null;
-      observation = { urlChanged, successToast, editorExited, successPage, creatorContentMatched: "UNKNOWN", platformError };
-      if (platformError || (urlChanged && successPage) || (successToast && editorExited)) return observation;
-      await waitForProbe(page, 250);
-    }
-    return observation;
-  }
-
-  private publicResultFromUrl(url: string): { externalId: string; publishedUrl: string } | null {
-    const match = /^https:\/\/(?:www\.)?xiaohongshu\.com\/(?:explore|discovery\/item)\/([^/?#]+)/iu.exec(url);
-    return match?.[1] ? { externalId: match[1], publishedUrl: `${new URL(url).origin}${new URL(url).pathname}` } : null;
-  }
-
   protected override async openBackendPage(ctx: AccountContext, url = XIAOHONGSHU_CREATOR_HOME): Promise<{ page: Page; session: BrowserSession; backendUrl: string }> {
     const opened = await this.activeCanonicalPage(ctx);
     if (!opened) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书当前没有可复用的 canonical authenticated Page，请先完成登录");
-    const currentUrl = opened.page.url();
-    if (!this.isCreatorHomeRoute(currentUrl) && !this.isEditorRoute(currentUrl)) await this.navigate(opened.page, url);
+    await this.navigate(opened.page, url);
     if (this.isLoginPage(opened.page.url())) throw new BrowserAutomationError("LOGIN_EXPIRED", "小红书 Session 已过期，请重新登录");
     return { page: opened.page, session: opened.session, backendUrl: opened.page.url() };
-  }
-
-  /** Read-only load telemetry and one fixed-route reload on the existing canonical Page. */
-  async inspectEditorLoad(ctx: AccountContext): Promise<XhsEditorLoadDiagnosticResult> {
-    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
-      const canonical = await this.activeCanonicalPage(ctx);
-      if (!canonical) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书当前没有可复用的 canonical Page，请先完成账号连接");
-      if (!this.isBrowserConnected(canonical.session) || this.isCanonicalPageClosed(canonical.page)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书 canonical Page 当前不可用");
-      const currentUrl = canonical.page.url();
-      if (!isExactXhsPublishEditorRoute(currentUrl)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书当前 canonical Page 不在固定 /publish/publish 路由");
-      return runXhsEditorLoadDiagnostic(canonical.page, {
-        operationId: randomUUID(),
-        accountId: ctx.accountId,
-        contextDebugId: canonical.session.contextDebugId ?? "unknown-context",
-        pageDebugId: canonical.pageDebugId
-      });
-    }, "editorLoadDiagnostic");
-  }
-
-  /** Read-only CDP Network diagnostics and one fixed-route reload on the existing canonical Page. */
-  async inspectEditorNetworkFailure(ctx: AccountContext): Promise<XhsEditorNetworkDiagnosticResult> {
-    return this.accountOperationMutex.run(`${this.platformKey}:${ctx.accountId}`, async () => {
-      const canonical = await this.activeCanonicalPage(ctx);
-      if (!canonical) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书当前没有可复用的 canonical Page，请先完成账号连接");
-      if (!this.isBrowserConnected(canonical.session) || this.isCanonicalPageClosed(canonical.page)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书 canonical Page 当前不可用");
-      if (!this.pageContextMatchesSession(canonical.session, canonical.page)) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书 canonical Context/Page correlation 失败");
-      if (!isExactXhsPublishEditorRoute(canonical.page.url())) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "小红书当前 canonical Page 不在固定 /publish/publish 路由");
-      return runXhsEditorNetworkFailureDiagnostic(canonical.page, {
-        operationId: randomUUID(),
-        accountId: ctx.accountId,
-        contextDebugId: canonical.session.contextDebugId ?? "unknown-context",
-        pageDebugId: canonical.pageDebugId
-      });
-    }, "editorNetworkFailureDiagnostic");
   }
 
   protected override async inspectConnectionPage(ctx: AccountContext, page: Page): Promise<LoginStatus> {
@@ -4776,7 +2049,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     this.onLoginEvaluation({ phase, ...(operationId ? { operationId } : {}), timestamp: new Date().toISOString(), platformKey: this.platformKey, accountId: ctx.accountId, pageIsClosed, pageUrl, pageTitle, creatorDomain: login.creatorHost, creatorHomePath: login.creatorHomePath, publishNoteVisible: login.publishNoteVisible, noteManagementVisible: login.noteManagementVisible, dataDashboardVisible: login.dataDashboardVisible, accountStatusVisible: login.accountStatusVisible, profileAreaVisible: login.profileAreaVisible, visibleLoginForm: login.visibleLoginForm, visibleQrLogin: login.visibleQrLogin, visibleSmsVerification: login.visibleSmsVerification, visibleCaptcha: login.visibleCaptcha, visibleSlider: login.visibleSlider, visibleSecurityModal: login.visibleSecurityModal, positiveSignalCount: new Set(login.positiveSignals).size, blockingSignalCount: blockers.filter(Boolean).length, loginClassification: decision, stableObservationWindowMs, stableObservationSamples, stableObservationPassed });
   }
 
-  private emitCanonicalPageOperation(ctx: AccountContext, session: BrowserSession, page: Page, pageDebugId: string, operationId: string, phase: XiaohongshuCanonicalPageOperationPhase, pageContextMatchesSession: boolean, finalStatus?: LoginStatus | PreSubmitGateStatus, action: "CHECK_LOGIN" | "PRE_SUBMIT_GATE" | "CONTROLLED_POST_UPLOAD_DISCOVERY" | "XHS_PUBLISH_FLOW_EXPLORATION" = "CHECK_LOGIN", result?: Pick<PreSubmitGateResult, "failureCode" | "failureStage" | "missingSignal">): void {
+  private emitCanonicalPageOperation(ctx: AccountContext, session: BrowserSession, page: Page, pageDebugId: string, operationId: string, phase: XiaohongshuCanonicalPageOperationPhase, pageContextMatchesSession: boolean, finalStatus?: LoginStatus | PreSubmitGateStatus, action: "CHECK_LOGIN" | "PRE_SUBMIT_GATE" | "CONTROLLED_POST_UPLOAD_DISCOVERY" = "CHECK_LOGIN", result?: Pick<PreSubmitGateResult, "failureCode" | "failureStage" | "missingSignal">): void {
     if (!this.onCanonicalPageOperation) return;
     const key = `${this.platformKey}:${ctx.accountId}`;
     const mutex = this.accountOperationMutex.getState(key);
@@ -4862,7 +2135,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     return this.authStateFingerprintKey;
   }
 
-  private assertProfilePageCanBeRead(evidence: XiaohongshuPageEvidence, runtimeIdentityProof?: CurrentRuntimeIdentityProof): void {
+  private assertProfilePageCanBeRead(evidence: XiaohongshuPageEvidence): void {
     if (!evidence.available) {
       if (this.isLoginPage(evidence.login.url)) throw new XiaohongshuGateError("LOGIN_REQUIRED", "USER_ACTION_REQUIRED", "小红书页面仍是登录页，请先完成登录");
       if (this.isVerificationUrl(evidence.login.url)) throw new XiaohongshuGateError("SECURITY_VERIFICATION_REQUIRED", "USER_ACTION_REQUIRED", "小红书页面仍是安全验证页；未尝试绕过");
@@ -4871,31 +2144,47 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     const decision = classifyXiaohongshuLoginEvidence(evidence.login);
     if (decision === "login_required") throw new XiaohongshuGateError("LOGIN_REQUIRED", "USER_ACTION_REQUIRED", "小红书页面仍是登录页，请先完成登录");
     if (decision === "needs_user_action") throw new XiaohongshuGateError("SECURITY_VERIFICATION_REQUIRED", "USER_ACTION_REQUIRED", "页面存在可见且阻塞当前操作的登录/安全验证；未尝试绕过");
-    if (decision === "unknown" && runtimeIdentityProof && evidence.login.creatorHost && !evidence.login.explicitLoginUrl && !evidence.login.verificationUrl && evidence.login.blockingSignals.length === 0 && evidence.identity.externalAccountId === runtimeIdentityProof.observedExternalCreatorId && evidence.identity.externalAccountIdCandidates.length === 1) return;
     if (decision !== "logged_in") throw new XiaohongshuGateError("ACCOUNT_IDENTITY_UNVERIFIED", "USER_ACTION_REQUIRED", "小红书 Creator 正向登录证据不足；未猜测账号身份");
   }
 
-  private assertRuntimeIdentityProof(ctx: AccountContext, proof: CurrentRuntimeIdentityProof, contextDebugId: string | null | undefined, pageDebugId: string | null | undefined): void {
-    if (proof.accountId !== ctx.accountId || proof.platformKey !== ctx.platformKey || proof.verified !== true || !proof.expectedExternalCreatorId || !proof.observedExternalCreatorId || proof.expectedExternalCreatorId !== proof.observedExternalCreatorId || proof.canonicalContextId !== contextDebugId || proof.canonicalPageId !== pageDebugId) {
-      throw new XiaohongshuGateError("ACCOUNT_IDENTITY_UNVERIFIED", "USER_ACTION_REQUIRED", "runtime identity proof 与当前 canonical Context/Page 不一致");
-    }
-  }
-
   private async inspectAccountIdentity(page: Page, pageEvidence?: XiaohongshuPageEvidence): Promise<XiaohongshuAccountIdentityEvidence> {
-    const evidence = pageEvidence ?? await readXiaohongshuPageEvidence(page);
-    const identity = evidence.identity;
-    if (!identity.externalAccountId || identity.externalAccountIdCandidates.length !== 1) {
-      const failure = identity.externalAccountIdCandidates.length > 1 ? "页面发现多个互相冲突的平台账号 ID" : "未从真实页面可靠取得小红书账号身份；未猜测平台账号 ID";
-      throw new XiaohongshuGateError("ACCOUNT_IDENTITY_UNVERIFIED", "USER_ACTION_REQUIRED", failure);
+    if (pageEvidence?.available) {
+      if (pageEvidence.identity.externalAccountIdCandidates.length > 1) throw new XiaohongshuGateError("ACCOUNT_IDENTITY_UNVERIFIED", "USER_ACTION_REQUIRED", "页面发现多个互相冲突的平台账号 ID");
+      if (pageEvidence.identity.externalAccountId || pageEvidence.identity.displayName || pageEvidence.identity.profileUrl) {
+        return {
+          externalAccountId: pageEvidence.identity.externalAccountId,
+          displayName: pageEvidence.identity.displayName,
+          profileUrl: pageEvidence.identity.profileUrl
+        };
+      }
     }
-    return {
-      externalAccountId: identity.externalAccountId,
-      displayName: identity.displayName,
-      profileUrl: identity.profileUrl,
-      identitySourceCandidates: identity.identitySourceCandidates,
-      identityDomDiagnosticMatchCount: identity.identityDomDiagnosticMatchCount,
-      identityDomDiagnosticMatches: identity.identityDomDiagnosticMatches
-    };
+    const links = page.locator("a[href]");
+    const candidates: Array<{ href: string; id: string | null; name: string }> = [];
+    for (let index = 0; index < await locatorCount(links); index += 1) {
+      const link = locatorAt(links, index);
+      const href = await attribute(link, "href");
+      const id = stableExternalAccountId(href);
+      if (!id) continue;
+      candidates.push({ href: new URL(href, XIAOHONGSHU_CREATOR_HOME).toString(), id, name: normalizeXiaohongshuEditorText((await innerText(link)) || (await attribute(link, "aria-label")) || (await attribute(link, "title"))) });
+    }
+    const distinctIds = [...new Set(candidates.map((candidate) => candidate.id).filter((value): value is string => Boolean(value)))];
+    if (distinctIds.length > 1) throw new XiaohongshuGateError("ACCOUNT_IDENTITY_UNVERIFIED", "USER_ACTION_REQUIRED", "页面发现多个互相冲突的平台账号 ID");
+    const selected = candidates.find((candidate) => candidate.id === distinctIds[0]);
+    if (selected) return { externalAccountId: selected.id, displayName: selected.name || null, profileUrl: selected.href };
+
+    const nicknameCandidates: string[] = [];
+    for (const selector of ['[data-testid*="nickname" i]', '[class*="nickname" i]', '[aria-label*="个人主页"], [aria-label*="账号"]']) {
+      const locator = page.locator(selector);
+      for (let index = 0; index < await locatorCount(locator); index += 1) {
+        const candidate = locatorAt(locator, index);
+        if (!(await isVisible(candidate)) || !(await isEnabled(candidate))) continue;
+        const name = normalizeXiaohongshuEditorText((await innerText(candidate)) || (await attribute(candidate, "aria-label")));
+        if (name) nicknameCandidates.push(name);
+      }
+    }
+    const distinctNames = [...new Set(nicknameCandidates)];
+    if (distinctNames.length === 1) return { externalAccountId: null, displayName: distinctNames[0], profileUrl: null };
+    throw new XiaohongshuGateError("ACCOUNT_IDENTITY_UNVERIFIED", "USER_ACTION_REQUIRED", "未从真实页面可靠取得小红书账号身份；未猜测平台账号 ID");
   }
 
   private preSubmitGateStatusForError(error: unknown): PreSubmitGateStatus {
@@ -5117,7 +2406,6 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         ancestorChainDiagnostics: clickable.ancestorChainDiagnostics,
         publishNoteSurface: clickable.publishNoteSurface,
         imagePostSurface: clickable.imagePostSurface,
-        publishNoteDropdownTrigger: clickable.publishNoteDropdownTrigger,
         clickableSurfaceStatus: clickable.clickableSurfaceStatus,
         clickableSurfaceFailureCode: clickable.clickableSurfaceFailureCode,
         clickableSurfaceConfidence: clickable.clickableSurfaceConfidence,
@@ -5149,78 +2437,10 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     }
   }
 
-  private async navigateToImagePostEditorViaExactCard(page: Page, operationId: string, accountId: string, startedAt: number): Promise<XiaohongshuEditorEntryResult> {
-    const selectorSignal = "semantic:EXACT_PUBLISH_IMAGE_POST_CARD";
-    const inspection = await inspectXiaohongshuImagePostEntry(page);
-    this.emitEditorEntryDiagnostic({
-      code: "IMAGE_POST_ENTRY_INSPECTION",
-      timestamp: new Date().toISOString(),
-      operationId,
-      platformKey: "xiaohongshu",
-      accountId,
-      sanitizedUrl: sanitizePageUrl(page),
-      selectorSignal,
-      status: inspection.inspectionStatus,
-      exactTextMatchCount: inspection.exactTextMatchCount,
-      safeToTestClick: inspection.safeToTestClick,
-      imagePostEntryInspection: inspection,
-      pageCapabilitiesSafe: inspection.pageCapabilities,
-      evaluationFailureReason: inspection.evaluationFailureReason,
-      imagePostEntryClickCount: 0,
-      failureCode: inspection.failureCode === "NOT_CREATOR_HOME" ? "EDITOR_ROUTE_NOT_REACHED" : inspection.failureCode === null ? undefined : "PUBLISH_ENTRY_NOT_FOUND",
-      failureStage: inspection.failureCode === null ? undefined : "PUBLISH_ENTRY_DISCOVERY",
-      missingSignal: inspection.failureCode === null ? undefined : selectorSignal
-    });
-    this.emitEditorEntryStep(page, operationId, accountId, startedAt, "PUBLISH_ENTRY_FOUND", inspection.safeToTestClick, selectorSignal);
-    if (!inspection.safeToTestClick) {
-      throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", `小红书唯一“发布图文笔记”入口未通过 bounded contract：${inspection.failureCode ?? "UNKNOWN"}`, { failureCode: "PUBLISH_ENTRY_NOT_FOUND", failureStage: "PUBLISH_ENTRY_DISCOVERY", missingSignal: selectorSignal });
-    }
-
-    const activation = await activateXiaohongshuImagePostEntry(page, { navigationClickCount: 0 });
-    this.emitEditorEntryDiagnostic({
-      code: "IMAGE_POST_ENTRY_ACTIVATION",
-      timestamp: new Date().toISOString(),
-      operationId,
-      platformKey: "xiaohongshu",
-      accountId,
-      sanitizedUrl: sanitizePageUrl(page),
-      selectorSignal,
-      status: activation.status,
-      imagePostEntryInspection: activation.inspection,
-      imagePostEntryActivation: activation,
-      imagePostEntryClickCount: activation.clickCount,
-      observedTarget: activation.observedTarget,
-      imagePostEntryRouteReadback: activation.routeReadback,
-      sanitizedUrlBefore: activation.sanitizedUrlBefore,
-      sanitizedUrlAfter: activation.sanitizedUrlAfter,
-      navigationClickCount: activation.clickCount,
-      navigationTransition: activation.status === "ACTIVATED",
-      failureCode: activation.failureCode === "WRONG_TARGET" ? "CONTENT_TYPE_ENTRY_NOT_FOUND" : activation.failureCode === undefined ? undefined : "EDITOR_ROUTE_NOT_REACHED",
-      failureStage: activation.failureCode === undefined ? undefined : "EDITOR_NAVIGATION",
-      missingSignal: activation.failureCode === undefined ? undefined : selectorSignal
-    });
-    this.emitEditorEntryStep(page, operationId, accountId, startedAt, "PUBLISH_ENTRY_CLICKED", activation.status === "ACTIVATED", selectorSignal, activation.sanitizedUrlBefore, activation.sanitizedUrlAfter, "PUBLISH_ENTRY_CLICK");
-    if (activation.status !== "ACTIVATED") {
-      const failureCode = activation.failureCode === "WRONG_TARGET" ? "CONTENT_TYPE_ENTRY_NOT_FOUND" : activation.failureCode === "NO_ROUTE_TRANSITION" ? "EDITOR_ROUTE_NOT_REACHED" : "PUBLISH_ENTRY_NOT_FOUND";
-      const failureStage = activation.failureCode === "WRONG_TARGET" ? "CONTENT_TYPE_SELECTION" : activation.failureCode === "NO_ROUTE_TRANSITION" ? "EDITOR_ROUTE" : "PUBLISH_ENTRY_CLICK";
-      throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", `唯一“发布图文笔记”入口激活未到达图文编辑器：${activation.failureCode ?? activation.status}；不会 retry`, { failureCode, failureStage, missingSignal: selectorSignal });
-    }
-
-    const postState = classifyPublishNotePostClickState({ url: page.url(), bodyText: "" });
-    if (postState === "VIDEO_EDITOR") throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "发布图文笔记入口进入了视频编辑器；不会继续 mutation", { failureCode: "CONTENT_TYPE_ENTRY_NOT_FOUND", failureStage: "CONTENT_TYPE_SELECTION", missingSignal: "target=image" });
-    if (postState !== "IMAGE_EDITOR") throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "发布图文笔记入口未得到可验证的图文编辑器路由", { failureCode: "EDITOR_ROUTE_NOT_REACHED", failureStage: "EDITOR_ROUTE", missingSignal: "url:/publish/publish?target=image" });
-    this.emitEditorEntryStep(page, operationId, accountId, startedAt, "EDITOR_ROUTE_REACHED", true, "url:/publish/publish?target=image", activation.sanitizedUrlBefore, activation.sanitizedUrlAfter, "PUBLISH_ENTRY_CLICK");
-    return { editorReached: true, sanitizedUrl: activation.sanitizedUrlAfter, preClickRevalidated: true, navigationClickCount: 1, navigationTransitionObserved: true, postPublishNoteState: "IMAGE_EDITOR" };
-  }
-
-  private async navigateToImagePostEditor(page: Page, operationId: string = randomUUID(), accountId = "unknown-account", identity: { context?: object; contextDebugId?: string; pageDebugId?: string } = {}, policy: XiaohongshuEditorNavigationPolicy = "PREPARE_PUBLISH"): Promise<XiaohongshuEditorEntryResult> {
+  private async navigateToImagePostEditor(page: Page, operationId = randomUUID(), accountId = "unknown-account", identity: { context?: object; contextDebugId?: string; pageDebugId?: string } = {}, policy: XiaohongshuEditorNavigationPolicy = "PREPARE_PUBLISH"): Promise<XiaohongshuEditorEntryResult> {
     const startedAt = Date.now();
     const startUrl = sanitizePageUrl(page);
     if (this.isEditorRoute(page.url())) {
-      if (classifyPublishNotePostClickState({ url: page.url(), bodyText: "" }) === "VIDEO_EDITOR") {
-        this.emitEditorEntryStep(page, operationId, accountId, startedAt, "EDITOR_ROUTE_REACHED", false, "url:/publish/publish?target=video", startUrl, startUrl, "PLATFORM_REDIRECT");
-        throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "当前页面是视频发布编辑器；不会在错误内容类型页面继续上传或填写", { failureCode: "CONTENT_TYPE_ENTRY_NOT_FOUND", failureStage: "CONTENT_TYPE_SELECTION", missingSignal: "target=image" });
-      }
       this.emitEditorEntryDiagnostic({ code: "EDITOR_ENTRY_STARTED", timestamp: new Date().toISOString(), operationId, platformKey: "xiaohongshu", accountId, startUrl, entryMethod: "ALREADY_ON_EDITOR", expectedTarget: "https://creator.xiaohongshu.com/publish/publish" });
       this.emitEditorEntryStep(page, operationId, accountId, startedAt, "EDITOR_ROUTE_REACHED", true, "url:/publish/publish", startUrl, startUrl, "DIRECT_GOTO");
       return { editorReached: true, sanitizedUrl: startUrl, navigationClickCount: 0, navigationTransitionObserved: false, postPublishNoteState: "IMAGE_EDITOR" };
@@ -5239,10 +2459,6 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     }
 
     await this.emitCreatorHomeDiagnostics(page, operationId, accountId, identity);
-
-    if (typeof (page as unknown as { getByText?: unknown }).getByText === "function") {
-      return this.navigateToImagePostEditorViaExactCard(page, operationId, accountId, startedAt);
-    }
 
     if (typeof (page as unknown as { evaluateHandle?: unknown }).evaluateHandle === "function") {
       if (policy === "GATE_NAVIGATION") return this.navigateToImagePostEditorForGate(page, operationId, accountId, identity);
@@ -5315,11 +2531,6 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         throw new XiaohongshuGateError("SECURITY_VERIFICATION_REQUIRED", "USER_ACTION_REQUIRED", "图文入口导航后出现安全验证页；未尝试绕过", { failureCode: "SECURITY_VERIFICATION_REQUIRED", failureStage: "AUTHENTICATION", missingSignal: "security-verification-url" });
       }
       if (/\/publish\/publish(?:[/?#]|$)/iu.test(currentUrl)) {
-        const postState = classifyPublishNotePostClickState({ url: currentUrl, bodyText: "" });
-        if (postState === "VIDEO_EDITOR") {
-          this.emitEditorEntryStep(page, operationId, accountId, startedAt, "EDITOR_ROUTE_REACHED", false, "url:/publish/publish?target=video", startUrl, sanitizePageUrl(page), "PLATFORM_REDIRECT");
-          throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "发布笔记 dropdown 后进入了视频发布编辑器；不会切换 tab 或继续 mutation", { failureCode: "CONTENT_TYPE_ENTRY_NOT_FOUND", failureStage: "CONTENT_TYPE_SELECTION", missingSignal: "target=image" });
-        }
         this.emitEditorEntryStep(page, operationId, accountId, startedAt, "EDITOR_ROUTE_REACHED", true, "url:/publish/publish");
         return { editorReached: true, sanitizedUrl: sanitizePageUrl(page), navigationClickCount: 1, navigationTransitionObserved: true, postPublishNoteState: "IMAGE_EDITOR" };
       }
@@ -5358,8 +2569,6 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       status: resolution.status,
       targetIdentity: resolution.target ? { targetId: resolution.target.targetId, tagName: resolution.target.tagName, exactText: resolution.target.exactText, depth: resolution.target.depth } : undefined,
       surfaceIdentity: resolution.surface ? { surfaceId: resolution.surface.surfaceId, targetId: resolution.surface.targetId, ancestorDepth: resolution.surface.ancestorDepth, tagName: resolution.surface.tagName } : undefined,
-      dropdownTriggerIdentity: resolution.dropdownTrigger ? { triggerId: resolution.dropdownTrigger.triggerId, targetId: resolution.dropdownTrigger.targetId, tagName: resolution.dropdownTrigger.tagName, role: resolution.dropdownTrigger.role } : undefined,
-      dropdownTriggerStatus: resolution.diagnostics?.publishNoteDropdownTrigger.status,
       exactSemanticText: resolution.evidence.exactSemanticText,
       visible: resolution.evidence.visible,
       pointerEventsActive: resolution.evidence.pointerEventsActive,
@@ -5438,9 +2647,6 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       sanitizedUrlAfter: click.sanitizedUrlAfter,
       navigationTransition: click.navigationTransition,
       navigationClickCount: click.navigationClickCount,
-      publishNoteDropdownClickCount: click.publishNoteDropdownClickCount,
-      imagePostMenuItemClickCount: click.imagePostMenuItemClickCount,
-      uploadVideoMenuItemClickCount: click.uploadVideoMenuItemClickCount,
       finalSubmitCount: click.finalSubmitCount,
       failureCode: click.failureCode,
       elapsedMs: Math.max(0, Date.now() - startedAt)
@@ -5452,17 +2658,6 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
 
     const postEvidence = await readXiaohongshuPageEvidence(page);
     const postBodyText = await bodyText(page);
-    if (resolution.dropdownTriggerHandle) {
-      let route: URL;
-      try {
-        route = new URL(page.url());
-      } catch {
-        throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "上传图文菜单点击后的页面 URL 无法验证", { failureCode: "CONTENT_TYPE_ENTRY_NOT_FOUND", failureStage: "CONTENT_TYPE_SELECTION", missingSignal: "from=menu&target=image" });
-      }
-      if (route.pathname !== "/publish/publish" || route.searchParams.get("from") !== "menu" || route.searchParams.get("target") !== "image") {
-        throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "上传图文菜单点击后未得到 from=menu&target=image 路由", { failureCode: "CONTENT_TYPE_ENTRY_NOT_FOUND", failureStage: "CONTENT_TYPE_SELECTION", missingSignal: "from=menu&target=image" });
-      }
-    }
     const postState = classifyPublishNotePostClickState({
       url: page.url(),
       bodyText: postBodyText,
@@ -5493,7 +2688,6 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
     });
     if (postState === "LOGIN") throw new XiaohongshuGateError("LOGIN_REQUIRED", "USER_ACTION_REQUIRED", "发布笔记 navigation 后被重定向到登录页", { failureCode: "AUTH_REDIRECTED_TO_LOGIN", failureStage: "AUTHENTICATION", missingSignal: "login-url" });
     if (postState === "SECURITY_VERIFICATION") throw new XiaohongshuGateError("SECURITY_VERIFICATION_REQUIRED", "USER_ACTION_REQUIRED", "发布笔记 navigation 后出现安全验证页；未尝试绕过", { failureCode: "SECURITY_VERIFICATION_REQUIRED", failureStage: "AUTHENTICATION", missingSignal: "security-verification-signal" });
-    if (postState === "VIDEO_EDITOR") throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "发布笔记 dropdown 后进入了视频发布编辑器；不会切换 tab 或继续 mutation", { failureCode: "CONTENT_TYPE_ENTRY_NOT_FOUND", failureStage: "CONTENT_TYPE_SELECTION", missingSignal: "target=image" });
     if (postState === "UNKNOWN") throw new XiaohongshuGateError("IMAGE_POST_ENTRY_NOT_VERIFIED", "CONTENT_REJECTED", "发布笔记 navigation 后页面状态未知", { failureCode: "UNKNOWN_UI_STATE", failureStage: "EDITOR_NAVIGATION", missingSignal: "post-publish-note-state" });
     return {
       editorReached: postState === "IMAGE_EDITOR",
@@ -5630,10 +2824,7 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       ctx: AccountContext;
       session: BrowserSession;
       metadata: { operationId: string; platformKey: "xiaohongshu"; accountId: string; contextDebugId: string; pageDebugId: string };
-      selfTestMode?: "POST_UPLOAD_DISCOVERY_ONLY" | "XHS_PUBLISH_FLOW_EXPLORATION";
-      uploadAttemptIndex?: number;
-      onMutationStarted?: () => void;
-      expectedFileMetadata?: XiaohongshuUploadFileExpectation;
+      selfTestMode?: "POST_UPLOAD_DISCOVERY_ONLY";
     }
   ): Promise<Record<string, unknown>> {
     const input = page.locator(XIAOHONGSHU_FILE_SELECTOR);
@@ -5653,42 +2844,18 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         mutationType: "IMAGE_UPLOAD_ONLY",
         ...(diagnosticContext.selfTestMode ? { selfTestMode: diagnosticContext.selfTestMode } : {}),
         uploadMutationCount: 1,
-        ...(diagnosticContext.uploadAttemptIndex === undefined ? {} : { uploadAttemptIndex: diagnosticContext.uploadAttemptIndex }),
         requestedCount: images.length
       });
     }
     try {
-      const immediateReadback = await readXiaohongshuUploadInputImmediately(input, images, diagnosticContext?.expectedFileMetadata, diagnosticContext?.onMutationStarted);
-      if (diagnosticContext) {
-        this.emitEditorEntryDiagnostic({
-          code: "IMAGE_UPLOAD_INPUT_READBACK",
-          timestamp: new Date().toISOString(),
-          operationId: diagnosticContext.metadata.operationId,
-          platformKey: "xiaohongshu",
-          accountId: diagnosticContext.ctx.accountId,
-          contextDebugId: diagnosticContext.metadata.contextDebugId,
-          pageDebugId: diagnosticContext.metadata.pageDebugId,
-          sanitizedUrl: sanitizePageUrl(page),
-          action: "IMAGE_UPLOAD_INPUT_READBACK",
-          mutationType: "IMAGE_UPLOAD_ONLY",
-          ...(diagnosticContext.selfTestMode ? { selfTestMode: diagnosticContext.selfTestMode } : {}),
-          uploadMutationCount: 1,
-          ...(diagnosticContext.uploadAttemptIndex === undefined ? {} : { uploadAttemptIndex: diagnosticContext.uploadAttemptIndex }),
-          fileInputImmediateReadbackStatus: immediateReadback.status,
-          fileInputFilesLength: immediateReadback.readback.filesLength,
-          fileInputExpectedFixtureMatch: immediateReadback.expectedFixtureMatch
-        });
-      }
-      if (immediateReadback.status !== "PASS") {
-        throw new XiaohongshuGateError("IMAGE_UPLOAD_NOT_VERIFIED", "UPLOAD_FAILED", `setInputFiles 后同一 file input 即时回读未通过；failure=${immediateReadback.failureCode ?? "FILE_INPUT_READBACK_MISMATCH"}; files=${immediateReadback.readback.filesLength}`);
-      }
+      await input.setInputFiles(images);
       for (let attempt = 0; attempt < 8; attempt += 1) {
         const pageContent = await bodyText(page);
         if (/上传失败|图片上传失败|upload failed/iu.test(pageContent)) throw new XiaohongshuGateError("IMAGE_UPLOAD_NOT_VERIFIED", "UPLOAD_FAILED", "页面显示图片上传失败");
         const busy = page.locator(XIAOHONGSHU_UPLOAD_BUSY_SELECTOR);
-        const postUploadSnapshot = await inspectXiaohongshuPostUploadReconciliationDom(page);
-        const previewCount = postUploadSnapshot.visibleImageItemCount;
-        if (previewCount >= images.length && previewCount > 0 && !postUploadSnapshot.processingSignalPresent && await locatorCount(busy) === 0) {
+        const preview = page.locator(XIAOHONGSHU_PREVIEW_SELECTOR);
+        const previewCount = await locatorCount(preview);
+        if (previewCount >= images.length && previewCount > 0 && (await isVisible(locatorAt(preview, 0))) && await locatorCount(busy) === 0) {
           if (diagnosticContext) {
             this.emitEditorEntryDiagnostic({
               code: "IMAGE_UPLOAD_COMPLETED",
@@ -5702,17 +2869,12 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
               action: "IMAGE_UPLOAD_COMPLETED",
               mutationType: "IMAGE_UPLOAD_ONLY",
               ...(diagnosticContext.selfTestMode ? { selfTestMode: diagnosticContext.selfTestMode } : {}),
-              ...(diagnosticContext.uploadAttemptIndex === undefined ? {} : { uploadAttemptIndex: diagnosticContext.uploadAttemptIndex }),
               requestedCount: images.length,
               previewCount,
-              previewDetector: "POST_UPLOAD_EDITOR_SCOPED",
-              fileInputImmediateReadbackStatus: immediateReadback.status,
-              fileInputFilesLength: immediateReadback.readback.filesLength,
-              fileInputExpectedFixtureMatch: immediateReadback.expectedFixtureMatch,
               verified: true
             });
           }
-          return { mechanism: "input[type=file]", requestedCount: images.length, previewCount, previewVisible: true, previewDetector: "POST_UPLOAD_EDITOR_SCOPED", uploadBusyCount: 0, verified: true, fileInputImmediateReadback: immediateReadback };
+          return { mechanism: "input[type=file]", requestedCount: images.length, previewCount, previewVisible: true, uploadBusyCount: 0, verified: true };
         }
         await waitForProbe(page);
       }
@@ -5730,7 +2892,6 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
           action: "IMAGE_UPLOAD_FAILED",
           mutationType: "IMAGE_UPLOAD_ONLY",
           ...(diagnosticContext.selfTestMode ? { selfTestMode: diagnosticContext.selfTestMode } : {}),
-          ...(diagnosticContext.uploadAttemptIndex === undefined ? {} : { uploadAttemptIndex: diagnosticContext.uploadAttemptIndex }),
           requestedCount: images.length,
           uploadFailureCode: error instanceof XiaohongshuGateError ? error.gateCode : "IMAGE_UPLOAD_NOT_VERIFIED"
         });
@@ -5751,7 +2912,6 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
         action: "IMAGE_UPLOAD_FAILED",
         mutationType: "IMAGE_UPLOAD_ONLY",
         ...(diagnosticContext.selfTestMode ? { selfTestMode: diagnosticContext.selfTestMode } : {}),
-        ...(diagnosticContext.uploadAttemptIndex === undefined ? {} : { uploadAttemptIndex: diagnosticContext.uploadAttemptIndex }),
         requestedCount: images.length,
         uploadFailureCode: "IMAGE_UPLOAD_NOT_VERIFIED"
       });
@@ -5778,13 +2938,10 @@ export class XiaohongshuBrowserAdapter extends BrowserAutomationAdapter {
       const value = await inputValue(field);
       const label = normalizeXiaohongshuEditorText((await attribute(field, "aria-label")) || (await attribute(field, "placeholder")) || (await innerText(field)));
       const checked = await attribute(field, "aria-checked");
-      const type = (await attribute(field, "type")).toLowerCase();
-      const role = (await attribute(field, "role")).toLowerCase();
       const visible = await isVisible(field);
       const enabled = await isEnabled(field);
       if (!visible || !enabled) continue;
-      const toggle = type === "checkbox" || type === "radio" || role === "checkbox" || role === "radio";
-      fields.push({ label, empty: toggle ? !(checked === "true" || await isChecked(field)) : !value.trim(), visible, enabled });
+      fields.push({ label, empty: !value.trim() && checked !== "true", visible, enabled });
     }
     return fields;
   }

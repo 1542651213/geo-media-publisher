@@ -2,13 +2,13 @@ import { AdapterRegistry, BrowserSessionManager, type BrowserRuntimeEvent, type 
 import { BaijiahaoBrowserAdapter } from "@publisher/adapters-baijiahao/browser";
 import { BilibiliBrowserAdapter } from "@publisher/adapters-bilibili/browser";
 import { DouyinOfficialAdapter } from "@publisher/adapters-douyin";
+import { DouyinImageTextBrowserAdapter } from "@publisher/adapters-douyin/image-text-browser";
 import { FacebookPagesAdapter } from "@publisher/adapters-facebook";
 import { KuaishouAdapter } from "@publisher/adapters-kuaishou";
 import { SohuBrowserAdapter } from "@publisher/adapters-sohu-media/browser";
 import { TestPlatformAdapter } from "@publisher/adapters-test";
 import { TikTokAdapter } from "@publisher/adapters-tiktok";
-import { ToutiaoAdapter } from "@publisher/adapters-toutiao";
-import { ToutiaoArticleBrowserAdapter } from "@publisher/adapters-toutiao/browser";
+import { ToutiaoAdapter, ToutiaoArticlePublisher } from "@publisher/adapters-toutiao";
 import { WeChatOfficialAdapter } from "@publisher/adapters-wechat";
 import { WechatChannelsSemiAutoAdapter } from "@publisher/adapters-wechat-channels/semi-auto";
 import { WeiboBrowserAdapter } from "@publisher/adapters-weibo/browser";
@@ -23,7 +23,8 @@ import type { Logger } from "@publisher/logger";
 import type { BrowserConnectionDiagnostic } from "@publisher/adapters-browser";
 import type { XiaohongshuAuthStateDiagnostic, XiaohongshuCanonicalPageOperationEvidence, XiaohongshuEditorEntryDiagnostic, XiaohongshuLoginEvaluation } from "@publisher/adapters-xiaohongshu/browser";
 
-export function createRuntimeAdapterRegistry(credentials: CredentialStore, includeTestPlatform: boolean, logger?: Logger, browserProfileRootDir?: string, credentialFilePath?: string): AdapterRegistry {
+export function createRuntimeAdapterRegistry(credentials: CredentialStore, includeTestPlatform: boolean, logger?: Logger, browserProfileRootDir?: string, credentialFilePath?: string, options: { toutiaoArticleApiPublisherEnabled?: boolean; toutiaoBrowserNativeSubmitEnabled?: boolean; douyinImageTextNativeSubmitEnabled?: boolean;
+  claimDouyinImageTextFileSelection?: NonNullable<ConstructorParameters<typeof DouyinImageTextBrowserAdapter>[0]>["claimFileSelection"] } = {}): AdapterRegistry {
   const registry = new AdapterRegistry();
   const onBrowserRuntimeEvent = (event: BrowserRuntimeEvent): void => {
     if (event.code === "BROWSER_RUNTIME_SELECTED") logger?.info("BROWSER_RUNTIME", event.code, "已选择系统浏览器运行时", event);
@@ -42,6 +43,7 @@ export function createRuntimeAdapterRegistry(credentials: CredentialStore, inclu
     onSessionLifecycle: onBrowserSessionLifecycle,
     onOperationPageLifecycle,
     browserProfileRootDir,
+    blockServiceWorkersForPlatforms: ["toutiao", "douyin"],
     persistentProfilePlatforms: ["xiaohongshu"],
     persistentProfileCredentialSnapshotPlatforms: [],
     platformPolicies: {
@@ -81,12 +83,23 @@ export function createRuntimeAdapterRegistry(credentials: CredentialStore, inclu
   if (includeTestPlatform) registry.register(new TestPlatformAdapter("success"));
   registry.register(new WeChatOfficialAdapter({ credentialStore: credentials }));
   registry.register(new DouyinOfficialAdapter({ credentialStore: credentials }));
+  registry.register(new DouyinImageTextBrowserAdapter({ credentialStore: credentials, sessionManager: browserSessionManager, onBrowserRuntimeEvent,
+    claimFileSelection: options.claimDouyinImageTextFileSelection,
+    nativeSubmitEnabled: options.douyinImageTextNativeSubmitEnabled ?? (process.env.DOUYIN_IMAGE_TEXT_NATIVE_SUBMIT_ENABLED === "true"
+      && Boolean(process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim() && process.env.DOUYIN_R1_ACCEPTANCE_ARTICLE_ID?.trim())),
+    approvedResume: process.env.DOUYIN_R1_RESUME_ARTICLE_ID?.trim()
+      && process.env.DOUYIN_R1_RESUME_ARTICLE_ID.trim() === process.env.DOUYIN_R1_ACCEPTANCE_ARTICLE_ID?.trim()
+      && process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID?.trim()
+      ? { accountId: process.env.DOUYIN_R1_ACCEPTANCE_ACCOUNT_ID.trim(), articleId: process.env.DOUYIN_R1_RESUME_ARTICLE_ID.trim() }
+      : null }));
   registry.register(new KuaishouAdapter({ credentialStore: credentials }));
   registry.register(new BilibiliBrowserAdapter({ credentialStore: credentials, sessionManager: browserSessionManager, onBrowserRuntimeEvent }));
   registry.register(new YouTubeAdapter({ credentialStore: credentials }));
   registry.register(new TikTokAdapter({ credentialStore: credentials }));
   registry.register(new ToutiaoAdapter({ credentialStore: credentials }));
-  registry.register(new ToutiaoArticleBrowserAdapter({ credentialStore: credentials, sessionManager: browserSessionManager, onBrowserRuntimeEvent }));
+  // Legacy API flags only belong to explicit diagnostics, never ordinary article routing.
+  registry.register(new ToutiaoArticlePublisher({ credentialStore: credentials, sessionManager: browserSessionManager, onBrowserRuntimeEvent,
+    nativeSubmitEnabled: options.toutiaoBrowserNativeSubmitEnabled ?? process.env.TOUTIAO_BROWSER_NATIVE_SUBMIT_ENABLED === "true" }));
   registry.register(new FacebookPagesAdapter({ credentialStore: credentials }));
   registry.register(new WeiboBrowserAdapter({ credentialStore: credentials, sessionManager: browserSessionManager, onBrowserRuntimeEvent }));
   registry.register(new BaijiahaoBrowserAdapter({ credentialStore: credentials, sessionManager: browserSessionManager, onBrowserRuntimeEvent }));

@@ -18,6 +18,52 @@ class MemoryCredentialStore implements CredentialStore {
 const userAction: UserInitiatedAction = { userActionId: "11111111-1111-4111-8111-111111111111", triggerSource: "CONNECT_ACCOUNT" };
 
 describe("BrowserSessionManager credential boundary", () => {
+  it("blocks Service Workers only for an explicitly configured diagnostic platform", async () => {
+    const context = { setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => page), pages: vi.fn(() => [page]), close: vi.fn(async () => undefined) } as unknown as BrowserContext;
+    const page = { isClosed: () => false, url: () => "about:blank", context: () => context };
+    const browser = { newContext: vi.fn(async () => context), close: vi.fn(async () => undefined), isConnected: () => true } as unknown as Browser;
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), {
+      launchBrowser: vi.fn(async () => browser), blockServiceWorkersForPlatforms: ["toutiao"]
+    });
+    await manager.open({ platformKey: "toutiao", accountId: "shadow-owner" }, userAction);
+    expect(browser.newContext).toHaveBeenCalledWith({ serviceWorkers: "block" });
+    await manager.open({ platformKey: "sohu-media", accountId: "other" }, userAction);
+    expect(browser.newContext).toHaveBeenLastCalledWith({});
+  });
+
+  it("restores a Toutiao ephemeral Context from the saved credential store after manager restart", async () => {
+    const store = new MemoryCredentialStore();
+    const identity = { platformKey: "toutiao", accountId: "restart-owner" };
+    const savedState = { cookies: [], origins: [] };
+    store.set("session:toutiao:restart-owner", JSON.stringify(savedState));
+    const context = { setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => page), pages: vi.fn(() => [page]), close: vi.fn(async () => undefined) } as unknown as BrowserContext;
+    const page = { isClosed: () => false, url: () => "about:blank", context: () => context };
+    const browser = { newContext: vi.fn(async () => context), close: vi.fn(async () => undefined), isConnected: () => true } as unknown as Browser;
+    const launchBrowser = vi.fn(async () => browser);
+    const first = new BrowserSessionManager(store, { launchBrowser });
+    await first.open(identity, userAction);
+    await first.closeAll();
+    const restarted = new BrowserSessionManager(store, { launchBrowser });
+    const restored = await restarted.open(identity, userAction);
+    expect(restored.hasStoredSession).toBe(true);
+    expect(browser.newContext).toHaveBeenCalledTimes(2);
+    expect(browser.newContext).toHaveBeenLastCalledWith({ storageState: savedState });
+    expect(restarted.getSessionSnapshot(identity)).toMatchObject({ sessionExists: true, contextExists: true, canonicalPageExists: true });
+  });
+
+  it("reports a closed Toutiao canonical Page as absent without treating saved authorization as expired", async () => {
+    let closed = false;
+    const page = { isClosed: () => closed, url: () => "https://mp.toutiao.com/", context: () => context };
+    const context = { setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => page), pages: vi.fn(() => [page]), close: vi.fn(async () => undefined) } as unknown as BrowserContext;
+    const browser = { newContext: vi.fn(async () => context), close: vi.fn(async () => undefined), isConnected: () => true } as unknown as Browser;
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser: vi.fn(async () => browser) });
+    const identity = { platformKey: "toutiao", accountId: "owner-account" };
+    await manager.open(identity, userAction);
+    expect(manager.getSessionSnapshot(identity)).toMatchObject({ sessionExists: true, canonicalPageExists: true, canonicalPageHost: "mp.toutiao.com", canonicalPagePath: "/" });
+    closed = true;
+    expect(manager.getSessionSnapshot(identity)).toMatchObject({ sessionExists: true, canonicalPageExists: true, canonicalPageClosed: true, canonicalPageHost: null });
+  });
+
   it("closes an XHS operation Page without closing its canonical Context", async () => {
     const firstPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), close: vi.fn(async () => undefined), context: vi.fn(() => context) };
     const secondPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "about:blank"), close: vi.fn(async () => undefined), context: vi.fn(() => context) };
@@ -865,63 +911,6 @@ describe("BrowserSessionManager credential boundary", () => {
     expect(snapshot).not.toHaveProperty("cookies");
     expect(snapshot).not.toHaveProperty("storageState");
     expect(snapshot).not.toHaveProperty("token");
-  });
-
-  it("enumerates every existing Context Page with stable diagnostic identities without creating a Page", async () => {
-    const canonicalPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "https://creator.xiaohongshu.com/"), context: vi.fn() };
-    const secondPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "https://creator.xiaohongshu.com/publish/publish?from=menu&target=image"), context: vi.fn() };
-    const newPage = vi.fn(async () => canonicalPage);
-    const context = {
-      setDefaultTimeout: vi.fn(),
-      newPage,
-      pages: vi.fn(() => [canonicalPage, secondPage]),
-      close: vi.fn(async () => undefined)
-    } as unknown as BrowserContext;
-    canonicalPage.context.mockReturnValue(context);
-    secondPage.context.mockReturnValue(context);
-    const browser = { newContext: vi.fn(async () => context), close: vi.fn(async () => undefined), isConnected: vi.fn(() => true) } as unknown as Browser;
-    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser: vi.fn(async () => browser) });
-    const identity = { platformKey: "xiaohongshu", accountId: "context-inventory-account" };
-    const session = await manager.open(identity, userAction);
-
-    const first = manager.getContextPages(identity);
-    const second = manager.getContextPages(identity);
-
-    expect(first).toHaveLength(2);
-    expect(first?.[0]).toMatchObject({ page: canonicalPage, pageIndex: 0, pageDebugId: session.pageDebugId, isCanonical: true });
-    expect(first?.[1]).toMatchObject({ page: secondPage, pageIndex: 1, isCanonical: false });
-    expect(first?.[1]?.pageDebugId).toEqual(second?.[1]?.pageDebugId);
-    expect(first?.[1]?.pageDebugId).not.toEqual(first?.[0]?.pageDebugId);
-    expect(newPage).toHaveBeenCalledTimes(1);
-  });
-
-  it("records read-only Context page creation events with sanitized route fields", async () => {
-    let pages: unknown[] = [];
-    let pageListener: ((page: unknown) => void) | undefined;
-    const canonicalPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "https://creator.xiaohongshu.com/"), context: vi.fn() };
-    const secondPage = { isClosed: vi.fn(() => false), url: vi.fn(() => "https://creator.xiaohongshu.com/publish/publish?target=image&token=drop"), context: vi.fn() };
-    const context = {
-      setDefaultTimeout: vi.fn(),
-      on: vi.fn((event: string, listener: (page: unknown) => void) => { if (event === "page") pageListener = listener; }),
-      off: vi.fn(),
-      newPage: vi.fn(async () => canonicalPage),
-      pages: vi.fn(() => pages),
-      close: vi.fn(async () => undefined)
-    } as unknown as BrowserContext;
-    canonicalPage.context.mockReturnValue(context);
-    secondPage.context.mockReturnValue(context);
-    pages = [canonicalPage];
-    const browser = { newContext: vi.fn(async () => context), close: vi.fn(async () => undefined), isConnected: vi.fn(() => true) } as unknown as Browser;
-    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser: vi.fn(async () => browser) });
-    const identity = { platformKey: "xiaohongshu", accountId: "context-page-event-account" };
-    const session = await manager.open(identity, userAction);
-    pages = [canonicalPage, secondPage];
-    pageListener?.(secondPage);
-
-    const events = manager.getContextPageLifecycleEvents(identity);
-    expect(events).toHaveLength(1);
-    expect(events?.[0]).toMatchObject({ phase: "CONTEXT_PAGE_CREATED", accountId: identity.accountId, contextDebugId: session.contextDebugId, pageIndex: 1, pageCount: 2, pageUrlOrigin: "https://creator.xiaohongshu.com", pageUrlPathname: "/publish/publish" });
-    expect(JSON.stringify(events)).not.toMatch(/token|cookie|storage/iu);
   });
 
   it("keeps launch count stable when an existing canonical session is reused", async () => {

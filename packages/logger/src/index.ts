@@ -1,8 +1,6 @@
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { ActivityLog } from "@publisher/domain";
-
-const SENSITIVE_KEY = /^(authorization|bearer|api[_-]?key|apikey|appsecret|client[_-]?secret|secret|cookie|set-cookie|access[_-]?token|refresh[_-]?token|page[_-]?access[_-]?token|oauth[_-]?access[_-]?token|password|storagestate|token)$/iu;
+import { redactSecretText, redactSecretValue, type ActivityLog } from "@publisher/domain";
 
 export interface Logger {
   info(module: string, code: string, message: string, context?: Record<string, unknown>): void;
@@ -47,18 +45,11 @@ export async function exportLogBundle(input: { outputPath: string; applicationLo
 }
 
 export function sanitizeText(value: string): string {
-  return value
-    .replace(/("?(?:api[_-]?key|apikey|appsecret|client[_-]?secret|secret|cookie|set-cookie|authorization|access[_-]?token|refresh[_-]?token|page[_-]?access[_-]?token|oauth[_-]?access[_-]?token|storageState|token|password)"?\s*[:=]\s*")([^"\r\n]+)(")/giu, "$1[REDACTED]$3")
-    .replace(/([?&](?:api[_-]?key|apikey|appsecret|client[_-]?secret|access[_-]?token|refresh[_-]?token|page[_-]?access[_-]?token|oauth[_-]?access[_-]?token|token)=)[^&#\s]+/giu, "$1[REDACTED]")
-    .replace(/\b((?:access[_-]?token|refresh[_-]?token|api[_-]?key|appsecret|client[_-]?secret|page[_-]?access[_-]?token|oauth[_-]?access[_-]?token|token)\s*=\s*)(?!["'])[^&\s]+/giu, "$1[REDACTED]")
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer [REDACTED]");
+  return redactSecretText(value);
 }
 
 export function sanitizeValue(value: unknown): unknown {
-  if (typeof value === "string") return sanitizeText(value);
-  if (Array.isArray(value)) return value.map(sanitizeValue);
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => SENSITIVE_KEY.test(key) ? [key, "[REDACTED]"] : [key, sanitizeValue(item)]));
-  return value;
+  return redactSecretValue(value);
 }
 
 function makeStoredZip(files: Array<{ name: string; data: Uint8Array }>): Uint8Array {

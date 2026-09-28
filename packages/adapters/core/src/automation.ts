@@ -10,8 +10,6 @@ import type {
 } from "@publisher/domain";
 import type { BrowserSessionRuntimeSnapshot, BrowserSessionRuntimeState } from "./browser";
 import type { PlatformAdapter } from "./index";
-import type { OneShotPublicationAuthorization, OneShotPublicationAuthorizationState, OneShotPublicationGuard } from "./one-shot-publication";
-export type { OneShotPublicationAuthorization, OneShotPublicationGuard } from "./one-shot-publication";
 
 export interface AutomationPrepareResult {
   prepared: boolean;
@@ -25,129 +23,10 @@ export interface AutomationPrepareResult {
   response: Record<string, unknown>;
 }
 
-export type ControlledSelfTestMode = "POST_UPLOAD_DISCOVERY_ONLY" | "XHS_PUBLISH_FLOW_EXPLORATION";
-
-export interface PublishFlowExplorationInput {
-  imagePath: string;
-  imageSource: "SAFE_TEST_FIXTURE";
-  title: string;
-  body: string;
-  operationId?: string;
-  postUploadReadinessStrategy?: "LEGACY" | "TERMINAL_CLASSIFIER";
-  budgets?: Partial<PublishFlowExplorationBudgets>;
-}
-
-export interface OneShotRealPublishAcceptanceInput extends PublishFlowExplorationInput {
-  authorization: OneShotPublicationAuthorization;
-}
-
-export interface OneShotRealPublishAcceptanceResult {
-  operationId: string;
-  status: "PUBLISHED_VERIFIED" | "NEEDS_RECONCILIATION" | "PLATFORM_REJECTED" | "BLOCKED";
-  authorizationState: OneShotPublicationAuthorizationState;
-  publicationTransactionCount: number;
-  publicationCommitActionCount: number;
-  finalSubmitAttemptCount: number;
-  finalSubmitRetryCount: 0;
-  finalSubmitActionStarted: boolean;
-  finalSubmitActionCompleted: boolean;
-  postSubmitObservation: Record<string, unknown>;
-  publicationReconciled: boolean;
-  externalId: string | null;
-  externalUrl: string | null;
-  publicPageVerified: boolean;
-  response: Record<string, unknown>;
-}
-
-export interface PublishFlowExplorationBudgets {
-  maxDurationMs: number;
-  maxNavigationRestarts: number;
-  maxUploadAttempts: number;
-  maxIntermediateActionClicks: number;
-  maxRefreshCount: number;
-  maxTitleMutations: number;
-  maxBodyMutations: number;
-}
-
-export interface PublishFlowExplorationCounters {
-  navigationRestartCount: number;
-  refreshCount: number;
-  uploadAttempts: number;
-  uploadMutationCount: number;
-  uploadRetryCount: number;
-  intermediateActionClickCount: number;
-  titleMutationCount: number;
-  bodyMutationCount: number;
-  settingsMutationCount: number;
-  contentMutationCount: number;
-  finalSubmitCount: number;
-}
-
-export interface PublishFlowExplorationTimelineEntry {
-  timestamp: string;
-  url: string;
-  phase: string;
-  action: string;
-  result: string;
-}
-
-export interface PublishFlowFieldEvidence {
-  attempted: boolean;
-  mutationCount: number;
-  strategyCount: number;
-  readbackVerified: boolean;
-  readbackLength?: number;
-  readbackHash?: string;
-}
-
-export interface PublishFlowExplorationResult {
-  mode: "XHS_PUBLISH_FLOW_EXPLORATION";
-  status: "PASS_READY_FOR_FINAL_SUBMIT" | "BLOCKED" | "SAFETY_BOUNDARY_VIOLATION";
-  operationId: string;
-  platformKey: string;
-  accountId: string;
-  imageSource: "SAFE_TEST_FIXTURE";
-  sameCanonicalPage: boolean;
-  sameContext: boolean;
-  timeline: readonly PublishFlowExplorationTimelineEntry[];
-  states: readonly Record<string, unknown>[];
-  actions: readonly Record<string, unknown>[];
-  selectors: readonly Record<string, unknown>[];
-  counters: PublishFlowExplorationCounters;
-  /** Flattened safety counters are kept for audit consumers that do not unpack nested evidence. */
-  uploadAttempts: number;
-  uploadMutationCount: number;
-  uploadRetryCount: number;
-  intermediateActionClickCount: number;
-  titleMutationCount: number;
-  bodyMutationCount: number;
-  settingsMutationCount: number;
-  contentMutationCount: number;
-  finalSubmitCount: 0;
-  budgets: PublishFlowExplorationBudgets;
-  title: PublishFlowFieldEvidence;
-  titleReadbackVerified: boolean;
-  body: PublishFlowFieldEvidence;
-  bodyReadbackVerified: boolean;
-  requiredSettings: { status: string; mutations: readonly Record<string, unknown>[] };
-  finalSubmit: { status: string; visible: boolean; enabled: boolean; hitTestValid: boolean; label?: string };
-  /** Read-only stabilization evidence collected after a native picker cancel. */
-  afterPickerCancelUrl?: string;
-  afterPickerCancelWaitMs?: number;
-  finalControlDiscoveryRetryCount?: number;
-  finalControlFoundAfterWait?: boolean;
-  forbiddenMutationObserved: boolean;
-  blocker: string | null;
-  failureCode?: string | null;
-  failureStage?: string | null;
-  missingSignal?: string | null;
-  readyForFinalSubmit: boolean;
-  database?: { before: Record<string, number>; after: Record<string, number> };
-  evidence: Record<string, unknown>;
-}
+export type ControlledSelfTestMode = "POST_UPLOAD_DISCOVERY_ONLY";
 
 export interface ControlledPostUploadDiscoveryResult {
-  mode: "POST_UPLOAD_DISCOVERY_ONLY";
+  mode: ControlledSelfTestMode;
   status: "PASS" | "FAIL";
   operationId: string;
   platformKey: string;
@@ -306,13 +185,7 @@ export interface AutomationAdapter extends PlatformAdapter {
   /** Optional side-effect-free editor discovery. This must never call preparePublish or mutate content. */
   inspectPublishEditor?(ctx: AccountContext): Promise<PreSubmitGateResult>;
   /** Optional controlled upload-only self-test. It may upload exactly one approved fixture, then must stop before content mutation or final submit. */
-  runControlledPostUploadDiscovery?(ctx: AccountContext, input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE"; onUploadMutationStarted?: () => void }): Promise<ControlledPostUploadDiscoveryResult>;
-  /** Optional bounded XHS exploration. It must never activate final publication. */
-  runPublishFlowExploration?(ctx: AccountContext, input: PublishFlowExplorationInput): Promise<PublishFlowExplorationResult>;
-  /** Optional bounded recovery of an editor for an existing Prepared Job. It must never create persistence rows or submit. */
-  recoverPreparedEditor?(ctx: AccountContext, input: PublishFlowExplorationInput): Promise<PublishFlowExplorationResult>;
-  /** Explicit Task10S path. It must be XHS/account/operation scoped and use the supplied guard for the only real submit. */
-  runOneShotRealPublishAcceptance?(ctx: AccountContext, input: OneShotRealPublishAcceptanceInput & { oneShotPublicationGuard: OneShotPublicationGuard }): Promise<OneShotRealPublishAcceptanceResult>;
+  runControlledPostUploadDiscovery?(ctx: AccountContext, input: { imagePath: string; imageSource: "SAFE_TEST_FIXTURE" }): Promise<ControlledPostUploadDiscoveryResult>;
   preparePublish(ctx: AccountContext, article: PublishArticleInput): Promise<AutomationPrepareResult>;
   verifyPublish(ctx: AccountContext, externalId?: string): Promise<PublishStatusResult>;
   logout(ctx: AccountContext): Promise<void>;
@@ -320,6 +193,8 @@ export interface AutomationAdapter extends PlatformAdapter {
   releaseOperationSession?(ctx: AccountContext): Promise<void>;
   /** Releases the visible login-only session after account identity has been persisted. */
   releaseConnectionSession?(ctx: AccountContext): Promise<void>;
+  /** Closes only an already active runtime; saved authorization remains intact. */
+  closeRuntimeSession?(ctx: AccountContext): Promise<void>;
   /** Releases only the visible connection Page while retaining the owned Context when supported. */
   releaseConnectionPage?(ctx: AccountContext): Promise<void>;
   /** Persists a deferred visible login Session after same-Page identity readback. */
