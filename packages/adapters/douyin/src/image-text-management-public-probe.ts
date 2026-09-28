@@ -14,6 +14,11 @@ export interface DouyinManagementPublicProbe {
   publicTitleMatch: boolean;
   publicMarkerMatch: boolean;
   publicImageEvidence: boolean;
+  observedPageHost: string | null;
+  observedPagePath: string | null;
+  popupOpened: boolean;
+  visibleWorkLinkPaths: Array<{ host: string; path: string; exactRemoteIdInPath: boolean }>;
+  visibleDialogCount: number;
 }
 
 const managementUrl = "https://creator.douyin.com/creator-micro/content/manage";
@@ -34,7 +39,9 @@ export async function probeDouyinPublishedCardPublicUrl(page: Page, context: Bro
     attempted: false, reason, exactTargetCardCount: 0, cardState: null, cardTime: null,
     cardTimeMatchesBoundary: false, actualPublicUrl: null, actualRemoteId: null,
     exactRemoteIdMatch: false, publicReachable: false, publicTitleMatch: false,
-    publicMarkerMatch: false, publicImageEvidence: false, ...details });
+    publicMarkerMatch: false, publicImageEvidence: false, observedPageHost: null,
+    observedPagePath: null, popupOpened: false, visibleWorkLinkPaths: [], visibleDialogCount: 0,
+    ...details });
   if (page.isClosed() || page.context() !== context || !context.pages().includes(page)) return empty("CONTEXT_MISMATCH");
   if (!/^\d{10,30}$/u.test(input.remoteId) || !input.title || !/^DYCORE[A-Za-z0-9]{4,32}$/u.test(input.marker))
     return empty("TARGET_INVALID");
@@ -77,15 +84,28 @@ export async function probeDouyinPublishedCardPublicUrl(page: Page, context: Bro
     if (observed.url() === "about:blank") await observed.waitForURL((url) => url.toString() !== "about:blank", { timeout: 8_000 });
     await observed.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => undefined);
     const parsed = new URL(observed.url());
+    const viewTopology = await observed.evaluate((targetId) => ({
+      visibleDialogCount: [...document.querySelectorAll<HTMLElement>('[role="dialog"],[class*="modal"],[class*="dialog"]')]
+        .filter((element) => { const box = element.getBoundingClientRect(); return box.width > 0 && box.height > 0; }).length,
+      visibleWorkLinkPaths: [...document.querySelectorAll<HTMLAnchorElement>('a[href]')]
+        .filter((element) => { const box = element.getBoundingClientRect(); return box.width > 0 && box.height > 0; })
+        .map((element) => { try { const url = new URL(element.href);
+          return { host: url.host, path: url.pathname.slice(0, 150),
+            exactRemoteIdInPath: url.pathname.split("/").includes(targetId) }; } catch { return null; } })
+        .filter((value): value is { host: string; path: string; exactRemoteIdInPath: boolean } => value !== null)
+        .filter((value) => /\/(?:note|video)\//u.test(value.path)).slice(0, 12)
+    }), input.remoteId).catch(() => ({ visibleDialogCount: 0, visibleWorkLinkPaths: [] }));
+    const viewDetails = { ...details, attempted: true, observedPageHost: parsed.host,
+      observedPagePath: parsed.pathname.slice(0, 150), popupOpened: Boolean(popup), ...viewTopology };
     const actualRemoteId = parsed.protocol === "https:" && (parsed.hostname === "douyin.com" || parsed.hostname.endsWith(".douyin.com"))
       ? publicPath.exec(parsed.pathname)?.[1] ?? null : null;
     const actualPublicUrl = actualRemoteId ? `${parsed.origin}${parsed.pathname}` : null;
-    if (!actualPublicUrl) return empty("COVER_DID_NOT_OPEN_PUBLIC_WORK", { ...details, attempted: true });
+    if (!actualPublicUrl) return empty("COVER_DID_NOT_OPEN_PUBLIC_WORK", viewDetails);
     const evidence = await observed.evaluate(({ title, marker }) => ({
       title: document.body.innerText.includes(title), marker: document.body.innerText.includes(marker),
       images: [...document.images].some((image) => image.complete && image.naturalWidth > 0)
     }), { title: input.title, marker: input.marker }).catch(() => ({ title: false, marker: false, images: false }));
-    return { ...empty(actualRemoteId === input.remoteId ? "ACTUAL_PUBLIC_WORK_OPENED" : "PUBLIC_REMOTE_ID_MISMATCH", details),
+    return { ...empty(actualRemoteId === input.remoteId ? "ACTUAL_PUBLIC_WORK_OPENED" : "PUBLIC_REMOTE_ID_MISMATCH", viewDetails),
       attempted: true, actualPublicUrl, actualRemoteId, exactRemoteIdMatch: actualRemoteId === input.remoteId,
       publicReachable: true, publicTitleMatch: evidence.title, publicMarkerMatch: evidence.marker,
       publicImageEvidence: evidence.images };

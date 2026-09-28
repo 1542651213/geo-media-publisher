@@ -83,4 +83,15 @@ describe.skipIf(!existsSync(chrome))("Douyin exact-card read-only public view", 
     expect(result).toMatchObject({ attempted: true, exactTargetCardCount: 1,
       exactRemoteIdMatch: true });
   }, 20_000);
+
+  it("records a bounded view dialog and actual link without treating it as an opened public URL", async () => {
+    const modalCard = card().replace(/window\.open\([^;]+\)/u, "document.querySelector('#view').hidden=false");
+    const { context, page } = await fixture([modalCard,
+      `<div id="view" role="dialog" hidden><a href="https://www.douyin.com/note/${remoteId}">查看</a></div>`]);
+    const result = await probeDouyinPublishedCardPublicUrl(page, context, {
+      remoteId, title, marker, submitBoundaryEnteredAt: submittedAt });
+    expect(result).toMatchObject({ attempted: true, reason: "COVER_DID_NOT_OPEN_PUBLIC_WORK",
+      observedPagePath: "/creator-micro/content/manage", visibleDialogCount: 1,
+      visibleWorkLinkPaths: [expect.objectContaining({ exactRemoteIdInPath: true })] });
+  }, 20_000);
 });
