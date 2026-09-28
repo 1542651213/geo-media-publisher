@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BrowserSessionManager } from "@publisher/adapters-core";
 import type { BrowserSession } from "@publisher/adapters-core";
-import { classifySohuControlCandidate, classifySohuDiscovery, diffSohuDomSnapshots, shouldAllowSohuDirectSubmitPreflight, SohuBrowserAdapter, type SohuDeepDomCandidate, type SohuDeepDomSnapshot } from "./browser";
+import { classifySohuArticleStatus, classifySohuControlCandidate, classifySohuDiscovery, diffSohuDomSnapshots, matchSohuArticleCandidates, mergeSohuReconciliationSnapshots, parseSohuListStatusCounts, shouldAllowSohuDirectSubmitPreflight, SohuBrowserAdapter, type SohuDeepDomCandidate, type SohuDeepDomSnapshot, type SohuReconciliationCandidate, type SohuReconciliationSnapshot } from "./browser";
 
 const sessionManager = {
   hasStoredSession: vi.fn(() => true),
@@ -12,8 +12,11 @@ const sessionManager = {
 
 type ReconciliationFixture = {
   pageEvidence: Record<string, unknown>;
-  candidates: Array<{ href: string; context: string; label: string; externalId: string | null }>;
+  candidates: Array<{ href?: string | null; context: string; label?: string; externalId?: string | null; title?: string; status?: SohuReconciliationCandidate["status"]; statusText?: string }>;
   initialUrl?: string;
+  publicHeading?: string;
+  publicPageTitle?: string;
+  publicBody?: string;
 };
 
 function fakeReconciliationPage(fixture: ReconciliationFixture) {
@@ -27,11 +30,18 @@ function fakeReconciliationPage(fixture: ReconciliationFixture) {
   const emptyLocator = () => ({
     count: async () => 0,
     nth: () => emptyLocator(),
+    first: () => emptyLocator(),
     filter: () => emptyLocator(),
     isVisible: async () => false,
     isEnabled: async () => false,
     getAttribute: async () => null,
     innerText: async () => ""
+  });
+  const publicLocator = (text: string) => ({
+    ...emptyLocator(),
+    count: async () => 1,
+    first: () => publicLocator(text),
+    innerText: async () => text
   });
   const entryLocator = {
     count: async () => 1,
@@ -47,9 +57,10 @@ function fakeReconciliationPage(fixture: ReconciliationFixture) {
   return {
     goto: async (url: string) => { currentUrl = url; },
     url: () => currentUrl,
+    title: async () => fixture.publicPageTitle ?? "",
     waitForFunction: async () => undefined,
     waitForTimeout: async () => undefined,
-    locator: (selector: string) => selector === "button" || selector === "body *" ? emptyLocator() : entryLocator,
+    locator: (selector: string) => currentUrl.startsWith("https://www.sohu.com/") && selector === "h1" ? publicLocator(fixture.publicHeading ?? "") : currentUrl.startsWith("https://www.sohu.com/") && selector === "body" ? publicLocator(fixture.publicBody ?? "") : selector === "button" || selector === "body *" ? emptyLocator() : entryLocator,
     getByText: () => emptyLocator(),
     evaluate: async () => {
       evaluateCount += 1;
@@ -85,6 +96,244 @@ const completeEvidence = {
 const reconciliationContext = { accountId: "account-1", accountName: "搜狐号账号", platformKey: "sohu_media", settings: { browserExecutionMode: "VISIBLE" } };
 
 describe("Sohu browser article adapter", () => {
+  const reconciliationCandidate = (overrides: Partial<SohuReconciliationCandidate> = {}): SohuReconciliationCandidate => ({
+    title: "Geo Media Publisher 发布链路测试",
+    status: "Unknown",
+    statusText: "Geo Media Publisher 发布链路测试 2026-08-25 11:37",
+    timeText: "2026-08-25 11:37",
+    href: null,
+    externalId: null,
+    articleId: "sohu-article-1",
+    summary: "Geo Media Publisher 内部发布链路测试",
+    context: "Geo Media Publisher 发布链路测试 2026-08-25 11:37 Geo Media Publisher 内部发布链路测试",
+    tab: "文章",
+    actionLabels: ["查看"],
+    dataAttributes: { "data-content-id": "sohu-article-1" },
+    ...overrides
+  });
+
+  const reconciliationSnapshot = (candidates: SohuReconciliationCandidate[], overrides: Partial<SohuReconciliationSnapshot> = {}): SohuReconciliationSnapshot => ({
+    pageUrl: "https://mp.sohu.com/mpfe/v4/contentManagement/first/page?newsType=1",
+    tab: "文章",
+    pageIndex: 1,
+    lazyLoadPass: 0,
+    searchUsed: false,
+    candidates,
+    ...overrides
+  });
+
+  it("classifies Sohu article review states from row semantics", () => {
+    expect(classifySohuArticleStatus("Geo Media Publisher 发布链路测试 审核中")).toBe("PendingReview");
+    expect(classifySohuArticleStatus("Geo Media Publisher 发布链路测试 已发布")).toBe("Published");
+    expect(classifySohuArticleStatus("Geo Media Publisher 发布链路测试 未通过：内容不符合规范")).toBe("Rejected");
+    expect(classifySohuArticleStatus("Geo Media Publisher 发布链路测试 草稿")).toBe("Draft");
+  });
+
+  it("returns a unique pending-review match without requiring an external URL", () => {
+    const result = matchSohuArticleCandidates([reconciliationCandidate({ status: "PendingReview" })], {
+      title: "Geo Media Publisher 发布链路测试",
+      windowStart: "2026-08-25T02:00:00.000Z",
+      windowEnd: "2026-08-25T04:00:00.000Z"
+    });
+    expect(result).toMatchObject({ classification: "UNIQUE", candidate: { status: "PendingReview", externalId: null }, timeWindowMatch: true });
+  });
+
+  it("returns PendingReview from a real management-row observation", async () => {
+    const title = "Geo Media Publisher 发布链路测试";
+    const { adapter } = setupReconciliation({
+      pageEvidence: { ...completeEvidence, titleOccurrenceCount: 1, bodyText: `${completeEvidence.bodyText} ${title}` },
+      candidates: [{ title, status: "PendingReview", href: null, context: `${title} 2026-08-25 11:37 审核中`, label: "查看" }]
+    });
+    const result = await adapter.reconcile(reconciliationContext, { jobId: "job-1", articleId: "article-1", title, accountName: "搜狐号账号", windowStart: "2026-08-25T02:00:00.000Z", windowEnd: "2026-08-25T04:00:00.000Z", finalSubmitCount: 1 });
+    expect(result).toMatchObject({ status: "STILL_UNCERTAIN", titleMatch: true, timeWindowMatch: true, response: { matchedBy: "exact_title_pending_review", platformStatus: "PendingReview" } });
+    expect(result.message).toContain("SOHU_REAL_PUBLISH_PENDING_REVIEW");
+  });
+
+  it("returns a unique published match with an external URL", () => {
+    const result = matchSohuArticleCandidates([reconciliationCandidate({ status: "Published", href: "https://www.sohu.com/a/123456789_1", externalId: "123456789" })], {
+      title: "Geo Media Publisher 发布链路测试",
+      windowStart: "2026-08-25T02:00:00.000Z",
+      windowEnd: "2026-08-25T04:00:00.000Z"
+    });
+    expect(result).toMatchObject({ classification: "UNIQUE", candidate: { status: "Published", externalId: "123456789", href: "https://www.sohu.com/a/123456789_1" }, timeWindowMatch: true });
+  });
+
+  it("uses the target article row status instead of page-level 未通过 counts", async () => {
+    const title = "Geo Media Publisher 发布链路测试";
+    const listSummary = "全部1已发布1审核中0未通过0草稿0定时发布0";
+    const { adapter } = setupReconciliation({
+      pageEvidence: { ...completeEvidence, titleOccurrenceCount: 1, bodyText: `${completeEvidence.bodyText} ${listSummary}` },
+      candidates: [{ title, context: `${listSummary} ${title} 2026-08-25 13:58 已发布 查看`, statusText: `${title} 2026-08-25 13:58 已发布`, href: "https://www.sohu.com/a/1234567890_122970301", externalId: "1234567890", label: "查看" }]
+    });
+    const result = await adapter.reconcile(reconciliationContext, { jobId: "job-1", articleId: "article-1", title, accountName: "搜狐号账号", windowStart: "2026-08-25T05:00:00.000Z", windowEnd: "2026-08-25T06:00:00.000Z" });
+    expect(result).toMatchObject({ status: "FOUND_PUBLISHED", externalId: "1234567890", publishedUrl: "https://www.sohu.com/a/1234567890_122970301", response: { platformStatus: "Published" } });
+    expect(result.message).not.toContain("SOHU_REAL_PUBLISH_REJECTED");
+  });
+
+  it("uses unique target-row evidence plus published-list counts as auxiliary evidence", async () => {
+    const title = "Geo Media Publisher 发布链路测试";
+    const listSummary = "全部1已发布1审核中0未通过0草稿0定时发布0";
+    const href = "https://www.sohu.com/a/1234567890_122970301";
+    const { adapter } = setupReconciliation({
+      pageEvidence: { ...completeEvidence, titleOccurrenceCount: 1, bodyText: `${completeEvidence.bodyText} ${listSummary}` },
+      candidates: [{ title, status: "Unknown", statusText: "阅读 0 评论 0 编辑 更多", context: `${listSummary} ${title} 2026-08-25 13:58 本内容用于公司内部验证。 阅读 0 评论 0 编辑 更多`, href, externalId: "1234567890", label: "查看" }]
+    });
+    const result = await adapter.reconcile(reconciliationContext, { jobId: "job-1", articleId: "article-1", title, accountName: "搜狐号账号", windowStart: "2026-08-25T05:00:00.000Z", windowEnd: "2026-08-25T06:00:00.000Z" });
+    expect(result).toMatchObject({ status: "FOUND_PUBLISHED", externalId: "1234567890", publishedUrl: href, response: { matchedBy: "exact_title_unique_published_list_auxiliary", platformStatus: "Published", candidate: { statusSource: "list_level_auxiliary" } } });
+  });
+
+  it("takes the current maximum from repeated list-count renderings without using it as row status", () => {
+    expect(parseSohuListStatusCounts([
+      "全部0已发布0审核中0未通过0草稿0定时发布0",
+      "全部1已发布1审核中0未通过0草稿0定时发布0 公告 全部 08-25搜狐号本周安全小贴士"
+    ])).toEqual({ 全部: 1, 已发布: 1, 审核中: 0, 未通过: 0, 草稿: 0, 定时发布: 0 });
+    expect(classifySohuArticleStatus("Geo Media Publisher 发布链路测试 阅读 0 评论 0 编辑 更多")).toBe("Unknown");
+  });
+
+  it("returns Rejected only when the target row itself says 未通过", async () => {
+    const title = "Geo Media Publisher 发布链路测试";
+    const { adapter } = setupReconciliation({
+      pageEvidence: { ...completeEvidence, titleOccurrenceCount: 1, bodyText: `${completeEvidence.bodyText} 全部1已发布1审核中0未通过0草稿0定时发布0` },
+      candidates: [{ title, context: `${title} 2026-08-25 13:58 未通过`, statusText: `${title} 2026-08-25 13:58 未通过`, href: null, externalId: null, label: "查看" }]
+    });
+    const result = await adapter.reconcile(reconciliationContext, { jobId: "job-1", articleId: "article-1", title, accountName: "搜狐号账号", windowStart: "2026-08-25T05:00:00.000Z", windowEnd: "2026-08-25T06:00:00.000Z" });
+    expect(result).toMatchObject({ status: "STILL_UNCERTAIN", response: { matchedBy: "exact_title_platform_rejected", platformStatus: "Rejected" } });
+    expect(result.message).toContain("SOHU_REAL_PUBLISH_REJECTED");
+  });
+
+  it("enriches a published target row with its unique matching management href", async () => {
+    const title = "Geo Media Publisher 发布链路测试";
+    const href = "https://www.sohu.com/a/1234567890_122970301";
+    const { adapter } = setupReconciliation({
+      pageEvidence: { ...completeEvidence, titleOccurrenceCount: 1, matchingTitleHrefs: [href], matchingTitleExternalIds: ["1234567890"], bodyText: `${completeEvidence.bodyText} ${title}` },
+      candidates: [{ title, status: "Published", statusText: `${title} 2026-08-25 13:58 已发布`, context: `${title} 2026-08-25 13:58 已发布 查看`, href: null, externalId: null, label: "查看" }]
+    });
+    const result = await adapter.reconcile(reconciliationContext, { jobId: "job-1", articleId: "article-1", title, accountName: "搜狐号账号", windowStart: "2026-08-25T05:00:00.000Z", windowEnd: "2026-08-25T06:00:00.000Z" });
+    expect(result).toMatchObject({ status: "FOUND_PUBLISHED", externalId: "1234567890", publishedUrl: href, response: { platformStatus: "Published" } });
+  });
+
+  it("does not let another article row's Rejected status affect the exact-title match", () => {
+    const result = matchSohuArticleCandidates([
+      reconciliationCandidate({ status: "Published" }),
+      reconciliationCandidate({ title: "另一个文章", status: "Rejected", articleId: "sohu-article-2" })
+    ], {
+      title: "Geo Media Publisher 发布链路测试",
+      windowStart: "2026-08-25T02:00:00.000Z",
+      windowEnd: "2026-08-25T04:00:00.000Z"
+    });
+    expect(result).toMatchObject({ classification: "UNIQUE", candidate: { title: "Geo Media Publisher 发布链路测试", status: "Published" } });
+  });
+
+  it("verifies a published external URL by reading the public page title", async () => {
+    const title = "Geo Media Publisher 发布链路测试";
+    const { adapter } = setupReconciliation({
+      pageEvidence: { ...completeEvidence, titleOccurrenceCount: 1, bodyText: `${completeEvidence.bodyText} ${title}` },
+      candidates: [{ href: "https://www.sohu.com/a/123456789_1", context: `${title} 2026-08-25 11:37 已发布`, label: "查看", externalId: "123456789" }],
+      publicHeading: title,
+      publicPageTitle: title,
+      publicBody: title
+    });
+    const reconciliation = await adapter.reconcile(reconciliationContext, { jobId: "job-1", articleId: "article-1", title, accountName: "搜狐号账号", windowStart: "2026-08-25T02:00:00.000Z", windowEnd: "2026-08-25T04:00:00.000Z" });
+    const verification = await adapter.verifyPublished(reconciliationContext, { articleId: "article-1", title, body: "正文", summary: "", tags: [] }, { externalId: reconciliation.externalId, publishedUrl: reconciliation.publishedUrl });
+    expect(verification).toMatchObject({ status: "published", externalId: "123456789", publishedUrl: "https://www.sohu.com/a/123456789_1", response: { titleMatch: true, urlReachable: true } });
+  });
+
+  it("does not verify a published result when the public page title cannot be read", async () => {
+    const title = "Geo Media Publisher 发布链路测试";
+    const { adapter } = setupReconciliation({
+      pageEvidence: { ...completeEvidence, titleOccurrenceCount: 1, bodyText: `${completeEvidence.bodyText} ${title}` },
+      candidates: [{ href: "https://www.sohu.com/a/123456789_1", context: `${title} 2026-08-25 11:37 已发布`, label: "查看", externalId: "123456789" }],
+      publicHeading: "404",
+      publicPageTitle: "404",
+      publicBody: "页面不存在"
+    });
+    const reconciliation = await adapter.reconcile(reconciliationContext, { jobId: "job-1", articleId: "article-1", title, accountName: "搜狐号账号", windowStart: "2026-08-25T02:00:00.000Z", windowEnd: "2026-08-25T04:00:00.000Z" });
+    const verification = await adapter.verifyPublished(reconciliationContext, { articleId: "article-1", title, body: "正文", summary: "", tags: [] }, { externalId: reconciliation.externalId, publishedUrl: reconciliation.publishedUrl });
+    expect(verification.status).toBe("failed");
+    expect(verification.errorCode).toBe("RECONCILIATION_UNCERTAIN");
+  });
+
+  it("keeps rejected and draft matches non-publishable", () => {
+    for (const status of ["Rejected", "Draft"] as const) {
+      const result = matchSohuArticleCandidates([reconciliationCandidate({ status })], {
+        title: "Geo Media Publisher 发布链路测试",
+        windowStart: "2026-08-25T02:00:00.000Z",
+        windowEnd: "2026-08-25T04:00:00.000Z"
+      });
+      expect(result).toMatchObject({ classification: "UNIQUE", candidate: { status } });
+      expect(result.candidate?.status).not.toBe("Published");
+    }
+  });
+
+  it("reports duplicate exact-title rows as ambiguous instead of selecting the first", () => {
+    const result = matchSohuArticleCandidates([
+      reconciliationCandidate({ articleId: "sohu-article-1", href: "https://www.sohu.com/a/123456789_1", externalId: "123456789", status: "Published" }),
+      reconciliationCandidate({ articleId: "sohu-article-2", href: "https://www.sohu.com/a/987654321_1", externalId: "987654321", status: "Published" })
+    ], {
+      title: "Geo Media Publisher 发布链路测试",
+      windowStart: "2026-08-25T02:00:00.000Z",
+      windowEnd: "2026-08-25T04:00:00.000Z"
+    });
+    expect(result.classification).toBe("AMBIGUOUS");
+    expect(result.candidate).toBeUndefined();
+    expect(result.candidates).toHaveLength(2);
+  });
+
+  it("merges a target found on the second page and after lazy loading", () => {
+    const target = reconciliationCandidate({ status: "Published", href: "https://www.sohu.com/a/123456789_1", externalId: "123456789" });
+    const snapshots = mergeSohuReconciliationSnapshots([
+      reconciliationSnapshot([], { pageIndex: 1 }),
+      reconciliationSnapshot([], { pageIndex: 2 }),
+      reconciliationSnapshot([target], { pageIndex: 2, lazyLoadPass: 1 })
+    ]);
+    const result = matchSohuArticleCandidates(snapshots.candidates, {
+      title: "Geo Media Publisher 发布链路测试",
+      windowStart: "2026-08-25T02:00:00.000Z",
+      windowEnd: "2026-08-25T04:00:00.000Z"
+    });
+    expect(result.classification).toBe("UNIQUE");
+    expect(result.candidate?.externalId).toBe("123456789");
+    expect(snapshots.paginationChecked).toBe(true);
+    expect(snapshots.lazyLoadChecked).toBe(true);
+  });
+
+  it("keeps the known Published row status discovered after an Unknown 全部 row", () => {
+    const href = "https://www.sohu.com/a/1234567890_122970301";
+    const merged = mergeSohuReconciliationSnapshots([
+      reconciliationSnapshot([reconciliationCandidate({ status: "Unknown", statusText: "阅读 0 评论 0 编辑 更多", href, externalId: "1234567890" })], { tab: "全部" }),
+      reconciliationSnapshot([reconciliationCandidate({ status: "Published", statusText: "2026-08-25 13:58 已发布", href, externalId: "1234567890" })], { tab: "已发布" })
+    ]);
+    expect(merged.candidates).toHaveLength(1);
+    expect(merged.candidates[0]).toMatchObject({ status: "Published", tab: "已发布", href, externalId: "1234567890" });
+  });
+
+  it("finds a target revealed after switching from the default filter", () => {
+    const target = reconciliationCandidate({ status: "PendingReview" });
+    const snapshots = mergeSohuReconciliationSnapshots([
+      reconciliationSnapshot([], { tab: "全部", searchUsed: false }),
+      reconciliationSnapshot([target], { tab: "文章", searchUsed: true })
+    ]);
+    const result = matchSohuArticleCandidates(snapshots.candidates, {
+      title: "Geo Media Publisher 发布链路测试",
+      windowStart: "2026-08-25T02:00:00.000Z",
+      windowEnd: "2026-08-25T04:00:00.000Z"
+    });
+    expect(result.classification).toBe("UNIQUE");
+    expect(result.candidate?.status).toBe("PendingReview");
+    expect(snapshots.tabsChecked).toBe(true);
+    expect(snapshots.searchUsed).toBe(true);
+  });
+
+  it("returns no match without converting it into a publish failure", () => {
+    const result = matchSohuArticleCandidates([], {
+      title: "Geo Media Publisher 发布链路测试",
+      windowStart: "2026-08-25T02:00:00.000Z",
+      windowEnd: "2026-08-25T04:00:00.000Z"
+    });
+    expect(result.classification).toBe("NONE");
+    expect(result.candidate).toBeUndefined();
+  });
+
   const candidate = (overrides: Partial<SohuDeepDomCandidate> = {}): SohuDeepDomCandidate => ({
     tag: "button",
     text: "",
@@ -163,6 +412,7 @@ describe("Sohu browser article adapter", () => {
   });
 
   it("keeps final submit fail-closed until the verified visible editor session exists", async () => {
+    sessionManager.open = vi.fn();
     const adapter = new SohuBrowserAdapter({ sessionManager });
     await expect(adapter.finalSubmit(
       { accountId: "account-1", accountName: "搜狐号账号", platformKey: "sohu_media", settings: {} },
@@ -202,5 +452,13 @@ describe("Sohu browser article adapter", () => {
     });
     expect(result.status).toBe("STILL_UNCERTAIN");
     expect(result.message).toContain("DOM 未完整加载");
+  });
+
+  it("does not call finalSubmit during reconciliation and preserves the persisted count", async () => {
+    const { adapter } = setupReconciliation({ pageEvidence: completeEvidence, candidates: [] });
+    const finalSubmit = vi.spyOn(adapter, "finalSubmit");
+    const result = await adapter.reconcile(reconciliationContext, { jobId: "job-1", articleId: "article-1", title: "Geo Media Publisher 发布链路测试", accountName: "搜狐号账号", windowStart: "2026-08-25T02:00:00.000Z", windowEnd: "2026-08-25T04:00:00.000Z", finalSubmitCount: 1 });
+    expect(finalSubmit).not.toHaveBeenCalled();
+    expect(result.response).toMatchObject({ finalSubmitEvidence: { finalSubmitCount: 1, noSecondSubmit: true } });
   });
 });

@@ -38,6 +38,143 @@ type SohuPublicCandidate = {
   externalId: string | null;
 };
 
+export type SohuReconciliationArticleStatus = "PendingReview" | "Published" | "Rejected" | "Draft" | "Unknown";
+
+export type SohuReconciliationCandidate = {
+  title: string;
+  status: SohuReconciliationArticleStatus;
+  statusSource?: "row" | "list_level_auxiliary";
+  statusText: string;
+  timeText: string;
+  href: string | null;
+  externalId: string | null;
+  articleId: string | null;
+  summary: string | null;
+  context: string;
+  tab: string;
+  actionLabels: string[];
+  dataAttributes: Record<string, string>;
+};
+
+export type SohuReconciliationSnapshot = {
+  pageUrl: string;
+  tab: string;
+  pageIndex: number;
+  lazyLoadPass: number;
+  searchUsed: boolean;
+  candidates: SohuReconciliationCandidate[];
+};
+
+export type SohuArticleMatchResult = {
+  classification: "UNIQUE" | "AMBIGUOUS" | "NONE";
+  candidates: Array<SohuReconciliationCandidate & { timeWindowMatch: boolean }>;
+  candidate?: SohuReconciliationCandidate & { timeWindowMatch: boolean };
+  timeWindowMatch: boolean;
+};
+
+export function classifySohuArticleStatus(text: string): SohuReconciliationArticleStatus {
+  const normalized = text.replace(/(?:全部|已发布|审核中|未通过|草稿|定时发布)\s*\d+/gu, " ").replace(/\s+/gu, " ").trim();
+  if (/未通过|审核失败|拒绝|被拒/iu.test(normalized)) return "Rejected";
+  if (/草稿/iu.test(normalized)) return "Draft";
+  if (/审核中|待审核|审核/iu.test(normalized)) return "PendingReview";
+  if (/已发布|发布成功|公开/iu.test(normalized)) return "Published";
+  return "Unknown";
+}
+
+const SOHU_LIST_STATUS_LABELS = ["全部", "已发布", "审核中", "未通过", "草稿", "定时发布"] as const;
+
+export function parseSohuListStatusCounts(texts: readonly string[]): Record<string, number | null> {
+  const groups = texts.flatMap((text) => [...text.matchAll(/全部\s*([0-9]+)\s*已发布\s*([0-9]+)\s*审核中\s*([0-9]+)\s*未通过\s*([0-9]+)\s*草稿\s*([0-9]+)\s*定时发布\s*([0-9]+)/gu)]);
+  return Object.fromEntries(SOHU_LIST_STATUS_LABELS.map((label, index) => {
+    const values = groups.map((group) => Number(group[index + 1])).filter((value) => Number.isInteger(value));
+    return [label, values.length > 0 ? Math.max(...values) : null];
+  }));
+}
+
+function mergeSohuListStatusCounts(...counts: readonly Record<string, number | null>[]): Record<string, number | null> {
+  return Object.fromEntries(SOHU_LIST_STATUS_LABELS.map((label) => {
+    const values = counts.map((entry) => entry[label]).filter((value): value is number => typeof value === "number" && Number.isInteger(value));
+    return [label, values.length > 0 ? Math.max(...values) : null];
+  }));
+}
+
+function normalizeSohuMatchText(value: string): string {
+  return value.replace(/\s+/gu, " ").trim();
+}
+
+export function mergeSohuReconciliationSnapshots(snapshots: readonly SohuReconciliationSnapshot[]): {
+  candidates: SohuReconciliationCandidate[];
+  searchUsed: boolean;
+  paginationChecked: boolean;
+  lazyLoadChecked: boolean;
+  tabsChecked: boolean;
+} {
+  const candidates = new Map<string, SohuReconciliationCandidate>();
+  for (const snapshot of snapshots) {
+    for (const candidate of snapshot.candidates) {
+      const observedCandidate = { ...candidate, tab: snapshot.tab };
+      const key = observedCandidate.articleId?.trim() || observedCandidate.href?.trim() || `${observedCandidate.title}|${observedCandidate.timeText}|${observedCandidate.tab}|${observedCandidate.context}`;
+      const existing = candidates.get(key);
+      if (!existing) {
+        candidates.set(key, observedCandidate);
+        continue;
+      }
+      const statusConflict = existing.status !== "Unknown" && observedCandidate.status !== "Unknown" && existing.status !== observedCandidate.status;
+      if (statusConflict) {
+        candidates.set(`${key}|${observedCandidate.status}`, observedCandidate);
+        continue;
+      }
+      const knownStatusIsRicher = existing.status === "Unknown" && observedCandidate.status !== "Unknown";
+      const sameStatusHasRicherEvidence = existing.status === observedCandidate.status && ((!existing.href && observedCandidate.href) || (!existing.externalId && observedCandidate.externalId));
+      if (knownStatusIsRicher || sameStatusHasRicherEvidence) candidates.set(key, observedCandidate);
+    }
+  }
+  return {
+    candidates: [...candidates.values()],
+    searchUsed: snapshots.some((snapshot) => snapshot.searchUsed),
+    paginationChecked: snapshots.some((snapshot) => snapshot.pageIndex > 1),
+    lazyLoadChecked: snapshots.some((snapshot) => snapshot.lazyLoadPass > 0),
+    tabsChecked: new Set(snapshots.map((snapshot) => snapshot.tab)).size > 1
+  };
+}
+
+function parseSohuDate(value: string, referenceYear: number): number | null {
+  const full = value.match(/(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})(?:日)?(?:\s+|T)?(\d{1,2}:\d{2}(?::\d{2})?)?/u);
+  if (full) {
+    const parsed = Date.parse(`${full[1]}-${full[2].padStart(2, "0")}-${full[3].padStart(2, "0")}${full[4] ? `T${full[4]}` : "T00:00:00"}`);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  const monthDay = value.match(/(\d{1,2})[-/.月](\d{1,2})(?:日)?(?:\s+)(\d{1,2}):(\d{2})/u);
+  if (!monthDay) return null;
+  const localValue = `${referenceYear}-${monthDay[1].padStart(2, "0")}-${monthDay[2].padStart(2, "0")}T${monthDay[3].padStart(2, "0")}:${monthDay[4]}:00`;
+  const localParsed = Date.parse(localValue);
+  const beijingParsed = Date.UTC(referenceYear, Number(monthDay[1]) - 1, Number(monthDay[2]), Number(monthDay[3]), Number(monthDay[4])) - 8 * 60 * 60 * 1000;
+  return [localParsed, beijingParsed].find((parsed) => Number.isFinite(parsed)) ?? null;
+}
+
+export function sohuTimeWindowMatches(context: string, windowStart: number, windowEnd: number): boolean {
+  if (!Number.isFinite(windowStart) || !Number.isFinite(windowEnd)) return false;
+  if (/刚刚|分钟前|今天|昨天/iu.test(context)) return true;
+  const referenceYear = new Date(windowStart).getUTCFullYear();
+  const values = context.match(/\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}(?:日)?(?:\s+|T)?\d{0,2}:?\d{0,2}:?\d{0,2}|\d{1,2}[-/.月]\d{1,2}(?:日)?\s+\d{1,2}:\d{2}/gu) ?? [];
+  return values.some((value) => {
+    const parsed = parseSohuDate(value, referenceYear);
+    return parsed !== null && parsed >= windowStart && parsed <= windowEnd;
+  });
+}
+
+export function matchSohuArticleCandidates(candidates: readonly SohuReconciliationCandidate[], input: { title: string; windowStart: string; windowEnd: string }): SohuArticleMatchResult {
+  const expectedTitle = normalizeSohuMatchText(input.title);
+  const windowStart = Date.parse(input.windowStart);
+  const windowEnd = Date.parse(input.windowEnd);
+  const exact = candidates
+    .filter((candidate) => normalizeSohuMatchText(candidate.title) === expectedTitle)
+    .map((candidate) => ({ ...candidate, timeWindowMatch: sohuTimeWindowMatches(`${candidate.timeText} ${candidate.context}`, windowStart, windowEnd) }));
+  if (exact.length === 0) return { classification: "NONE", candidates: [], timeWindowMatch: false };
+  if (exact.length > 1) return { classification: "AMBIGUOUS", candidates: exact, timeWindowMatch: false };
+  return { classification: "UNIQUE", candidate: exact[0], candidates: exact, timeWindowMatch: exact[0].timeWindowMatch };
+}
+
 type SohuContentManagementEvidence = {
   pageLoaded: boolean;
   articleManagementPage: boolean;
@@ -371,11 +508,48 @@ export class SohuBrowserAdapter extends BrowserAutomationAdapter {
         message: "搜狐内容管理入口或页面导航未取得真实 DOM 证据，保持 NeedsReconciliation；未判定为未发布"
       };
     }
-    const managementEvidence = await this.readContentManagementEvidence(page, input.title, input.accountName);
-    const candidates = await this.readContentCandidates(page, input.title);
-    const candidate = candidates.find((item) => item.context.includes(input.title) && item.externalId);
-    const windowStart = Date.parse(input.windowStart);
-    const windowEnd = Date.parse(input.windowEnd);
+    const managementEvidenceBase = await this.readContentManagementEvidence(page, input.title, input.accountName);
+    const initialCandidates = await this.readContentCandidates(page, input.title);
+    const scan = initialCandidates.length > 0
+      ? mergeSohuReconciliationSnapshots([{ pageUrl: page.url(), tab: "当前页面", pageIndex: 1, lazyLoadPass: 0, searchUsed: false, candidates: initialCandidates }])
+      : await this.collectContentManagementCandidates(page, input.title);
+    const managementHref = managementEvidenceBase.matchingTitleHrefs.length === 1 ? managementEvidenceBase.matchingTitleHrefs[0] : null;
+    const managementExternalId = managementEvidenceBase.matchingTitleExternalIds.length === 1 ? managementEvidenceBase.matchingTitleExternalIds[0] : null;
+    const candidates = scan.candidates.map((candidate) => {
+      const isExactPublishedTarget = normalizeSohuMatchText(candidate.title) === normalizeSohuMatchText(input.title) && candidate.status === "Published";
+      const hrefCompatible = !candidate.href || candidate.href === managementHref;
+      const externalIdCompatible = !candidate.externalId || candidate.externalId === managementExternalId;
+      if (!isExactPublishedTarget || !managementHref || !managementExternalId || !hrefCompatible || !externalIdCompatible) return candidate;
+      return { ...candidate, href: candidate.href ?? managementHref, externalId: candidate.externalId ?? managementExternalId };
+    });
+    const managementEvidence: SohuContentManagementEvidence = {
+      ...managementEvidenceBase,
+      totalContentCount: managementEvidenceBase.totalContentCount ?? mergeSohuListStatusCounts(managementEvidenceBase.statusCounts, ...candidates.map((candidate) => parseSohuListStatusCounts([candidate.context, candidate.statusText])))["全部"],
+      statusCounts: mergeSohuListStatusCounts(managementEvidenceBase.statusCounts, ...candidates.map((candidate) => parseSohuListStatusCounts([candidate.context, candidate.statusText]))),
+      titleOccurrenceCount: Math.max(managementEvidenceBase.titleOccurrenceCount, candidates.length),
+      matchingTitleHrefs: [...new Set([...managementEvidenceBase.matchingTitleHrefs, ...candidates.flatMap((candidate) => candidate.href ? [candidate.href] : [])])],
+      matchingTitleExternalIds: [...new Set([...managementEvidenceBase.matchingTitleExternalIds, ...candidates.flatMap((candidate) => candidate.externalId ? [candidate.externalId] : [])])]
+    };
+    const publishedListAuxiliaryEvidence = managementEvidence.statusCategoriesComplete
+      && managementEvidence.accountIdentityVisible
+      && managementEvidence.titleOccurrenceCount === 1
+      && managementEvidence.statusCounts["全部"] === 1
+      && managementEvidence.statusCounts["已发布"] === 1
+      && managementEvidence.statusCounts["审核中"] === 0
+      && managementEvidence.statusCounts["未通过"] === 0
+      && managementEvidence.statusCounts["草稿"] === 0
+      && managementEvidence.statusCounts["定时发布"] === 0;
+    const candidatesForMatch = candidates.map((candidate) => {
+      const exactTitle = normalizeSohuMatchText(candidate.title) === normalizeSohuMatchText(input.title);
+      const hasTargetRowEvidence = exactTitle && Boolean(candidate.timeText.trim()) && Boolean(candidate.href) && Boolean(candidate.externalId);
+      if (candidate.status !== "Unknown" || !publishedListAuxiliaryEvidence || !hasTargetRowEvidence) return candidate;
+      return {
+        ...candidate,
+        status: "Published" as const,
+        statusSource: "list_level_auxiliary" as const,
+        statusText: `${candidate.statusText}；已发布列表唯一匹配（列表级辅助证据）`
+      };
+    });
     const pageEvidenceComplete = managementEvidence.pageLoaded
       && managementEvidence.articleManagementPage
       && managementEvidence.accountIdentityVisible
@@ -385,6 +559,7 @@ export class SohuBrowserAdapter extends BrowserAutomationAdapter {
       pageUrl: page.url(),
       contentManagementEntry: contentEntry.label,
       managementEvidence,
+      contentManagementScan: scan,
       finalSubmitEvidence: {
         waitWindowSatisfied: input.waitWindowSatisfied === true,
         submissionIntentState: input.submissionIntentState ?? null,
@@ -392,10 +567,19 @@ export class SohuBrowserAdapter extends BrowserAutomationAdapter {
         noSecondSubmit: input.finalSubmitCount === 1
       }
     };
-    if (candidate && pageEvidenceComplete) {
-      const timeWindowMatch = this.timeWindowMatches(candidate.context, windowStart, windowEnd);
-      if (timeWindowMatch) return { status: "FOUND_PUBLISHED", externalId: candidate.externalId ?? undefined, publishedUrl: candidate.href, titleMatch: true, accountMatch: true, timeWindowMatch: true, response: { ...evidenceResponse, matchedBy: "exact_title_authenticated_sohu_content_management", candidateContext: candidate.context.slice(0, 1_000) }, message: "搜狐内容管理中找到标题、公开 URL 和时间窗口均匹配的真实文章" };
-      return { status: "STILL_UNCERTAIN", externalId: candidate.externalId ?? undefined, publishedUrl: candidate.href, titleMatch: true, accountMatch: true, timeWindowMatch: false, response: { ...evidenceResponse, matchedBy: "exact_title_without_time_window", candidateContext: candidate.context.slice(0, 1_000) }, message: "搜狐内容管理找到同名文章，但时间窗口无法可靠匹配，保持 NeedsReconciliation" };
+    const match = matchSohuArticleCandidates(candidatesForMatch, input);
+    if (match.classification === "AMBIGUOUS") {
+      return { status: "STILL_UNCERTAIN", titleMatch: true, accountMatch: managementEvidence.accountIdentityVisible, timeWindowMatch: false, response: { ...evidenceResponse, matchedBy: "ARTICLE_MATCH_AMBIGUOUS", articleMatch: match.candidates.map((candidate) => ({ ...candidate, context: candidate.context.slice(0, 1_000) })) }, message: "搜狐内容管理存在多个精确标题候选，结果为 ARTICLE_MATCH_AMBIGUOUS；未自动选择、未发布、保持 NeedsReconciliation" };
+    }
+    if (match.candidate) {
+      const candidate = match.candidate;
+      const rowEvidence = { candidate: { ...candidate, context: candidate.context.slice(0, 1_000) }, platformStatus: candidate.status, platformAcceptedSubmission: candidate.status !== "Rejected" && candidate.status !== "Draft" && candidate.status !== "Unknown" };
+      if (!match.timeWindowMatch) return { status: "STILL_UNCERTAIN", externalId: candidate.externalId ?? undefined, publishedUrl: candidate.href ?? undefined, titleMatch: true, accountMatch: managementEvidence.accountIdentityVisible, timeWindowMatch: false, response: { ...evidenceResponse, matchedBy: "exact_title_without_time_window", ...rowEvidence }, message: "搜狐内容管理找到同名文章，但时间窗口无法可靠匹配，保持 NeedsReconciliation" };
+      if (candidate.status === "PendingReview") return { status: "STILL_UNCERTAIN", titleMatch: true, accountMatch: managementEvidence.accountIdentityVisible, timeWindowMatch: true, response: { ...evidenceResponse, matchedBy: "exact_title_pending_review", ...rowEvidence }, message: "SOHU_REAL_PUBLISH_PENDING_REVIEW：搜狐已接受该历史提交，当前平台状态为审核中；禁止重发，保持非 PASS 状态" };
+      if (candidate.status === "Rejected") return { status: "STILL_UNCERTAIN", titleMatch: true, accountMatch: managementEvidence.accountIdentityVisible, timeWindowMatch: true, response: { ...evidenceResponse, matchedBy: "exact_title_platform_rejected", ...rowEvidence }, message: "SOHU_REAL_PUBLISH_REJECTED：搜狐内容管理显示该历史文章未通过；已记录平台审核结果，禁止重发" };
+      if (candidate.status === "Draft") return { status: "STILL_UNCERTAIN", titleMatch: true, accountMatch: managementEvidence.accountIdentityVisible, timeWindowMatch: true, response: { ...evidenceResponse, matchedBy: "exact_title_draft", ...rowEvidence }, message: "搜狐内容管理找到历史文章草稿；未自动发布，保持非 PASS 状态" };
+      if (candidate.status === "Published" && candidate.externalId && candidate.href) return { status: "FOUND_PUBLISHED", externalId: candidate.externalId, publishedUrl: candidate.href, titleMatch: true, accountMatch: managementEvidence.accountIdentityVisible, timeWindowMatch: true, response: { ...evidenceResponse, matchedBy: candidate.statusSource === "list_level_auxiliary" ? "exact_title_unique_published_list_auxiliary" : "exact_title_authenticated_sohu_content_management", ...rowEvidence }, message: candidate.statusSource === "list_level_auxiliary" ? "搜狐内容管理中以唯一目标文章行、时间、账号和公开链接为主证据，并以已发布列表统计作辅助证据确认 Published" : "搜狐内容管理中找到标题、已发布状态、公开 URL 和时间窗口均匹配的真实文章" };
+      return { status: "STILL_UNCERTAIN", externalId: candidate.externalId ?? undefined, publishedUrl: candidate.href ?? undefined, titleMatch: true, accountMatch: managementEvidence.accountIdentityVisible, timeWindowMatch: true, response: { ...evidenceResponse, matchedBy: "exact_title_published_external_evidence_incomplete", ...rowEvidence }, message: "搜狐内容管理显示文章已发布，但未取得可靠 External ID/URL，未执行 PASS 收口" };
     }
     const noMatchingTitle = managementEvidence.titleOccurrenceCount === 0;
     const noMatchingExternalId = !input.expectedExternalId || managementEvidence.matchingTitleExternalIds.every((id) => id !== input.expectedExternalId);
@@ -754,45 +938,46 @@ export class SohuBrowserAdapter extends BrowserAutomationAdapter {
       const totalContentDom = Array.from(document.querySelectorAll<HTMLElement>("body *"))
         .filter((element) => visible(element) && /总内容量/u.test(clean(element.innerText ?? "")))
         .sort((left, right) => clean(left.innerText ?? "").length - clean(right.innerText ?? "").length)
-        .slice(0, 12)
+        .slice(0, 4)
         .map((element) => {
           const valueNodes = [element, ...Array.from(element.querySelectorAll<HTMLElement>("h3, [class*='number-icon']"))];
           const valueClasses = valueNodes.flatMap((node) => [...node.classList].filter((className) => /(?:number|count|total)/iu.test(className)));
           const pseudoContent = valueNodes.flatMap((node) => [window.getComputedStyle(node, "::before").content, window.getComputedStyle(node, "::after").content].filter((value) => value && value !== "none"));
           return {
             tag: element.tagName,
-            text: clean(element.innerText ?? "").slice(0, 300),
-            parentText: clean(element.parentElement?.innerText ?? "").slice(0, 300),
-            nextText: clean(element.nextElementSibling?.textContent ?? "").slice(0, 300),
+            text: clean(element.innerText ?? "").slice(0, 180),
+            parentText: clean(element.parentElement?.innerText ?? "").slice(0, 180),
+            nextText: clean(element.nextElementSibling?.textContent ?? "").slice(0, 120),
             valueClasses,
             pseudoContent,
-            outer: element.outerHTML.slice(0, 800)
+            outer: element.outerHTML.slice(0, 450)
           };
         });
       const totalContentValueNodes = Array.from(document.querySelectorAll<HTMLElement>(".read-info-info-item"))
         .filter((element) => visible(element) && clean(element.innerText ?? "").includes("总内容量"))
         .flatMap((card) => [card, ...Array.from(card.querySelectorAll<HTMLElement>("h3, [class*='number-icon']"))]);
       const totalContentDomMatches = totalContentValueNodes.flatMap((element) => {
-        const classMatch = [...element.classList].map((className) => className.match(/(?:mp-iconnumber|number-icon)[_-]([0-9]+)/iu)).find((match): match is RegExpMatchArray => Boolean(match));
         const pseudoValues = [window.getComputedStyle(element, "::before").content, window.getComputedStyle(element, "::after").content]
           .map((value) => value.split('"').join("").split("'").join(""))
           .filter((value) => /^[0-9]+$/u.test(value));
-        const textMatch = clean(element.innerText ?? "").match(/(?:总内容量|内容量)\s*([0-9]+)/u);
-        return [classMatch?.[1], ...pseudoValues, textMatch?.[1]].filter((value): value is string => Boolean(value));
+        const attributeValues = Array.from(element.attributes).map((attribute) => attribute.value).filter((value) => /^[0-9]+$/u.test(value));
+        const textMatch = clean(`${element.innerText ?? ""} ${element.parentElement?.innerText ?? ""}`).match(/(?:总内容量|内容量)\s*([0-9]+)/u);
+        return [...pseudoValues, ...attributeValues, textMatch?.[1]].filter((value): value is string => Boolean(value));
       });
       const totalContentMatch = [...totalContentDomMatches, ...totalStatTexts, ...statTexts, bodyText].map((value) => typeof value === "string" ? value.match(/总内容量\s*([0-9]+)/u) : null).find((match): match is RegExpMatchArray => Boolean(match));
       const totalContentCount = totalContentDomMatches.map((value) => Number(value)).find((value) => Number.isInteger(value));
-      const countFor = (label: string): number | null => {
-        const match = `${bodyText} ${visibleTexts.join(" ")}`.match(new RegExp(`${label}\\s*([0-9]+)`, "u"));
-        return match ? Number(match[1]) : null;
+      const statusGroups = [...`${bodyText} ${visibleTexts.join(" ")}`.matchAll(/全部\s*([0-9]+)\s*已发布\s*([0-9]+)\s*审核中\s*([0-9]+)\s*未通过\s*([0-9]+)\s*草稿\s*([0-9]+)\s*定时发布\s*([0-9]+)/gu)];
+      const countFor = (index: number): number | null => {
+        const values = statusGroups.map((group) => Number(group[index])).filter((value) => Number.isInteger(value));
+        return values.length > 0 ? Math.max(...values) : null;
       };
       const statusCounts: Record<string, number | null> = {
-        全部: countFor("全部"),
-        已发布: countFor("已发布"),
-        审核中: countFor("审核中"),
-        未通过: countFor("未通过"),
-        草稿: countFor("草稿"),
-        定时发布: countFor("定时发布")
+        全部: countFor(1),
+        已发布: countFor(2),
+        审核中: countFor(3),
+        未通过: countFor(4),
+        草稿: countFor(5),
+        定时发布: countFor(6)
       };
       const externalIdFromHref = (href: string): string | null => {
         try {
@@ -829,7 +1014,7 @@ export class SohuBrowserAdapter extends BrowserAutomationAdapter {
         matchingTitleHrefs: [...new Set(matchingTitleHrefs)],
         matchingTitleExternalIds: [...new Set(matchingTitleExternalIds)],
         totalContentDom,
-        bodyText: bodyText.slice(0, 2_000)
+        bodyText: bodyText.slice(0, 1_200)
       };
     }, { expectedTitle, accountName });
   }
@@ -858,8 +1043,219 @@ export class SohuBrowserAdapter extends BrowserAutomationAdapter {
     });
   }
 
-  private async readContentCandidates(page: Page, title: string): Promise<SohuPublicCandidate[]> {
-    return this.readPublicCandidates(page, title);
+  private async collectContentManagementCandidates(page: Page, title: string): Promise<ReturnType<typeof mergeSohuReconciliationSnapshots>> {
+    const snapshots: SohuReconciliationSnapshot[] = [];
+    let searchUsed = false;
+    const searchInput = await this.findContentSearchInput(page);
+    if (searchInput) {
+      await searchInput.fill(title);
+      await searchInput.press("Enter").catch(() => undefined);
+      await page.waitForTimeout(700);
+      searchUsed = true;
+    }
+    const tabs = ["全部", "文章", "已发布", "审核中", "未通过", "草稿", "定时发布"];
+    for (const tab of tabs) {
+      await this.clickSafeContentControl(page, tab);
+      await page.waitForTimeout(400);
+      let pageIndex = 1;
+      const visitedPageSignatures = new Set<string>();
+      for (let pagePass = 0; pagePass < 20; pagePass += 1) {
+        let previousSignature = "";
+        for (let lazyPass = 0; lazyPass < 8; lazyPass += 1) {
+          const candidates = await this.readContentCandidates(page, title);
+          const signature = JSON.stringify(candidates.map((candidate) => [candidate.articleId, candidate.href, candidate.context]));
+          snapshots.push({ pageUrl: page.url(), tab, pageIndex, lazyLoadPass: lazyPass, searchUsed, candidates });
+          if (signature === previousSignature || !(await this.scrollSohuContentForLazyLoad(page))) break;
+          previousSignature = signature;
+        }
+        const pageSignature = JSON.stringify(snapshots.filter((snapshot) => snapshot.tab === tab && snapshot.pageIndex === pageIndex).map((snapshot) => snapshot.candidates));
+        if (visitedPageSignatures.has(pageSignature)) break;
+        visitedPageSignatures.add(pageSignature);
+        if (!(await this.clickSohuNextPage(page))) break;
+        pageIndex += 1;
+        await page.waitForTimeout(700);
+      }
+    }
+    return mergeSohuReconciliationSnapshots(snapshots);
+  }
+
+  private async findContentSearchInput(page: Page): Promise<Locator | null> {
+    const candidates = page.locator('input[type="search"],input[placeholder*="搜索" i],input[aria-label*="搜索" i],input[name*="search" i]');
+    for (let index = 0; index < await candidates.count(); index += 1) {
+      const candidate = candidates.nth(index);
+      if (!(await candidate.isVisible().catch(() => false))) continue;
+      const attributes = await Promise.all(["type", "placeholder", "aria-label", "name"].map((name) => candidate.getAttribute(name).catch(() => null)));
+      const hint = attributes.filter((value): value is string => Boolean(value)).join(" ");
+      if (/search|搜索/iu.test(hint)) return candidate;
+    }
+    return null;
+  }
+
+  private async clickSafeContentControl(page: Page, label: string): Promise<boolean> {
+    const candidates = page.locator('button,a,[role="tab"],[role="button"],li,span,div');
+    for (let index = 0; index < Math.min(await candidates.count(), 300); index += 1) {
+      const candidate = candidates.nth(index);
+      if (!(await candidate.isVisible().catch(() => false)) || !(await candidate.isEnabled().catch(() => true))) continue;
+      const text = (await candidate.innerText().catch(() => "")).replace(/\s+/gu, " ").trim();
+      const ariaLabel = (await candidate.getAttribute("aria-label").catch(() => null))?.replace(/\s+/gu, " ").trim() ?? "";
+      if (text !== label && ariaLabel !== label) continue;
+      try {
+        await candidate.click({ timeout: 5_000 });
+        return true;
+      } catch {
+        // A duplicated text node may not be the actionable tab; continue with the next real DOM candidate.
+      }
+    }
+    return false;
+  }
+
+  private async clickSohuNextPage(page: Page): Promise<boolean> {
+    const candidates = page.locator('button,a,[role="button"],li');
+    for (let index = 0; index < Math.min(await candidates.count(), 200); index += 1) {
+      const candidate = candidates.nth(index);
+      if (!(await candidate.isVisible().catch(() => false)) || !(await candidate.isEnabled().catch(() => false))) continue;
+      const text = (await candidate.innerText().catch(() => "")).replace(/\s+/gu, " ").trim();
+      const label = `${text} ${(await candidate.getAttribute("aria-label").catch(() => null)) ?? ""}`.trim();
+      if (!/^(?:下一页|下一页\s*[>›]|next)$/iu.test(label) || /发布|提交|重发/iu.test(label)) continue;
+      try {
+        await candidate.click({ timeout: 5_000 });
+        return true;
+      } catch {
+        // Continue looking for the real enabled next-page control.
+      }
+    }
+    return false;
+  }
+
+  private async scrollSohuContentForLazyLoad(page: Page): Promise<boolean> {
+    const result = await page.evaluate(() => {
+      const beforeWindow = window.scrollY;
+      let changed = false;
+      const scrollables = Array.from(document.querySelectorAll<HTMLElement>("body *"))
+        .filter((element) => element.scrollHeight > element.clientHeight + 80)
+        .sort((left, right) => (right.scrollHeight - right.clientHeight) - (left.scrollHeight - left.clientHeight))
+        .slice(0, 8);
+      for (const element of scrollables) {
+        const before = element.scrollTop;
+        element.scrollTop = Math.min(element.scrollHeight, before + Math.max(400, element.clientHeight * 0.8));
+        changed ||= element.scrollTop > before;
+      }
+      window.scrollBy(0, Math.max(400, window.innerHeight * 0.8));
+      changed ||= window.scrollY > beforeWindow;
+      return changed;
+    }).catch(() => false);
+    await page.waitForTimeout(350);
+    return result === true;
+  }
+
+  private async readContentCandidates(page: Page, title: string): Promise<SohuReconciliationCandidate[]> {
+    const raw = await page.evaluate(({ expectedTitle }) => {
+      const clean = (value: string): string => value.replace(/\s+/gu, " ").trim();
+      const visible = (element: Element): boolean => {
+        const target = element as HTMLElement;
+        const style = window.getComputedStyle(target);
+        const bounds = target.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || "1") > 0 && bounds.width > 0 && bounds.height > 0;
+      };
+      const externalIdFromHref = (href: string): string | null => {
+        try {
+          const parsed = new URL(href, location.href);
+          if (parsed.hostname === "mp.sohu.com") return null;
+          return parsed.pathname.match(/(?:^|\/)(\d{5,})(?:[/?#_.-]|$)/u)?.[1] ?? null;
+        } catch { return null; }
+      };
+      const normalizeHref = (value: string): string | null => {
+        try {
+          const parsed = new URL(value, location.href);
+          return /^https?:$/iu.test(parsed.protocol) ? parsed.href.split("#", 1)[0] : null;
+        } catch { return null; }
+      };
+      const stripListStatusCounts = (value: string): string => clean(value.replace(/(?:全部|已发布|审核中|未通过|草稿|定时发布)\s*\d+/gu, " "));
+      const statusFor = (value: string): SohuReconciliationArticleStatus => {
+        const rowStatusText = stripListStatusCounts(value);
+        if (/未通过|审核失败|拒绝|被拒/iu.test(rowStatusText)) return "Rejected";
+        if (/草稿/iu.test(rowStatusText)) return "Draft";
+        if (/审核中|待审核|审核/iu.test(rowStatusText)) return "PendingReview";
+        if (/已发布|发布成功|公开/iu.test(rowStatusText)) return "Published";
+        return "Unknown";
+      };
+      const statusTextFor = (row: Element, context: string): string => {
+        const statusNodes = [
+          ...(row.matches("[data-status],[data-state],[data-review-status]") ? [row] : []),
+          ...Array.from(row.querySelectorAll<HTMLElement>("[data-status],[data-state],[data-review-status],[class*='status' i],[class*='state' i],[class*='audit' i],[class*='review' i]"))
+        ];
+        const scoped = statusNodes.flatMap((node) => [
+          node.getAttribute("data-status"),
+          node.getAttribute("data-state"),
+          node.getAttribute("data-review-status"),
+          node.getAttribute("aria-label"),
+          node.getAttribute("title"),
+          node instanceof HTMLElement ? node.innerText : node.textContent
+        ]).filter((value): value is string => Boolean(value)).join(" ");
+        return stripListStatusCounts(scoped || context);
+      };
+      const datePattern = /(?:\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}(?:日)?(?:\s+|T)?\d{0,2}:?\d{0,2}:?\d{0,2}|\d{1,2}[-/.月]\d{1,2}(?:日)?\s+\d{1,2}:\d{2})/gu;
+      const all = Array.from(document.querySelectorAll<HTMLElement>("body *")).filter(visible);
+      const matched = all.filter((element) => {
+        const text = clean(element.innerText || element.textContent || "");
+        return text === expectedTitle || text.includes(expectedTitle) || element.getAttribute("title")?.trim() === expectedTitle;
+      });
+      return matched.flatMap((element) => {
+        let row: Element = element;
+        for (let depth = 0; depth < 8 && row.parentElement; depth += 1) {
+          const parent = row.parentElement;
+          const parentText = clean(parent.innerText || parent.textContent || "");
+          const className = parent.className.toString();
+          const containerClass = /(?:content[-_]?wrap|content[-_]?list|content[-_]?management|container|first[-_]?page|read[-_]?info|sidebar|wrapper|tabs?|header|footer|layout)/iu.test(className);
+          const semanticRow = !containerClass && (/^(?:TR|LI|ARTICLE)$/u.test(parent.tagName) || parent.getAttribute("role") === "row" || /(?:^|[-_ ])(?:row|item|card|record)(?:$|[-_ ])|(?:article|news|content)[-_](?:item|row|card)/iu.test(className));
+          const hasAction = Boolean(parent.querySelector("a[href],button,[role='button']"));
+          const hasRowSignal = /(?:\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}|\d{1,2}[-/.月]\d{1,2}\s+\d{1,2}:\d{2}|已发布|审核中|未通过|草稿|定时发布|待审核)/u.test(parentText);
+          if (parentText.length > 1_200) break;
+          if (semanticRow && parentText.includes(expectedTitle)) { row = parent; break; }
+          if (!containerClass && hasAction && hasRowSignal && parentText.includes(expectedTitle) && parentText.split(expectedTitle).length - 1 === 1) { row = parent; break; }
+        }
+        const context = clean(row instanceof HTMLElement ? row.innerText : row.textContent || "");
+        if (!context.includes(expectedTitle)) return [];
+        const elementsInRow = [row, ...Array.from(row.querySelectorAll<HTMLElement>("[data-href],[data-url],[data-link],[data-id],a[href],button,[role='button']"))];
+        const hrefs = elementsInRow.flatMap((candidate) => [candidate.getAttribute("href"), candidate.getAttribute("data-href"), candidate.getAttribute("data-url"), candidate.getAttribute("data-link")].filter((value): value is string => Boolean(value)).map(normalizeHref).filter((value): value is string => Boolean(value)));
+        const href = hrefs.find((value) => Boolean(externalIdFromHref(value))) ?? null;
+        const dataAttributes: Record<string, string> = {};
+        for (const candidate of elementsInRow) {
+          for (const attribute of Array.from(candidate.attributes)) {
+            if (attribute.name.startsWith("data-") && attribute.value.trim()) dataAttributes[attribute.name] = attribute.value.trim().slice(0, 300);
+          }
+        }
+        const articleId = Object.entries(dataAttributes).find(([key]) => /(?:article|content|news|item|resource).*id|^data-id$/iu.test(key))?.[1] ?? null;
+        const actionLabels = elementsInRow.filter((candidate) => /^(?:BUTTON|A)$/u.test(candidate.tagName) || candidate.getAttribute("role") === "button").map((candidate) => clean((candidate as HTMLElement).innerText || candidate.getAttribute("aria-label") || candidate.getAttribute("title") || "")).filter(Boolean);
+        const timeText = context.match(datePattern)?.[0] ?? "";
+        const summary = context.split(" ").find((part) => part.length > 8 && part !== expectedTitle && !datePattern.test(part)) ?? null;
+        const statusText = statusTextFor(row, context);
+        const status = statusFor(statusText);
+        return [{ title: expectedTitle, status, statusSource: "row", statusText, timeText, href, externalId: href ? externalIdFromHref(href) : null, articleId, summary, context, tab: "当前页面", actionLabels: [...new Set(actionLabels)], dataAttributes } satisfies SohuReconciliationCandidate];
+      });
+    }, { expectedTitle: title }) as unknown;
+    if (!Array.isArray(raw)) return [];
+    return raw.flatMap((item): SohuReconciliationCandidate[] => {
+      if (!item || typeof item !== "object") return [];
+      const value = item as Partial<SohuReconciliationCandidate> & { href?: unknown; context?: unknown; label?: unknown; externalId?: unknown; statusText?: unknown };
+      if (typeof value.title === "string" && typeof value.context === "string") return [{
+        title: value.title,
+        status: value.status ?? classifySohuArticleStatus(typeof value.statusText === "string" ? value.statusText : value.context),
+        statusSource: value.statusSource ?? "row",
+        statusText: typeof value.statusText === "string" ? value.statusText : value.context,
+        timeText: value.timeText ?? value.context.match(/\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}(?:日)?(?:\s+|T)?\d{1,2}:\d{2}/u)?.[0] ?? "",
+        href: typeof value.href === "string" ? value.href : null,
+        externalId: typeof value.externalId === "string" ? value.externalId : null,
+        articleId: value.articleId ?? null,
+        summary: value.summary ?? null,
+        context: value.context,
+        tab: value.tab ?? "当前页面",
+        actionLabels: value.actionLabels ?? [],
+        dataAttributes: value.dataAttributes ?? {}
+      }];
+      if (typeof value.context !== "string") return [];
+      return [{ title, status: "Published", statusSource: "row", statusText: value.context, timeText: value.context.match(/\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}(?:日)?(?:\s+|T)?\d{1,2}:\d{2}/u)?.[0] ?? "", href: typeof value.href === "string" ? value.href : null, externalId: typeof value.externalId === "string" ? value.externalId : null, articleId: null, summary: null, context: value.context, tab: "当前页面", actionLabels: typeof value.label === "string" ? [value.label] : [], dataAttributes: {} }];
+    });
   }
 
   private async readPublicCandidates(page: Page, title: string): Promise<SohuPublicCandidate[]> {
@@ -1334,10 +1730,7 @@ export class SohuBrowserAdapter extends BrowserAutomationAdapter {
   }
 
   private timeWindowMatches(context: string, windowStart: number, windowEnd: number): boolean {
-    if (!Number.isFinite(windowStart) || !Number.isFinite(windowEnd)) return false;
-    if (/刚刚|分钟前|今天|昨天/iu.test(context)) return true;
-    const values = context.match(/\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}(?:日)?(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?/gu) ?? [];
-    return values.some((value) => { const parsed = Date.parse(value.replace(/[年月]/gu, "-").replace("日", "").replaceAll("/", "-")); return Number.isFinite(parsed) && parsed >= windowStart && parsed <= windowEnd; });
+    return sohuTimeWindowMatches(context, windowStart, windowEnd);
   }
 
   private isPublicSohuUrl(url: string): boolean {
