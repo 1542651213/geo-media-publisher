@@ -729,7 +729,9 @@ export function registerIpc(deps: IpcDependencies): void {
       throw new Error("DOUYIN_R14_READONLY_TARGET_BINDING_INVALID");
     const adapter = registry.getForContent("douyin", "article");
     if (!(adapter instanceof DouyinImageTextBrowserAdapter)) throw new Error("DOUYIN_R14_READONLY_ADAPTER_UNAVAILABLE");
-    const result = await adapter.inspectManagementTopologyReadOnly(accountContext(input.accountId, "douyin"), intent.externalId);
+    const marker = /DYCORE[A-Za-z0-9]{4,32}/u.exec(article.body)?.[0];
+    const result = await adapter.inspectManagementTopologyReadOnly(accountContext(input.accountId, "douyin"),
+      intent.externalId, article.title, marker);
     logger.info("ACCOUNT", "DOUYIN_MANAGEMENT_TOPOLOGY_READONLY", "抖音作品管理受控页面结构只读检查", {
       accountId: input.accountId, jobId: input.jobId, creatorId: result.creatorId, pagePath: result.pagePath,
       visibleAnchorCount: result.visibleAnchorCount, rowCandidateCount: result.rowCandidateCount,

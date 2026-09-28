@@ -244,7 +244,8 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
   }
 
   /** Post-boundary, read-only topology on a temporary Page in the account-owned Context. */
-  async inspectManagementTopologyReadOnly(ctx: AccountContext, targetRemoteId: string): Promise<DouyinManagementTopology &
+  async inspectManagementTopologyReadOnly(ctx: AccountContext, targetRemoteId: string,
+    targetTitle?: string, targetMarker?: string): Promise<DouyinManagementTopology &
     { creatorId: string; sessionIdHash: string; canonicalPagePath: string; contextOwnership: true }> {
     if (this.nativeSubmitEnabled) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_READONLY_RUNTIME_REQUIRED");
     const owned = await this.activeCanonicalPage(ctx);
@@ -262,7 +263,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     const tab = await owned.session.context.newPage();
     try {
       await tab.goto("https://creator.douyin.com/creator-micro/content/manage", { waitUntil: "domcontentloaded", timeout: 20_000 });
-      const result = await inspectDouyinManagementTopology(tab, owned.session.context, targetRemoteId);
+      const result = await inspectDouyinManagementTopology(tab, owned.session.context, targetRemoteId, targetTitle, targetMarker);
       const latest = await this.activeCanonicalPage(ctx);
       if (!latest || latest.page !== canonicalPage || latest.session.context !== owned.session.context
         || latest.session.sessionIdHash !== sessionIdHash || canonicalPage.isClosed()

@@ -27,6 +27,12 @@ export interface DouyinManagementTopology {
     statusAncestorChains: Array<Array<{ tag: string; role: string | null; classSummary: string;
       childElementCount: number; totalTextLength: number; dataAttributeNames: string[];
       exactTargetIdInData: boolean }>> };
+  targetCardProbes: Array<{ query: "DEFAULT" | "REMOTE_ID" | "EXACT_TITLE"; cardCount: number;
+    exactTitleCardCount: number; markerCardCount: number; exactIdAttributeCardCount: number;
+    exactIdTextCardCount: number; loadingVisible: boolean; routePreserved: boolean;
+    targetCards: Array<{ titleNodeClass: string | null; titleNodeTag: string | null;
+      knownStateLabels: string[]; markerPresent: boolean; exactIdInAnyAttribute: boolean;
+      imageCount: number; actionLabels: string[]; descendantClasses: string[] }> }>;
   loadingIndicatorCount: number;
   endOfListSignal: boolean;
   source: "APP_OWNED_MANAGEMENT_PAGE";
@@ -34,13 +40,17 @@ export interface DouyinManagementTopology {
 
 /** Reads only the already-opened management Page in the exact owned BrowserContext. */
 export async function inspectDouyinManagementTopology(page: Page, context: BrowserContext,
-  targetRemoteId: string): Promise<DouyinManagementTopology> {
+  targetRemoteId: string, targetTitle?: string, targetMarker?: string): Promise<DouyinManagementTopology> {
   if (page.isClosed() || page.context() !== context || !context.pages().includes(page))
     throw new Error("DOUYIN_MANAGEMENT_TOPOLOGY_CONTEXT_MISMATCH");
   const url = new URL(page.url());
   if (url.origin !== "https://creator.douyin.com" || url.pathname !== "/creator-micro/content/manage")
     throw new Error("DOUYIN_MANAGEMENT_TOPOLOGY_ROUTE_MISMATCH");
   if (!/^\d{10,30}$/u.test(targetRemoteId)) throw new Error("DOUYIN_MANAGEMENT_TOPOLOGY_TARGET_ID_INVALID");
+  if (targetTitle !== undefined && (targetTitle.length < 2 || targetTitle.length > 100))
+    throw new Error("DOUYIN_MANAGEMENT_TOPOLOGY_TARGET_TITLE_INVALID");
+  if (targetMarker !== undefined && !/^DYCORE[A-Za-z0-9]{4,32}$/u.test(targetMarker))
+    throw new Error("DOUYIN_MANAGEMENT_TOPOLOGY_TARGET_MARKER_INVALID");
   await page.locator('input[placeholder="搜索作品"]').first().waitFor({ state: "visible", timeout: 15_000 })
     .catch(() => undefined);
   // The search control can hydrate before the work list. Wait only for the observed loading surface;
@@ -200,6 +210,60 @@ export async function inspectDouyinManagementTopology(page: Page, context: Brows
   if (page.isClosed() || page.context() !== context || !context.pages().includes(page)
     || new URL(page.url()).origin !== url.origin || new URL(page.url()).pathname !== url.pathname)
     throw new Error("DOUYIN_MANAGEMENT_TOPOLOGY_PAGE_CHANGED");
-  return { ...snapshot, reviewDropdown, capturedAt: new Date().toISOString(), pagePath: url.pathname,
+  const cardProbe = async (query: DouyinManagementTopology["targetCardProbes"][number]["query"]): Promise<DouyinManagementTopology["targetCardProbes"][number]> => {
+    const observation = await page.evaluate(({ id, title, marker }) => {
+      const cards = [...document.querySelectorAll<HTMLElement>('[class*="content-body-"] > [class*="video-card-"]')];
+      const exactAttribute = (card: Element): boolean => [card, ...card.querySelectorAll("*")]
+        .some((element) => [...element.attributes].some((attribute) => attribute.value === id));
+      const matched = cards.filter((card) => title && (card.innerText ?? "").includes(title)).slice(0, 4);
+      const targetCards = matched.map((card) => {
+        const titleNode = [...card.querySelectorAll<HTMLElement>("*")]
+          .find((element) => element.children.length === 0 && (element.innerText ?? "").trim() === title);
+        const texts = [...card.querySelectorAll<HTMLElement>('button,[role="button"],a')]
+          .map((element) => (element.innerText ?? "").replace(/\s+/gu, " ").trim())
+          .filter((value) => value.length > 0 && value.length <= 24).slice(0, 12);
+        return { titleNodeClass: titleNode && typeof titleNode.className === "string"
+          ? titleNode.className.replace(/[^\p{L}\p{N}_\-\s]/gu, "").slice(0, 100) : null,
+        titleNodeTag: titleNode?.tagName.toLowerCase() ?? null,
+        knownStateLabels: ["已发布", "审核中", "未通过"].filter((label) =>
+          [...card.querySelectorAll<HTMLElement>('[class*="info-status-"]')]
+            .some((element) => (element.innerText ?? "").trim() === label)),
+        markerPresent: Boolean(marker && (card.innerText ?? "").includes(marker)),
+        exactIdInAnyAttribute: exactAttribute(card), imageCount: card.querySelectorAll("img").length,
+        actionLabels: texts, descendantClasses: [...card.querySelectorAll<HTMLElement>("*")]
+          .filter((element) => typeof element.className === "string" && element.className.length > 0)
+          .map((element) => (element.className as string).replace(/[^\p{L}\p{N}_\-\s]/gu, "").slice(0, 100))
+          .slice(0, 45) };
+      });
+      const loadingVisible = [...document.querySelectorAll<HTMLElement>(
+        '[aria-busy="true"],[role="progressbar"],[class*="loading"],[class*="spinner"]')]
+        .some((element) => { const box = element.getBoundingClientRect();
+          return box.width > 0 && box.height > 0 && getComputedStyle(element).visibility !== "hidden"; });
+      return { cardCount: cards.length, exactTitleCardCount: cards.filter((card) =>
+        title && (card.innerText ?? "").includes(title)).length,
+      markerCardCount: cards.filter((card) => marker && (card.innerText ?? "").includes(marker)).length,
+      exactIdAttributeCardCount: cards.filter(exactAttribute).length,
+      exactIdTextCardCount: cards.filter((card) => (card.innerText ?? "").includes(id)).length,
+      loadingVisible, targetCards };
+    }, { id: targetRemoteId, title: targetTitle ?? "", marker: targetMarker ?? "" });
+    return { query, ...observation, routePreserved: !page.isClosed()
+      && page.context() === context && new URL(page.url()).origin === url.origin
+      && new URL(page.url()).pathname === url.pathname };
+  };
+  const targetCardProbes: DouyinManagementTopology["targetCardProbes"] = [await cardProbe("DEFAULT")];
+  if (targetTitle && targetMarker) {
+    const search = page.locator('input[placeholder="搜索作品"]');
+    if (await search.count() === 1 && await search.isVisible()) {
+      for (const [query, value] of [["REMOTE_ID", targetRemoteId], ["EXACT_TITLE", targetTitle]] as const) {
+        await search.fill(value);
+        await search.press("Enter");
+        await page.waitForTimeout(1_500);
+        if (page.isClosed() || page.context() !== context || new URL(page.url()).origin !== url.origin
+          || new URL(page.url()).pathname !== url.pathname) throw new Error("DOUYIN_MANAGEMENT_TOPOLOGY_SEARCH_CHANGED_PAGE");
+        targetCardProbes.push(await cardProbe(query));
+      }
+    }
+  }
+  return { ...snapshot, reviewDropdown, targetCardProbes, capturedAt: new Date().toISOString(), pagePath: url.pathname,
     source: "APP_OWNED_MANAGEMENT_PAGE" };
 }

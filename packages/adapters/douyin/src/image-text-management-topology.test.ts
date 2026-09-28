@@ -98,4 +98,25 @@ describe.skipIf(!existsSync(chrome))("Douyin bounded app-owned management topolo
       .toEqual(expect.arrayContaining(["info-status-real", "card", "list-scroll-real"]));
     expect(JSON.stringify(result.listStructure)).not.toContain("Private historical title");
   });
+
+  it("probes exact ID and title search on the owned management Page without exporting other works", async () => {
+    const title = "装修后为什么要关注甲醛？";
+    const marker = "DYCORE693951f2";
+    const { context, page, methods } = await fixture(`<!doctype html><html><body>
+      <input placeholder="搜索作品"><div class="content-body-real">
+        <div class="video-card-real"><div class="title-real">${title}</div>
+          <span class="info-status-real">已发布</span><p>${marker}</p>
+          <button>查看作品</button><span data-work-id="${targetId}"></span></div>
+        <div class="video-card-real"><div>Private historical title</div><span class="info-status-real">已发布</span></div>
+      </div></body></html>`);
+    const result = await inspectDouyinManagementTopology(page, context, targetId, title, marker);
+    expect(result.targetCardProbes.map((probe) => probe.query)).toEqual(["DEFAULT", "REMOTE_ID", "EXACT_TITLE"]);
+    expect(result.targetCardProbes.every((probe) => probe.routePreserved)).toBe(true);
+    expect(result.targetCardProbes[0]).toMatchObject({ cardCount: 2, exactTitleCardCount: 1,
+      markerCardCount: 1, exactIdAttributeCardCount: 1 });
+    expect(result.targetCardProbes[0]?.targetCards[0]).toMatchObject({ titleNodeClass: "title-real",
+      markerPresent: true, exactIdInAnyAttribute: true, knownStateLabels: ["已发布"] });
+    expect(JSON.stringify(result.targetCardProbes)).not.toContain("Private historical title");
+    expect(methods).toEqual(["GET"]);
+  }, 15_000);
 });
