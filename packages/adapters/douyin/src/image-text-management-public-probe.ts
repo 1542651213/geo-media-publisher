@@ -44,8 +44,9 @@ export async function probeDouyinPublishedCardPublicUrl(page: Page, context: Bro
   if (new URL(page.url()).origin !== "https://creator.douyin.com"
     || new URL(page.url()).pathname !== "/creator-micro/content/manage") return empty("MANAGEMENT_ROUTE_CHANGED");
   await page.locator('input[placeholder="搜索作品"]').waitFor({ state: "visible", timeout: 15_000 });
-  await page.waitForFunction(() => document.querySelector('[class*="content-body-"] > [class*="video-card-"]')
-    || document.querySelector('[class*="load-more-"]'), null, { timeout: 12_000 }).catch(() => undefined);
+  // The list's load-more/loading shell appears before cards. It cannot establish a negative result.
+  await page.waitForFunction(() => document.querySelector('[class*="content-body-"] > [class*="video-card-"]'),
+    null, { timeout: 15_000 }).catch(() => undefined);
   const cards = page.locator('[class*="list-scroll-"] [class*="content-body-"] > [class*="video-card-"]')
     .filter({ hasText: input.title }).filter({ hasText: input.marker });
   const count = await cards.count();

@@ -74,4 +74,13 @@ describe.skipIf(!existsSync(chrome))("Douyin exact-card read-only public view", 
     expect(result).toMatchObject({ attempted: true, exactRemoteIdMatch: false,
       reason: "PUBLIC_REMOTE_ID_MISMATCH", actualRemoteId: "7690435917298928999" });
   }, 20_000);
+
+  it("waits past an early empty list shell before assessing the target card", async () => {
+    const delayed = `<script>setTimeout(() => { document.querySelector('.content-body-real').innerHTML = ${JSON.stringify(card())}; }, 500);</script>`;
+    const { context, page } = await fixture([delayed]);
+    const result = await probeDouyinPublishedCardPublicUrl(page, context, {
+      remoteId, title, marker, submitBoundaryEnteredAt: submittedAt });
+    expect(result).toMatchObject({ attempted: true, exactTargetCardCount: 1,
+      exactRemoteIdMatch: true });
+  }, 20_000);
 });
