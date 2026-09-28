@@ -94,7 +94,10 @@ async function requireCurrentPreMusicNone(page: Page, evidence?: DouyinPreMusicE
   if (!evidence || !resolveCurrent)
     throw new DouyinPreMusicInvariantError("DOUYIN_PRE_MUSIC_EVIDENCE_REQUIRED");
   assertDouyinPreMusicEvidenceCurrent(evidence, await resolveCurrent());
-  if (evidence.page !== page || (await readSelectedDouyinMusic(page)).classification !== "NONE")
+  const selected = await readSelectedDouyinMusic(page);
+  // The canonical Page can change while the DOM classifier is awaiting a result.
+  assertDouyinPreMusicEvidenceCurrent(evidence, await resolveCurrent());
+  if (evidence.page !== page || selected.classification !== "NONE")
     throw new DouyinPreMusicInvariantError("DOUYIN_PRE_MUSIC_EVIDENCE_STALE");
 }
 
@@ -104,6 +107,7 @@ export async function inspectRecommendedDouyinMusic(page: Page, evidence?: Douyi
   await requireCurrentPreMusicNone(page, evidence, resolveCurrent);
   const entry = page.getByText("选择音乐", { exact: true });
   if (await entry.count() !== 1 || !await entry.isVisible()) return { candidates: [], entryFound: false };
+  await requireCurrentPreMusicNone(page, evidence, resolveCurrent);
   await entry.click();
   const search = page.getByPlaceholder("搜索音乐");
   await search.first().waitFor({ state: "visible", timeout: 8_000 });

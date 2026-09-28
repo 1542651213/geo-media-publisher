@@ -12,13 +12,15 @@ import { DouyinImageTextBrowserAdapter } from "./image-text-browser";
 
 const editorUrl = "https://creator.douyin.com/creator-micro/content/post/image";
 const imageData = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/8V8AAAAASUVORK5CYII=";
+const secondImageData = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>')}`;
 const imageBytes = Buffer.from(imageData.split(",")[1]!, "base64");
 const store: CredentialStore = { get: () => null, set: () => undefined, delete: () => undefined, has: () => false };
 let browser: Browser;
 let imageDir: string;
 let imagePath: string;
 
-function html(input: { preselected?: boolean; corruptBody?: boolean; trackOnClick?: boolean; wrongTrackOnClick?: boolean } = {}): string {
+function html(input: { preselected?: boolean; corruptBody?: boolean; trackOnClick?: boolean; wrongTrackOnClick?: boolean;
+  settingsChangeOnDrawerOpen?: boolean; secondPreviewOnDrawerOpen?: boolean; bodyChangeOnTrackClick?: boolean } = {}): string {
   const selected = (title: string) => `<div data-selected-music="track-a"><span data-track-title>${title}</span><span data-track-artist>音乐人</span><time>01:30</time></div>`;
   return `<html><body><main>
     <div class="upload-preview"><img src="${imageData}"></div><span>已添加1张图片</span>
@@ -39,17 +41,24 @@ function html(input: { preselected?: boolean; corruptBody?: boolean; trackOnClic
       });
       document.getElementById('music-entry').addEventListener('click', () => {
         window.actions.push('drawer open'); document.querySelector('[role="dialog"]').hidden = false;
+        if (${Boolean(input.settingsChangeOnDrawerOpen)}) document.querySelector('input[type="radio"]').checked = false;
+        if (${Boolean(input.secondPreviewOnDrawerOpen)}) {
+          const image = document.createElement('img'); image.src = ${JSON.stringify(secondImageData)};
+          document.querySelector('.upload-preview').appendChild(image);
+        }
       });
       document.addEventListener('keydown', (event) => { if (event.key === 'Escape') document.querySelector('[role="dialog"]').hidden = true; });
       document.querySelector('[data-music-id="track-a"]')?.addEventListener('click', () => {
         window.actions.push('music click');
         document.querySelector('[data-douyin-music-region]').insertAdjacentHTML('beforeend', ${JSON.stringify(selected(input.wrongTrackOnClick ? "另一首歌" : "舒缓纯音乐"))});
+        if (${Boolean(input.bodyChangeOnTrackClick)}) document.querySelector('[contenteditable="true"]').textContent += 'X';
       });
     </script></body></html>`;
 }
 
 async function fixture(input: Parameters<typeof html>[0] = {}): Promise<{
   adapter: DouyinImageTextBrowserAdapter; page: Page; ctx: AccountContext; article: PublishArticleInput;
+  replaceCanonicalDuringNextMusicGuard: () => Promise<Page>;
 }> {
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -59,8 +68,19 @@ async function fixture(input: Parameters<typeof html>[0] = {}): Promise<{
   await page.locator("main img").evaluate((image) => (image as HTMLImageElement).decode());
   const adapter = new DouyinImageTextBrowserAdapter({ credentialStore: store });
   const session = { context, page, executionMode: "VISIBLE", sessionIdHash: "test-session" };
-  Object.defineProperty(adapter, "activeCanonicalPage", { value: async () => ({ page, session }) });
-  Object.defineProperty(adapter, "readOwnedCreatorId", { value: async () => "72388977613" });
+  let canonicalPage = page;
+  let replacement: Page | null = null;
+  let creatorReadCount = 0;
+  let replaceOnGuard = false;
+  Object.defineProperty(adapter, "activeCanonicalPage", { value: async () => ({ page: canonicalPage, session }) });
+  Object.defineProperty(adapter, "readOwnedCreatorId", { value: async () => {
+    creatorReadCount += 1;
+    if (replaceOnGuard && creatorReadCount === 3 && replacement) {
+      await Promise.resolve();
+      canonicalPage = replacement;
+    }
+    return "72388977613";
+  } });
   const ctx = { accountId: "account", accountName: "Owner", platformKey: "douyin", secrets: {}, settings: {
     expectedCreatorId: "72388977613", expectedVisibility: "public", expectedLoginGeneration: 1,
     expectedMusicMode: "AUTO_RECOMMENDED", publishJobId: "job", recentDouyinMusicJson: "[]" } } as AccountContext;
@@ -75,7 +95,12 @@ async function fixture(input: Parameters<typeof html>[0] = {}): Promise<{
     sourceContentHash: frozen.sourceContentHash, imageSha256: frozen.imageHashes[0],
     selectionStatus: "RETURNED", preUploadImageCount: 0, inputDetached: true,
     inputFileName: null, previewDigest });
-  return { adapter, page, ctx, article };
+  return { adapter, page, ctx, article, replaceCanonicalDuringNextMusicGuard: async () => {
+    replacement = await context.newPage();
+    await replacement.goto(editorUrl);
+    replaceOnGuard = true;
+    return replacement;
+  } };
 }
 
 describe.skipIf(!existsSync("C:/Program Files/Google/Chrome/Application/chrome.exe"))("Douyin pre-music prepare order", () => {
@@ -159,6 +184,46 @@ describe.skipIf(!existsSync("C:/Program Files/Google/Chrome/Application/chrome.e
     try {
       await expect(adapter.preparePublish(ctx, article)).rejects.toThrow("DOUYIN_MUSIC_READBACK_MISMATCH");
       expect(await page.evaluate(() => (window as Window & { actions?: string[] }).actions)).toEqual(["title fill", "body fill", "drawer open", "music click"]);
+    } finally { await page.context().close(); }
+  });
+
+  it("stops before track click when opening the drawer changes visibility", async () => {
+    const { adapter, page, ctx, article } = await fixture({ trackOnClick: true, settingsChangeOnDrawerOpen: true });
+    try {
+      await expect(adapter.preparePublish(ctx, article)).rejects.toThrow("DOUYIN_PRE_MUSIC_CURRENT_EDITOR_UNVERIFIED");
+      expect(await page.evaluate(() => (window as Window & { actions?: string[] }).actions))
+        .toEqual(["title fill", "body fill", "drawer open"]);
+    } finally { await page.context().close(); }
+  });
+
+  it("stops before track click when a second preview appears after opening the drawer", async () => {
+    const { adapter, page, ctx, article } = await fixture({ trackOnClick: true, secondPreviewOnDrawerOpen: true });
+    try {
+      await expect(adapter.preparePublish(ctx, article)).rejects.toThrow("DOUYIN_PRE_MUSIC_EDITOR_CHANGED");
+      expect(await page.locator(".upload-preview img").count()).toBe(2);
+      expect(await page.evaluate(() => (window as Window & { actions?: string[] }).actions))
+        .toEqual(["title fill", "body fill", "drawer open"]);
+    } finally { await page.context().close(); }
+  });
+
+  it("rejects a canonical Page replacement during an asynchronous guard read while the old Page stays open", async () => {
+    const { adapter, page, ctx, article, replaceCanonicalDuringNextMusicGuard } = await fixture({ trackOnClick: true });
+    try {
+      const replacement = await replaceCanonicalDuringNextMusicGuard();
+      await expect(adapter.preparePublish(ctx, article)).rejects.toThrow("DOUYIN_PRE_MUSIC_EVIDENCE_STALE");
+      expect(page.isClosed()).toBe(false);
+      expect(replacement.isClosed()).toBe(false);
+      expect(await page.evaluate(() => (window as Window & { actions?: string[] }).actions))
+        .toEqual(["title fill", "body fill"]);
+    } finally { await page.context().close(); }
+  });
+
+  it("rejects content changed by a selected track before freezing Prepared", async () => {
+    const { adapter, page, ctx, article } = await fixture({ trackOnClick: true, bodyChangeOnTrackClick: true });
+    try {
+      await expect(adapter.preparePublish(ctx, article)).rejects.toThrow("BODY_MISMATCH");
+      expect(await page.evaluate(() => (window as Window & { actions?: string[] }).actions))
+        .toEqual(["title fill", "body fill", "drawer open", "music click"]);
     } finally { await page.context().close(); }
   });
 });

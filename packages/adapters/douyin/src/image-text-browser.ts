@@ -586,34 +586,47 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
       || uploadOperation.previewDigest !== previewDigest)
       throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_PRE_MUSIC_UPLOAD_OPERATION_UNVERIFIED");
     const resolveCurrentPreMusicBinding = async (): Promise<DouyinPreMusicBinding> => {
-      const currentOwned = await this.activeCanonicalPage(ctx);
-      if (!currentOwned || currentOwned.page !== page || currentOwned.session.context !== owned.session.context
-        || currentOwned.session.sessionIdHash !== uploadOperation.sessionIdHash
-        || currentOwned.session.executionMode !== "VISIBLE" || page.isClosed()
-        || await this.readOwnedCreatorId(ctx, currentOwned) !== creatorId
-        || ctx.settings.expectedLoginGeneration !== uploadOperation.loginGeneration)
-        throw new DouyinPreMusicInvariantError("DOUYIN_PRE_MUSIC_EVIDENCE_STALE");
-      const currentTitle = await title.inputValue();
-      const currentBody = await readDouyinBodyText(page);
-      const currentSettings = await this.readEditorSettings(page);
-      assertDouyinEditorSettings(currentSettings, visibility);
-      const loadedPreviewSources = await images.evaluateAll((elements) => elements.filter((element) => {
-        if (!(element instanceof HTMLImageElement) || !element.complete || element.naturalWidth <= 0) return false;
-        return Boolean(element.currentSrc || element.src);
-      }).map((element) => element instanceof HTMLImageElement ? element.currentSrc || element.src : ""));
-      // These URLs remain ephemeral in Main; only the digest is retained in evidence.
-      const currentPreviewMatches = loadedPreviewSources.filter((src) => createHash("sha256").update(src).digest("hex") === previewDigest).length;
-      if (currentPreviewMatches !== 1 || currentTitle !== initialFrozen.title
-        || currentBody.semanticText !== initialFrozen.body || JSON.stringify(currentSettings) !== JSON.stringify(settings))
-        throw new DouyinPreMusicInvariantError("DOUYIN_PRE_MUSIC_EDITOR_CHANGED");
-      return { accountId: ctx.accountId, articleId: article.articleId, jobId, preparationId,
-        uploadOperationId: uploadOperation.operationId, sessionIdHash: uploadOperation.sessionIdHash,
-        loginGeneration: uploadOperation.loginGeneration, sourceContentHash: initialFrozen.sourceContentHash,
-        imageSha256: uploadOperation.imageSha256, previewDigest,
-        editorObservationHash: hashDouyinPreMusicEditorObservation({ title: currentTitle,
-          semanticBody: currentBody.semanticText, previewDigest, imageCount: currentPreviewMatches,
-          settings: currentSettings }), editorUrl: page.url(), page, context: owned.session.context,
-        musicSelectionCount: this.musicSelectionUsed.has(jobId) ? 1 : 0 };
+      try {
+        const currentOwned = await this.activeCanonicalPage(ctx);
+        if (!currentOwned || currentOwned.page !== page || currentOwned.session.context !== owned.session.context
+          || currentOwned.session.sessionIdHash !== uploadOperation.sessionIdHash
+          || currentOwned.session.executionMode !== "VISIBLE" || page.isClosed()
+          || await this.readOwnedCreatorId(ctx, currentOwned) !== creatorId
+          || ctx.settings.expectedLoginGeneration !== uploadOperation.loginGeneration)
+          throw new DouyinPreMusicInvariantError("DOUYIN_PRE_MUSIC_EVIDENCE_STALE");
+        const currentTitle = await title.inputValue();
+        const currentBody = await readDouyinBodyText(page);
+        const currentSettings = await this.readEditorSettings(page);
+        assertDouyinEditorSettings(currentSettings, visibility);
+        const loadedPreviewSources = await images.evaluateAll((elements) => elements.filter((element) => {
+          if (!(element instanceof HTMLImageElement) || !element.complete || element.naturalWidth <= 0) return false;
+          return Boolean(element.currentSrc || element.src);
+        }).map((element) => element instanceof HTMLImageElement ? element.currentSrc || element.src : ""));
+        // These URLs remain ephemeral in Main; only the digest is retained in evidence.
+        const currentPreviewMatches = loadedPreviewSources.filter((src) => createHash("sha256").update(src).digest("hex") === previewDigest).length;
+        if (await images.count() !== 1 || loadedPreviewSources.length !== 1 || currentPreviewMatches !== 1
+          || currentTitle !== initialFrozen.title || currentBody.semanticText !== initialFrozen.body
+          || JSON.stringify(currentSettings) !== JSON.stringify(settings))
+          throw new DouyinPreMusicInvariantError("DOUYIN_PRE_MUSIC_EDITOR_CHANGED");
+        // A different Page can become canonical while the DOM reads above are pending.
+        // The music action must never use a former canonical Page that remains open.
+        const confirmedOwned = await this.activeCanonicalPage(ctx);
+        if (!confirmedOwned || confirmedOwned.page !== page || confirmedOwned.session.context !== owned.session.context
+          || confirmedOwned.session.sessionIdHash !== uploadOperation.sessionIdHash
+          || page.isClosed() || page.context() !== confirmedOwned.session.context)
+          throw new DouyinPreMusicInvariantError("DOUYIN_PRE_MUSIC_EVIDENCE_STALE");
+        return { accountId: ctx.accountId, articleId: article.articleId, jobId, preparationId,
+          uploadOperationId: uploadOperation.operationId, sessionIdHash: uploadOperation.sessionIdHash,
+          loginGeneration: uploadOperation.loginGeneration, sourceContentHash: initialFrozen.sourceContentHash,
+          imageSha256: uploadOperation.imageSha256, previewDigest,
+          editorObservationHash: hashDouyinPreMusicEditorObservation({ title: currentTitle,
+            semanticBody: currentBody.semanticText, previewDigest, imageCount: loadedPreviewSources.length,
+            settings: currentSettings }), editorUrl: page.url(), page, context: owned.session.context,
+          musicSelectionCount: this.musicSelectionUsed.has(jobId) ? 1 : 0 };
+      } catch (error) {
+        if (error instanceof DouyinPreMusicInvariantError) throw error;
+        throw new DouyinPreMusicInvariantError("DOUYIN_PRE_MUSIC_CURRENT_EDITOR_UNVERIFIED");
+      }
     };
     const preMusicEvidence = await inspectDouyinPreMusicReadOnly(await resolveCurrentPreMusicBinding());
     const musicMode = ctx.settings.expectedMusicMode === "AUTO_RECOMMENDED" ? "AUTO_RECOMMENDED" : "NONE";
@@ -673,13 +686,34 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     let postMusicReadback: "PASS_NONE" | "PASS_TRACK";
     try { postMusicReadback = assertDouyinMusicReadback(musicBinding, postMusic); }
     catch { throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_MUSIC_READBACK_MISMATCH"); }
-    const frozen = await freezeDouyinImageText({ ...source, mandatorySelections: settings.selectedMandatory, musicBinding });
+    const postTitleReadback = await title.inputValue();
+    const postBodyReadback = await readDouyinBodyText(page);
+    const postImageCount = await images.count();
+    const postSettings = await this.readEditorSettings(page);
+    assertDouyinEditorSettings(postSettings, visibility);
+    if (JSON.stringify(postSettings) !== JSON.stringify(settings) || postImageCount !== 1)
+      throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_POST_MUSIC_EDITOR_CHANGED");
+    const postPreviewSource = await images.first().evaluate((image) => image instanceof HTMLImageElement
+      && image.complete && image.naturalWidth > 0 ? image.currentSrc || image.src : "");
+    if (!postPreviewSource || createHash("sha256").update(postPreviewSource).digest("hex") !== previewDigest)
+      throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_IMAGE_PREVIEW_CHANGED");
+    const frozen = await freezeDouyinImageText({ ...source, mandatorySelections: postSettings.selectedMandatory, musicBinding });
+    if (frozen.imageHashes[0] !== uploadOperation.imageSha256)
+      throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_IMAGE_HASH_CHANGED_AFTER_UPLOAD");
     assertDouyinImageTextReadback(frozen, { accountId: ctx.accountId, creatorId,
       contextOwned: page.context() === owned.session.context, sessionActive: !page.isClosed(),
-      pageHost: new URL(page.url()).host, title: titleReadback, body: bodyReadback.semanticText, imageCount,
-      requiredFieldsPresent: douyinRequiredSettingsPass(settings), finalSubmitControlCount: finalCount,
+      pageHost: new URL(page.url()).host, title: postTitleReadback, body: postBodyReadback.semanticText, imageCount: postImageCount,
+      requiredFieldsPresent: douyinRequiredSettingsPass(postSettings), finalSubmitControlCount: await finalControl.count(),
       securityChallenge: /captcha|security[-_/]?check|risk[-_/]?control/iu.test(page.url()) });
-    this.prepared.set(ctx.accountId, { frozen, page, context: owned.session.context, settings, previewDigest });
+    const finalOwned = await this.activeCanonicalPage(ctx);
+    if (!finalOwned || finalOwned.page !== page || finalOwned.session.context !== owned.session.context
+      || finalOwned.session.sessionIdHash !== uploadOperation.sessionIdHash || page.isClosed()
+      || new URL(page.url()).origin !== "https://creator.douyin.com"
+      || new URL(page.url()).pathname !== "/creator-micro/content/post/image"
+      || ctx.settings.expectedLoginGeneration !== uploadOperation.loginGeneration
+      || await this.readOwnedCreatorId(ctx, finalOwned) !== creatorId)
+      throw new DouyinPreMusicInvariantError("DOUYIN_PRE_MUSIC_EVIDENCE_STALE");
+    this.prepared.set(ctx.accountId, { frozen, page, context: owned.session.context, settings: postSettings, previewDigest });
     return { prepared: true, requiresUserAction: true, message: "Douyin image-text editor readback passed; waiting for one-shot authorization",
       sessionIdHash: owned.session.sessionIdHash, backendUrl: page.url(), editorOpenedAt: new Date().toISOString(),
       titleFilled: true, bodyFilled: true, response: { adapter: "douyin-image-text-browser", imageUploaded: true,
@@ -694,12 +728,12 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
         preMusicAmbiguousCount: preMusicEvidence.diagnostic.ambiguousNodes,
         preMusicCorrelationHash: createHash("sha256").update(`${preMusicEvidence.sessionIdHash}:${preMusicEvidence.preparationId}:${preMusicEvidence.evidenceId}`).digest("hex"),
         postMusicReadback,
-        expectedCreatorId: creatorId, settingsSnapshot: settings, mandatorySelections: settings.selectedMandatory,
-        rawBodyUtf16Length: bodyReadback.rawInnerText.length,
-        rawTextContentUtf16Length: bodyReadback.rawTextContent.length,
-        semanticBodyUtf16Length: bodyReadback.semanticText.length,
-        terminalPlaceholderIgnored: bodyReadback.terminalPlaceholderIgnored,
-        bodyStructureClass: bodyReadback.structureClass,
+        expectedCreatorId: creatorId, settingsSnapshot: postSettings, mandatorySelections: postSettings.selectedMandatory,
+        rawBodyUtf16Length: postBodyReadback.rawInnerText.length,
+        rawTextContentUtf16Length: postBodyReadback.rawTextContent.length,
+        semanticBodyUtf16Length: postBodyReadback.semanticText.length,
+        terminalPlaceholderIgnored: postBodyReadback.terminalPlaceholderIgnored,
+        bodyStructureClass: postBodyReadback.structureClass,
         finalSubmitCount: 0 } };
   }
 
