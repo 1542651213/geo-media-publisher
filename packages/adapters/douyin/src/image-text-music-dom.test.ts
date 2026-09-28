@@ -38,6 +38,8 @@ describe.skipIf(!existsSync("C:/Program Files/Google/Chrome/Application/chrome.e
       expect(observed.classification).toBe("TRACK");
       expect(observed.drawerPresent).toBe(true);
       expect(assertDouyinMusicReadback(track, observed)).toBe("PASS_TRACK");
+      expect(assertDouyinMusicReadback({ ...track, trackId: null,
+        identity: "text:舒缓纯音乐\u0000平台音乐人\u000001:30" }, observed)).toBe("PASS_TRACK");
       expect(() => assertDouyinMusicReadback(none, observed)).toThrow("DOUYIN_MUSIC_READBACK_MISMATCH");
       expect(() => assertDouyinMusicReadback({ ...track, title: "另一首" }, observed)).toThrow();
       expect(() => assertDouyinMusicReadback({ ...track, trackId: "track-b" }, observed)).toThrow();

@@ -74,7 +74,8 @@ export function assertDouyinMusicReadback(expected: DouyinMusicBinding, observed
   if (observed.classification !== "TRACK" || !track || track.title !== expected.title
     || track.artist !== expected.artist || track.duration !== expected.duration
     || (expected.trackId && track.trackId !== expected.trackId)
-    || douyinMusicIdentityKey(track) !== expected.identity)
+    || (expected.trackId ? `id:${expected.trackId.trim()}` :
+      `text:${track.title.trim()}\u0000${track.artist.trim()}\u0000${track.duration.trim()}`) !== expected.identity)
     throw new Error("DOUYIN_MUSIC_READBACK_MISMATCH");
   return "PASS_TRACK";
 }
