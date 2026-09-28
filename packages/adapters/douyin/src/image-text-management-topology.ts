@@ -20,6 +20,13 @@ export interface DouyinManagementTopology {
     classSummary: string }>;
   scrollContainers: Array<{ tag: string; role: string | null; classSummary: string;
     clientHeight: number; scrollHeight: number; scrollTop: number; overflowY: string; visibleAnchorCount: number }>;
+  listStructure: { listCount: number; directChildCount: number | null;
+    firstBranch: Array<{ depth: number; tag: string; role: string | null; classSummary: string;
+      childElementCount: number; directTextLength: number; totalTextLength: number;
+      dataAttributeNames: string[]; exactTargetIdInData: boolean; knownStateLabels: string[] }>;
+    statusAncestorChains: Array<Array<{ tag: string; role: string | null; classSummary: string;
+      childElementCount: number; totalTextLength: number; dataAttributeNames: string[];
+      exactTargetIdInData: boolean }>> };
   loadingIndicatorCount: number;
   endOfListSignal: boolean;
   source: "APP_OWNED_MANAGEMENT_PAGE";
@@ -116,12 +123,48 @@ export async function inspectDouyinManagementTopology(page: Page, context: Brows
         scrollHeight: element.scrollHeight, scrollTop: element.scrollTop,
         overflowY: getComputedStyle(element).overflowY,
         visibleAnchorCount: [...element.querySelectorAll("a[href]")].filter(visible).length }));
+    const listElements = [...document.querySelectorAll<HTMLElement>('div[class*="list-scroll-"]')]
+      .filter(visible);
+    const list = listElements.length === 1 ? listElements[0] : null;
+    const listStructure: DouyinManagementTopology["listStructure"] = {
+      listCount: listElements.length, directChildCount: list?.children.length ?? null,
+      firstBranch: [], statusAncestorChains: []
+    };
+    if (list) {
+      const queue: Array<{ element: Element; depth: number }> = [...list.children].slice(0, 3)
+        .map((element) => ({ element, depth: 0 }));
+      while (queue.length > 0 && listStructure.firstBranch.length < 60) {
+        const current = queue.shift()!;
+        if (!visible(current.element)) continue;
+        const directTextLength = [...current.element.childNodes]
+          .filter((child) => child.nodeType === Node.TEXT_NODE)
+          .reduce((count, child) => count + (child.textContent?.length ?? 0), 0);
+        listStructure.firstBranch.push({ depth: current.depth, ...node(current.element),
+          childElementCount: current.element.children.length, directTextLength,
+          totalTextLength: text(current.element).length,
+          knownStateLabels: ["已发布", "审核中", "未通过"].filter((label) => text(current.element).includes(label)) });
+        if (current.depth < 5) queue.push(...[...current.element.children].slice(0, 8)
+          .map((element) => ({ element, depth: current.depth + 1 })));
+      }
+      const stateNodes = [...list.querySelectorAll<HTMLElement>('[class*="info-status-"]')]
+        .filter(visible).slice(0, 2);
+      for (const stateNode of stateNodes) {
+        const chain: DouyinManagementTopology["listStructure"]["statusAncestorChains"][number] = [];
+        let cursor: Element | null = stateNode;
+        while (cursor && cursor !== list.parentElement && chain.length < 9) {
+          chain.push({ ...node(cursor), childElementCount: cursor.children.length,
+            totalTextLength: text(cursor).length });
+          cursor = cursor.parentElement;
+        }
+        listStructure.statusAncestorChains.push(chain);
+      }
+    }
     const loadingIndicatorCount = [...document.querySelectorAll<HTMLElement>(
       '[aria-busy="true"],[role="progressbar"],[class*="loading"],[class*="spinner"]')]
       .filter(visible).length;
     const endOfListSignal = /没有更多|暂无更多|已经到底|已加载全部|没有更多作品/u.test(document.body.innerText);
     return { searchControls, statusControls, visibleAnchorCount: anchors.length, anchorSamples,
-      rowCandidateCount: rowCandidates.length, rowSamples, paginationControls, scrollContainers,
+      rowCandidateCount: rowCandidates.length, rowSamples, paginationControls, scrollContainers, listStructure,
       loadingIndicatorCount, endOfListSignal };
   }, targetRemoteId);
   const reviewControl = page.getByText("审核状态", { exact: true });

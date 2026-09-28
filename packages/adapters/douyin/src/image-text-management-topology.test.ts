@@ -85,4 +85,17 @@ describe.skipIf(!existsSync(chrome))("Douyin bounded app-owned management topolo
     expect(result.loadingIndicatorCount).toBe(0);
     expect(result.rowSamples.some((row) => row.exactTargetIdInData)).toBe(true);
   }, 15_000);
+
+  it("describes a bounded linkless status-card hierarchy without historical row text", async () => {
+    const { context, page } = await fixture(`<!doctype html><html><body>
+      <input placeholder="搜索作品"><div class="list-scroll-real" style="height:150px;overflow-y:auto">
+      <div class="list-inner"><div class="card"><div class="card-title">Private historical title</div>
+      <div class="info-status-real">已发布</div></div></div></div></body></html>`);
+    const result = await inspectDouyinManagementTopology(page, context, targetId);
+    expect(result.listStructure.listCount).toBe(1);
+    expect(result.listStructure.firstBranch.map((node) => node.classSummary)).toContain("card");
+    expect(result.listStructure.statusAncestorChains[0]?.map((node) => node.classSummary))
+      .toEqual(expect.arrayContaining(["info-status-real", "card", "list-scroll-real"]));
+    expect(JSON.stringify(result.listStructure)).not.toContain("Private historical title");
+  });
 });
