@@ -1,14 +1,19 @@
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   assertElectronNativeRuntime,
+  assertRuntimeArtifactHashes,
   runElectronCandidateAfterChecks,
   validateDouyinCandidateScript
-} from "../scripts/douyin-acceptance-electron-runtime";
+} from "../scripts/douyin-acceptance-electron-runtime.mjs";
 
 const temporaryRoots: string[] = [];
+const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "douyin-abi-"));
@@ -27,6 +32,44 @@ afterEach(() => {
 });
 
 describe("Douyin acceptance Electron ABI gate", () => {
+  it("checks exact installer, executable, archive, and Main bytes before candidate import", async () => {
+    const { root, executable } = fixture();
+    const installer = join(root, "installer.exe");
+    const appAsar = join(root, "app.asar");
+    const main = join(root, "main.js");
+    const original = { installer: "installer", executable: "fixture", appAsar: "archive", main: "compiled main" };
+    writeFileSync(installer, original.installer);
+    writeFileSync(appAsar, original.appAsar);
+    writeFileSync(main, original.main);
+    const paths = { installer, executable, appAsar, main };
+    const hash = (value: string) => createHash("sha256").update(value).digest("hex").toUpperCase();
+    const expected = {
+      installer: hash(original.installer), executable: hash(original.executable),
+      appAsar: hash(original.appAsar), main: hash(original.main)
+    };
+    await expect(assertRuntimeArtifactHashes(paths, expected)).resolves.toBeUndefined();
+    for (const [key, code] of [
+      ["installer", "DOUYIN_ACCEPTANCE_INSTALLER_HASH_MISMATCH"],
+      ["executable", "DOUYIN_ACCEPTANCE_EXE_HASH_MISMATCH"],
+      ["appAsar", "DOUYIN_ACCEPTANCE_ASAR_HASH_MISMATCH"],
+      ["main", "DOUYIN_ACCEPTANCE_MAIN_HASH_MISMATCH"]
+    ] as const) {
+      writeFileSync(paths[key], "tampered");
+      await expect(assertRuntimeArtifactHashes(paths, expected)).rejects.toThrow(code);
+      writeFileSync(paths[key], original[key]);
+    }
+  });
+
+  it("loads the CLI before rejecting an invalid candidate without launching Electron", () => {
+    const result = spawnSync(process.execPath, [
+      "--import", "tsx",
+      join(workspaceRoot, "scripts", "douyin-acceptance-electron-runtime.mts"),
+      "--candidate-script", "package.json"
+    ], { cwd: workspaceRoot, encoding: "utf8" });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("DOUYIN_ACCEPTANCE_CANDIDATE_PATH_INVALID");
+  });
+
   it("rejects a candidate outside the bounded output directory", () => {
     const { root } = fixture();
     const outside = join(root, "douyin-seed.mts");

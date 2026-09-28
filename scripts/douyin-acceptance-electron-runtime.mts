@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { realpathSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { createReadStream, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -7,6 +8,22 @@ type RuntimeIdentity = {
   electronVersion: string | null;
   executable: string;
   runAsNode: boolean;
+};
+
+type RuntimeArtifacts = {
+  installer: string;
+  executable: string;
+  appAsar: string;
+  main: string;
+};
+
+type RuntimeHashes = RuntimeArtifacts;
+
+const R111_RUNTIME_HASHES: RuntimeHashes = {
+  installer: "2FEAF00A37CB0D9915B36494BC6B4501FCF456FAA67D41CADF6A01053B6F06AD",
+  executable: "A9A10D870DF2EA389B0CD89A9FA2D6910FB4A962028F4CFFDE37C6C7D498C4DF",
+  appAsar: "BF9C38A4073539EE9616D13B290327ECC6549021498E7596BFD32ADB72F7FAF7",
+  main: "7050F0D81B43D479C97F95B165AD1AAD905821AA8D960B4383828C509F279C98"
 };
 
 type CandidateRun = {
@@ -19,6 +36,38 @@ type CandidateRun = {
 };
 
 const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+async function sha256File(path: string): Promise<string> {
+  const hash = createHash("sha256");
+  const stream = process.versions.electron
+    ? (await import("original-fs")).createReadStream(path)
+    : createReadStream(path);
+  for await (const chunk of stream) hash.update(chunk);
+  return hash.digest("hex").toUpperCase();
+}
+
+export async function assertRuntimeArtifactHashes(paths: RuntimeArtifacts, expected: RuntimeHashes): Promise<void> {
+  for (const [key, code] of [
+    ["installer", "DOUYIN_ACCEPTANCE_INSTALLER_HASH_MISMATCH"],
+    ["executable", "DOUYIN_ACCEPTANCE_EXE_HASH_MISMATCH"],
+    ["appAsar", "DOUYIN_ACCEPTANCE_ASAR_HASH_MISMATCH"],
+    ["main", "DOUYIN_ACCEPTANCE_MAIN_HASH_MISMATCH"]
+  ] as const) {
+    if (await sha256File(paths[key]) !== expected[key]) throw new Error(code);
+  }
+}
+
+async function assertR111RuntimeIdentity(): Promise<RuntimeArtifacts> {
+  const unpackedRoot = join(workspaceRoot, "release", "win-unpacked");
+  const paths = {
+    installer: realpathSync("C:\\Users\\Administrator\\.codex\\artifacts\\douyin-r1-11-aa2d701-short\\Geo Media Publisher Setup 1.1.9.exe"),
+    executable: realpathSync(join(unpackedRoot, "Geo Media Publisher.exe")),
+    appAsar: realpathSync(join(unpackedRoot, "resources", "app.asar")),
+    main: realpathSync(join(workspaceRoot, "out", "main", "main.js"))
+  };
+  await assertRuntimeArtifactHashes(paths, R111_RUNTIME_HASHES);
+  return paths;
+}
 
 function samePath(left: string, right: string): boolean {
   const a = realpathSync(left);
@@ -58,10 +107,6 @@ export async function runElectronCandidateAfterChecks(input: CandidateRun): Prom
   await input.importCandidate(candidate);
 }
 
-function electronExecutable(): string {
-  return realpathSync(join(workspaceRoot, "node_modules", "electron", "dist", "electron.exe"));
-}
-
 async function probeBetterSqlite3InMemory(): Promise<void> {
   const { default: Database } = await import("better-sqlite3");
   const probe = new Database(":memory:");
@@ -69,10 +114,11 @@ async function probeBetterSqlite3InMemory(): Promise<void> {
 }
 
 async function runChild(candidatePath: string): Promise<void> {
+  const runtimeArtifacts = await assertR111RuntimeIdentity();
   await runElectronCandidateAfterChecks({
     candidatePath,
     workspaceRoot,
-    expectedElectronExecutable: electronExecutable(),
+    expectedElectronExecutable: runtimeArtifacts.executable,
     runtime: {
       electronVersion: process.versions.electron ?? null,
       executable: process.execPath,
@@ -90,10 +136,10 @@ async function runChild(candidatePath: string): Promise<void> {
   });
 }
 
-function launchChild(candidatePath: string): number {
+async function launchChild(candidatePath: string): Promise<number> {
   const candidate = validateDouyinCandidateScript(candidatePath, workspaceRoot);
-  const executable = electronExecutable();
-  const result = spawnSync(executable, ["--import", "tsx", fileURLToPath(import.meta.url), "--electron-child", candidate], {
+  const runtimeArtifacts = await assertR111RuntimeIdentity();
+  const result = spawnSync(runtimeArtifacts.executable, ["--import", "tsx", fileURLToPath(import.meta.url), "--electron-child", candidate], {
     cwd: workspaceRoot,
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
     stdio: "inherit",
@@ -111,6 +157,6 @@ if (process.argv[1] && samePath(process.argv[1], fileURLToPath(import.meta.url))
   if (mode === "--electron-child") {
     await runChild(candidatePath);
   } else {
-    process.exitCode = launchChild(candidatePath);
+    process.exitCode = await launchChild(candidatePath);
   }
 }
