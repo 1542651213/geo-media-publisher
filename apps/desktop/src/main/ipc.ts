@@ -610,7 +610,9 @@ export function registerIpc(deps: IpcDependencies): void {
       return { status: "NO_STORED_AUTH" as const, creatorId: null, pageHost: null, sessionIdHash: null };
     const adapter = registry.getForContent("douyin", "article");
     if (!(adapter instanceof DouyinImageTextBrowserAdapter)) throw new Error("Douyin image/text BrowserNative route is unavailable");
-    const result = await adapter.activateStoredCreatorSession(accountContext(input.accountId, "douyin", createUserAction("OPEN_BACKEND")));
+    const result = await adapter.activateStoredCreatorSession(accountContext(input.accountId, "douyin", createUserAction("OPEN_BACKEND")),
+      Boolean(process.env.DOUYIN_R1_14_READONLY_JOB_ID && process.env.DOUYIN_R1_14_READONLY_JOB_ID.trim()
+        && process.env.DOUYIN_IMAGE_TEXT_NATIVE_SUBMIT_ENABLED !== "true"));
     logger.info("ACCOUNT", "DOUYIN_IMAGE_TEXT_SESSION_ACTIVATION", "抖音图文受控会话激活检查", {
       accountId: input.accountId, status: result.status, pageHost: result.pageHost, sessionIdHash: result.sessionIdHash });
     return result;

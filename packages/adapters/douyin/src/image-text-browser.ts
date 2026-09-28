@@ -14,6 +14,7 @@ import { DouyinImagePostObserver } from "./image-text-observer";
 import { observeDouyinImageEditor, selectAndObserveDouyinImage } from "./image-text-upload";
 import { inspectDouyinManagementControls, inspectDouyinManagementReadOnlyNavigation } from "./image-text-management-preflight";
 import { inspectDouyinManagementTopology, type DouyinManagementTopology } from "./image-text-management-topology";
+import { revealDouyinCreatorIdentityReadOnly, type DouyinIdentityMenuProbe } from "./image-text-identity-menu";
 import { inspectDouyinBodyPage, type DouyinBodyPageDiagnostic } from "./image-text-body-diagnostic";
 import { readDouyinBodyText, type DouyinBodyReadback } from "./image-text-body-readback";
 import { assertDouyinMusicReadback, chooseDouyinMusic, clickRecommendedDouyinMusicOnce, douyinMusicDrawerRows, douyinMusicIdentityKey,
@@ -171,7 +172,9 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
   async releaseConnectionPage(_ctx: AccountContext): Promise<void> { /* retained until explicit logout or app shutdown */ }
 
   /** Restores only this account's encrypted BrowserSession; a hidden identity stays unverified. */
-  async activateStoredCreatorSession(ctx: AccountContext): Promise<{ status: "ACTIVE" | "WAITING_FOR_OWNER" | "IDENTITY_MISMATCH"; creatorId: string | null; pageHost: string | null; sessionIdHash: string | null }> {
+  async activateStoredCreatorSession(ctx: AccountContext, revealIdentityMenuReadOnly = false): Promise<{
+    status: "ACTIVE" | "WAITING_FOR_OWNER" | "IDENTITY_MISMATCH"; creatorId: string | null;
+    pageHost: string | null; sessionIdHash: string | null; identityMenuProbe?: DouyinIdentityMenuProbe }> {
     const expected = typeof ctx.settings.expectedCreatorId === "string" ? ctx.settings.expectedCreatorId.trim() : "";
     if (!expected) throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_CREATOR_BINDING_REQUIRED");
     const existing = await this.activeCanonicalPage(ctx);
@@ -182,9 +185,16 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     const pageHost = new URL(owned.page.url()).host;
     if (pageHost !== "creator.douyin.com" || /login|passport|captcha|verify/iu.test(owned.page.url()))
       return { status: "WAITING_FOR_OWNER", creatorId: null, pageHost, sessionIdHash: owned.session.sessionIdHash };
-    const creatorId = await this.readOwnedCreatorId(ctx, owned);
+    let creatorId = await this.readOwnedCreatorId(ctx, owned);
+    let identityMenuProbe: DouyinIdentityMenuProbe | undefined;
+    if (!creatorId && revealIdentityMenuReadOnly) {
+      const observed = await revealDouyinCreatorIdentityReadOnly(owned.page,
+        async () => this.readVisibleCreatorId(owned.page));
+      identityMenuProbe = observed.probe;
+      if (observed.creatorId) creatorId = await this.readOwnedCreatorId(ctx, owned);
+    }
     return { status: !creatorId ? "WAITING_FOR_OWNER" : creatorId === expected ? "ACTIVE" : "IDENTITY_MISMATCH",
-      creatorId, pageHost, sessionIdHash: owned.session.sessionIdHash };
+      creatorId, pageHost, sessionIdHash: owned.session.sessionIdHash, identityMenuProbe };
   }
 
   /** Reports the actual account-owned BrowserSession and canonical Page without opening a new Context. */
