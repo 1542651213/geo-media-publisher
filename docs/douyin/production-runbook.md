@@ -1,5 +1,13 @@
 # Douyin image/text R1 runbook
 
+## R1.13 Core no-music acceptance (2026-09-28)
+
+Smart Music is deferred for this Core acceptance. R110 Article `40a8c738-417a-4460-bce3-63297eddf313` and Job `75bf2065-7ed8-46f1-8b58-bb2f5cc01a2d` retain their one upload claim and `NeedsUserAction` history with no Intent, Record or final claim. The old task-owned runtime closed normally after a read-only audit; no Creator draft button was used. Do not retry or recover R110 for this acceptance.
+
+The new candidate must request `musicMode=NONE` before editor preparation. In this mode the adapter does not inspect the music DOM, open the drawer, parse recommendations, select a track or perform a music readback during preparation or final preflight. Optional selection controls are excluded from the Core settings snapshot, so a music UI toggle cannot alter its frozen binding; actual public/immediate controls and required fields remain checked. Its frozen binding still records `{mode:"NONE"}` as the system-selected music state. Core gates remain exact image association, title, Slate semantic body, public and immediate settings, account/Context ownership, management readiness and the one-shot final claim. `AUTO_RECOMMENDED` remains subject to the strict music gates and is not enabled for this run. An unsupported music mode is rejected before preparation.
+
+Offline focused tests 14/14, full tests 1066/1066, typecheck, lint and build passed. The independent package and live acceptance are pending. Only after verifying the independent runtime, account and management page may the new Article/Job be created. One new upload and one final BrowserNative action are the authorized limits. After any final claim, only read-only reconciliation is allowed. Ordinary production submit and batch remain OFF.
+
 ## R1.12 R110 one-shot preparation stopped before music selection (2026-09-28)
 
 Owner authorized **only** the existing R110 Article `40a8c738-417a-4460-bce3-63297eddf313` and Job `75bf2065-7ed8-46f1-8b58-bb2f5cc01a2d` for one image selection, one fill per field, at most one music selection and at most one BrowserNative final action after all gates. The R1.11 acceptance launcher needed a CLI-only `.mts`/runtime-hash guard fix (`1f7ea1f095cb9df5095bc37d99c2e03b038b025c`) before it could run. R1.11 app code `aa2d701baa3892d69b832de90fe502c71b8dfdb7` and its installer/EXE/app.asar/Main hashes remained unchanged and matched. Full regression eventually passed 152 files / 1062 tests with bounded concurrency and a 15-second test timeout after one default 5-second Playwright timeout; typecheck and lint passed. The Electron-ABI runner's initial read-only DB audit confirmed the exact candidate binding and no prior upload, Intent, Record or final claim.

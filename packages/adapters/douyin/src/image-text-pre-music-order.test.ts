@@ -62,11 +62,13 @@ async function fixture(input: Parameters<typeof html>[0] = {}): Promise<{
 }> {
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.route("https://creator.douyin.com/**", (route) => route.fulfill({ status: 200,
-    contentType: "text/html; charset=utf-8", body: html(input) }));
+  await context.route("https://creator.douyin.com/**", (route) => route.fulfill({ status: 200,
+    contentType: "text/html; charset=utf-8", body: new URL(route.request().url()).pathname.endsWith("/manage")
+      ? '<html><body><input placeholder="搜索作品"><button>已发布</button><button>审核中</button><button>未通过</button></body></html>'
+      : html(input) }));
   await page.goto(editorUrl);
   await page.locator("main img").evaluate((image) => (image as HTMLImageElement).decode());
-  const adapter = new DouyinImageTextBrowserAdapter({ credentialStore: store });
+  const adapter = new DouyinImageTextBrowserAdapter({ credentialStore: store, nativeSubmitEnabled: true });
   const session = { context, page, executionMode: "VISIBLE", sessionIdHash: "test-session" };
   let canonicalPage = page;
   let replacement: Page | null = null;
@@ -150,6 +152,70 @@ describe.skipIf(!existsSync("C:/Program Files/Google/Chrome/Application/chrome.e
       expect(result.response).toMatchObject({ preMusicDiagnosticRun: true, preMusicClassification: "NONE",
         postMusicReadback: "PASS_NONE", musicBinding: { mode: "NONE" } });
       expect(await page.evaluate(() => (window as Window & { actions?: string[] }).actions)).toEqual(["title fill", "body fill", "drawer open"]);
+    } finally { await page.context().close(); }
+  });
+
+  it("prepares and final-preflights an explicit NONE candidate without reading an unknown music DOM", async () => {
+    const { adapter, page, ctx, article } = await fixture();
+    try {
+      ctx.settings.expectedMusicMode = "NONE";
+      await page.evaluate(() => {
+        const main = document.querySelector("main")!;
+        const replacement = document.createElement("section");
+        replacement.className = "upload-preview";
+        while (main.firstChild) replacement.appendChild(main.firstChild);
+        main.replaceWith(replacement);
+        document.querySelector("[data-douyin-music-region]")!.innerHTML =
+          '<span>选择音乐</span><button aria-pressed="true">选择音乐</button><div>未知音乐结构</div>';
+      });
+      const musicDomCalls = vi.spyOn(page, "evaluate");
+      const prepared = await adapter.preparePublish(ctx, article);
+      expect(prepared.response).toMatchObject({ musicModeRequested: "NONE", musicBinding: { mode: "NONE" },
+        musicFeatureEnabled: false, musicDomGateExecuted: false });
+      expect(await page.evaluate(() => (window as Window & { actions?: string[] }).actions))
+        .toEqual(["title fill", "body fill"]);
+      await page.locator('[data-douyin-music-region] [aria-pressed]').evaluate((element) => element.setAttribute("aria-pressed", "false"));
+      const finalPreflight = await adapter.prepareFinalSubmit(ctx, article);
+      expect(finalPreflight.response).toMatchObject({ stage: "final_submit_preflight", titleReadback: true,
+        bodyReadback: true, settingsReadback: true });
+      expect(musicDomCalls.mock.calls.filter(([fn]) => typeof fn === "function"
+        && fn.name === "inspectDouyinMusicDocument")).toHaveLength(0);
+    } finally { await page.context().close(); }
+  });
+
+  it("keeps AUTO strict when the main editor music structure is unknown", async () => {
+    const { adapter, page, ctx, article } = await fixture();
+    try {
+      await page.evaluate(() => {
+        const main = document.querySelector("main")!;
+        const replacement = document.createElement("section");
+        replacement.className = "upload-preview";
+        while (main.firstChild) replacement.appendChild(main.firstChild);
+        main.replaceWith(replacement);
+      });
+      await expect(adapter.preparePublish(ctx, article)).rejects.toThrow("DOUYIN_PRE_MUSIC_UNKNOWN");
+      expect(await page.evaluate(() => (window as Window & { actions?: string[] }).actions))
+        .toEqual(["title fill", "body fill"]);
+    } finally { await page.context().close(); }
+  });
+
+  it("rejects an unknown music policy before any editor preparation", async () => {
+    const { adapter, page, ctx, article } = await fixture();
+    try {
+      ctx.settings.expectedMusicMode = "UNRECOGNIZED";
+      await expect(adapter.preparePublish(ctx, article)).rejects.toThrow("DOUYIN_MUSIC_POLICY_INVALID");
+      expect(await page.evaluate(() => (window as Window & { actions?: string[] }).actions)).toEqual([]);
+    } finally { await page.context().close(); }
+  });
+
+  it("still checks music at final preflight when AUTO selected no track", async () => {
+    const { adapter, page, ctx, article } = await fixture();
+    try {
+      const prepared = await adapter.preparePublish(ctx, article);
+      expect(prepared.response).toMatchObject({ musicModeRequested: "AUTO_RECOMMENDED",
+        musicBinding: { mode: "NONE" }, postMusicReadback: "PASS_NONE" });
+      await page.locator("[data-douyin-music-region]").evaluate((element) => element.remove());
+      await expect(adapter.prepareFinalSubmit(ctx, article)).rejects.toThrow("DOUYIN_MUSIC_READBACK_MISMATCH");
     } finally { await page.context().close(); }
   });
 
