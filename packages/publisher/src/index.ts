@@ -198,8 +198,37 @@ export class PublisherService {
     if (managementReconciliation && (!intent || intent.finalSubmitCount !== 1)) throw new Error("Toutiao management reconciliation requires a persisted final submit claim");
     if (managementReconciliation && typeof existingRecord?.response.expectedCreatorId === "string"
       && existingRecord.response.expectedCreatorId !== expectedCreatorId) throw Object.assign(new Error("Browser reconciliation account identity differs from the prepared binding"), { code: "USER_ACTION_REQUIRED" });
-    if (job.platformKey === "douyin" && existingRecord?.response.expectedLoginGeneration !== douyinConnection?.loginGeneration)
-      throw Object.assign(new Error("Douyin login generation changed after preparation"), { code: "USER_ACTION_REQUIRED" });
+    if (job.platformKey === "douyin") {
+      const preparedGeneration = existingRecord?.response.expectedLoginGeneration;
+      if (preparedGeneration === undefined) {
+        // Earlier accepted responses replaced the Prepared response without this field. The one-time
+        // file-selection claim is durable and can recover the original binding for read-only lookup.
+        const selection = this.repository.getPublishPayload(job.id).douyinImageSelection;
+        const claim = selection && typeof selection === "object" && !Array.isArray(selection)
+          ? selection as Record<string, unknown> : null;
+        const original = selectedImage && expectedCreatorId && job.imageSelectionMode === "manual"
+          && selectedImage.brandId === article.brandId
+          ? await freezeDouyinImageText({ articleId: article.id, accountId: account.id, creatorId: expectedCreatorId,
+            title: input.title, body: input.body, imagePaths: [selectedImage.filePath], topics: [],
+            visibility: "public", scheduledAt: null }) : null;
+        if (!douyinConnection?.active || !existingRecord || !claim || !original
+          || existingRecord.accountId !== account.id || existingRecord.articleId !== article.id
+          || existingRecord.selectedImageAssetId !== selectedImage?.id
+          || existingRecord.browserSessionIdHash !== douyinConnection.browserSessionIdHash
+          || existingRecord.response.expectedCreatorId !== douyinConnection.creatorId
+          || existingRecord.response.contentTransport !== adapter.getCapabilities().contentTransport
+          || existingRecord.response.preparedInputHash !== hashPreparedBrowserArticleInput(input)
+          || claim.stage !== "FILE_SELECTION_DISPATCHED" || typeof claim.operationId !== "string" || !claim.operationId
+          || claim.accountId !== account.id || claim.articleId !== article.id
+          || claim.sessionIdHash !== douyinConnection.browserSessionIdHash
+          || claim.loginGeneration !== douyinConnection.loginGeneration
+          || claim.imageSha256 !== original.imageHashes[0]
+          || claim.sourceContentHash !== original.sourceContentHash)
+          throw Object.assign(new Error("Douyin legacy reconciliation binding cannot be uniquely verified"), { code: "USER_ACTION_REQUIRED" });
+      } else if (preparedGeneration !== douyinConnection?.loginGeneration) {
+        throw Object.assign(new Error("Douyin login generation changed after preparation"), { code: "USER_ACTION_REQUIRED" });
+      }
+    }
     const boundaryAt = intent?.submitBoundaryEnteredAt ?? job.startedAt ?? job.createdAt;
     const createdAt = Date.parse(managementReconciliation ? boundaryAt : job.startedAt ?? job.createdAt);
     const windowStart = Number.isFinite(createdAt) ? new Date(createdAt - (managementReconciliation ? 15 : 5) * 60_000).toISOString() : job.createdAt;
@@ -595,7 +624,13 @@ export class PublisherService {
           ...result.response,
           ...(managementReconciliation ? { contentTransport: adapter.getCapabilities().contentTransport, preparedInputHash: preparedRecord?.response.preparedInputHash,
             expectedCreatorId: preparedRecord?.response.expectedCreatorId } : {}),
-          ...(job.platformKey === "douyin" && preparedRecord ? { musicBinding: preparedRecord.response.musicBinding } : {}),
+          ...(job.platformKey === "douyin" && preparedRecord ? {
+            expectedLoginGeneration: preparedRecord.response.expectedLoginGeneration,
+            sourceContentHash: preparedRecord.response.sourceContentHash,
+            contentBindingHash: preparedRecord.response.contentBindingHash,
+            imageHashes: preparedRecord.response.imageHashes,
+            mandatorySelections: preparedRecord.response.mandatorySelections,
+            musicBinding: preparedRecord.response.musicBinding } : {}),
           selectedImageAssetId: job.selectedImageAssetId ?? null,
           imageSelectionMode: job.imageSelectionMode ?? "none",
           imageInsertion: job.selectedImageAssetId ? result.response.imageUploaded === true ? "uploaded_verified" : "failed" : "none"
