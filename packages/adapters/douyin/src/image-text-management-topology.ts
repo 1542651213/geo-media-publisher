@@ -32,7 +32,10 @@ export interface DouyinManagementTopology {
     exactIdTextCardCount: number; loadingVisible: boolean; routePreserved: boolean;
     targetCards: Array<{ titleNodeClass: string | null; titleNodeTag: string | null;
       knownStateLabels: string[]; markerPresent: boolean; exactIdInAnyAttribute: boolean;
-      imageCount: number; actionLabels: string[]; descendantClasses: string[] }> }>;
+      imageCount: number; actionLabels: string[]; timeText: string | null;
+      controls: Array<{ tag: string; role: string | null; classSummary: string; text: string;
+        title: string | null; cursor: string; hasHref: boolean; hasOnclickAttribute: boolean }>;
+      descendantClasses: string[] }> }>;
   loadingIndicatorCount: number;
   endOfListSignal: boolean;
   source: "APP_OWNED_MANAGEMENT_PAGE";
@@ -215,13 +218,27 @@ export async function inspectDouyinManagementTopology(page: Page, context: Brows
       const cards = [...document.querySelectorAll<HTMLElement>('[class*="content-body-"] > [class*="video-card-"]')];
       const exactAttribute = (card: Element): boolean => [card, ...card.querySelectorAll("*")]
         .some((element) => [...element.attributes].some((attribute) => attribute.value === id));
-      const matched = cards.filter((card) => title && (card.innerText ?? "").includes(title)).slice(0, 4);
+      const matched = cards.filter((card) => title && (card.innerText ?? "").includes(title)
+        && (!marker || (card.innerText ?? "").includes(marker))).slice(0, 4);
       const targetCards = matched.map((card) => {
         const titleNode = [...card.querySelectorAll<HTMLElement>("*")]
           .find((element) => element.children.length === 0 && (element.innerText ?? "").trim() === title);
         const texts = [...card.querySelectorAll<HTMLElement>('button,[role="button"],a')]
           .map((element) => (element.innerText ?? "").replace(/\s+/gu, " ").trim())
           .filter((value) => value.length > 0 && value.length <= 24).slice(0, 12);
+        const controlNodes = [...card.querySelectorAll<HTMLElement>(
+          '[class*="info-title-text-"],[class*="video-card-cover-"],[class*="op-btns-"],[class*="edit-btn-"],[class*="ghost-btn-"],[class*="op-btn-"],button,a,[role="button"]')]
+          .slice(0, 20);
+        const controls = controlNodes.map((element) => ({ tag: element.tagName.toLowerCase(),
+          role: element.getAttribute("role"),
+          classSummary: (typeof element.className === "string" ? element.className : "")
+            .replace(/[^\p{L}\p{N}_\-\s]/gu, "").slice(0, 100),
+          text: (element.innerText ?? "").replace(/\s+/gu, " ").trim().slice(0, 100),
+          title: element.getAttribute("title")?.slice(0, 60) ?? null,
+          cursor: getComputedStyle(element).cursor, hasHref: element.hasAttribute("href"),
+          hasOnclickAttribute: element.hasAttribute("onclick") }));
+        const timeText = card.querySelector<HTMLElement>('[class*="info-time-"]')?.innerText
+          .replace(/\s+/gu, " ").trim().slice(0, 80) ?? null;
         return { titleNodeClass: titleNode && typeof titleNode.className === "string"
           ? titleNode.className.replace(/[^\p{L}\p{N}_\-\s]/gu, "").slice(0, 100) : null,
         titleNodeTag: titleNode?.tagName.toLowerCase() ?? null,
@@ -230,7 +247,8 @@ export async function inspectDouyinManagementTopology(page: Page, context: Brows
             .some((element) => (element.innerText ?? "").trim() === label)),
         markerPresent: Boolean(marker && (card.innerText ?? "").includes(marker)),
         exactIdInAnyAttribute: exactAttribute(card), imageCount: card.querySelectorAll("img").length,
-        actionLabels: texts, descendantClasses: [...card.querySelectorAll<HTMLElement>("*")]
+        actionLabels: texts, timeText, controls,
+        descendantClasses: [...card.querySelectorAll<HTMLElement>("*")]
           .filter((element) => typeof element.className === "string" && element.className.length > 0)
           .map((element) => (element.className as string).replace(/[^\p{L}\p{N}_\-\s]/gu, "").slice(0, 100))
           .slice(0, 45) };
