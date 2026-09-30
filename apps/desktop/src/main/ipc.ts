@@ -9,6 +9,7 @@ import { protocolShadowEnabled } from "@publisher/adapters-toutiao/article-api";
 import { ToutiaoArticleBrowserAdapter } from "@publisher/adapters-toutiao/browser";
 import { DouyinImageTextBrowserAdapter } from "@publisher/adapters-douyin/image-text-browser";
 import { freezeDouyinImageText } from "@publisher/domain/douyin-image-text";
+import { assertDouyinImageTextTitle, b01ArticleMarker } from "@publisher/domain";
 import { backupDatabase, validateDatabaseBackup, type AIBatchTarget, type AppRepository, type ContentStudioTaskPayload, type HumanReviewSubmitInput } from "@publisher/db";
 import type { AccountDisconnectResult, BatchGenerationInput, ContentStudioGenerationInput } from "../shared/api";
 import { AIProviderError, DeepSeekErrorMapper, DeepSeekProvider, FallbackAIProvider, MockAIProvider, OpenAICompatibleProvider, contentHash, type AIConnectionDiagnostic, type AIConnectionResult, type AIProvider } from "@publisher/ai";
@@ -553,11 +554,12 @@ export function registerIpc(deps: IpcDependencies): void {
     const account = repository.getAccountById(input.accountId, "douyin");
     const article = repository.getArticle(input.articleId);
     const image = repository.getImageAsset(input.imageAssetId);
-    const marker = article?.title.match(/GMP-R115-B01-\d{10,}/u)?.[0];
+    const marker = article ? b01ArticleMarker(article.title, article.body) : null;
     if (!account || account.archivedAt || !account.enabled || !article || !marker || !article.body.includes(marker)
       || !image?.enabled || image.brandId !== article.brandId || !existsSync(image.filePath))
       throw new Error("B01_EXACT_NEW_TEST_SELECTION_REQUIRED");
-    if (repository.getB01Authorization()) throw new Error("B01_AUTHORIZATION_ALREADY_EXISTS");
+    assertDouyinImageTextTitle(article.title);
+    if (!repository.canCreateB01Authorization()) throw new Error("B01_AUTHORIZATION_ALREADY_EXISTS");
     const answer = await dialog.showMessageBox({ type: "warning", title: "B01 单次产品验收授权",
       message: "确认仅为当前账号、文章和单张图片创建一次验收授权？",
       detail: `账号：${account.accountAlias || account.name}\n文章：${article.title}\n图片：${image.name}\n\n此操作不批准最终提交；授权创建后不可改绑或重建。`,
@@ -571,12 +573,19 @@ export function registerIpc(deps: IpcDependencies): void {
     const eligibility = repository.b01Eligibility(input);
     logger.info("B01", "OWNER_AUTHORIZATION_CREATED", "B01 单次验收授权已由 Main 创建", {
       accountId: authorization.accountId, articleId: authorization.articleId, imageAssetId: authorization.imageAssetId });
-    return { id: "R1.15-B01", status: authorization.status, eligible: eligibility.eligible, reason: eligibility.reason };
+    return { id: authorization.id, status: authorization.status, eligible: eligibility.eligible, reason: eligibility.reason };
+  });
+  register("b01:retire-preboundary", async (_event, payload) => {
+    const { jobId } = z.strictObject({ jobId: idSchema }).parse(payload);
+    if (!deps.b01AcceptanceEnabled) throw new Error("B01_CANDIDATE_CAPABILITY_REQUIRED");
+    const result = repository.retireB01Preboundary(jobId);
+    logger.info("B01", "PREBOUNDARY_RETIRED", "Owner 撤销未提交的 B01 尝试；历史与冻结内容保留", { jobId, authorizationId: result.id });
+    return { status: result.status, jobId: result.jobId, reason: "此未提交验收已撤销，旧任务永远不能提交。" };
   });
   register("b01:job-status", (_event, payload) => {
     const jobId = z.object({ jobId: idSchema }).parse(payload).jobId;
     if (!deps.b01AcceptanceEnabled) return { eligible: false, status: "Missing", reason: "当前安装版未开放 B01 单次验收" };
-    const status = repository.getB01Authorization()?.status ?? "Missing";
+    const status = repository.getB01Authorization(jobId)?.status ?? "Missing";
     try { repository.assertB01Job(jobId, "final"); return { eligible: true, status, reason: "仅此任务可进行一次 B01 最终提交" }; }
     catch { return { eligible: false, status, reason: status === "Prepared" ? "B01 内容已准备，等待 Owner 单独批准最终提交" : "当前任务没有 B01 最终提交资格" }; }
   });

@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import type Database from "better-sqlite3";
 import { CONTENT_STUDIO_PLATFORM_KEYS, CORE_AI_FABRICATION_RULES, canonicalSerialize, conservativePlatformContentRules, expandKeywords, normalizeContentReviewMode, normalizeToutiaoSettings, redactSecretText, redactSecretValue } from "@publisher/domain";
 import { hashToutiaoContentBinding } from "@publisher/domain/toutiao-hash";
+import { assertDouyinImageTextTitle, b01ArticleMarker } from "@publisher/domain";
 import type { DouyinImageTextJobSettings } from "@publisher/domain/douyin-image-text";
 import type { Account, ActivityLog, AdapterManifest, AIProviderProfile, AIUsage, Article, ArticleVariant, BackgroundAutomationStatus, Brand, BrandAsset, BrandDifferentiationMetrics, BrandKnowledgeCategory, BrandKnowledgeEntry, CityRegion, ContentGoal, ContentIntent, ContentQualityCheckResult, ContentQualityContentType, ContentQualityIssue, ContentQualityStatus, ContentQualityTrigger, ContentReviewMode, ContentSource, ContentStudioContent, ContentStudioPlatformKey, ContentStudioTopicPlan, DashboardStats, ExcelArticleRowInput, ExcelImportDiagnostic, ExcelImportDiagnosticCode, ExcelImportPreview, ExcelImportPreviewRow, ExcelImportResult, ExcelImportSheetCandidate, FinalPublishMode, ImageAsset, ImageSelectionMode, KnowledgeSnapshot, KeywordItem, KeywordTemplate, LoginStatus, Notification, Platform, PlatformCapability, PlatformCapabilities, PlatformContentRules, PlatformProfile, PlatformSelfTestCleanupStatus, PlatformSelfTestLevel, PlatformSelfTestResult, PlatformSelfTestRun, PlatformSelfTestStep, PromotionStrength, PublishJob, PublishPlan, PublishRecord, SearchIntent, VideoAsset } from "@publisher/domain";
 import type { PublishRemoteStatus, ToutiaoArticleSettingsSnapshot, ToutiaoContentBindingInput } from "@publisher/domain";
@@ -37,6 +38,8 @@ export interface AccountAuthorizationView {
 
 export type B01AuthorizationStatus = "Created" | "Bound" | "Prepared" | "FinalApproved" | "Consumed" | "Revoked";
 export interface B01Authorization {
+  id: string;
+  retiredPreboundaryAt: string | null;
   platformKey: "douyin";
   authorizationPurpose: "R1.15-B01";
   accountId: string;
@@ -2238,7 +2241,7 @@ export class AppRepository {
     const article = this.getArticle(input.articleId);
     const image = this.getImageAsset(input.imageAssetId);
     const brand = article ? this.getBrand(article.brandId) : null;
-    const marker = article?.title.match(/GMP-R115-B01-\d{10,}/u)?.[0];
+    const marker = article ? b01ArticleMarker(article.title, article.body) : null;
     if (!account || !article || !b01OrdinaryArticleSource(article) || !brand || !marker || !article.body.includes(marker)
       || (article.company && brand.companyName && article.company.trim() !== brand.companyName.trim())
       || !Number.isFinite(Date.parse(article.createdAt)) || Date.parse(article.createdAt) > Date.now()
@@ -2254,19 +2257,28 @@ export class AppRepository {
     const duplicateMarker = this.db.prepare("SELECT id FROM articles WHERE id<>? AND (title LIKE ? OR body LIKE ?) LIMIT 1")
       .get(article.id, `%${marker}%`, `%${marker}%`) as Row | undefined;
     if (duplicateMarker) throw new Error("B01_MARKER_ALREADY_USED");
+    assertDouyinImageTextTitle(article.title);
+    if (!this.canCreateB01Authorization()) throw new Error("B01_AUTHORIZATION_ALREADY_EXISTS");
+    const id = this.getB01Authorization() ? randomUUID() : "R1.15-B01";
     const snapshot = createHash("sha256").update(canonicalSerialize({ title: article.title, body: article.body,
       summary: article.summary, tags: article.tags })).digest("hex");
     this.db.prepare(`INSERT INTO b01_product_e2e_authorization
       (id,platform_key,authorization_purpose,account_id,article_id,article_content_hash,article_snapshot_sha256,image_asset_id,image_sha256,status,created_at,expires_at)
-      VALUES ('R1.15-B01','douyin','R1.15-B01',?,?,?,?,?,?,'Created',?,?)`)
-      .run(account.id, article.id, article.contentHash, snapshot, image.id, input.imageSha256, now(), input.expiresAt);
+      VALUES (?,'douyin','R1.15-B01',?,?,?,?,?,?,'Created',?,?)`)
+      .run(id, account.id, article.id, article.contentHash, snapshot, image.id, input.imageSha256, now(), input.expiresAt);
     return this.getB01Authorization() as B01Authorization;
   }
 
-  getB01Authorization(): B01Authorization | null {
-    const row = this.db.prepare("SELECT * FROM b01_product_e2e_authorization WHERE id='R1.15-B01'").get() as Row | undefined;
+  canCreateB01Authorization(): boolean {
+    return !this.db.prepare("SELECT id FROM b01_product_e2e_authorization WHERE status!='Revoked' OR retired_preboundary_at IS NULL LIMIT 1").get();
+  }
+
+  getB01Authorization(jobId?: string): B01Authorization | null {
+    const row = (jobId ? this.db.prepare("SELECT * FROM b01_product_e2e_authorization WHERE job_id=?").get(jobId)
+      : this.db.prepare("SELECT * FROM b01_product_e2e_authorization ORDER BY (status!='Revoked') DESC,created_at DESC,rowid DESC LIMIT 1").get()) as Row | undefined;
     if (!row) return null;
-    return { platformKey: "douyin", authorizationPurpose: "R1.15-B01", accountId: textValue(row.account_id), articleId: textValue(row.article_id),
+    return { id: textValue(row.id), retiredPreboundaryAt: typeof row.retired_preboundary_at === "string" ? row.retired_preboundary_at : null,
+      platformKey: "douyin", authorizationPurpose: "R1.15-B01", accountId: textValue(row.account_id), articleId: textValue(row.article_id),
       articleContentHash: textValue(row.article_content_hash), articleSnapshotSha256: textValue(row.article_snapshot_sha256),
       imageAssetId: textValue(row.image_asset_id), imageSha256: textValue(row.image_sha256),
       jobId: typeof row.job_id === "string" ? row.job_id : null, status: textValue(row.status) as B01AuthorizationStatus,
@@ -2281,7 +2293,7 @@ export class AppRepository {
     const article = this.getArticle(auth.articleId);
     const image = this.getImageAsset(auth.imageAssetId);
     const brand = article ? this.getBrand(article.brandId) : null;
-    const marker = article?.title.match(/GMP-R115-B01-\d{10,}/u)?.[0];
+    const marker = article ? b01ArticleMarker(article.title, article.body) : null;
     const duplicateMarker = marker ? this.db.prepare("SELECT id FROM articles WHERE id<>? AND (title LIKE ? OR body LIKE ?) LIMIT 1")
       .get(auth.articleId, `%${marker}%`, `%${marker}%`) as Row | undefined : undefined;
     return Boolean(account && article && b01OrdinaryArticleSource(article) && brand && marker && article.body.includes(marker)
@@ -2322,7 +2334,7 @@ export class AppRepository {
       if (!account || !this.b01Eligibility({ accountId: account.id, articleId: input.articleId,
         imageAssetId: input.selectedImageAssetId }).eligible) throw new Error("B01_EXACT_AUTHORIZATION_REQUIRED");
       const job = this.createArticlePublishJob(input);
-      const changed = this.db.prepare("UPDATE b01_product_e2e_authorization SET job_id=?,status='Bound' WHERE id='R1.15-B01' AND status='Created' AND job_id IS NULL")
+      const changed = this.db.prepare("UPDATE b01_product_e2e_authorization SET job_id=?,status='Bound' WHERE status='Created' AND job_id IS NULL")
         .run(job.id).changes;
       if (changed !== 1 || job.attemptCount !== 0 || job.status !== "AwaitingConfirmation") throw new Error("B01_JOB_BINDING_FAILED");
       this.db.prepare("UPDATE publish_jobs SET max_attempts=1 WHERE id=?").run(job.id);
@@ -2331,7 +2343,7 @@ export class AppRepository {
   }
 
   assertB01Job(jobId: string, stage: "prepare" | "final"): B01Authorization {
-    const auth = this.getB01Authorization();
+    const auth = this.getB01Authorization(jobId);
     const job = this.getJob(jobId);
     if (!auth || !job || auth.jobId !== job.id || job.platformKey !== "douyin" || job.contentKind === "video"
       || job.accountId !== auth.accountId || job.articleId !== auth.articleId || job.selectedImageAssetId !== auth.imageAssetId
@@ -2353,7 +2365,7 @@ export class AppRepository {
   markB01Prepared(jobId: string): B01Authorization {
     this.assertB01Job(jobId, "prepare");
     if (this.getPublishRecordByJob(jobId)?.status !== "Prepared") throw new Error("B01_PREPARED_RECORD_REQUIRED");
-    const changed = this.db.prepare("UPDATE b01_product_e2e_authorization SET status='Prepared',prepared_at=? WHERE id='R1.15-B01' AND job_id=? AND status='Bound'")
+    const changed = this.db.prepare("UPDATE b01_product_e2e_authorization SET status='Prepared',prepared_at=? WHERE job_id=? AND status='Bound'")
       .run(now(), jobId).changes;
     if (changed !== 1) throw new Error("B01_PREPARE_STATE_INVALID");
     return this.getB01Authorization() as B01Authorization;
@@ -2367,20 +2379,40 @@ export class AppRepository {
       || !this.b01BindingValid(auth) || this.getPublishRecordByJob(jobId)?.status !== "Prepared"
       || this.getJob(jobId)?.status !== "AwaitingConfirmation" || this.getJob(jobId)?.attemptCount !== 0
       || this.getSubmissionIntentByJob(jobId)) throw new Error("B01_FINAL_APPROVAL_NOT_ELIGIBLE");
-    const changed = this.db.prepare("UPDATE b01_product_e2e_authorization SET status='FinalApproved',final_authorized_at=?,owner_final_approval_reference=? WHERE id='R1.15-B01' AND job_id=? AND status='Prepared'")
+    const changed = this.db.prepare("UPDATE b01_product_e2e_authorization SET status='FinalApproved',final_authorized_at=?,owner_final_approval_reference=? WHERE job_id=? AND status='Prepared'")
       .run(now(), ownerApprovalReference, jobId).changes;
     if (changed !== 1) throw new Error("B01_FINAL_APPROVAL_NOT_ELIGIBLE");
     return this.getB01Authorization() as B01Authorization;
   }
 
   revokeB01Authorization(): void {
-    this.db.prepare("UPDATE b01_product_e2e_authorization SET status='Revoked',revoked_at=? WHERE id='R1.15-B01' AND status IN ('Created','Bound','Prepared','FinalApproved')")
+    this.db.prepare("UPDATE b01_product_e2e_authorization SET status='Revoked',revoked_at=? WHERE status IN ('Created','Bound','Prepared','FinalApproved')")
       .run(now());
+  }
+
+  /** Main-controlled retirement; no Intent/Record or submit attempt can ever be retired. */
+  retireB01Preboundary(jobId: string): B01Authorization {
+    return this.db.transaction(() => {
+      const auth = this.getB01Authorization(jobId);
+      const job = this.getJob(jobId);
+      if (!auth || auth.status !== "Bound" || auth.finalAuthorizedAt || auth.consumedAt
+        || !job || job.status !== "NeedsUserAction" || job.attemptCount !== 0
+        || job.platformKey !== "douyin" || auth.accountId !== job.accountId || auth.articleId !== job.articleId
+        || this.getSubmissionIntentByJob(jobId) || this.getPublishRecordByJob(jobId))
+        throw new Error("B01_SAFE_PREBOUNDARY_RETIREMENT_REQUIRED");
+      const timestamp = now();
+      const changed = this.db.prepare("UPDATE b01_product_e2e_authorization SET status='Revoked',revoked_at=?,retired_preboundary_at=? WHERE id=? AND status='Bound' AND consumed_at IS NULL AND final_authorized_at IS NULL")
+        .run(timestamp, timestamp, auth.id).changes;
+      if (changed !== 1) throw new Error("B01_SAFE_PREBOUNDARY_RETIREMENT_REQUIRED");
+      this.updateJobFailure(jobId, "Cancelled", "B01_PREBOUNDARY_RETIRED", "Owner 已撤销此未提交验收；冻结内容与历史保留，禁止再次提交。", null);
+      return this.getB01Authorization(jobId) as B01Authorization;
+    })();
   }
 
   createArticlePublishJob(input: { articleId: string; platformKey: string; platformAccountId: string; publishMode?: "ASSISTED" | "MANUAL"; finalPublishMode?: FinalPublishMode; selectedImageAssetId?: string | null; imageSelectionMode?: ImageSelectionMode; articleTransport?: "browser" | "api"; douyinImageTextSettings?: DouyinImageTextJobSettings }): PublishJob {
     const article = this.getArticle(input.articleId);
     if (!article) throw new Error("文章不存在");
+    if (input.platformKey === "douyin") assertDouyinImageTextTitle(article.title);
     this.assertArticlePublishAllowed(article.id);
     const account = this.listAccounts().find((item) => item.platformAccountId === input.platformAccountId && item.platformKey === input.platformKey);
     if (!account) throw new Error("目标平台账号不存在");
@@ -2603,7 +2635,12 @@ export class AppRepository {
     })();
   }
 
+  private assertB01NotRetired(jobId: string): void {
+    if (this.getB01Authorization(jobId)?.retiredPreboundaryAt) throw new Error("B01_RETIRED_JOB_PERMANENTLY_BLOCKED");
+  }
+
   confirmJob(id: string, dryRun = false): PublishJob {
+    this.assertB01NotRetired(id);
     const job = this.getJob(id);
     if (!job) throw new Error("任务不存在");
     if (job.finalPublishMode === "PREPARE_ONLY" && !dryRun) throw new Error("该任务为只准备内容模式，不能执行最终发布；请重新创建发布任务并选择发布前确认或自动发布");
@@ -2613,6 +2650,7 @@ export class AppRepository {
   }
 
   claimJob(id: string): PublishJob {
+    this.assertB01NotRetired(id);
     const priorIntent = this.getSubmissionIntentByJob(id);
     if (priorIntent && (priorIntent.finalSubmitCount >= 1 || priorIntent.submitBoundaryEnteredAt || priorIntent.state === "Unknown" || priorIntent.remoteStatus === "UNCERTAIN")) throw Object.assign(new Error("A previous final submit requires confirmed remote non-publication before a new Job may be created"), { code: "FINAL_SUBMIT_ALREADY_USED" });
     const timestamp = now();
@@ -2623,6 +2661,7 @@ export class AppRepository {
 
   updateJobFailure(id: string, status: string, code: string, message: string, nextRetryAt: string | null): PublishJob {
     if (status === "Retry") {
+      this.assertB01NotRetired(id);
       const intent = this.getSubmissionIntentByJob(id);
       if (intent && (intent.finalSubmitCount >= 1 || intent.submitBoundaryEnteredAt || intent.state === "Unknown" || intent.remoteStatus === "UNCERTAIN")) throw Object.assign(new Error("A final submit attempt requires reconciliation; automatic or manual retry is forbidden"), { code: "FINAL_SUBMIT_ALREADY_USED" });
     }
@@ -2664,6 +2703,7 @@ export class AppRepository {
   }
 
   prepareSubmissionIntent(jobId: string): { id: string; job: PublishJob } {
+    this.assertB01NotRetired(jobId);
     const job = this.getJob(jobId);
     if (!job) throw new Error("Publish job not found");
     const existing = this.getSubmissionIntentByJob(jobId);
@@ -2697,7 +2737,7 @@ export class AppRepository {
       const row = this.db.prepare("SELECT id,job_id,attempt FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
       if (!row) throw new Error("Submission intent not found");
       if (evidence.requireB01) {
-        const consumed = this.db.prepare("UPDATE b01_product_e2e_authorization SET status='Consumed',consumed_at=? WHERE id='R1.15-B01' AND job_id=? AND status='FinalApproved'")
+        const consumed = this.db.prepare("UPDATE b01_product_e2e_authorization SET status='Consumed',consumed_at=? WHERE job_id=? AND status='FinalApproved'")
           .run(timestamp, jobId).changes;
         if (consumed !== 1) throw new Error("B01_FINAL_AUTHORIZATION_CONSUME_FAILED");
       }
@@ -2901,6 +2941,7 @@ export class AppRepository {
   }
 
   markJobReconciledNotSubmitted(id: string): PublishJob {
+    this.assertB01NotRetired(id);
     const intent = this.getSubmissionIntentByJob(id);
     if (intent && (intent.finalSubmitCount >= 1 || intent.submitBoundaryEnteredAt || intent.state === "Unknown" || intent.remoteStatus === "UNCERTAIN")) throw Object.assign(new Error("Remote non-publication proof is required; this method cannot reopen an uncertain submit attempt"), { code: "FINAL_SUBMIT_ALREADY_USED" });
     if (intent) this.db.prepare("UPDATE submission_intents SET state='NotSubmitted', updated_at=? WHERE id=?").run(now(), intent.id);

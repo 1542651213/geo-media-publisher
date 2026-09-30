@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { assertDouyinImageTextTitle } from "./douyin-title";
+export { assertDouyinImageTextTitle, douyinImageTextTitleError, b01ArticleMarker } from "./douyin-title";
 
 export interface DouyinImageTextSource {
   articleId: string;
@@ -78,6 +80,7 @@ function supportedImage(bytes: Uint8Array): boolean {
 }
 
 export async function freezeDouyinImageText(source: DouyinImageTextSource): Promise<FrozenDouyinImageText> {
+  assertDouyinImageTextTitle(source.title);
   if (!source.articleId.trim() || !source.accountId.trim() || !source.creatorId.trim()) throw new Error("Douyin account identity and Article binding are required");
   if (!source.title.trim() || !source.body.trim()) throw new Error("Douyin image-text title and body are required");
   if (/<\/?[a-z][^>]*>/iu.test(source.title) || /<\/?[a-z][^>]*>/iu.test(source.body)) throw new Error("Douyin image-text requires plain text");

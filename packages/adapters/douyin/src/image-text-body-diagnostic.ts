@@ -93,7 +93,7 @@ export type DouyinBodyCandidateDiagnostic = Omit<RawCandidate, "innerText" | "te
 export type DouyinBodyPageDiagnostic = { locator: '[contenteditable="true"]'; candidateCount: number;
   selectedCandidateIndex: number | null; candidates: DouyinBodyCandidateDiagnostic[];
   semanticReadback: (TextRepresentation & { terminalPlaceholderIgnored: boolean;
-    structureClass: "SLATE_TERMINAL_ZWSP" | "SLATE_OTHER" | "NON_SLATE" }) | null };
+    structureClass: "SLATE_TERMINAL_ZWSP" | "SLATE_PARAGRAPHS" | "SLATE_OTHER" | "NON_SLATE" }) | null };
 
 const sha256 = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
 

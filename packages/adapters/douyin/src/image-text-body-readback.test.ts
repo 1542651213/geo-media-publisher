@@ -19,6 +19,19 @@ const slate = (leaves: string) => `<div contenteditable="true" data-slate-editor
 const leaf = (value: string) => `<span><span>${value}</span></span>`;
 
 describe.skipIf(!existsSync(chrome))("Douyin Slate semantic body readback", () => {
+  const liveParagraph = (text: string) => `<div class="ace-line" data-node="true"><div data-line-wrapper="true" dir="auto"><span data-leaf="true"><span data-string="true">${text}</span></span><span data-leaf="true"><span data-string="true" data-enter="true">\u200B</span></span></div></div>`;
+  it("reads the observed Creator multi-paragraph Slate structure in DOM order", async () => {
+    const parts = ["保持合理通风。", "不能只凭气味判断空气状况。", "B01-A7F39C"];
+    const page = await fixture(`<div contenteditable="true" data-slate-editor="true">${parts.map(liveParagraph).join("")}</div>`);
+    expect((await readDouyinBodyText(page)).semanticText).toBe(parts.join("\n"));
+  });
+  it("preserves user zero-width characters and rejects malformed live paragraph leaves", async () => {
+    const text = "甲\u200B乙\u200B";
+    expect((await readDouyinBodyText(await fixture(`<div contenteditable="true" data-slate-editor="true">${liveParagraph(text)}</div>`))).semanticText).toBe(text);
+    for (const html of [liveParagraph("正文").replace('data-enter="true"', ''),
+      liveParagraph("正文").replace("\u200B", "X"), liveParagraph("正文") + "<div>未识别内容</div>"])
+      await expect(readDouyinBodyText(await fixture(`<div contenteditable="true" data-slate-editor="true">${html}</div>`))).rejects.toThrow("DOUYIN_BODY_SLATE_STRUCTURE_UNVERIFIED");
+  });
   it("keeps exact plain and Chinese bodies unchanged", async () => {
     for (const value of ["Exact text", "这是抖音图文测试正文。"])
       expect((await readDouyinBodyText(await fixture(`<div contenteditable="true">${value}</div>`))).semanticText).toBe(value);

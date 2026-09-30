@@ -9,6 +9,10 @@ describe("B01 package capability", () => {
     const root = mkdtempSync(join(tmpdir(), "gmp-b01-marker-"));
     try {
       expect(b01CandidateCapabilityEnabled(true, root)).toBe(false);
+      writeFileSync(join(root, "r115-b01-hotfix.json"), JSON.stringify({ purpose: "R1.15-B01", candidate: "HOTFIX" }));
+      expect(b01CandidateCapabilityEnabled(true, root)).toBe(true);
+      expect(b01CandidateCapabilityEnabled(false, root)).toBe(false);
+      writeFileSync(join(root, "r115-b01-hotfix.json"), JSON.stringify({ purpose: "R1.15-B01", candidate: "invalid" }));
       writeFileSync(join(root, B01_CANDIDATE_MARKER), JSON.stringify({ purpose: "R1.15-B01", candidate: "R2" }));
       expect(b01CandidateCapabilityEnabled(false, root)).toBe(false);
       expect(b01CandidateCapabilityEnabled(true, root)).toBe(true);

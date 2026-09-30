@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,7 +30,7 @@ function fixture(capability = true) {
   const brand = repo.createBrand({ name: "B01", companyName: "B01" });
   const account = repo.createAccount({ platformKey: "douyin", name: "Owner test" });
   repo.saveDouyinImageTextConnection({ accountId: account.id, creatorId: "fixture-creator", browserSessionIdHash: "fixture" });
-  const marker = `GMP-R115-B01-${Date.now()}`;
+  const marker = `B01-${randomUUID().replaceAll("-", "").slice(0, 8).toUpperCase()}`;
   const article = repo.createArticle({ brandId: brand.id, title: `${marker} title`, body: `${marker} body`, summary: "", tags: [],
     seoKeywords: [], topic: "B01", keyword: "B01", city: "", articleType: "科普", aiProvider: "fixture", aiModel: "fixture",
     generatedAt: new Date().toISOString(), reusePolicy: "once", contentHash: createHash("sha256").update(marker).digest("hex"), source: "production" });
@@ -55,6 +55,21 @@ function fixture(capability = true) {
 }
 
 describe("B01 Candidate R2 Main authorization request", () => {
+  it("retires only an exact safe failed pre-boundary Job through Main and blocks its final route", async () => {
+    const { repo, account, article, image, invoke } = fixture();
+    await invoke("b01:request-authorization", { platformKey: "douyin", accountId: account.id, articleId: article.id, imageAssetId: image.id });
+    const job = repo.createB01Job({ articleId: article.id, platformKey: "douyin", platformAccountId: account.id,
+      selectedImageAssetId: image.id, imageSelectionMode: "manual", finalPublishMode: "CONFIRM_BEFORE_PUBLISH",
+      douyinImageTextSettings: { version: 1, visibility: "public", timing: "immediate" } });
+    await expect(invoke("b01:retire-preboundary", { jobId: job.id, status: "Revoked" })).rejects.toThrow();
+    await expect(invoke("b01:retire-preboundary", { jobId: job.id })).rejects.toThrow();
+    repo.updateJobFailure(job.id, "NeedsUserAction", "USER_ACTION_REQUIRED", "fixture", null);
+    await expect(invoke("b01:retire-preboundary", { jobId: job.id })).resolves.toMatchObject({ status: "Revoked", jobId: job.id });
+    expect(repo.getJob(job.id)?.status).toBe("Cancelled");
+    await expect(invoke("jobs:confirm", { id: job.id, dryRun: false })).rejects.toThrow();
+    await expect(invoke("jobs:run", { id: job.id })).rejects.toThrow();
+    expect(repo.getSubmissionIntentByJob(job.id)).toBeNull();
+  });
   it("imports the selected company's image through Main and hashes managed bytes", async () => {
     const { repo, path, invoke } = fixture();
     const selected = repo.createBrand({ name: "Selected company", companyName: "Selected company" });

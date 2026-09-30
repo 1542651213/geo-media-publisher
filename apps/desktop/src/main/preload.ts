@@ -6,6 +6,7 @@ const invoke = <T>(channel: string, payload?: unknown): Promise<T> => ipcRendere
 const api: PublisherApi = {
   b01: { availability: () => invoke("b01:availability"), requestAuthorization: (input) => invoke("b01:request-authorization", input),
     requestFinalApproval: (jobId) => invoke("b01:request-final-approval", { jobId }),
+    retirePreboundary: (jobId) => invoke("b01:retire-preboundary", { jobId }),
     eligibility: (input) => invoke("b01:eligibility", input), jobStatus: (jobId) => invoke("b01:job-status", { jobId }) },
   toutiaoProduction: { readiness: (accountId) => invoke("toutiao:production-readiness", { accountId }) },
   toutiaoDiagnostics: { protocolShadow: (accountId, mode) => invoke("toutiao:protocol-shadow", { accountId, mode }),

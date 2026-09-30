@@ -16,8 +16,9 @@ describe("V0.4 platform integration", () => {
     const { db } = openDatabase(join(dir, "publisher.db"), join(process.cwd(), "packages", "db", "migrations"));
     try {
       const applied = db.prepare("SELECT id FROM migrations ORDER BY id").all() as Array<{ id: string }>;
-      expect(applied.at(-2)?.id).toBe("0026_douyin_image_text_connection.sql");
-      expect(applied.at(-1)?.id).toBe("0027_r115_b01_product_e2e_authorization.sql");
+      expect(applied.at(-3)?.id).toBe("0026_douyin_image_text_connection.sql");
+      expect(applied.at(-2)?.id).toBe("0027_r115_b01_product_e2e_authorization.sql");
+      expect(applied.at(-1)?.id).toBe("0028_b01_preboundary_retirement.sql");
       const b01Columns = db.prepare("PRAGMA table_info(b01_product_e2e_authorization)").all() as Array<{ name: string }>;
       expect(b01Columns.map((column) => column.name)).toEqual(expect.arrayContaining([
         "account_id", "article_id", "article_snapshot_sha256", "image_asset_id", "image_sha256", "job_id",

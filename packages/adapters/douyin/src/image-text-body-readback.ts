@@ -6,7 +6,7 @@ export type DouyinBodyReadback = {
   rawTextContent: string;
   semanticText: string;
   terminalPlaceholderIgnored: boolean;
-  structureClass: "SLATE_TERMINAL_ZWSP" | "SLATE_OTHER" | "NON_SLATE";
+  structureClass: "SLATE_TERMINAL_ZWSP" | "SLATE_PARAGRAPHS" | "SLATE_OTHER" | "NON_SLATE";
 };
 
 /** Read the unique editor. Only the exact observed Slate leaf pair has a removable terminal placeholder. */
@@ -26,6 +26,33 @@ export async function readDouyinBodyText(page: Page): Promise<DouyinBodyReadback
       terminalPlaceholderIgnored: false,
       structureClass: isSlate ? "SLATE_OTHER" as const : "NON_SLATE" as const };
     if (!isSlate) return base;
+    // Observed Creator DOM: each data-node DIV is one paragraph, with a separate
+    // data-enter placeholder leaf. Validate every node before ignoring placeholders.
+    if (element.querySelector('[data-node],[data-line-wrapper],[data-leaf],[data-string]')) {
+      const paragraphs: string[] = [];
+      if (!element.childNodes.length) throw new Error("DOUYIN_BODY_SLATE_STRUCTURE_UNVERIFIED");
+      for (const node of element.childNodes) {
+        if (!(node instanceof HTMLElement) || node.tagName !== "DIV" || node.dataset.node !== "true" || node.childNodes.length !== 1)
+          throw new Error("DOUYIN_BODY_SLATE_STRUCTURE_UNVERIFIED");
+        const line = node.firstElementChild;
+        if (!(line instanceof HTMLElement) || line.tagName !== "DIV" || line.dataset.lineWrapper !== "true" || line.childNodes.length !== 2)
+          throw new Error("DOUYIN_BODY_SLATE_STRUCTURE_UNVERIFIED");
+        const leaves = [...line.children];
+        if (leaves.length !== 2 || leaves.some(x => x.tagName !== "SPAN" || x.getAttribute("data-leaf") !== "true" || x.childNodes.length !== 1))
+          throw new Error("DOUYIN_BODY_SLATE_STRUCTURE_UNVERIFIED");
+        const spans = leaves.map(x => x.firstElementChild);
+        if (spans.some(x => !x || x.tagName !== "SPAN" || x.getAttribute("data-string") !== "true"
+          || x.childNodes.length !== 1 || x.firstChild?.nodeType !== Node.TEXT_NODE)
+          || spans[0]?.hasAttribute("data-enter") || spans[1]?.getAttribute("data-enter") !== "true"
+          || spans[1]?.textContent !== "\u200B") throw new Error("DOUYIN_BODY_SLATE_STRUCTURE_UNVERIFIED");
+        paragraphs.push(spans[0]?.textContent ?? "");
+      }
+      if (rawTextContent !== paragraphs.map(x => `${x}\u200B`).join("")
+        || rawInnerText !== paragraphs.map(x => `${x}\u200B`).join("\n"))
+        throw new Error("DOUYIN_BODY_SLATE_STRUCTURE_UNVERIFIED");
+      return { ...base, semanticText: paragraphs.join("\n"), terminalPlaceholderIgnored: true,
+        structureClass: "SLATE_PARAGRAPHS" as const };
+    }
     if (rawInnerText !== rawTextContent) throw new Error("DOUYIN_BODY_SLATE_STRUCTURE_UNVERIFIED");
 
     // Live Creator evidence: Slate root > div > div > two sibling span/span/text leaves.

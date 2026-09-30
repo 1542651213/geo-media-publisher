@@ -36,7 +36,7 @@ describe("R1.15 Main IPC operator gate", () => {
     const account = repository.createAccount({ platformKey: "douyin", name: "Owner test" });
     const other = repository.createAccount({ platformKey: "douyin", name: "Wrong" });
     repository.saveDouyinImageTextConnection({ accountId: account.id, creatorId: "b01-creator", browserSessionIdHash: "fixture" });
-    const marker = `GMP-R115-B01-${Date.now()}`;
+    const marker = `B01-A7F39C`;
     const article = repository.createArticle({ brandId: brand.id, topic: "B01", keyword: "B01", city: "", title: `${marker} unique`,
       body: `${marker} unique body`, summary: "", tags: [], seoKeywords: [], articleType: "科普", aiProvider: "fixture", aiModel: "fixture",
       generatedAt: new Date().toISOString(), reusePolicy: "once", contentHash: "b01-ipc-unique", source: "production" });

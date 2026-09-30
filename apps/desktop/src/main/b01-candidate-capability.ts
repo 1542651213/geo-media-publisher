@@ -9,7 +9,7 @@ export const B01_CANDIDATE_R4_MARKER = "r115-b01-candidate-r4.json";
 export function b01CandidateCapabilityEnabled(packaged: boolean, resourcesPath: string): boolean {
   if (!packaged) return false;
   return ([{ file: B01_CANDIDATE_MARKER, candidate: "R2" }, { file: B01_CANDIDATE_R3_MARKER, candidate: "R3" },
-    { file: B01_CANDIDATE_R4_MARKER, candidate: "R4" }] as const).some(({ file, candidate }) => {
+    { file: B01_CANDIDATE_R4_MARKER, candidate: "R4" }, { file: "r115-b01-hotfix.json", candidate: "HOTFIX" }] as const).some(({ file, candidate }) => {
     try {
       const marker: unknown = JSON.parse(readFileSync(join(resourcesPath, file), "utf8"));
       return Boolean(marker && typeof marker === "object" && !Array.isArray(marker)

@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { openDatabase } from "@publisher/db";
+import { openDatabase, runMigrations } from "@publisher/db";
 
 const roots: string[] = [];
 const databases: Array<{ close(): void }> = [];
@@ -20,7 +20,7 @@ function fixture(source: "production" | "excel_import" | "test" = "production") 
   const account = repo.createAccount({ platformKey: "douyin", name: "B01 test account" });
   const otherAccount = repo.createAccount({ platformKey: "douyin", name: "Other account" });
   repo.saveDouyinImageTextConnection({ accountId: account.id, creatorId: "b01-creator", browserSessionIdHash: "fixture-session" });
-  const marker = `GMP-R115-B01-${Date.now()}`;
+  const marker = `B01-${randomUUID().replaceAll("-", "").slice(0, 8).toUpperCase()}`;
   const article = repo.createArticle({ brandId: brand.id, title: `${marker} unique`, body: `${marker} unique body`, summary: "", tags: [],
     seoKeywords: [], topic: "B01", keyword: "B01", city: "", articleType: "科普", aiProvider: "fixture", aiModel: "fixture",
     generatedAt: new Date().toISOString(), reusePolicy: "once", contentHash: "b01-unique-content", qualityStatus: "passed",
@@ -43,6 +43,70 @@ afterEach(() => {
 });
 
 describe("R1.15-B01 Main-owned one-shot authorization", () => {
+  it("forwards an existing 0027 grant without changing frozen data, then does not reapply the migration", () => {
+    const { repo, db, target } = fixture();
+    const before = repo.createB01Authorization(target);
+    const columns = (db.prepare("PRAGMA table_info(b01_product_e2e_authorization)").all() as Array<{ name: string }>).map(x => x.name).filter(x => x !== "retired_preboundary_at").join(",");
+    db.exec("ALTER TABLE b01_product_e2e_authorization RENAME TO fixture_previous");
+    db.exec(readFileSync(join(process.cwd(), "packages/db/migrations/0027_r115_b01_product_e2e_authorization.sql"), "utf8"));
+    db.exec(`INSERT INTO b01_product_e2e_authorization (${columns}) SELECT ${columns} FROM fixture_previous; DROP TABLE fixture_previous; DELETE FROM migrations WHERE id='0028_b01_preboundary_retirement.sql';`);
+    runMigrations(db, join(process.cwd(), "packages/db/migrations"));
+    expect(repo.getB01Authorization()).toEqual(before);
+    expect(db.pragma("integrity_check", { simple: true })).toBe("ok");
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+    runMigrations(db, join(process.cwd(), "packages/db/migrations"));
+    expect(repo.getB01Authorization()).toEqual(before);
+  });
+  it("retires only a proven unsubmitted failed attempt, preserving its immutable bindings and permanently blocking it", () => {
+    const { repo, db, target, article, image } = fixture();
+    const original = repo.createB01Authorization(target);
+    const input = { articleId: article.id, platformKey: "douyin", platformAccountId: target.accountId,
+      selectedImageAssetId: image.id, imageSelectionMode: "manual" as const, finalPublishMode: "CONFIRM_BEFORE_PUBLISH" as const, douyinImageTextSettings: settings };
+    const job = repo.createB01Job(input);
+    expect(() => repo.retireB01Preboundary(job.id)).toThrow("B01_SAFE_PREBOUNDARY_RETIREMENT_REQUIRED");
+    repo.updateJobFailure(job.id, "NeedsUserAction", "USER_ACTION_REQUIRED", "pre-boundary fixture", null);
+    const retired = repo.retireB01Preboundary(job.id);
+    expect(retired).toMatchObject({ id: original.id, accountId: original.accountId, articleId: original.articleId,
+      imageSha256: original.imageSha256, articleSnapshotSha256: original.articleSnapshotSha256, status: "Revoked", jobId: job.id });
+    expect(repo.getJob(job.id)?.status).toBe("Cancelled");
+    expect(repo.getSubmissionIntentByJob(job.id)).toBeNull();
+    expect(repo.getPublishRecordByJob(job.id)).toBeNull();
+    for (const action of [() => repo.confirmJob(job.id), () => repo.claimJob(job.id),
+      () => repo.prepareSubmissionIntent(job.id), () => repo.updateJobFailure(job.id, "Retry", "UNKNOWN", "retry", null)])
+      expect(action).toThrow("B01_RETIRED_JOB_PERMANENTLY_BLOCKED");
+    expect(() => repo.createB01Authorization(target)).toThrow("B01_HISTORICAL_ARTICLE_OR_CONTENT_FORBIDDEN");
+    const next = repo.createArticle({ brandId: article.brandId, title: "通风记录 B01-B12345", body: "正常通风记录 B01-B12345",
+      summary: "", tags: [], seoKeywords: [], topic: "B01", keyword: "B01", city: "", articleType: "科普",
+      aiProvider: "fixture", aiModel: "fixture", generatedAt: new Date().toISOString(), reusePolicy: "once", contentHash: "new-unique-content", source: "excel_import" });
+    if (!next) throw new Error("New Article missing");
+    const created = repo.createB01Authorization({ ...target, articleId: next.id });
+    expect(created.id).not.toBe(retired.id);
+    expect(repo.getB01Authorization(job.id)).toEqual(retired);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM b01_product_e2e_authorization").get()).toEqual({ n: 2 });
+    expect(() => repo.assertB01Job(job.id, "final")).toThrow();
+    expect(() => repo.createB01Authorization({ ...target, articleId: next.id })).toThrow();
+  });
+
+  it("cannot retire an attempt with even an unclaimed Intent or reopen a generic revoked grant", () => {
+    const { repo, target, article, image } = fixture();
+    repo.createB01Authorization(target);
+    const job = repo.createB01Job({ articleId: article.id, platformKey: "douyin", platformAccountId: target.accountId,
+      selectedImageAssetId: image.id, imageSelectionMode: "manual", finalPublishMode: "CONFIRM_BEFORE_PUBLISH", douyinImageTextSettings: settings });
+    repo.prepareSubmissionIntent(job.id);
+    repo.updateJobFailure(job.id, "NeedsUserAction", "USER_ACTION_REQUIRED", "fixture", null);
+    expect(repo.getSubmissionIntentByJob(job.id)?.finalSubmitCount).toBe(0);
+    expect(() => repo.retireB01Preboundary(job.id)).toThrow();
+    repo.revokeB01Authorization();
+    expect(repo.canCreateB01Authorization()).toBe(false);
+  });
+
+  it("rejects long titles before authorization or Job creation", () => {
+    const { repo, target, article, account } = fixture();
+    repo.updateArticle(article.id, { title: "超长标题".repeat(5) + " B01-A7F39C", body: "B01-A7F39C" });
+    expect(() => repo.createB01Authorization(target)).toThrow("20");
+    expect(() => repo.createArticlePublishJob({ articleId: article.id, platformKey: "douyin", platformAccountId: account.id })).toThrow("20");
+    expect(repo.listJobs()).toHaveLength(0);
+  });
   it("accepts a fresh ordinary-library Excel Article and rejects test sources", () => {
     const normal = fixture("excel_import");
     expect(normal.article.source).toBe("excel_import");
@@ -62,7 +126,7 @@ describe("R1.15-B01 Main-owned one-shot authorization", () => {
     company.db.prepare("UPDATE articles SET company=? WHERE id=?").run("Another company", company.article.id);
     expect(() => company.repo.createB01Authorization(company.target)).toThrow("B01_AUTH_TARGET_INVALID");
     const repeated = fixture("excel_import");
-    const sameMarker = repeated.article.title.match(/GMP-R115-B01-\d{10,}/u)?.[0];
+    const sameMarker = repeated.article.title.match(/B01-[A-F0-9]{6,8}/u)?.[0];
     if (!sameMarker) throw new Error("Fixture marker missing");
     const another = repeated.repo.createArticle({ brandId: repeated.article.brandId, title: `${sameMarker} another`, body: "different body", summary: "", tags: [],
       seoKeywords: [], topic: "B01", keyword: "B01", city: "", articleType: "科普", aiProvider: "excel_import", aiModel: "1.0",
