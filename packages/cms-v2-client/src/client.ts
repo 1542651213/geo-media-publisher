@@ -2,6 +2,8 @@ import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { Capabilities, CmsRecord, ContentList, CreateContent, DeleteContent, DeployEnvironment, ExpectedPublished, Failure, FieldError, Job, Media, Publish, Purge, Rollback, SaveDraft, Success, Validation } from "./contracts";
 
 const PREFIX = "/_publish-api/v2";
+const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
+const MEDIA_MIMES: readonly Media["mime"][] = ["image/jpeg", "image/png", "image/webp"];
 const pause = (milliseconds: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 export interface SigningInput { method: string; target: string; siteId: string; environment: DeployEnvironment; timestamp: number; nonce: string; idempotencyKey?: string; body: Uint8Array }
@@ -83,6 +85,140 @@ export class CmsV2Client {
 
   private delay(attempt: number): number { return Math.min(this.config.retryDelayMs * 2 ** attempt, 5_000); }
   private contentPath(id: string): string { if (!/^[A-Za-z0-9_-]{1,128}$/u.test(id)) throw new Error("Invalid content id"); return `/contents/${encodeURIComponent(id)}`; }
+  private validateExpectedMedia(expected: Media): void {
+    const valid = expected !== null && typeof expected === "object"
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(expected.mediaId)
+      && /^[a-f0-9]{64}$/u.test(expected.sha256)
+      && MEDIA_MIMES.includes(expected.mime)
+      && Number.isInteger(expected.bytes) && expected.bytes > 0 && expected.bytes <= MAX_MEDIA_BYTES
+      && Number.isInteger(expected.width) && expected.width > 0 && expected.width <= 10_000
+      && Number.isInteger(expected.height) && expected.height > 0 && expected.height <= 10_000
+      && expected.width * expected.height <= 40_000_000;
+    if (!valid) throw new ClientError("INVALID_MEDIA_EXPECTATION", "Invalid expected private media metadata");
+  }
+
+  private mediaIntegerHeader(response: Response, name: string): number {
+    const raw = response.headers.get(name);
+    if (raw === null || !/^(?:0|[1-9][0-9]*)$/u.test(raw)) throw new ClientError("UNEXPECTED_RESPONSE", "Invalid private media response metadata", response.status);
+    const value = Number(raw);
+    if (!Number.isSafeInteger(value)) throw new ClientError("UNEXPECTED_RESPONSE", "Invalid private media response metadata", response.status);
+    return value;
+  }
+
+  private async cancelMediaBody(response: Response): Promise<void> {
+    await response.body?.cancel().catch(() => undefined);
+  }
+
+  private async hashMediaBody(response: Response): Promise<{ bytes: number; sha256: string }> {
+    if (!response.body) return { bytes: 0, sha256: createHash("sha256").digest("hex") };
+    const reader = response.body.getReader();
+    const hash = createHash("sha256");
+    let bytes = 0;
+    try {
+      while (true) {
+        const item = await reader.read();
+        if (item.done) break;
+        bytes += item.value.byteLength;
+        if (bytes > MAX_MEDIA_BYTES) {
+          await reader.cancel().catch(() => undefined);
+          throw new ClientError("MEDIA_TOO_LARGE", "Private media response exceeds the read limit", response.status);
+        }
+        hash.update(item.value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    return { bytes, sha256: hash.digest("hex") };
+  }
+
+  async verifyPrivateMedia(expected: Media): Promise<{ httpStatus: 200; mediaId: string; sha256: string; bytes: number; mime: string; width: number; height: number }> {
+    this.validateExpectedMedia(expected);
+    const url = new URL(`${PREFIX}/media/${expected.mediaId}`, this.config.origin);
+    const target = url.pathname;
+    for (let attempt = 0; attempt <= this.config.maxRetries; attempt += 1) {
+      const timestamp = Math.floor(Date.now() / 1000);
+      const nonce = randomBytes(16).toString("hex");
+      const body = Buffer.alloc(0);
+      const headers: Record<string, string> = {
+        Accept: expected.mime,
+        "X-Publish-Key-Id": this.config.keyId,
+        "X-Publish-Site-Id": this.config.siteId,
+        "X-Publish-Environment": this.config.environment,
+        "X-Publish-Timestamp": String(timestamp),
+        "X-Publish-Nonce": nonce,
+        "X-Publish-Signature": signRequest({ method: "GET", target, siteId: this.config.siteId, environment: this.config.environment, timestamp, nonce, body }, this.config.secret)
+      };
+      let response: Response;
+      try {
+        response = await fetch(url, { method: "GET", headers, redirect: "manual", signal: AbortSignal.timeout(this.config.timeoutMs) });
+      } catch {
+        if (attempt < this.config.maxRetries) { await pause(this.delay(attempt)); continue; }
+        throw new ClientError("TRANSPORT_ERROR", "Private media request failed or timed out");
+      }
+
+      if ([429, 503].includes(response.status) && attempt < this.config.maxRetries) {
+        await this.cancelMediaBody(response);
+        await pause(this.delay(attempt));
+        continue;
+      }
+      if ([401, 403].includes(response.status)) {
+        await this.cancelMediaBody(response);
+        throw new ClientError("AUTH_REJECTED", "Private media read authorization rejected", response.status);
+      }
+      if (response.status >= 300 && response.status < 400) {
+        await this.cancelMediaBody(response);
+        throw new ClientError("UNEXPECTED_RESPONSE", "Private media redirect rejected", response.status);
+      }
+      if (response.status >= 500) {
+        await this.cancelMediaBody(response);
+        throw new ClientError("REMOTE_ERROR", "Private media service failed", response.status);
+      }
+      if (response.status !== 200) {
+        await this.cancelMediaBody(response);
+        throw new ClientError("REMOTE_REJECTED", "Private media read was rejected", response.status);
+      }
+
+      const mediaId = response.headers.get("X-Media-Id");
+      const sha256 = response.headers.get("X-Media-Sha256");
+      const mime = response.headers.get("Content-Type")?.trim().toLowerCase();
+      let width: number;
+      let height: number;
+      let bytes: number;
+      let parsedContentLength: number | null;
+      try {
+        width = this.mediaIntegerHeader(response, "X-Media-Width");
+        height = this.mediaIntegerHeader(response, "X-Media-Height");
+        bytes = this.mediaIntegerHeader(response, "X-Media-Bytes");
+        parsedContentLength = response.headers.has("Content-Length") ? this.mediaIntegerHeader(response, "Content-Length") : null;
+      } catch (error) {
+        await this.cancelMediaBody(response);
+        throw error;
+      }
+      if (bytes > MAX_MEDIA_BYTES || parsedContentLength !== null && parsedContentLength > MAX_MEDIA_BYTES) {
+        await this.cancelMediaBody(response);
+        throw new ClientError("MEDIA_TOO_LARGE", "Private media response exceeds the read limit", response.status);
+      }
+      if (mediaId !== expected.mediaId || sha256 !== expected.sha256 || mime !== expected.mime
+        || width !== expected.width || height !== expected.height || bytes !== expected.bytes
+        || parsedContentLength !== null && parsedContentLength !== bytes) {
+        await this.cancelMediaBody(response);
+        throw new ClientError("MEDIA_MISMATCH", "Private media response metadata does not match the expected upload", response.status);
+      }
+
+      let actual: { bytes: number; sha256: string };
+      try {
+        actual = await this.hashMediaBody(response);
+      } catch (error) {
+        if (error instanceof ClientError) throw error;
+        if (attempt < this.config.maxRetries) { await pause(this.delay(attempt)); continue; }
+        throw new ClientError("TRANSPORT_ERROR", "Private media response could not be read");
+      }
+      if (actual.bytes !== bytes || actual.sha256 !== sha256) throw new ClientError("MEDIA_MISMATCH", "Private media body does not match its signed metadata", response.status);
+      return { httpStatus: 200, mediaId, sha256, bytes, mime, width, height };
+    }
+    throw new Error("Unreachable private media retry state");
+  }
+
   capabilities() { return this.request<Capabilities>("GET", "/capabilities"); }
   health() { return this.request<{ status: string; protocolVersion: string }>("GET", "/health"); }
   uploadMedia(bytes: Uint8Array, mime: Media["mime"], idempotencyKey: string) { if (!["image/jpeg", "image/png", "image/webp"].includes(mime) || bytes.length === 0) throw new Error("Invalid media type or empty image"); return this.request<Media>("POST", "/media", { bytes, contentType: mime, idempotencyKey }); }
