@@ -1,11 +1,24 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readOfficialApiAcceptance, candidateBindingAllowed, OFFICIAL_API_ACCEPTANCE_MARKER } from "../apps/desktop/src/main/official-api-candidate";
 
 const selection = { accountId: "account", articleId: "article", siteId: "kangyi", environment: "production", keyId: "fixture", kind: "article", contentBindingId: "a".repeat(64) };
+afterEach(() => vi.restoreAllMocks());
 describe("Website bounded Candidate authority", () => {
+  it("expires retained authorization in a process that remains open beyond marker expiry", () => {
+    const dir = mkdtempSync(join(tmpdir(), "geo-website-candidate-expiry-"));
+    try {
+      const now = Date.now();
+      writeFileSync(join(dir, OFFICIAL_API_ACCEPTANCE_MARKER), JSON.stringify({ purpose: "R1.15-C-OFFICIALAPI-ACCEPTANCE", version: 1,
+        expiresAt: new Date(now + 1000).toISOString(), selections: [selection] }));
+      const retained = readOfficialApiAcceptance(true, dir);
+      expect(candidateBindingAllowed(retained, selection)).toBe(true);
+      vi.spyOn(Date, "now").mockReturnValue(now + 2000);
+      expect(candidateBindingAllowed(retained, selection)).toBe(false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
   it("requires a packaged unexpired strict marker and never accepts Renderer authority", () => {
     const dir = mkdtempSync(join(tmpdir(), "geo-website-candidate-"));
     try {

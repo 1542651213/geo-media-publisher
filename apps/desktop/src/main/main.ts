@@ -13,7 +13,7 @@ import { createProcessDiagnostics } from "./process-diagnostics";
 import { recordAppStartup } from "./runtime-observability";
 import { b01CandidateCapabilityEnabled } from "./b01-candidate-capability";
 import { OfficialApiAdapter } from "../../../../packages/adapters/official-api/src";
-import { readOfficialApiAcceptance } from "./official-api-candidate";
+import { candidateGrantActive, readOfficialApiAcceptance } from "./official-api-candidate";
 import { OfficialApiController } from "./official-api-controller";
 import { SqliteOfficialApiOperationStore } from "./official-api-operation-store";
 import { verifyOfficialApiPublicContent } from "./official-api-public-verifier";
@@ -74,7 +74,8 @@ async function createWindow(): Promise<void> {
     douyinImageTextNativeSubmitEnabled: ordinaryDouyinEnabled || b01AcceptanceEnabled,
     officialApiOptions: { operationStore: officialApiStore, publicVerifier: verifyOfficialApiPublicContent,
       formalExecution: { available: ordinaryWebsiteEnabled || officialApiGrants.length > 0,
-        ...(ordinaryWebsiteEnabled ? {} : { allowedBindings: officialApiGrants.map(({ accountId, articleId, contentBindingId }) => ({ accountId, articleId, contentBindingId })) }) } }
+        ...(ordinaryWebsiteEnabled ? {} : { authorizationValid: () => officialApiGrants.some(candidateGrantActive),
+          allowedBindings: officialApiGrants.map(({ accountId, articleId, contentBindingId }) => ({ accountId, articleId, contentBindingId })) }) } }
   });
   ownedBrowserSessionClosers.add(async () => {
     const closableAdapters = registry.listAll().filter((adapter): adapter is typeof adapter & { closeOwnedSessions(): Promise<void> } => typeof (adapter as { closeOwnedSessions?: unknown }).closeOwnedSessions === "function");

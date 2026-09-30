@@ -110,6 +110,26 @@ function runtime(store: MemoryStore, api: OfficialApiRuntimeClient, allowedBindi
 }
 
 describe("OfficialAPI durable runtime", () => {
+  it("rechecks retained Candidate authority after asynchronous final preflight and before claiming or dispatching", async () => {
+    const store = new MemoryStore(), api = client(); let authorized = true;
+    const durable = new OfficialApiDurableRuntime({ operationStore: store, clientFactory: () => api,
+      readMediaBytes: async () => bytes, formalExecution: { available: true, authorizationValid: () => authorized } });
+    await durable.prepare(context(), prepared(), "job-one"); const frozen = durable.getPreparedArticleInput(context());
+    const originalVerify = api.verifyPrivateMedia;
+    api.verifyPrivateMedia = vi.fn(async expected => { const verified = await originalVerify(expected); authorized = false; return verified; });
+    const claim = vi.fn();
+    await expect(durable.finalSubmit(context(), frozen, { jobId: "job-one", submissionIntentId: "intent", attempt: 1,
+      markSubmissionSideEffect: claim })).rejects.toThrow("ACCEPTANCE_EXPIRED");
+    expect(claim).not.toHaveBeenCalled(); expect(store.getByJobId("job-one")?.publish).toBeUndefined();
+    expect(vi.mocked(api.request).mock.calls.some(([, path]) => path.endsWith("/publish"))).toBe(false);
+  });
+  it("stops further media/create writes if Candidate authority expires while image bytes are being read", async () => {
+    const store = new MemoryStore(), api = client(); let authorized = true;
+    const durable = new OfficialApiDurableRuntime({ operationStore: store, clientFactory: () => api,
+      readMediaBytes: async () => { authorized = false; return bytes; }, formalExecution: { available: true, authorizationValid: () => authorized } });
+    await expect(durable.prepare(context(), prepared(), "job-one")).rejects.toThrow("ACCEPTANCE_EXPIRED");
+    expect(api.uploadMedia).not.toHaveBeenCalled(); expect(api.request).not.toHaveBeenCalled();
+  });
   it("persists frozen binding, operation keys, exact JSON, and remote identities before advancing to PREPARED", async () => {
     const store = new MemoryStore(); const api = client(); const frozen = prepared();
     const result = await runtime(store, api, [{ accountId: scope.accountId, articleId: source.articleId,
@@ -283,19 +303,50 @@ describe("OfficialAPI durable runtime", () => {
     api.request = vi.fn(async (method, path, options) => path.endsWith("/unpublish")
       ? { ok: true as const, requestId: "request-maintenance", httpStatus: 202, data: {
           ...(await api.getJob("ignored")).data, jobId: "50000000-0000-4000-a000-000000000001", operation: "unpublish",
-          contentId: published.id, revisionId: published.revisionId, contentHash: published.contentHash, status: "queued", publicUrl: null } as never }
+          contentId: published.id, revisionId: null, contentHash: null, status: "queued", publicUrl: null } as never }
       : normalRequest(method, path, options)) as OfficialApiRuntimeClient["request"];
     await durable.maintainOwnContent(context(), { jobId: "job-one", operation: "unpublish" });
     const maintenanceRequests = () => vi.mocked(api.request).mock.calls.filter(([, path]) => path.endsWith("/unpublish")).length;
     expect(maintenanceRequests()).toBe(1);
+    const mismatchedMaintenanceGetJob: OfficialApiRuntimeClient["getJob"] = async jobId => ({ ok: true, requestId: "request-job", httpStatus: 200, data: {
+      ...(await client().getJob(jobId)).data, jobId, operation: "unpublish", contentId: published.id,
+      revisionId: published.revisionId, contentHash: published.contentHash, status: "succeeded", publicUrl: null } });
+    api.getJob = vi.fn(mismatchedMaintenanceGetJob);
+    await expect(durable.maintainOwnContent(context(), { jobId: "job-one", operation: "unpublish" }))
+      .resolves.toMatchObject({ status: "needs_reconciliation" });
+    expect(store.getByJobId("job-one")).toMatchObject({ maintenance: [{ state: "DISPATCHING",
+      jobBinding: { revisionId: null, contentHash: null }, remoteJob: { status: "queued" } }] });
     const maintenanceGetJob: OfficialApiRuntimeClient["getJob"] = async jobId => ({ ok: true, requestId: "request-job", httpStatus: 200, data: {
-      ...(await client().getJob(jobId)).data, jobId, operation: "unpublish", contentId: published.id, status: "succeeded", publicUrl: null } });
+      ...(await client().getJob(jobId)).data, jobId, operation: "unpublish", contentId: published.id,
+      revisionId: null, contentHash: null, status: "succeeded", publicUrl: null } });
     api.getJob = vi.fn(maintenanceGetJob);
     api.getContent = vi.fn(async () => ({ ok: true as const, requestId: "request-content", httpStatus: 200,
       data: { ...published, rowVersion: 3, publishedRevisionId: null } }));
     await expect(durable.maintainOwnContent(context(), { jobId: "job-one", operation: "unpublish" }))
       .resolves.toMatchObject({ status: "maintained", operation: { maintenance: [{ remoteJob: { status: "succeeded" } }] } });
     expect(maintenanceRequests()).toBe(1);
+  });
+
+  it("keeps a maintenance 202 with a non-null revision binding outcome-unknown", async () => {
+    const store = new MemoryStore(); const api = client(); const durable = runtime(store, api);
+    await durable.prepare(context(), prepared(), "job-one"); const frozenArticle = durable.getPreparedArticleInput(context());
+    await durable.finalSubmit(context(), frozenArticle, { jobId: "job-one", submissionIntentId: "intent", attempt: 1,
+      markSubmissionSideEffect: vi.fn() });
+    await durable.collectPublishResult(context(), frozenArticle, { jobId: "job-one", submissionIntentId: "intent", attempt: 1 });
+    const published = { ...remoteRecord(store.getByJobId("job-one")!.prepared.draftPreview, 2),
+      externalId: store.getByJobId("job-one")!.externalId, publishedRevisionId: "20000000-0000-4000-a000-000000000001" };
+    api.getContent = vi.fn(async () => ({ ok: true as const, requestId: "request-content", httpStatus: 200, data: published }));
+    const normalRequest = api.request;
+    api.request = vi.fn(async (method, path, options) => path.endsWith("/unpublish")
+      ? { ok: true as const, requestId: "request-maintenance", httpStatus: 202, data: {
+          ...(await client().getJob("ignored")).data, jobId: "50000000-0000-4000-a000-000000000001", operation: "unpublish",
+          contentId: published.id, revisionId: published.revisionId, contentHash: published.contentHash,
+          status: "queued", publicUrl: null } as never }
+      : normalRequest(method, path, options)) as OfficialApiRuntimeClient["request"];
+    await expect(durable.maintainOwnContent(context(), { jobId: "job-one", operation: "unpublish" }))
+      .rejects.toThrow("MAINTENANCE_RESPONSE_MISMATCH");
+    expect(store.getByJobId("job-one")).toMatchObject({ phase: "NEEDS_RECONCILIATION", maintenance: [{
+      state: "OUTCOME_UNKNOWN", jobBinding: { revisionId: null, contentHash: null } }] });
   });
 
   it("refuses maintenance for prepared content that has no accepted original publish job", async () => {
@@ -325,6 +376,25 @@ describe("OfficialAPI durable runtime", () => {
     await expect(durable.recoverOriginalOperation(context(), "job-one"))
       .resolves.toMatchObject({ status: "needs_reconciliation" });
     expect(api.request).not.toHaveBeenCalled(); expect(api.getContent).not.toHaveBeenCalled(); expect(api.getJob).not.toHaveBeenCalled();
+  });
+
+  it("does not poll a legacy pending maintenance job that lacks its exact null job binding", async () => {
+    const store = new MemoryStore(); const api = client(); const durable = runtime(store, api);
+    await durable.prepare(context(), prepared(), "job-one"); const frozenArticle = durable.getPreparedArticleInput(context());
+    await durable.finalSubmit(context(), frozenArticle, { jobId: "job-one", submissionIntentId: "intent", attempt: 1,
+      markSubmissionSideEffect: vi.fn() });
+    await durable.collectPublishResult(context(), frozenArticle, { jobId: "job-one", submissionIntentId: "intent", attempt: 1 });
+    const operation = store.getByJobId("job-one")!;
+    store.compareAndSwap("job-one", operation.revision, { ...operation, maintenance: [...operation.maintenance, {
+      maintenanceId: "unpublish:2", operation: "unpublish", state: "DISPATCHING",
+      idempotencyKey: "official_v2_legacy_fixture", exactJson: '{"rowVersion":2}',
+      bodySha256: createHash("sha256").update('{"rowVersion":2}').digest("hex"), sourceRowVersion: 2,
+      remoteJob: { jobId: "50000000-0000-4000-a000-000000000001", status: "queued", publicUrl: null }
+    }] });
+    vi.mocked(api.getJob).mockClear();
+    await expect(durable.recoverOriginalOperation(context(), "job-one"))
+      .resolves.toMatchObject({ status: "needs_reconciliation", operation: { errorCode: "WEBSITE_MAINTENANCE_JOB_BINDING_MISSING" } });
+    expect(api.getJob).not.toHaveBeenCalled();
   });
 
   it("blocks every new maintenance action behind an uncertain maintenance request with no remote job", async () => {
@@ -367,14 +437,14 @@ describe("OfficialAPI durable runtime", () => {
     api.request = vi.fn(async (method, path, options) => path.endsWith("/purge")
       ? { ok: true as const, requestId: "request-purge", httpStatus: 202, data: {
           ...(await client().getJob("ignored")).data, jobId: "60000000-0000-4000-a000-000000000001", operation: "purge",
-          contentId: deleted.id, revisionId: deleted.revisionId, contentHash: deleted.contentHash, status: "queued", publicUrl: null } as never }
+          contentId: deleted.id, revisionId: null, contentHash: null, status: "queued", publicUrl: null } as never }
       : normalRequest(method, path, options)) as OfficialApiRuntimeClient["request"];
     await expect(durable.maintainOwnContent(context(), { jobId: "job-one", operation: "purge",
       mainAuthorization: { acceptanceRunId: "run-one", explicitPermission: true } }))
       .resolves.toMatchObject({ status: "publishing" });
     const purgeGetJob: OfficialApiRuntimeClient["getJob"] = async jobId => ({ ok: true, requestId: "request-job", httpStatus: 200, data: {
       ...(await client().getJob(jobId)).data, jobId, operation: "purge", contentId: deleted.id,
-      status: "succeeded", publicUrl: null } });
+      revisionId: null, contentHash: null, status: "succeeded", publicUrl: null } });
     api.getJob = vi.fn(purgeGetJob);
     api.getContent = vi.fn(async () => { throw new ClientError("NOT_FOUND", "gone", 404, "request-content"); });
     await expect(durable.maintainOwnContent(context(), { jobId: "job-one", operation: "purge",

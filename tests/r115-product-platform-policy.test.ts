@@ -26,11 +26,13 @@ const platform = (platformKey: string, extra: Partial<Platform> = {}): Platform 
 
 describe("R1.15 ordinary platform policy", () => {
   const catalog = [platform("zhihu"), platform("bilibili"), platform("douyin"), platform("netease_media"), platform("baijiahao")];
-  it("opens only ordinary Douyin image/text and leaves every batch and other platform gate OFF", () => {
-    expect(PRODUCT_PLATFORM_POLICY.filter((item) => item.ordinaryPublishEnabled).map((item) => item.platformKey)).toEqual(["douyin"]);
+  it("opens accepted ordinary Douyin and Website while leaving every batch and other platform gate OFF", () => {
+    expect(PRODUCT_PLATFORM_POLICY.filter((item) => item.ordinaryPublishEnabled).map((item) => item.platformKey)).toEqual(["douyin", "website"]);
     expect(PRODUCT_PLATFORM_POLICY.every((item) => !item.batchPublishEnabled)).toBe(true);
     expect(operatorPublishBlockReason("douyin", platform("douyin"))).toBeNull();
     expect(operatorPublishBlockReason("douyin", platform("douyin", { enabled: false }))).toBeTruthy();
+    expect(operatorPublishBlockReason("website", platform("website"))).toBeNull();
+    expect(operatorPublishBlockReason("website", platform("website", { enabled: false }))).toBeTruthy();
   });
 
   it("presents exactly ten platforms in the required order even when current main lacks Website", () => {
@@ -72,7 +74,7 @@ describe("R1.15 ordinary platform policy", () => {
 
   it("shows staged platforms without granting ordinary publish capability", () => {
     const views = operatorPlatformCatalog(catalog);
-    expect(operatorPublishBlockReason("website", views.find((item) => item.platformKey === "website"))).toContain("尚未验收");
+    expect(operatorPublishBlockReason("website", views.find((item) => item.platformKey === "website"))).toContain("没有可用");
     expect(operatorPublishBlockReason("netease_media", views.find((item) => item.platformKey === "netease_media"))).toContain("待开发");
     expect(operatorPublishBlockReason("baijiahao", views.find((item) => item.platformKey === "baijiahao"))).toContain("编辑器");
     expect(operatorPublishBlockReason("zhihu", platform("zhihu"))).toContain("普通运营");

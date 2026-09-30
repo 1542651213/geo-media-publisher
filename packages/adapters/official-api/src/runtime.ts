@@ -65,6 +65,8 @@ export interface OfficialApiMaintenanceStep {
   exactJson: string;
   bodySha256: string;
   sourceRowVersion: number;
+  /** Exact maintenance-job response binding. Optional only for legacy journals. */
+  jobBinding?: Pick<Job, "revisionId" | "contentHash">;
   remoteJob?: OfficialApiRemoteJob;
   errorCode?: string;
 }
@@ -120,7 +122,7 @@ export interface OfficialApiFormalBinding { accountId: string; articleId: string
 export interface OfficialApiRuntimeOptions {
   operationStore: OfficialApiOperationStore;
   clientFactory: (ctx: AccountContext, scope: OfficialApiPreparedContent["scope"]) => OfficialApiRuntimeClient;
-  formalExecution: { available: boolean; allowedBindings?: OfficialApiFormalBinding[] };
+  formalExecution: { available: boolean; allowedBindings?: OfficialApiFormalBinding[]; authorizationValid?: () => boolean };
   readMediaBytes?: (filePath: string) => Promise<Uint8Array>;
   publicVerifier?: (input: { operation: OfficialApiOperation; publicUrl: string }) => Promise<{ ok: boolean; warning?: string; evidence: Record<string, unknown> }>;
 }
@@ -197,6 +199,8 @@ export class OfficialApiDurableRuntime {
 
   assertFormalSubmitAvailable(): void {
     if (!this.options.formalExecution.available) throw new Error("WEBSITE_FORMAL_EXECUTION_UNAVAILABLE");
+    if (this.options.formalExecution.authorizationValid && !this.options.formalExecution.authorizationValid())
+      throw new Error("WEBSITE_ACCEPTANCE_EXPIRED");
   }
 
   async prepare(ctx: AccountContext, prepared: OfficialApiPreparedContent, jobId: string): Promise<OfficialApiRunResult> {
@@ -225,6 +229,7 @@ export class OfficialApiDurableRuntime {
       if (!image) throw new Error("WEBSITE_MEDIA_BINDING_REQUIRED");
       const bytes = await this.readMediaBytes(image.filePath);
       if (bytes.byteLength !== image.bytes || sha256(bytes) !== image.sha256) throw new Error("WEBSITE_MEDIA_FILE_CHANGED");
+      this.assertFormalBinding(prepared);
       operation = this.replaceMedia(operation, index, { ...step, state: "DISPATCHING" });
       step = operation.media[index]!;
       let responseReceived = false;
@@ -256,6 +261,7 @@ export class OfficialApiDurableRuntime {
     if (operation.create!.state === "DISPATCHING" || operation.create!.state === "OUTCOME_UNKNOWN") return this.needsReconciliation(operation, "WEBSITE_CREATE_OUTCOME_UNKNOWN");
     if (operation.create!.state === "FAILED") return { status: "failed", operation };
     if (operation.create!.state !== "SUCCEEDED") {
+      this.assertFormalBinding(prepared);
       operation = this.update(operation, { create: { ...operation.create!, state: "DISPATCHING" } });
       let responseReceived = false;
       try {
@@ -283,6 +289,7 @@ export class OfficialApiDurableRuntime {
     if (operation.draft!.state !== "SUCCEEDED") {
       const beforeDraft = operation.remoteContent;
       if (!beforeDraft) throw new Error("WEBSITE_CONTENT_IDENTITY_MISSING");
+      this.assertFormalBinding(prepared);
       operation = this.update(operation, { draft: { ...operation.draft!, state: "DISPATCHING" } });
       let responseReceived = false;
       try {
@@ -313,6 +320,7 @@ export class OfficialApiDurableRuntime {
     if (operation.validate!.state === "DISPATCHING" || operation.validate!.state === "OUTCOME_UNKNOWN") return this.needsReconciliation(operation, "WEBSITE_VALIDATE_OUTCOME_UNKNOWN");
     if (operation.validate!.state === "FAILED") return { status: "failed", operation };
     if (operation.validate!.state !== "SUCCEEDED") {
+      this.assertFormalBinding(prepared);
       operation = this.update(operation, { validate: { ...operation.validate!, state: "DISPATCHING" } });
       let responseReceived = false;
       try {
@@ -383,6 +391,7 @@ export class OfficialApiDurableRuntime {
     if (operation.phase !== "PREPARED" || !operation.remoteContent || operation.validate?.state !== "SUCCEEDED")
       throw new Error("WEBSITE_OPERATION_NOT_PREPARED");
     await this.finalPreflight(operation, client);
+    this.assertFormalBinding(operation.prepared);
     const remoteContent = operation.remoteContent;
     if (!remoteContent) throw new Error("WEBSITE_CONTENT_IDENTITY_MISSING");
     if (!operation.publish) operation = this.update(operation, { publish: exactStep<OfficialApiContentIdentity & { jobId: string }>(operation, "publish", remoteContent.revisionId, {
@@ -594,11 +603,15 @@ export class OfficialApiDurableRuntime {
         : { rowVersion: current.rowVersion, acceptanceRunId: input.mainAuthorization!.acceptanceRunId };
     const maintenanceId = `${input.operation}:${current.rowVersion}`;
     const existing = operation.maintenance.find(item => item.maintenanceId === maintenanceId);
-    if (existing) return existing.remoteJob ? this.pollMaintenance(operation, operation.maintenance.indexOf(existing), client)
-      : this.needsReconciliation(operation, "WEBSITE_MAINTENANCE_ALREADY_DISPATCHED");
+    if (existing) {
+      if (existing.state === "SUCCEEDED" && existing.remoteJob?.status === "succeeded") return { status: "maintained", operation };
+      if (existing.state === "FAILED" || existing.remoteJob?.status === "failed") return { status: "failed", operation };
+      return existing.remoteJob ? this.pollMaintenance(operation, operation.maintenance.indexOf(existing), client)
+        : this.needsReconciliation(operation, "WEBSITE_MAINTENANCE_ALREADY_DISPATCHED");
+    }
     const step: OfficialApiMaintenanceStep = { maintenanceId, operation: input.operation, state: "PLANNED",
       idempotencyKey: operationKey(operation, input.operation, maintenanceId), exactJson: canonical(body), bodySha256: sha256(canonical(body)),
-      sourceRowVersion: current.rowVersion };
+      sourceRowVersion: current.rowVersion, jobBinding: { revisionId: null, contentHash: null } };
     operation = this.update(operation, { maintenance: [...operation.maintenance, step] });
     const index = operation.maintenance.length - 1;
     operation = this.update(operation, { maintenance: operation.maintenance.map((item, itemIndex) => itemIndex === index ? { ...item, state: "DISPATCHING" } : item) });
@@ -610,7 +623,9 @@ export class OfficialApiDurableRuntime {
       responseReceived = true;
       const job = response.data;
       if (response.httpStatus !== 202 || !uuid.test(job.jobId) || job.operation !== input.operation || job.siteId !== operation.siteId
-        || job.environment !== operation.environment || job.contentId !== current.id) throw new Error("WEBSITE_MAINTENANCE_RESPONSE_MISMATCH");
+        || job.environment !== operation.environment || job.contentId !== current.id
+        || job.revisionId !== step.jobBinding!.revisionId || job.contentHash !== step.jobBinding!.contentHash)
+        throw new Error("WEBSITE_MAINTENANCE_RESPONSE_MISMATCH");
       operation = this.update(operation, { maintenance: operation.maintenance.map((item, itemIndex) => itemIndex === index
         ? { ...item, state: "DISPATCHING", remoteJob: { jobId: job.jobId, status: job.status, publicUrl: job.publicUrl } } : item) });
       return { status: "publishing", operation };
@@ -659,7 +674,7 @@ export class OfficialApiDurableRuntime {
   }
 
   private assertFormalBinding(prepared: OfficialApiPreparedContent): void {
-    if (!this.options.formalExecution.available) throw new Error("WEBSITE_FORMAL_EXECUTION_UNAVAILABLE");
+    this.assertFormalSubmitAvailable();
     const allowed = this.options.formalExecution.allowedBindings;
     if (allowed !== undefined && !allowed.some(binding => binding.accountId === prepared.scope.accountId
       && binding.articleId === prepared.source.articleId && binding.contentBindingId === prepared.contentBindingId))
@@ -715,11 +730,14 @@ export class OfficialApiDurableRuntime {
     client: OfficialApiRuntimeClient): Promise<OfficialApiRunResult> {
     const step = operation.maintenance[index];
     if (!step?.remoteJob || !operation.remoteContent) return this.needsReconciliation(operation, "WEBSITE_MAINTENANCE_JOB_MISSING");
+    if (!step.jobBinding || !("revisionId" in step.jobBinding) || !("contentHash" in step.jobBinding))
+      return this.needsReconciliation(operation, "WEBSITE_MAINTENANCE_JOB_BINDING_MISSING");
     const remoteContent = operation.remoteContent;
     const job = (await client.getJob(step.remoteJob.jobId)).data;
     if (job.jobId !== step.remoteJob.jobId || job.operation !== step.operation || job.siteId !== operation.siteId
-      || job.environment !== operation.environment || job.contentId !== operation.remoteContent.contentId)
-      throw new Error("WEBSITE_MAINTENANCE_JOB_MISMATCH");
+      || job.environment !== operation.environment || job.contentId !== operation.remoteContent.contentId
+      || job.revisionId !== step.jobBinding.revisionId || job.contentHash !== step.jobBinding.contentHash)
+      return this.needsReconciliation(operation, "WEBSITE_MAINTENANCE_JOB_MISMATCH");
     operation = this.update(operation, { maintenance: operation.maintenance.map((item, itemIndex) => itemIndex === index
       ? { ...item, remoteJob: { jobId: job.jobId, status: job.status, publicUrl: job.publicUrl } } : item) });
     if (job.status === "failed") {

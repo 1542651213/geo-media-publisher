@@ -5,7 +5,7 @@ import { readOfficialApiCredential, KANGYI_SITE_CONFIG, type OfficialApiCredenti
 import type { OfficialApiOperation, OfficialApiOperationStore, OfficialApiRunResult } from "../../../../packages/adapters/official-api/src/runtime";
 import type { OfficialApiPreparedContent } from "../../../../packages/adapters/official-api/src/mapping";
 import type { OfficialApiJobView, OfficialApiMaintenanceOperation } from "../shared/official-api";
-import { candidateBindingAllowed, type OfficialApiAcceptanceSelection } from "./official-api-candidate";
+import { candidateBindingAllowed, candidateGrantActive, type OfficialApiAcceptanceSelection } from "./official-api-candidate";
 import { freezeOfficialApiSelection } from "./official-api-selection";
 import { verifyOfficialApiConnection } from "./official-api-account";
 
@@ -27,7 +27,7 @@ export class OfficialApiController {
   constructor(private readonly deps: Dependencies) {}
 
   availability() { return { ordinaryEnabled: this.deps.ordinaryEnabled,
-    candidateSelections: this.deps.grants.map(({ accountId, articleId, kind }) => ({ accountId, articleId, kind })) }; }
+    candidateSelections: this.deps.grants.filter(candidateGrantActive).map(({ accountId, articleId, kind }) => ({ accountId, articleId, kind })) }; }
 
   assertCredentialReconfiguration(accountId: string, next: OfficialApiCredential): void {
     const current = readOfficialApiCredential(this.deps.credentials, accountId);
@@ -40,7 +40,8 @@ export class OfficialApiController {
         continue;
       }
       const last = operation.maintenance.at(-1);
-      if (last?.remoteJob?.status !== "succeeded" || last.operation !== "purge") throw new Error("WEBSITE_ORIGINAL_CREDENTIAL_STILL_REQUIRED");
+      if (last?.state !== "SUCCEEDED" || last.remoteJob?.status !== "succeeded" || last.operation !== "purge")
+        throw new Error("WEBSITE_ORIGINAL_CREDENTIAL_STILL_REQUIRED");
     }
   }
 
@@ -102,13 +103,15 @@ export class OfficialApiController {
     if (!operation) return null;
     const last = operation.maintenance.at(-1);
     const grant = this.deps.grants.find(value => candidateBindingAllowed([value], this.binding(operation.prepared)));
-    return { jobId, phase: last?.remoteJob?.status === "succeeded" ? ({ unpublish: "UNPUBLISHED", delete: "DELETED", restore: "RESTORED", purge: "CLEANED" })[last.operation] : last && ["queued", "processing", "verifying"].includes(last.remoteJob?.status ?? "") ? `MAINTENANCE_${last.operation.toUpperCase()}` : operation.phase,
+    const maintenanceSucceeded = last?.state === "SUCCEEDED" && last.remoteJob?.status === "succeeded";
+    const maintenanceFailed = last?.state === "FAILED" || last?.remoteJob?.status === "failed";
+    return { jobId, phase: maintenanceSucceeded ? ({ unpublish: "UNPUBLISHED", delete: "DELETED", restore: "RESTORED", purge: "CLEANED" })[last.operation] : maintenanceFailed ? "FAILED" : last?.remoteJob?.status === "needs_attention" ? "NEEDS_RECONCILIATION" : last ? `MAINTENANCE_${last.operation.toUpperCase()}` : operation.phase,
       contentId: operation.remoteContent?.contentId ?? null, revisionId: operation.remoteContent?.revisionId ?? null,
       contentHash: operation.remoteContent?.contentHash ?? null, rowVersion: operation.remoteContent?.rowVersion ?? null,
-      remoteJobId: last?.remoteJob?.jobId ?? operation.remoteJob?.jobId ?? null, publicUrl: operation.remoteJob?.publicUrl ?? null,
+      remoteJobId: last ? last.remoteJob?.jobId ?? null : operation.remoteJob?.jobId ?? null, publicUrl: operation.remoteJob?.publicUrl ?? null,
       kind: operation.prepared.settings.kind, siteId: operation.siteId, environment: operation.environment,
       publicContentVerified: operation.fidelity?.ok ?? null, fidelityWarning: operation.fidelity?.warning ?? null,
-      errorCode: operation.errorCode ?? null, canPurge: Boolean(operation.environment === "staging" && grant?.acceptanceRunId) };
+      errorCode: last?.errorCode ?? operation.errorCode ?? null, canPurge: Boolean(operation.environment === "staging" && grant?.acceptanceRunId) };
   }
 
   async recover(jobId: string): Promise<OfficialApiJobView> {
@@ -117,7 +120,7 @@ export class OfficialApiController {
       const job = this.deps.repository.getJob(jobId);
       if (!job) throw new Error("WEBSITE_JOB_NOT_FOUND");
       const maintenance = result.operation.maintenance.at(-1);
-      if (!maintenance && result.status === "prepared") this.preparedResult(job, result.operation);
+      if (!maintenance && result.status === "prepared") this.restorePreparedResult(job, result.operation);
       if (!maintenance && result.status === "published" && result.operation.remoteContent && result.operation.remoteJob?.publicUrl
         && !["Success", "Published"].includes(job.status)) {
         const intent = this.deps.repository.getSubmissionIntentByJob(jobId);
@@ -185,6 +188,20 @@ export class OfficialApiController {
       publishedUrl: null, publishedExternalId: null, success: false, status: "Prepared", automationType: "API",
       response: this.metadata(operation), verificationStatus: "WaitingUser" });
     return { job: this.deps.repository.getJob(job.id)!, record, message: "官网图片、草稿与版本验证已完成；请确认原任务最终发布。" };
+  }
+  private restorePreparedResult(job: PublishJob, operation: OfficialApiOperation) {
+    const intent = this.deps.repository.getSubmissionIntentByJob(job.id);
+    if (!intent) return this.preparedResult(job, operation);
+    if (operation.phase !== "PREPARED" || operation.publish || operation.remoteJob || intent.finalSubmitCount !== 0 || intent.submitBoundaryEnteredAt)
+      throw new Error("WEBSITE_PREPARED_INTENT_RECOVERY_UNSAFE");
+    return this.deps.repository.db.transaction(() => {
+      if (intent.state === "Unknown") {
+        const restored = this.deps.repository.db.prepare("UPDATE submission_intents SET state='Prepared',remote_status='SUBMIT_NOT_STARTED',reconciliation_required=0,updated_at=? WHERE id=? AND job_id=? AND state='Unknown' AND final_submit_count=0 AND submit_boundary_entered_at IS NULL AND remote_request_started_at IS NULL AND remote_response_received_at IS NULL AND external_id IS NULL")
+          .run(new Date().toISOString(), intent.id, job.id).changes;
+        if (restored !== 1) throw new Error("WEBSITE_PREPARED_INTENT_RECOVERY_UNSAFE");
+      } else if (intent.state !== "Prepared") throw new Error("WEBSITE_PREPARED_INTENT_RECOVERY_UNSAFE");
+      return this.preparedResult(job, operation);
+    })();
   }
   private async exclusive<T>(key: string, action: () => Promise<T>): Promise<T> {
     const running = this.pending.get(key);

@@ -27,7 +27,7 @@ const define = (platformKey: string, displayName: string, order: number, automat
 export const PRODUCT_PLATFORM_POLICY: readonly ProductPlatformDefinition[] = [
   { ...define("douyin", "抖音", 1, "PRODUCT_E2E_PUBLISHED", "图文可发布", "单账号、单图、标题最多20字符、公开、立即发布、无音乐。", ""), ordinaryPublishEnabled: true },
   define("xiaohongshu", "小红书", 2, "PRODUCT_E2E_PENDING", "正式链路待验收", "普通生产链路尚未完整验收。", "小红书正式生产链路尚未完整验收"),
-  define("website", "官网", 3, "API_CONNECTION_PENDING", "API 发布待验收", "已接入 Main 安全凭据导入与只读连接校验；真实发布尚未验收。", "官网 API 发布尚未验收，普通提交仍关闭"),
+  { ...define("website", "官网", 3, "PRODUCT_E2E_PUBLISHED", "OfficialAPI 可发布", "康一 ARTICLE / CASE 支持封面、正文图片与图库；确认后提交，按原任务查询结果。", ""), ordinaryPublishEnabled: true },
   define("toutiao", "今日头条", 4, "HISTORICALLY_CONFIRMED", "普通 UI 待验收", "历史限定路线已确认；普通正式提交仍关闭。", "今日头条普通 UI Product E2E 尚未完成，正式提交开关关闭"),
   define("sohu_media", "搜狐号", 5, "HISTORY_VERIFIED", "普通 UI 待复验", "历史 Published / Verified；普通 UI 尚待复验。", "搜狐号普通 UI 尚待产品复验"),
   define("netease_media", "网易号", 6, "NOT_IMPLEMENTED", "待开发", "当前只有平台目录占位，尚无独立 Adapter。", "网易号待开发，当前不可发布"),
