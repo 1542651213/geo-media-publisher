@@ -310,5 +310,6 @@
 }
 
 .v11-platform-overview small { color: #667085; }
+.v11-channel-list { flex-shrink: 0; }
 .v11-channel-list .check-row.disabled { opacity: 1; }
 .v11-channel-list .check-row.disabled em { color: #526780; font-size: 11px; }
