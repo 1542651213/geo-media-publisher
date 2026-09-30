@@ -1,23 +1,62 @@
 # 康一 OfficialAPI：不可重复操作与恢复契约
 
-此文是后续产品接线约束，尚未实现 operation journal/真实恢复验收。现阶段发布全面 fail closed。
+本契约已由 durable runtime、SQLite journal、重启测试和双环境 live acceptance 验证。它是持续生效的产品边界，不是一次验收脚本的临时规则。
 
-## 已实现客户端防线
+## 写前持久化与唯一最终边界
 
-一次 POST/PUT 调用只发送一次；默认 maxRetries=0，显式 GET 重试预算不改变写请求。raw bytes / exactJson 原样签名并发送；transport loss/5xx 保留 operation key、outcomeUnknown=true，不自动重复请求。日志/错误消息不回显远端任意 message、签名或 secret。
+每个写步骤在发送前持久化 immutable account/site/environment/keyId、Article source、settings、图片 SHA/MIME/bytes/dimensions、contentBindingId、exact JSON 或 raw byte hash、operation key 和预期远端 identity。journal 不保存 secret。
 
-## 必须沿用的产品边界
+POST/PUT 每个 logical operation 只发送一次。transport loss、timeout、5xx、响应 schema/binding 不匹配或进程崩溃后，不创建新 key、新 content、新 revision、新 media 或新 publish Job。状态进入 NeedsReconciliation，由原 job 的只读恢复处理。
 
-每次操作在发送前持久化 immutable scope/account/Article/media/hash、request body/key、remote content/revision/version/job identity；不得在 Job snapshot 持久化密钥。正式 publish 使用现有 SubmissionIntent + Main atomic final_submit_count 0→1/global concurrency1，不另造计数器。发送后未知状态=NeedsReconciliation；重启不恢复为可再次发布。fidelity FAIL/LIMITED 只告警，不能重发。
+正式 publish 继续使用 SubmissionIntent 和全局 formal-execution gate：
 
-有可信 remote Job ID：只读 GET/jobs/:id，检查 site/env/content/revision/hash，pending 有界轮询；succeeded 且可信同 scope publicUrl 才认定 Published。可信 Content ID/externalId 可 GET 对照 draft/published pointer，但不能将“不在某一页列表”当成原请求未被接受。
+- `finalSubmitCount=0` 且没有 `submitBoundaryEnteredAt` 才可能进入最终边界。
+- Adapter 只有在最终 preflight 全部通过、publish exact request 已持久化为 DISPATCHING 后，才调用 durable boundary claim。
+- boundary 进入后 `finalSubmitCount=1`；任务永不 Retry，也不能恢复为 AwaitingConfirmation。
+- 如果 final preflight 在任何 publish step 创建前失败，Publisher 可能已经创建并保留 submissionAttemptId。只在原 operation 仍为 PREPARED、没有 publish/remote Job、intent 为 Unknown、final count=0、没有 boundary、没有 remote request/response/external ID 时，Main 才在同一 SQLite transaction 将同一 intent 恢复为 Prepared。原 intent ID、attempt 和 submissionAttemptId 不变。
 
-无 remote Job ID 的完全响应丢失：当前 API 没有公开 operation-by-key/jobs-by-key 查询。不得猜 ID/publicUrl，不以第二 publish 来探测。媒体无 mediaId 也不得以重新上传当 recovery。继续验收必须从实际签名 API 合同获得可证明的原操作身份或明确未接受证据；否则保持只读待人工核对。
+## 原操作恢复
 
-服务端 idempotency 48h 与永久 externalId reservation/tombstone 是防御层，不是 Main 自动 replay 授权。fixture 中显式同 key 重传测试只证明字节与 nonce 契约，不能授权生产重传。
+有可信 remote Job ID 时，只读 `GET /jobs/:id`，核对 site、environment、operation、content、revision、hash 和保存的 maintenance nullable binding。queued/processing/verifying 只做有界轮询。原 exact publish Job=`succeeded` 且带可信同 scope `publicUrl` 时，发布结果为 Success；后续 content、raw SSR、media 与 public 页面读回形成独立 fidelity 结果。
 
-## 安全维护
+首次 publish 响应丢失时，允许的 POST 仅是原缓存读取，且必须同时满足：
 
-unpublish/delete/restore/purge 使用新的独立 operation identity；期待的 rowVersion/publishedRevision 不匹配即停止。只允许本次产品路径创建且服务器权限认可的对象。restore 只恢复 draft。purge 需额外人工确认、deleted 状态、task-owned测试资格与 acceptanceRunId/server permission；不以 writesEnabled 代替权限，不让 Renderer 自行指定任意内容为测试对象。
+1. 使用原 principal、scope、method、target、operation key 和 exact bytes。
+2. 先 GET 原 content，完整核对 externalId、contentId、revisionId、contentHash。
+3. 当前 rowVersion 严格大于原 publish body 的 rowVersion，证明原 exact request 已经不可能再次通过 enqueuePublish 的旧版本门禁。
+4. 仍在服务器 48 小时 idempotency cache 窗口内时，同 key/same bytes 可返回原 202 Job；changed bytes 必须冲突。
 
-本轮 production publisher.db、credentials、BrowserSession、历史 unresolved Douyin Job 均未打开/改写；没有 migration。后续 schema 变更必须独立 additive migration，并在本地受控副本上检查 integrity/FK、重启和既有表语义。
+缓存过期时，版本门禁令原请求失败；这不授权换 key 重发。pending 且版本未改变、身份不一致或任何证据缺失时，不发送 POST。
+
+HTTP 202、content published pointer 或 SSR 200 都不能单独证明 Published。原 exact Job=`succeeded` 且返回可信同 scope `publicUrl` 时，才能写 Publish Success。公开读回独立记录 `PublicContentVerified=PASS/FAIL/LIMITED`；FAIL/LIMITED 不撤销该 Publish Success，也不授权重新发送 publish。
+
+## 媒体恢复
+
+收到 mediaId 后，journal 立即保存返回 metadata，再用 signed private GET 核对 header 与实际 body byte count/SHA256；本地冻结的实际 MIME、尺寸与 SHA 仍是权威预期。
+
+如果首次 media POST 响应完全丢失且没有 mediaId，当前公开 API 没有 operation-by-key 或 media-by-idempotency-key 查询。这一情形明确标记为 `ARCHITECTURE_GAP`：
+
+- 不重新上传；
+- 不创建替代 media identity；
+- 不猜 mediaId；
+- 保持 NeedsReconciliation，等待合同扩展或人工服务端证据。
+
+## 维护恢复
+
+unpublish、delete、restore、purge 各自拥有独立 maintenanceId、operation key、exact JSON 和 sourceRowVersion。调用者只能传本地 jobId 与动作名。
+
+当前服务端维护 Job 的 `revisionId` 和 `contentHash` 应为 null。runtime 在 202 时保存 `{revisionId:null, contentHash:null}` 作为 exact jobBinding；非 null 返回进入 outcome unknown。仍处于非终态的旧 journal 若缺少 jobBinding，即使保存了 remote Job ID，也不轮询或宣告成功。已经以 local `SUCCEEDED`、remote `succeeded` 和既有读回证据完成的历史维护保持终态，runtime 直接返回该终态，不重新轮询。
+
+维护本地状态只有在 step=`SUCCEEDED` 且 remote Job=`succeeded` 时才是终态。若读回成功发生在持久化本地 SUCCEEDED 之前，step 仍为 DISPATCHING/OUTCOME_UNKNOWN，UI 保持 `MAINTENANCE_*`，下次只恢复原维护操作。凭据轮换同样等待这一双重终态。
+
+状态展示以最后一个 maintenance step 为准。最后一步=`FAILED` 时，显示该步骤的终态错误，不能在找不到当前维护成功证据时回退到原 publication Job。remote Job=`needs_attention` 仍为 `NEEDS_RECONCILIATION`，等待原操作的证据补全。
+
+purge 还要求：原 publish 已 succeeded、当前内容 deleted、environment=staging、Main package grant 明确绑定 acceptanceRunId 和 permission。production 正常对象不能由 Renderer 或普通写账号自报为 test-only。
+
+## Live 证据
+
+- staging ARTICLE 与 CASE 各一次 logical publish；ARTICLE 包含真实 reply-loss，原 operation 成功恢复；替代内容为 0。两对象维护与 purge 均从各自原 journal 完成。
+- production 普通安装版对象只有一个 content、一个 publish Job 和一次 logical publish；应用重启后从原 journal 恢复。随后 unpublish/delete/restore/delete 仍使用该对象的受控维护链，最终公开页 404。
+- production 对象 `is_test=0` 且当前权限不允许 purge。系统保留 soft-deleted content 与三张合成媒体，没有伪造权限或篡改服务端数据。
+
+fidelity FAIL/LIMITED、Basic Auth 导致的匿名 401、公开页面暂不可读等信号只产生告警。它们永远不能重置 final counter、触发替代 publish 或覆盖已有成功证据。

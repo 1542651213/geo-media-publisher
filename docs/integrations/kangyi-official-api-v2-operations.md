@@ -1,10 +1,19 @@
-# 康一 OfficialAPI：本机安全导入及继续验收
+# 康一 OfficialAPI：安装版操作与交接
 
-当前状态：OWNER_ACTION_REQUIRED=YES，CREDENTIAL_TARGET=staging|production。历史加密 Kangyi 配置在当前 Windows 用户下无法解密；没有发现可用环境配置。不要在聊天粘贴 secret。
+R1.15-C 的普通安装版 Website 路径已完成 staging / production live acceptance，最终部门 NSIS 及两次正常数据目录重启 smoke PASS。Website ordinary **ON**、batch **OFF**；Douyin ordinary **ON**、batch **OFF**。正式包身份见 [Release handoff](../releases/R1.15-C-READY.md)，证据见 [acceptance summary](../evidence/r115-c/acceptance-summary.json)。不得使用旧 Candidate 资源替代正式包。
 
-## 本机准备
+## 已配置账号
 
-由 Owner 在仓库以外、本机受控目录准备两个 JSON 文件。字段严格为 origin、siteId、environment、keyId、secret；环境和值须一致。下面只展示非秘密结构，secret 必须由 Owner 在本机填入真实值；placeholder 不能通过实际连接验证。
+| 环境 | Main accountId | principal | 当前用途 |
+| --- | --- | --- | --- |
+| staging | `6894966b-7e69-4740-834f-ca8842fe9466` | staging-editor | 已恢复到原 staging SafeStorage 配置；普通连接与后续正常发布 |
+| production | `54fde62d-68e0-4aa3-91a9-8afb8217c70d` | production-admin | 已验收的 production 可写账号 |
+
+secret 只保存在 Main SafeStorage。不要从数据库、日志、文档或验收输出提取 secret；不要求 Owner 再发送密码、PAT 或 HMAC 值。
+
+## 安全导入与验证
+
+需要重新导入时，只使用普通账号中心的 Main 原生文件选择器。文件字段严格为 origin、siteId、environment、keyId、secret；下面只有结构占位符，不是可用凭据：
 
 ```json
 {
@@ -16,24 +25,38 @@
 }
 ```
 
-production 文件改为 origin=`https://xn--4gq502b.com`、environment=`production`，使用独立 production key。secret 至少32 UTF-8字节，不附加换行/trim/编码转换。文件不得放入 Git/源码/output/聊天附件/Release，不上传。
+production 使用 `https://xn--4gq502b.com` 和独立 production key。secret 是至少 32 UTF-8 字节的原始值，不 trim、不附加换行、不转码。导入文件不得放入 Git、源码、output、聊天附件或 Release。
 
-staging 凭据需服务端允许本次 ARTICLE+CASE 和 task-owned 对象清理；production 凭据必须限定本次唯一临时验收对象及安全清理。writesEnabled 不能证明 purge 权限，实际权限仍需 API 拒绝/允许事实验证。不要以 Admin 密码替代 HMAC。
+Main 在写入 SafeStorage 前校验文件大小、字段、固定 origin/site/environment，并签名读取 health/capabilities。账号 scope 已绑定后不能跨环境改写；存在未清理的 durable operation 时不能轮换其凭据。Renderer 只收到连接 metadata，不接收 secret、凭据文件路径、exact JSON 或 journal 内部对象。
 
-## 普通 UI 导入（连接 Candidate，不是部门 Release）
+## 普通 Website 发布流程
 
-1. 使用本轮连接预检 Candidate。首次检查采用显式隔离 userData；正式 production userData 的凭据配置仅在 Owner 提供有效本机文件后继续。
-2. 普通账号中心 →「康一官网 · OfficialAPI」→「安全导入测试环境凭据」。在 Main 原生文件选择器选择对应 JSON。
-3. Main 读取并校验实际文件、精确 origin/site/env，然后只读 health/capabilities。验证成功后才通过现有 Main Repository 创建或更新 scope 账号、通过 SafeStorage 加密保存密钥。
-4. 对 production 使用「安全导入正式环境凭据」，不能将 staging 账号改为 production。重复配置使用原账号「重新安全导入」，不自动创建第二账号。
-5. 点击「检查 API 连接」。成功显示连接状态、环境、site、origin、协议、types 和当前可写/只读能力。连接正常不等于官网可发布。重启后状态先为待检查连接，必须重新验证，不能盲信 DB logged_in。
+1. 在账号中心检查 OfficialAPI 连接。Main 重新读取 SafeStorage 并验证当前协议、site、environment、content kind、limits 和 writesEnabled。
+2. 在发布窗口选择 Website、已验证可写账号、ARTICLE 或 CASE，并明确填写所需 summary/category/keywords 等字段。
+3. 只选择已启用的同品牌图片或明确的 universal 图片。Renderer 传 asset ID；Main 重新读取并冻结实际字节、MIME、尺寸、SHA256。
+4. 「准备官网内容」依次完成媒体、内容、草稿和 validate，并持久化唯一 job、scope、source、settings、exact request bytes、operation keys 和远端 identity。
+5. 准备完成后任务为 AwaitingConfirmation。Website 不接受 Dry Run；只有显式 confirmed final 才进入 Scheduled 和唯一 final submit。
+6. HTTP 202 后保持 Publishing，直到原 exact remote Job=`succeeded`、scope/identity 一致且存在可信同 scope `publicUrl`，随后记录 Publish Success。raw SSR、media 与 public 页面读回独立记录 `PublicContentVerified=PASS/FAIL/LIMITED`；fidelity warning 只显示提醒，不撤销 Publish Success，也不创建第二次发布。
 
-Renderer 不读取文件路径或 secret，不接受用户传入的 status/FinalApproved/hash/config。通用 accounts:set-credentials 的 website 写入口被阻断。只有 metadata 返回界面。
+任务不得通过通用 Retry 重新执行 Website publish。NeedsReconciliation 使用「按原操作恢复」，只读取或恢复同一 journaled operation。final boundary 已进入、存在 publish step 或 outcome unknown 时，不能退回可确认状态。
 
-## 继续执行范围
+## 维护操作
 
-凭据有效后从已完成连接基础继续：产品 ARTICLE/CASE/媒体契约及 durable queue → isolated restart/uncertain tests → staging 两对象完整闭环和安全故障测试 → production 一对象闭环 →普通 UI验收 → Website ordinary ON →最终回归/独立正式 Release。
+维护入口只接受本地既有 Website jobId。contentId、revisionId、contentHash、rowVersion、remote Job ID 和 operation key 全部由 Main journal 派生；Renderer 不能提供这些远端身份。
 
-当前两个 live 环境均未创建任何测试对象、媒体、授权、Job、Intent 或 final claim。不得直接借低层客户端脚本绕开普通产品路径做正式发布。
+- unpublish、delete、restore 使用独立、持久化的维护 operation。
+- restore 只恢复 draft，不自动重新发布。
+- 当前 maintenance Job 的 revisionId/contentHash 是精确 null binding；返回非 null，或非终态旧 journal 缺少该 binding 时保持待恢复。已经以 local `SUCCEEDED`、remote `succeeded` 和既有读回证据完成的历史维护保持终态，不重新轮询。
+- purge 只允许 staging、Main package grant 绑定的 acceptanceRunId、task-owned、deleted 对象。`writesEnabled=true` 不是 purge 授权。
+- 只有本地 step=`SUCCEEDED` 且 remote Job=`succeeded` 才显示 CLEANED/DELETED/RESTORED/UNPUBLISHED，并允许相应的凭据轮换。PLANNED、DISPATCHING、OUTCOME_UNKNOWN 均保持 `MAINTENANCE_*`。
+- 最后一个 maintenance step=`FAILED` 时显示该终态错误，不能回退到原 publication Job 推断状态；remote `needs_attention` 继续显示 `NEEDS_RECONCILIATION`。
 
-GitHub 交付另有必要确认：当前 `1542651213/geo-media-publisher` 实测 PUBLIC，而任务要求 private。Owner 需指定已有私有仓库，或明确授权将现有仓库改为 private；确认前不推到公开仓库，不改 visibility，不创建 READY tag。
+## 已完成验收与清理
+
+staging ARTICLE 与 CASE 各一个对象、各一次逻辑 publish，真实 reply-loss/restart recovery、raw SSR 和图片验证均 PASS；两对象均由各自受控 acceptance run purge。原 staging 配置字节及 owner 已恢复，新建 grant keys 已移除。站点既有 Basic Auth 保留，所以匿名 fidelity 为 401 warning；认证 raw SSR 与图片 HTTP 200 通过。
+
+production 使用普通安装版 UI 完成唯一对象与唯一 publish，随后执行 unpublish → delete → restore → delete，最终页面 404，业务 active/published 仍为 84。该对象 `is_test=0`，正式 API 没有 purge 权限；禁止伪造 purge。三张合成媒体按既有服务保留策略继续存在。
+
+本地既有 64 张表和业务行均保留。验收收尾仅通过 Main 已有 `accounts:update` 恢复一次 Douyin enabled 开关，两条审计时间戳因此如实变化；没有发生登录或发布，既有加密 credential entries 均未改变。
+
+不存在需要操作者补做的远端内容 cleanup、打包或真实验收。最终交付采用本地 commit/tag 和 clean 检查；私有 GitHub 推送等待 Owner 配置私有目标。不得重新运行 live acceptance 或创建替代 production 对象来“再确认”。

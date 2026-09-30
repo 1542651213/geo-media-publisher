@@ -1,0 +1,95 @@
+{
+  "task": "R1.15-C_KANGYI_OFFICIAL_API",
+  "status": "R1_15_C_KANGYI_OFFICIALAPI_READY",
+  "sourceCommit": "86727b9250135282ab2fa247fe1a5dc3f5f791b5",
+  "installer": {
+    "path": "output/r115-c-department-release/Geo Media Publisher Setup 1.1.9 - R1.15 KANGYI WEBSITE RELEASE.exe",
+    "bytes": 101217340,
+    "sha256": "31b3729b616faa3572e59ad3be5b74896c046a9b2a6ffd22f45f0f1f1bb0e24f",
+    "appAsarSha256": "7efc90afd43fe5f7377acd2c7e4d70bb0c46a2c06f42c2128b67db9f191ec34f"
+  },
+  "staging": {
+    "status": "PASS",
+    "stages": {
+      "staging-article": {
+        "jobId": "e978a8c5-46b5-4f81-b7f9-46f16e800ab0",
+        "remoteContentId": "de42cf4d-9c2d-4d14-9fe5-455096c9ef8b",
+        "remotePublishJobId": "e9a08e47-09c2-4106-843a-f2ce14ca4f3e",
+        "logicalPublishCount": 1,
+        "rawSsr": "PASS",
+        "media": "PASS",
+        "cleanup": "PASS"
+      },
+      "staging-case": {
+        "jobId": "77e10f29-264f-4741-9168-830168f31762",
+        "remoteContentId": "e8d20256-3587-4e44-ab11-f51d49b70c1e",
+        "remotePublishJobId": "885bb17a-2b8d-4b8d-9bba-a47a76f3dac0",
+        "logicalPublishCount": 1,
+        "rawSsr": "PASS",
+        "media": "PASS",
+        "cleanup": "PASS"
+      }
+    },
+    "realReplyLoss": true,
+    "originalOperationRecovered": true,
+    "normalInstalledUi": true,
+    "duplicateContents": 0,
+    "stagingBasicAuthPreserved": true,
+    "authenticatedPublicSsr": "PASS",
+    "anonymousFidelityWarning": "PUBLIC_PAGE_UNAVAILABLE",
+    "productionWritesBeforeGate": 0,
+    "secretsPrinted": false
+  },
+  "production": {
+    "status": "PASS",
+    "normalInstalledUi": "PASS",
+    "restart": "PASS",
+    "jobId": "7c64dca3-c30f-4f35-b029-161c284a5f38",
+    "contentId": "6a81e7ff-d239-47b2-99b5-aa09e28337df",
+    "remotePublishJobId": "efd97474-7572-4606-b046-2d03200cc848",
+    "realProductionTestObjectCount": 1,
+    "logicalPublishCount": 1,
+    "mediaGroupCount": 1,
+    "mediaCount": 3,
+    "rawSsr": "PASS",
+    "browser": "PASS",
+    "publicFidelity": "PASS",
+    "safeCleanup": "PASS_SOFT_DELETED",
+    "publicPageAfterCleanup": 404,
+    "productionPurge": "NOT_ALLOWED_BY_CURRENT_API_GUARD",
+    "mediaRetention": "THREE_SYNTHETIC_MEDIA_RETAINED_BY_EXISTING_POLICY_PUBLIC_CACHE_MAY_RETURN_200",
+    "businessActivePublished": 84,
+    "duplicateContents": 0,
+    "stagingOriginalConfigRestored": true,
+    "secretsPrinted": false
+  },
+  "localProtection": {
+    "tablesCompared": 64,
+    "previousBusinessFieldsPreserved": true,
+    "expectedAccountTimestampChanges": 2,
+    "existingEncryptedCredentialEntriesUnchanged": true
+  },
+  "tests": {
+    "fullFiles": 184,
+    "fullTests": 1332,
+    "command": "pnpm exec vitest run --maxWorkers=1",
+    "status": "PASS",
+    "parallelFixtureFailuresObserved": {
+      "inheritedDouyinPopup": 1,
+      "newPrivateMediaTransport": 5
+    },
+    "standalonePass": {
+      "douyin": 8,
+      "privateMedia": 25
+    }
+  },
+  "installedSmoke": {
+    "runs": 2,
+    "normalUserData": true,
+    "restart": true,
+    "dualEnvironmentLiveConnection": true,
+    "remoteWrites": 0,
+    "candidateMarkerAbsent": true
+  },
+  "secretValuesIncluded": false
+}

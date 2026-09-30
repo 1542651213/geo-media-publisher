@@ -1,56 +1,85 @@
-# 康一 OfficialAPI V2：当前契约与实现边界
+# 康一 OfficialAPI V2：正式契约与已验收实现边界
 
-Task: R1.15-C_KANGYI_OFFICIAL_API。当前交付状态是连接基础已实现、HMAC 凭据阻塞；不是官网发布 READY。
+R1.15-C_KANGYI_OFFICIAL_API 的产品实现、双环境 live acceptance、最终部门 NSIS 和安装版重启验收已完成。Website 普通发布 **ON**、批量 **OFF**；Douyin 普通 **ON**、批量 **OFF**。包身份和交付状态见 [Release handoff](../releases/R1.15-C-READY.md)，脱敏证据见 [acceptance summary](../evidence/r115-c/acceptance-summary.json)。仅私有 GitHub 推送因 Owner 尚未配置目标而未完成，当前 public origin 未推送。
 
-## 核对来源
+## 已核实来源
 
-GEO 起点 `d2aa3c3f2c173c186c567421bbc4657ae32eec45`，当时 main=origin/main、工作区 clean。历史 Website tag `archive-website-adapters-20260928` 指向 `901e2ea7f97c451aa1efc5fdd7bbe53ec8f71aca`，只恢复 CMS V2 signing/client/contracts，逐项对照当前 Kangyi 源码；未 cherry-pick 旧 Publisher、旧 Main、旧迁移或另建品牌 Adapter。
+- GEO 从 `d2aa3c3f2c173c186c567421bbc4657ae32eec45` 的 main 基线开始；历史 Website tag `archive-website-adapters-20260928` 只提供 CMS V2 signing/client/contracts 的可核对来源，没有覆盖 Publisher、Main、迁移或其它平台 Adapter。
+- Kangyi 两环境当前运行包 SHA256 为 `fcc39c01d38211ecde42c95665b1272f8773ab1efa3e7328988fe737cb208406`，runtimeSourceCommit / packageSourceCommit 均为 `8ac541c5518e44e3b1f23c0b9d9169ba0d0460fd`。
+- 本任务没有修改 Kangyi CMS schema、API、HMAC、idempotency、Nginx 或站点源码。两环境的 CMS / Site units、health、capabilities 和 OpenAPI V2 均已核实。
+- 两环境真实凭据只经 Main 原生文件入口进入 SafeStorage；secret 和凭据文件路径不进入 Renderer、日志、文档或验收产物。
 
-当前 Kangyi 正式交接源码位于 `D:\康一环保科技\康一K3-R2-authoring-r3-workspace`，HEAD `a23600ac6ef792e743e255fac8509f085f1b27a3`，只读、clean。读取了其 ready、`docs/cms-rollout/api/{GEO_INTEGRATION.md,DELETE_API_CONTRACT.md,openapi.json}`、`clients/cms-v2` 和 `gateway/src/cms/{http-v2,auth-v2,validation-v2,repository,publication}.ts`。交接声明部署源 `8ac541c5518e44e3b1f23c0b9d9169ba0d0460fd`、包 SHA256 `fcc39c01d38211ecde42c95665b1272f8773ab1efa3e7328988fe737cb208406`；这些是交接声明，尚未通过签名 live API 独立复验。
+## 固定 scope 与 HMAC
 
-2026-09-30 只读 live health：staging / production 均 HTTP200、status=ok、protocolVersion=2。未签名 staging capabilities 为 HTTP401。没有可用 HMAC，不能把 health 通过写成 capabilities/permission/发布通过。
+固定 `siteId=kangyi`。staging origin=`https://staging.kangyihb.com`；production origin=`https://xn--4gq502b.com`。只调用 `/_publish-api/v2`，不使用 Admin transport、Browser publish 或失败后的替代通道。
 
-## Scope 与签名
+Canonical HMAC 输入严格为 8 行：
 
-固定 siteId=kangyi。staging origin=`https://staging.kangyihb.com`；production origin=`https://xn--4gq502b.com`。只调用 `/_publish-api/v2`，无 Admin transport、Browser publish 或 API fallback。
+1. 大写 METHOD
+2. 精确 pathname + query
+3. siteId
+4. environment
+5. 秒级 timestamp
+6. nonce
+7. Idempotency-Key；GET 为空串
+8. 实际请求字节 SHA256
 
-Canonical HMAC 输入依次为 METHOD 大写、精确 pathname+query、siteId、environment、秒级 timestamp、nonce、Idempotency-Key 或空串、实际请求字节 SHA256；8 行以 LF 连接，末尾不追加 LF。secret 使用原始 UTF-8，不 trim、不做 Base64 decode。签名为 `sha256=<lowercase hex>`。签名头只存在 Main 的 HTTP 请求内。
+八行只以 LF 连接，末尾没有额外 LF。secret 是原始 UTF-8 字节，不 trim、不 Base64 decode。签名格式为 `sha256=<lowercase hex>`。nonce 为 32–64 个小写十六进制字符；每次请求使用新 nonce。POST/PUT 的 operation key 为 8–128 字符，exact JSON bytes 持久化后不得重排。
 
-GET 无 body / Idempotency-Key；POST/PUT 必须保留 8–128 字符 operation key。每次请求使用新 nonce，原 exact JSON bytes 不重排。客户端默认不重试；即使显式设置 maxRetries，写请求也只发送一次，该设置只影响 GET。response loss/5xx 写结果为 outcomeUnknown，不能创建替代资源或再发布。
+客户端写请求只发送一次；`maxRetries` 只影响 GET。response loss、timeout 或 5xx 后保留原 operation key、exact bytes 和 durable identity，进入只读恢复，不创建替代内容、版本、媒体或 publish Job。
 
-## 当前服务器形状
+## API 与限制
 
-Capabilities: siteId、environment、protocolVersion、contentKinds(article/case)、limits、writesEnabled。没有 per-action permission / supportedActions 字段；不能以 writesEnabled 推导 purge 权限。limits：JSON 1MiB、raw media 8MiB、dimension 10000、40M pixels。媒体 PNG/JPEG/WebP。当前 Main 检查协议、站点、环境、types 和 limit 类型/范围。
+Capabilities 返回 siteId、environment、protocolVersion、contentKinds、limits、writesEnabled。`writesEnabled=true` 不代表拥有 purge 权限；部署合同没有 per-action permission 或 supportedActions 字段。
 
-| API | 请求 / 返回关键绑定 |
+- JSON 最大 1 MiB。
+- raw media 最大 8 MiB。
+- 图片单边最大 10,000 px，总像素最大 40,000,000。
+- 媒体只接受 PNG、JPEG、WebP；Main 从实际字节计算 MIME、尺寸和 SHA256，私有 GET 再核对响应 metadata、实际 byte count 与实际 SHA256。
+- blocks 最大 100；禁止任意 HTML。paragraph/quote、heading、list、image 均按 CMS V2 字段上限验证。
+
+| API | 必须保存或验证的绑定 |
 | --- | --- |
-| GET /health、/capabilities | protocolVersion、当前 scope / capability |
-| POST /media；GET /media/:id | raw image bytes；mediaId、sha256、mime、尺寸 |
-| GET /contents | kind、externalId、status、page/pageSize；当前部署 status 只接受 active/deleted |
-| POST /contents | externalId + draft；contentId、revisionId、contentHash、rowVersion |
-| GET /contents/:id | exact scope、draft、revision 和 published pointer |
-| PUT /contents/:id/draft | rowVersion + draft；新 revision/hash/version |
-| POST /contents/:id/validate | revisionId；valid + fieldErrors |
-| POST /contents/:id/publish | revisionId + contentHash + rowVersion；HTTP202 是 queued Job，不是 Published |
-| GET /jobs/:id | queued/processing/verifying/succeeded/failed/needs_attention；可信 publicUrl |
-| POST /contents/:id/unpublish | rowVersion + expectedPublishedRevisionId |
-| POST /contents/:id/rollback | revisionId/hash/version + expectedPublishedRevisionId |
-| POST /contents/:id/delete | rowVersion + expectedPublishedRevisionId + reason |
-| POST /contents/:id/restore | rowVersion；仅恢复为 draft，不自动发布 |
-| POST /contents/:id/purge | rowVersion + acceptanceRunId（权限要求时）；只允许 deleted 和 task-owned test objects |
+| GET `/health`、`/capabilities` | protocolVersion、site、environment、content kind、limits、writesEnabled |
+| POST `/media`；GET `/media/:id` | 原 operation key、mediaId、SHA256、MIME、bytes、width、height |
+| POST `/contents` | externalId、exact draft；contentId、revisionId、contentHash、rowVersion |
+| PUT `/contents/:id/draft` | rowVersion、exact draft；新 revision/hash/version |
+| POST `/contents/:id/validate` | exact revisionId；valid 与 fieldErrors |
+| POST `/contents/:id/publish` | revisionId、contentHash、rowVersion；HTTP 202 只表示 queued |
+| GET `/jobs/:id` | site/env/content/revision/hash、状态、可信 publicUrl |
+| unpublish / delete / restore / rollback | 当前 rowVersion、published revision fence、独立 operation identity |
+| purge | 当前 rowVersion、Main 绑定的 acceptanceRunId、deleted 与 task-owned 资格 |
 
-继承的 OpenAPI list status enum 与部署 handler 不一致；客户端保留历史 published 字符串类型供兼容，但当前 live 调用不得发送 published filter。public DTO 不提供内部 isTest/testRunId，不得信任 Renderer 自报测试对象资格。
+维护 Job 的 `revisionId` / `contentHash` 在当前合同中应为精确 `null`；runtime 将这组 nullable binding 持久化并核对。仍处于非终态的旧 journal 没有该 binding 时 fail closed，不能据 remote Job ID 猜测归属。已经以 local `SUCCEEDED`、remote `succeeded` 和既有读回证据完成的历史维护保持终态，runtime 不重新轮询或降级它。
 
-## ARTICLE / CASE 后续映射要求（尚未接入产品）
+## ARTICLE 与 CASE 映射
 
-两类必须分开。共同 publish 字段：kind、ASCII 未保留 slug、title≤200、非空 controlled blocks、summary≤500、category、seoTitle、seoDescription≤300。ARTICLE 另需 keywords(≤20×100)、takeaways(≤20×300)、showOnHomepage boolean。CASE 另需 location/listSummary/detailIntro(≤3000)，可选 airQualityFocus/serviceFocus/referenceFor(≤20×500)。项目背景等展示字段按实际 CMS schema 配置，不虚构案例/资质/数据。
+共同字段为 kind、受控 ASCII slug、title、summary、category、seoTitle、seoDescription 和 controlled blocks。ARTICLE 使用 keywords、takeaways、showOnHomepage；CASE 使用 location、listSummary、detailIntro、serviceFocus 等实际 schema 字段。简单 Excel 来源缺少 summary/category/keywords 时，普通 Website 表单要求操作者明确填写；系统不生成公司事实或改写正文。
 
-blocks≤100：paragraph/quote text≤5000；heading level2/3、text≤300；list≤30×500；image 为真实同 scope mediaId + alt≤300。coverMediaId、galleryMediaIds≤20、body image 共用媒体与版本引用。禁止任意 HTML。
+图片只允许当前文章同品牌素材，或明确 `universal=true` 的已启用素材。Main 在冻结时重新读取文件并校验实际格式、尺寸、大小和 SHA256；冻结 source、scope、settings、图片身份和 contentBindingId 在清理前不可变。Renderer 只取得安全图片选项，不取得 Website journal 的文件路径或 exact JSON。
 
-## 已实现 / 未实现
+## 已实现的产品边界
 
-已实现：通用 OfficialApiAdapter 连接层 + Kangyi SiteConfig；Main 本机文件导入到既有 SafeStorage；签名 health/capability 校验；普通账号中心显示双环境连接；Renderer metadata only；账号 scope 不可跨环境改绑；丢失凭据不会自动造替代账号。新 IPC 不提供 publish/purge/grant/status write。
+- 通用 OfficialApiAdapter、Kangyi SiteConfig、signed CMS V2 client 和私有媒体 GET 校验。
+- Main SafeStorage 凭据导入、双环境账号隔离、每次操作前的 live capability verification。
+- ARTICLE / CASE 映射、图片上传、草稿、验证、一次 confirmed final submit、Job 轮询与 public fidelity。
+- SQLite durable operation journal；崩溃后只恢复原 operation，不生成替代 identity。
+- SubmissionIntent 的最终边界仍是唯一权威：只有 `finalSubmitCount=0`、没有 boundary、没有 publish step 的原 PREPARED preflight 才可恢复为同一 Prepared intent；最终边界进入后永不重试。
+- 维护仅接受本地已有 Website jobId，并从 journal 派生 content/revision/rowVersion。调用者不能传 remote ID 或自行声明 purge 权限。
+- 维护状态以最后一个 maintenance step 为准：最后一步 `FAILED` 显示其终态错误，不回退到原 publish Job 推断成功；remote `needs_attention` 保持 `NEEDS_RECONCILIATION`。
+- package-owned 临时候选必须精确匹配 account/article/site/environment/key/kind/contentBindingId 且未过期。普通 Website 已开启后仍要求已验证可写账号和人工 final confirmation；batch 保持关闭。
 
-尚未实现/验收：ARTICLE/CASE 表单与映射、durable operation journal、媒体/草稿 prepare、现有 final counter 接线、维护 UI、live unknown recovery、staging/prod 闭环。客户端低层 endpoint 方法存在不等于产品实现或验收。Website ordinary/batch 始终 OFF，Adapter direct publish fail closed。
+## Live acceptance 结论
 
-恢复缺口：现有声明没有只读 operation/idempotency 查询接口。publish 响应全部丢失且未保存 remote Job ID 时，不能假设 GET/jobs identity 可得；media ID 丢失也不能默认重新上传。必须在有效凭据和实际合同下证明原操作可只读识别或明确未被接受，否则 NeedsReconciliation。见 recovery 文档。
+- staging ARTICLE 和 CASE 各创建一个受控对象，各只有一个逻辑 publish；真实 reply-loss、原操作恢复、raw SSR、私有/公开图片校验及 purge cleanup 均 PASS，替代内容为 0。
+- staging 原配置字节与 owner 已恢复，新建 grant keys 已移除。原有 Basic Auth 保留，因此匿名 public fidelity 得到 401 并记录 `PUBLIC_PAGE_UNAVAILABLE` warning；使用既有认证读取时 raw SSR 与图片 HTTP 200 均 PASS。该 warning 不授权重发。
+- production 通过普通安装版 UI 创建唯一对象 `6a81e7ff-d239-47b2-99b5-aa09e28337df`，publish Job `efd97474-7572-4606-b046-2d03200cc848`；逻辑 publish=1、媒体=3，restart、raw SSR、browser、private media 与 public fidelity 均 PASS。
+- production 按 unpublish → delete → restore → delete 完成安全维护，最终公开页 404；业务 active/published 基线仍为 84。当前正式 API 对 `is_test=0` 对象没有 purge 权限，因此没有伪造 purge。三张合成媒体按既有保留策略 RETAINED。
+- 本地既有 64 张表及业务行均保留。为恢复验收前状态，仅通过 Main 既有 `accounts:update` 恢复一次 Douyin enabled 开关；因此两条审计时间戳如实变化，但没有登录或发布。既有加密 credential entries 全部未改变。
+
+## 仍需长期保留的 fail-closed 边界
+
+- idempotency cache 有效期为 48 小时。只有 GET 已证明当前 rowVersion 严格大于原 publish body 版本、原 exact request 不可能再次入队时，才可用原 key + 原 bytes 读取缓存；缓存过期后按版本门禁失败，不能改 key 重发。
+- 首次 media POST 响应完全丢失且没有 mediaId 时，公开 API 无 operation-by-key 查询。这是明确的 `ARCHITECTURE_GAP`：保持 NeedsReconciliation，不重新上传，也不猜 mediaId。
+- HTTP 202、内容 published pointer 或 SSR 200 均不能单独证明 Published。原 exact publish Job=`succeeded` 且返回可信同 scope `publicUrl` 时，写入 Publish Success；raw SSR、media 与 public 页面读回另记 `PublicContentVerified=PASS/FAIL/LIMITED`。fidelity warning 不撤销已证实的 Publish Success，也不授权重发。
+- production 合成媒体的保留是既有服务策略，不属于未完成 cleanup，也不能以内容已删除为理由绕过媒体保留规则。
