@@ -1267,7 +1267,7 @@ export function registerIpc(deps: IpcDependencies): void {
     const fields = adapter.getCredentialSchema().map((field) => ({ ...field, configured: field.type === "browser_login" && adapter.manifest.transport === "browser" ? credentials.has(browserSessionCredentialKey({ platformKey, accountId })) : credentials.has(`account:${accountId}:${platformKey}:${field.key}`) }));
     return { configured: fields.filter((field) => field.required).every((field) => field.configured), expired: account.loginStatus === "expired", fields };
   };
-  register("accounts:overview", () => {
+  register("accounts:overview", async () => {
     const platforms = listPlatformViews();
     const records = repository.getPublishRecords();
     const lastDryRunAt = new Map<string, string>();
@@ -1276,10 +1276,22 @@ export function registerIpc(deps: IpcDependencies): void {
       const key = `${record.accountId}:${record.platformKey}`;
       if (!lastDryRunAt.has(key)) lastDryRunAt.set(key, record.publishedAt);
     }
-    return repository.listAccounts().map((account) => {
+    return Promise.all(repository.listAccounts().map(async (account) => {
       const registeredAdapter = registry.tryGetForConnection(account.platformKey);
       const douyinImageTextAdapter = account.platformKey === "douyin" ? registry.getForContent("douyin", "article") : null;
       const douyinImageTextConnection = account.platformKey === "douyin" ? repository.getDouyinImageTextConnection(account.id) : null;
+      let douyinCreatorVerified = false;
+      if (douyinImageTextConnection?.active && douyinImageTextAdapter instanceof DouyinImageTextBrowserAdapter) {
+        try {
+          const readiness = await douyinImageTextAdapter.inspectOwnedCreatorReadiness(accountContext(account.id, "douyin"));
+          douyinCreatorVerified = readiness.identityVerified && readiness.contextOwnership && readiness.sessionExists
+            && readiness.browserConnected === true && readiness.canonicalPageExists && readiness.canonicalPageClosed === false
+            && readiness.canonicalPageContextMatchesSession === true && readiness.runtimeAuthState === "AUTHENTICATED";
+        } catch (error) {
+          logger.warn("ACCOUNT", "DOUYIN_IMAGE_TEXT_READINESS_FAILED", "抖音图文账号身份复核未通过", {
+            accountId: account.id, errorCode: safeErrorCode(error) });
+        }
+      }
       const douyinImageTextRuntime = douyinImageTextAdapter && isAutomationAdapter(douyinImageTextAdapter)
         ? douyinImageTextAdapter.getBrowserRuntimeState?.(accountContext(account.id, "douyin"))?.state : null;
       const toutiaoRuntime = account.platformKey === "toutiao" ? toutiaoSessionActivation.status(account.id) : null;
@@ -1287,7 +1299,9 @@ export function registerIpc(deps: IpcDependencies): void {
       const runtimeAuthState = account.platformKey === "xiaohongshu" && registeredAdapter && isAutomationAdapter(registeredAdapter)
         ? registeredAdapter.getBrowserRuntimeState?.(accountContext(account.id, account.platformKey))?.state ?? null
         : null;
-      const accountStatus: AccountStatus = account.platformKey === "toutiao" && account.loginStatus === "logged_in"
+      const accountStatus: AccountStatus = account.platformKey === "douyin"
+        ? douyinCreatorVerified ? "Connected" : "Unverified"
+        : account.platformKey === "toutiao" && account.loginStatus === "logged_in"
         ? toutiaoRuntime?.runtimeState === "ACTIVE" ? "Connected" : "Unverified"
         : account.platformKey === "xiaohongshu"
         ? runtimeAuthState === "AUTHENTICATED" ? "Connected"
@@ -1300,7 +1314,7 @@ export function registerIpc(deps: IpcDependencies): void {
         : account.loginStatus === "logged_in" ? "Connected" : account.loginStatus === "expired" ? "Expired" : account.loginStatus === "needs_user_action" ? (browserConnecting || oauthSessions.isPending(account.id, account.platformKey)) ? "Connecting" : "NeedsLogin" : account.loginStatus === "unknown" ? "Error" : "NotConnected";
       return {
       account,
-      imageTextCreatorReady: Boolean(douyinImageTextConnection?.active && douyinImageTextRuntime === "AUTHENTICATED"),
+      imageTextCreatorReady: Boolean(douyinImageTextConnection?.active && douyinCreatorVerified && douyinImageTextRuntime === "AUTHENTICATED"),
       platform: platforms.find((item) => item.platformKey === account.platformKey) ?? null,
       credentialStatus: readCredentialStatus(account.id, account.platformKey),
       lastDryRunAt: lastDryRunAt.get(`${account.id}:${account.platformKey}`) ?? null,
@@ -1326,7 +1340,7 @@ export function registerIpc(deps: IpcDependencies): void {
         return readCredentialStatus(account.id, account.platformKey).configured ? "CredentialConfigured" as const : "NotConfigured" as const;
       })()
       };
-    });
+    }));
   });
   register("accounts:create", (_event, payload) => repository.createAccount(z.object({ platformKey: idSchema, name: z.string().min(1), accountAlias: z.string().trim().min(1).max(100).optional(), allowAutoPublish: z.boolean().optional(), publishMode: z.enum(["inherit", "manual", "auto", "assisted"]).optional() }).parse(payload)));
   register("accounts:update", (_event, payload) => { const input = z.object({ id: idSchema, data: z.object({ accountAlias: z.string().trim().min(1).max(100).optional(), enabled: z.boolean().optional(), loginStatus: z.enum(["logged_in", "logged_out", "expired", "needs_user_action", "unknown"]).optional(), pausedReason: z.string().nullable().optional(), allowAutoPublish: z.boolean().optional(), publishMode: z.enum(["inherit", "manual", "auto", "assisted"]).optional(), minimumIntervalSeconds: z.number().int().min(0).max(86400).optional() }) }).parse(payload); return repository.updateAccount(input.id, input.data); });
@@ -1402,6 +1416,8 @@ export function registerIpc(deps: IpcDependencies): void {
       }
       const profile = adapter.getAccountProfile ? await adapter.getAccountProfile(completedContext) : undefined;
       if (input.platformKey === "douyin" && input.contentKind === "article") {
+        const imageTextAdapter = adapter instanceof DouyinImageTextBrowserAdapter ? adapter : null;
+        if (!imageTextAdapter) throw new Error("Douyin image/text BrowserNative route is unavailable");
         if (!profile?.accountId) throw new Error("Douyin Creator stable identity is required");
         const prior = repository.getDouyinImageTextConnection(input.accountId);
         if (prior?.active && prior.creatorId !== profile.accountId)
@@ -1413,6 +1429,9 @@ export function registerIpc(deps: IpcDependencies): void {
         const binding = repository.saveDouyinImageTextConnection({ accountId: input.accountId,
           creatorId: profile.accountId, browserSessionIdHash: sessionEvidence.sessionIdHash });
         await adapter.releaseConnectionPage?.(completedContext);
+        const readiness = await imageTextAdapter.inspectOwnedCreatorReadiness(accountContext(input.accountId, "douyin"));
+        if (!readiness.identityVerified || readiness.runtimeAuthState !== "AUTHENTICATED")
+          throw new Error("Douyin Creator identity was not verified in the active owned session after binding");
         logger.info("ACCOUNT", "DOUYIN_IMAGE_TEXT_LOGIN_VERIFIED", "抖音图文账号身份和受控浏览器会话已绑定", {
           accountId: input.accountId, creatorId: profile.accountId, loginGeneration: binding.loginGeneration,
           browserSessionIdHash: sessionEvidence.sessionIdHash });

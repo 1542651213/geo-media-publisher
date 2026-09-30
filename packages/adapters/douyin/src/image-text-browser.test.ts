@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { chromium } from "playwright-core";
 import type { Page } from "playwright-core";
 import { vi } from "vitest";
+import { BrowserSessionManager, type BrowserSession } from "@publisher/adapters-core";
 import type { CredentialStore } from "@publisher/security";
 import { DouyinImageTextBrowserAdapter, denyOptionalDouyinLocation, dismissKnownDouyinHomeTour, douyinRequiredSettingsPass, isAuthorizedDouyinDraftResume, isSameDouyinUploadOperation, parseVisibleDouyinCreatorId,
   waitForUniqueDouyinImageInput } from "./image-text-browser";
@@ -132,16 +133,72 @@ describe("Douyin image/text BrowserNative adapter", () => {
     await expect(adapter.activateStoredCreatorSession(ctx)).rejects.toThrow(/尚未连接账号|DOUYIN_ACTIVE_OWNED_CONTEXT_REQUIRED/u);
   });
 
+  it("synchronizes runtime authentication only from the owned canonical Creator identity", async () => {
+    const manager = new BrowserSessionManager(store);
+    const adapter = new DouyinImageTextBrowserAdapter({ sessionManager: manager });
+    const identity = { platformKey: "douyin", accountId: "owner-account" };
+    const ctx = { ...identity, accountName: "Owner", settings: { expectedCreatorId: "72388977613", browserExecutionMode: "VISIBLE" }, secrets: {} };
+    let url = "https://creator.douyin.com/creator-micro/home";
+    let visibleId = "72388977613";
+    let closed = false;
+    let navigateDuringIdentityRead = false;
+    const context = { pages: () => closed ? [] : [page] };
+    const page = { url: () => url, isClosed: () => closed, context: () => context,
+      locator: () => ({ innerText: async () => { if (navigateDuringIdentityRead) url = "https://creator.douyin.com/login";
+        return `抖音号：${visibleId}`; } }) } as unknown as Page;
+    const session = { context, page, browser: { isConnected: () => true }, executionMode: "VISIBLE",
+      sessionIdHash: "owned-session" } as unknown as BrowserSession;
+    manager.setActiveSession(identity, session);
+
+    expect(adapter.getBrowserRuntimeState(ctx).state).toBe("UNVERIFIED");
+    expect(await adapter.inspectOwnedCreatorReadiness(ctx)).toMatchObject({ identityVerified: true,
+      contextOwnership: true, runtimeAuthState: "AUTHENTICATED" });
+    expect(adapter.getBrowserRuntimeState(ctx).state).toBe("AUTHENTICATED");
+
+    visibleId = "";
+    expect(await adapter.inspectOwnedCreatorReadiness(ctx)).toMatchObject({ identityVerified: false,
+      runtimeAuthState: "NEEDS_USER_ACTION" });
+    visibleId = "72388977613";
+    expect((await adapter.checkSession(ctx))).toBe("logged_in");
+
+    navigateDuringIdentityRead = true;
+    expect(await adapter.inspectOwnedCreatorReadiness(ctx)).toMatchObject({ identityVerified: false,
+      runtimeAuthState: "NEEDS_USER_ACTION" });
+    navigateDuringIdentityRead = false;
+    url = "https://creator.douyin.com/creator-micro/home";
+
+    visibleId = "11111111111";
+    expect(await adapter.inspectOwnedCreatorReadiness(ctx)).toMatchObject({ identityVerified: false,
+      runtimeAuthState: "NEEDS_USER_ACTION" });
+    visibleId = "72388977613";
+    expect((await adapter.activateStoredCreatorSession(ctx)).status).toBe("ACTIVE");
+    expect(adapter.getBrowserRuntimeState(ctx).state).toBe("AUTHENTICATED");
+
+    url = "https://creator.douyin.com/login";
+    expect(await adapter.inspectOwnedCreatorReadiness(ctx)).toMatchObject({ identityVerified: false,
+      runtimeAuthState: "NEEDS_USER_ACTION" });
+    url = "https://creator.douyin.com/creator-micro/home";
+    expect((await adapter.checkSession(ctx))).toBe("logged_in");
+    expect(adapter.getBrowserRuntimeState(ctx).state).toBe("AUTHENTICATED");
+
+    closed = true;
+    expect(await adapter.inspectOwnedCreatorReadiness(ctx)).toMatchObject({ identityVerified: false,
+      runtimeAuthState: "NEEDS_USER_ACTION" });
+    expect(adapter.getBrowserRuntimeState({ ...ctx, accountId: "other-account" }).state).toBe("UNVERIFIED");
+    expect(new DouyinImageTextBrowserAdapter({ credentialStore: store }).getBrowserRuntimeState(ctx).state).toBe("UNVERIFIED");
+  });
+
   it("keeps a recently verified identity bound to the same Page, Context and Session only", async () => {
-    const adapter = new DouyinImageTextBrowserAdapter({ credentialStore: store });
-    const context = {};
+    const manager = new BrowserSessionManager(store);
+    const adapter = new DouyinImageTextBrowserAdapter({ sessionManager: manager });
+    const context = { pages: () => [page] };
     let path = "/creator-micro/home";
     let visible = "抖音号：72388977613";
     const page = { url: () => `https://creator.douyin.com${path}`, isClosed: () => false, context: () => context,
       locator: () => ({ innerText: async () => visible }), evaluate: async () => ({ labels: ["已发布"],
         searchControlCount: 1, visibleRowCount: 0 }) } as unknown as Page;
-    const session = { context, page, executionMode: "VISIBLE", sessionIdHash: "session-1" };
-    Object.defineProperty(adapter, "activeCanonicalPage", { value: async () => ({ page, session }) });
+    const session = { context, page, browser: { isConnected: () => true }, executionMode: "VISIBLE", sessionIdHash: "session-1" };
+    manager.setActiveSession({ platformKey: "douyin", accountId: "owner-account" }, session as unknown as BrowserSession);
     const ctx = { accountId: "owner-account", accountName: "Owner", platformKey: "douyin",
       settings: { expectedCreatorId: "72388977613", browserExecutionMode: "VISIBLE" }, secrets: {} };
     expect((await adapter.activateStoredCreatorSession(ctx)).status).toBe("ACTIVE");

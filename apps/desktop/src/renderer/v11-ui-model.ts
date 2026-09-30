@@ -102,7 +102,7 @@ export const accountStatusLabel = (account: Pick<Account, "loginStatus"> & { acc
 
 export const isOnlineAccount = (account: AccountRuntimeView): boolean =>
   account.enabled
-  && (account.platformKey !== "douyin" || account.imageTextCreatorReady === true || account.loginStatus === "logged_in")
+  && (account.platformKey !== "douyin" || account.imageTextCreatorReady === true)
   && (account.platformKey !== "xiaohongshu" || account.runtimeAuthState === "AUTHENTICATED")
   && (account.platformKey !== "toutiao" || account.accountStatus === "Connected")
   && (account.loginStatus === "logged_in" || account.accountStatus === "Connected" || account.platformKey === "douyin" && account.imageTextCreatorReady === true);

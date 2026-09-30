@@ -184,8 +184,10 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     if (!owned || owned.page.isClosed() || owned.page.context() !== owned.session.context || owned.session.executionMode !== "VISIBLE")
       throw new BrowserAutomationError("USER_ACTION_REQUIRED", "DOUYIN_ACTIVE_OWNED_CONTEXT_REQUIRED");
     const pageHost = new URL(owned.page.url()).host;
-    if (pageHost !== "creator.douyin.com" || /login|passport|captcha|verify/iu.test(owned.page.url()))
+    if (pageHost !== "creator.douyin.com" || /login|passport|captcha|verify/iu.test(owned.page.url())) {
+      await this.inspectOwnedCreatorReadiness(ctx);
       return { status: "WAITING_FOR_OWNER", creatorId: null, pageHost, sessionIdHash: owned.session.sessionIdHash };
+    }
     let creatorId = await this.readOwnedCreatorId(ctx, owned);
     let identityMenuProbe: DouyinIdentityMenuProbe | undefined;
     if (!creatorId && revealIdentityMenuReadOnly) {
@@ -194,25 +196,46 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
       identityMenuProbe = observed.probe;
       if (observed.creatorId) creatorId = await this.readOwnedCreatorId(ctx, owned);
     }
-    return { status: !creatorId ? "WAITING_FOR_OWNER" : creatorId === expected ? "ACTIVE" : "IDENTITY_MISMATCH",
-      creatorId, pageHost, sessionIdHash: owned.session.sessionIdHash, identityMenuProbe };
+    const readiness = await this.inspectOwnedCreatorReadiness(ctx);
+    return { status: readiness.identityVerified ? "ACTIVE"
+      : readiness.creatorId && readiness.creatorId !== expected ? "IDENTITY_MISMATCH" : "WAITING_FOR_OWNER",
+      creatorId: readiness.creatorId, pageHost, sessionIdHash: owned.session.sessionIdHash, identityMenuProbe };
   }
 
   /** Reports the actual account-owned BrowserSession and canonical Page without opening a new Context. */
   async inspectOwnedCreatorReadiness(ctx: AccountContext): Promise<ReturnType<DouyinImageTextBrowserAdapter["getBrowserRuntimeSnapshot"]> &
     { canonicalPageUrl: string | null; creatorId: string | null; identityVerified: boolean;
       contextOwnership: boolean; loginGeneration: number | null }> {
-    const snapshot = this.getBrowserRuntimeSnapshot(ctx);
-    const owned = await this.activeCanonicalPage(ctx);
-    const contextOwnership = Boolean(owned && !owned.page.isClosed() && owned.page.context() === owned.session.context
-      && owned.session.context.pages().includes(owned.page));
-    const pageUrl = contextOwnership ? new URL(owned!.page.url()) : null;
-    const creatorId = contextOwnership && pageUrl?.origin === "https://creator.douyin.com"
-      ? await this.readOwnedCreatorId(ctx, owned!) : null;
-    const expected = typeof ctx.settings.expectedCreatorId === "string" ? ctx.settings.expectedCreatorId : null;
-    return { ...snapshot, canonicalPageUrl: pageUrl ? `${pageUrl.origin}${pageUrl.pathname}` : null,
-      creatorId, identityVerified: Boolean(creatorId && expected && creatorId === expected), contextOwnership,
-      loginGeneration: typeof ctx.settings.expectedLoginGeneration === "number" ? ctx.settings.expectedLoginGeneration : null };
+    const identity = { platformKey: "douyin", accountId: ctx.accountId };
+    try {
+      const owned = await this.activeCanonicalPage(ctx);
+      const initiallyOwned = Boolean(owned && !owned.page.isClosed() && owned.page.context() === owned.session.context
+        && owned.session.context.pages().includes(owned.page));
+      const initialUrl = initiallyOwned ? new URL(owned!.page.url()) : null;
+      const requireVisibleId = initialUrl?.pathname === "/creator-micro/home"
+        || this.getBrowserRuntimeState(ctx).state !== "AUTHENTICATED";
+      const creatorId = initialUrl?.origin === "https://creator.douyin.com"
+        ? await this.readOwnedCreatorId(ctx, owned!, requireVisibleId) : null;
+      const latest = await this.activeCanonicalPage(ctx);
+      const snapshot = this.getBrowserRuntimeSnapshot(ctx);
+      const contextOwnership = Boolean(initiallyOwned && latest && latest.page === owned?.page && latest.session === owned.session
+        && !latest.page.isClosed() && latest.page.context() === latest.session.context
+        && latest.session.context.pages().includes(latest.page));
+      const pageUrl = contextOwnership ? new URL(latest!.page.url()) : null;
+      const expected = typeof ctx.settings.expectedCreatorId === "string" ? ctx.settings.expectedCreatorId.trim() : "";
+      const identityVerified = Boolean(creatorId && expected && creatorId === expected && latest?.session.executionMode === "VISIBLE"
+        && pageUrl?.origin === "https://creator.douyin.com" && !/login|passport|captcha|verify/iu.test(pageUrl.pathname)
+        && snapshot.sessionExists && snapshot.browserConnected === true && snapshot.canonicalPageExists
+        && snapshot.canonicalPageClosed === false && snapshot.canonicalPageContextMatchesSession === true);
+      this.sessionManager.setRuntimeAuthState(identity, identityVerified ? "AUTHENTICATED" : "NEEDS_USER_ACTION",
+        identityVerified ? null : "DOUYIN_OWNED_CREATOR_IDENTITY_UNVERIFIED");
+      return { ...this.getBrowserRuntimeSnapshot(ctx), canonicalPageUrl: pageUrl ? `${pageUrl.origin}${pageUrl.pathname}` : null,
+        creatorId, identityVerified, contextOwnership,
+        loginGeneration: typeof ctx.settings.expectedLoginGeneration === "number" ? ctx.settings.expectedLoginGeneration : null };
+    } catch (error) {
+      this.sessionManager.setRuntimeAuthState(identity, "NEEDS_USER_ACTION", "DOUYIN_OWNED_CREATOR_READINESS_FAILED");
+      throw error;
+    }
   }
 
   /** GET-only smoke on the same Page; refuses to navigate away from an editor. */
@@ -397,7 +420,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     return parseVisibleDouyinCreatorId(await page.locator("body").innerText().catch(() => ""));
   }
 
-  private async readOwnedCreatorId(ctx: AccountContext, owned: NonNullable<Awaited<ReturnType<DouyinImageTextBrowserAdapter["activeCanonicalPage"]>>>): Promise<string | null> {
+  private async readOwnedCreatorId(ctx: AccountContext, owned: NonNullable<Awaited<ReturnType<DouyinImageTextBrowserAdapter["activeCanonicalPage"]>>>, requireVisible = false): Promise<string | null> {
     if (owned.page.isClosed() || owned.page.context() !== owned.session.context || new URL(owned.page.url()).host !== "creator.douyin.com"
       || /login|passport|captcha|verify/iu.test(owned.page.url())) { this.verifiedIdentity.delete(ctx.accountId); return null; }
     const visible = await this.readVisibleCreatorId(owned.page);
@@ -406,6 +429,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
         sessionIdHash: owned.session.sessionIdHash, creatorId: visible, verifiedAt: Date.now() });
       return visible;
     }
+    if (requireVisible) { this.verifiedIdentity.delete(ctx.accountId); return null; }
     const previous = this.verifiedIdentity.get(ctx.accountId);
     return previous && previous.page === owned.page && previous.context === owned.session.context
       && previous.sessionIdHash === owned.session.sessionIdHash && Date.now() - previous.verifiedAt < 15 * 60_000
@@ -427,12 +451,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
   }
 
   override async checkSession(ctx: AccountContext): Promise<LoginStatus> {
-    const owned = await this.activeCanonicalPage(ctx);
-    if (!owned || owned.page.isClosed() || owned.page.context() !== owned.session.context) return "needs_user_action";
-    if (/login|passport|captcha|verify/iu.test(owned.page.url())) return "needs_user_action";
-    const creatorId = await this.readOwnedCreatorId(ctx, owned);
-    const expected = typeof ctx.settings.expectedCreatorId === "string" ? ctx.settings.expectedCreatorId : null;
-    return creatorId && (!expected || creatorId === expected) ? "logged_in" : "needs_user_action";
+    return (await this.inspectOwnedCreatorReadiness(ctx)).identityVerified ? "logged_in" : "needs_user_action";
   }
 
   override async checkLogin(ctx: AccountContext): Promise<LoginStatus> { return this.checkSession(ctx); }

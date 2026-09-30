@@ -16,6 +16,11 @@ describe("B01 package capability", () => {
       expect(b01CandidateCapabilityEnabled(true, root)).toBe(false);
       writeFileSync(join(root, B01_CANDIDATE_R3_MARKER), JSON.stringify({ purpose: "R1.15-B01", candidate: "R3" }));
       expect(b01CandidateCapabilityEnabled(true, root)).toBe(true);
+      writeFileSync(join(root, B01_CANDIDATE_R3_MARKER), JSON.stringify({ purpose: "R1.15-B01", candidate: "invalid" }));
+      writeFileSync(join(root, "r115-b01-candidate-r4.json"), JSON.stringify({ purpose: "R1.15-B01", candidate: "R4" }));
+      expect(b01CandidateCapabilityEnabled(true, root)).toBe(true);
+      writeFileSync(join(root, "r115-b01-candidate-r4.json"), JSON.stringify({ purpose: "R1.15-B01", candidate: "invalid" }));
+      expect(b01CandidateCapabilityEnabled(true, root)).toBe(false);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
