@@ -28,7 +28,7 @@ better-sqlite3 是原生模块：普通 host Node 与 Electron 的 ABI 可能不
 
 CURRENT PRODUCT UI STATE（R1.15-A01 + B01 Candidate）：普通运营首页、账号中心、发布抽屉、发布中心和统计统一展示抖音、小红书、官网、今日头条、搜狐号、网易号、百家号、微博、列举网、博客园，按此顺序排列。十个平台的普通正式提交与批量发布仍关闭；展示不代表 production-ready。Douyin 仅在 Main 持久化的一次性 B01 授权精确匹配账号、Article、图片及 Job，且 Owner 另行批准最终提交后，才可走单次验收路径。Main IPC 和持久调度继续执行产品门禁，隐藏平台的账号、Job、PublishRecord 与原有配置不迁移、不删除，历史详情仍可读取。
 
-最新 durable milestone：R1.15-B01 Candidate 的持久一次性门禁、Main/Publisher 原子 final claim 接线和 diagnostic IPC 隔离已实现；隔离数据安装版 UI、授权状态与重启 smoke 通过，真实 Product E2E 尚未执行。Candidate：`Geo Media Publisher Setup 1.1.9 - R1.15-B01 CANDIDATE.exe`，SHA-256 `2B010751713C2CD998EF897221AB732D31DA5F1E165B4A3E3F5AED92B7F558EE`；普通/批量默认仍 OFF。首次 Candidate smoke 暴露 Electron 忽略 `APPDATA` 测试隔离，现有 production DB 因此应用了 B01 表 migration，但 B01 授权表为空、未创建提交；已加入显式隔离目录并验证其不再触碰现有 DB，未回滚或清理现有数据。下一步由 Owner 选择唯一测试账号、Article、图片并完成登录验证；最终提交仍需下一轮单独明确授权。
+最新 durable milestone：R1.15-B01 Candidate R2 已补齐普通 UI 的显式账号、Article、单图选择和受控 Main 授权申请入口；Main 从现有数据重新核验并计算图片 SHA256，最终批准由独立 Main 请求、严格编辑器回读和原生确认控制。只有带 R2 资源标记的安装包启用该验收能力；十平台普通正式发布与批量发布仍 OFF。R2 安装包 `Geo Media Publisher Setup 1.1.9 - R1.15-B01 CANDIDATE-R2.exe`，SHA-256 `E4E3410CAE55BBA925131582A760209B9FA5906D53253EE526ABF0C11893455A`，`app.asar` SHA-256 `1C2319446F0DA3782356E9D0751F6FA2F14B3AACCE7B3917815FBF59768ECE55`。隔离数据安装版完成授权创建、唯一 Job、Prepared 无 Intent、重启及失效门禁 smoke；未访问真实平台，也未执行 B01 真实 Product E2E。旧 Candidate 保留。首次旧 Candidate smoke 曾使现有 production DB 应用加法式 0027 migration；后续隔离 smoke 未触碰 production DB。本次下一步由 Owner 指定全新测试 Article 和单图，再从普通 UI 恢复 B01 Prepare；最终提交仍需另行明确授权。
 
 暂时隐藏：视频号、公众号、腾讯新闻、闲鱼、58 同城、地方新媒体、权威媒体及其它当前没有业务需求的平台。隐藏是产品展示决定，不删除历史数据、账号、Job 或 Adapter；有新业务需求时重新评估能力与验收。
 
@@ -70,8 +70,8 @@ BrowserSession、BrowserContext、canonical app-owned Playwright Page 和稳定�
 2. 激活该账号的 BrowserSession，验证 Context 与 canonical Page 归属、平台 host、远端账号身份和登录代数。
 3. 进入空白编辑器；在当前 Job 的唯一操作额度内上传素材、填写标题/正文/设置。对图片数量与加载、标题、语义正文、可见性和时机做严格 readback。
 4. 只有被本任务明确启用的附加功能才进入其独立准备与回读；未启用音乐的 Core NO-MUSIC 路径不运行音乐 DOM 自动化。
-5. 全部准备门禁通过后持久化 Prepared PublishRecord 与 SubmissionIntent，并在 final preflight 重核冻结绑定。
-6. Main 原子 claim final_submit_count 0→1；只在成功后执行一次 BrowserNative 最终动作。被动观察真实 Browser 响应，不重放请求。
+5. Douyin B01 准备门禁通过后先持久化 Prepared PublishRecord，授权保持 Prepared（等待 Owner 最终批准）；此时尚无 SubmissionIntent。Main 在另一次 Owner 批准请求中重核冻结绑定、应用自有远端身份及编辑器严格回读，然后才可进入 FinalApproved。
+6. 正式执行阶段才创建现有 SubmissionIntent；Main 在不可逆动作前原子 claim final_submit_count 0→1，同时消费 B01 授权。只在成功后执行一次 BrowserNative 最终动作。被动观察真实 Browser 响应，不重放请求。
 7. 最终动作后只读 reconcile：可信 ID 优先；否则必须在当前账号、标题、时间和唯一标识下找到唯一作品。按审核中、未通过、已发布、公开页严格证据记录真实状态。
 8. 无论结果如何，保留 Job/Intent/Record、操作次数和证据。NeedsUserAction、NeedsReconciliation、Failed、Published/Verified 的区别不能用乐观猜测抹平。
 

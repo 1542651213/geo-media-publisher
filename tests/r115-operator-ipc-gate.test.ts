@@ -47,7 +47,7 @@ describe("R1.15 Main IPC operator gate", () => {
     const publisher = { prepareArticle: async () => { throw new Error("STOP_BEFORE_BROWSER"); },
       executeJob: async () => { throw new Error("STOP_BEFORE_FINAL"); } };
     const registry = { getForContent: () => ({ manifest: { transport: "browser" } }) };
-    registerIpc({ repository, publisher, scheduler: {}, registry, resolveAccountSecrets: () => ({}), dataDirectory: dir, coverDir: dir,
+    registerIpc({ repository, publisher, scheduler: {}, registry, b01AcceptanceEnabled: true, resolveAccountSecrets: () => ({}), dataDirectory: dir, coverDir: dir,
       logger: { info: () => {}, warn: () => {}, error: () => {} }, credentials: {}, aiCredentials: {}, appLogPath: "", databasePath: join(dir, "publisher.db") } as unknown as IpcDependencies);
     const invoke = (channel: string, payload: unknown): Promise<unknown> => {
       const handler = handlers.get(channel); if (!handler) throw new Error(`Missing IPC handler ${channel}`); return handler({}, payload);

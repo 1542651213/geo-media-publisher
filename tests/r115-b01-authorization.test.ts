@@ -77,6 +77,23 @@ describe("R1.15-B01 Main-owned one-shot authorization", () => {
     expect(() => repo.assertB01Job(job.id, "final")).toThrow();
   });
 
+  it("rejects final approval if an Intent was created during Prepared instead of after approval", () => {
+    const { repo, target, article, image } = fixture();
+    repo.createB01Authorization(target);
+    const job = repo.createB01Job({ articleId: article.id, platformKey: "douyin", platformAccountId: target.accountId,
+      selectedImageAssetId: image.id, imageSelectionMode: "manual", finalPublishMode: "CONFIRM_BEFORE_PUBLISH",
+      douyinImageTextSettings: settings });
+    repo.insertPublishRecord({ jobId: job.id, accountId: job.accountId, platformAccountId: job.platformAccountId,
+      platformKey: "douyin", articleId: article.id, publishedUrl: null, publishedExternalId: null, success: false,
+      response: { fixture: "prepared" }, status: "Prepared", publishMode: "ASSISTED", automationType: "BrowserAutomation",
+      verificationStatus: "WaitingUser" });
+    repo.markB01Prepared(job.id);
+    expect(repo.getSubmissionIntentByJob(job.id)).toBeNull();
+    repo.prepareSubmissionIntent(job.id);
+    expect(() => repo.approveB01Final(job.id, "B01-OWNER-FIXTURE-001")).toThrow("B01_FINAL_APPROVAL_NOT_ELIGIBLE");
+    expect(repo.getB01Authorization()?.status).toBe("Prepared");
+  });
+
   it("restores the same bound Job after restart and atomically consumes authorization with the existing final claim", () => {
     const { repo, root, target, article, image } = fixture();
     repo.createB01Authorization(target);

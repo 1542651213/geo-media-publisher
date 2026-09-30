@@ -43,6 +43,7 @@ import { selectDouyinMusicDiagnosticTarget } from "./douyin-music-diagnostic-gat
 import { assertDouyinR14ReadOnlyChannel } from "./douyin-r14-readonly-gate";
 import { assertOperatorBatchPlanAllowed, assertOperatorPublishIpcRequest } from "./operator-publish-gate";
 import { assertB01OperatorIpcException, assertNoProductE2EDiagnosticSubmit } from "./b01-product-e2e-gate";
+import { productPlatform } from "../shared/product-platform-policy";
 
 const idSchema = z.string().min(1);
 function safeErrorCode(error: unknown): string {
@@ -95,10 +96,13 @@ export interface IpcDependencies {
   databasePath: string;
   restoreDatabase?: (backupPath: string) => void;
   processDiagnostics?: ProcessDiagnostics;
+  /** True only for an explicitly marked B01 Candidate package. */
+  b01AcceptanceEnabled?: boolean;
 }
 
 let processDiagnostics: ProcessDiagnostics | null = null;
 let acceptanceRepository: AppRepository | null = null;
+let b01CandidateActive = false;
 const mvp5PausedChannels = new Set(["articles:prepare-publish", "jobs:run", "jobs:confirm", "jobs:retry", "jobs:prepare-existing-douyin",
   "platform-self-test:run-post-upload-discovery", "platform-self-test:continue", "platform-self-test:run-level",
   "platform-self-test:request-publish", "platform-self-test:confirm-publish"]);
@@ -112,7 +116,8 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
         channel, payload,
         (platformKey) => acceptanceRepository?.listPlatforms().find((platform) => platform.platformKey === platformKey),
         (jobId) => acceptanceRepository?.getJob(jobId),
-        (requestChannel, requestPayload) => assertB01OperatorIpcException(requestChannel, requestPayload, acceptanceRepository!)
+        (requestChannel, requestPayload) => b01CandidateActive
+          && assertB01OperatorIpcException(requestChannel, requestPayload, acceptanceRepository!)
       );
       const douyinR14JobId = process.env.DOUYIN_R1_14_READONLY_JOB_ID?.trim();
       if (douyinR14JobId) assertDouyinR14ReadOnlyChannel(channel, payload, {
@@ -150,6 +155,7 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
 export function registerIpc(deps: IpcDependencies): void {
   processDiagnostics = deps.processDiagnostics ?? null;
   acceptanceRepository = deps.repository;
+  b01CandidateActive = deps.b01AcceptanceEnabled === true;
   const { repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir, logger, credentials, aiCredentials } = deps;
   const capturedDouyinBodyDiagnosticJobs = new Set<string>();
   const capturedDouyinMusicDiagnosticJobs = new Set<string>();
@@ -531,13 +537,93 @@ export function registerIpc(deps: IpcDependencies): void {
   });
   register("b01:eligibility", (_event, payload) => {
     const input = z.object({ accountId: idSchema, articleId: idSchema, imageAssetId: idSchema }).parse(payload);
+    if (!deps.b01AcceptanceEnabled) return { eligible: false, status: "Missing" as const, reason: "当前安装版未开放 B01 验收申请" };
     return repository.b01Eligibility(input);
+  });
+  register("b01:availability", () => ({ enabled: deps.b01AcceptanceEnabled === true,
+    reason: deps.b01AcceptanceEnabled ? "可申请指定组合的一次 B01 验收授权" : "当前安装版未开放 B01 验收申请" }));
+  register("b01:request-authorization", async (_event, payload) => {
+    const input = z.strictObject({ platformKey: z.literal("douyin"), accountId: idSchema,
+      articleId: idSchema, imageAssetId: idSchema }).parse(payload);
+    if (!deps.b01AcceptanceEnabled || productPlatform("douyin")?.ordinaryPublishEnabled !== false
+      || productPlatform("douyin")?.batchPublishEnabled !== false) throw new Error("B01_CANDIDATE_CAPABILITY_REQUIRED");
+    const adapter = registry.getForContent("douyin", "article");
+    if (adapter.manifest.transport !== "browser" || !adapter.getCapabilities().article || !adapter.getCapabilities().imagePost)
+      throw new Error("B01_DOUYIN_CAPABILITY_UNAVAILABLE");
+    const account = repository.getAccountById(input.accountId, "douyin");
+    const article = repository.getArticle(input.articleId);
+    const image = repository.getImageAsset(input.imageAssetId);
+    const marker = article?.title.match(/GMP-R115-B01-\d{10,}/u)?.[0];
+    if (!account || account.archivedAt || !account.enabled || !article || !marker || !article.body.includes(marker)
+      || !image?.enabled || image.brandId !== article.brandId || !existsSync(image.filePath))
+      throw new Error("B01_EXACT_NEW_TEST_SELECTION_REQUIRED");
+    if (repository.getB01Authorization()) throw new Error("B01_AUTHORIZATION_ALREADY_EXISTS");
+    const answer = await dialog.showMessageBox({ type: "warning", title: "B01 单次产品验收授权",
+      message: "确认仅为当前账号、文章和单张图片创建一次验收授权？",
+      detail: `账号：${account.accountAlias || account.name}\n文章：${article.title}\n图片：${image.name}\n\n此操作不批准最终提交；授权创建后不可改绑或重建。`,
+      buttons: ["取消", "确认创建一次验收授权"], cancelId: 0, defaultId: 0, noLink: true });
+    if (answer.response !== 1) throw new Error("B01_OWNER_AUTHORIZATION_REQUIRED");
+    // The Repository re-reads the Article and image bytes, checks history, and owns the single INSERT.
+    const imageSha256 = createHash("sha256").update(readFileSync(image.filePath)).digest("hex");
+    const authorization = repository.createB01Authorization({ platformKey: input.platformKey,
+      accountId: input.accountId, articleId: input.articleId, imageAssetId: input.imageAssetId,
+      imageSha256, expiresAt: new Date(Date.now() + 12 * 60 * 60_000).toISOString() });
+    const eligibility = repository.b01Eligibility(input);
+    logger.info("B01", "OWNER_AUTHORIZATION_CREATED", "B01 单次验收授权已由 Main 创建", {
+      accountId: authorization.accountId, articleId: authorization.articleId, imageAssetId: authorization.imageAssetId });
+    return { id: "R1.15-B01", status: authorization.status, eligible: eligibility.eligible, reason: eligibility.reason };
   });
   register("b01:job-status", (_event, payload) => {
     const jobId = z.object({ jobId: idSchema }).parse(payload).jobId;
+    if (!deps.b01AcceptanceEnabled) return { eligible: false, status: "Missing", reason: "当前安装版未开放 B01 单次验收" };
     const status = repository.getB01Authorization()?.status ?? "Missing";
     try { repository.assertB01Job(jobId, "final"); return { eligible: true, status, reason: "仅此任务可进行一次 B01 最终提交" }; }
     catch { return { eligible: false, status, reason: status === "Prepared" ? "B01 内容已准备，等待 Owner 单独批准最终提交" : "当前任务没有 B01 最终提交资格" }; }
+  });
+  register("b01:request-final-approval", async (_event, payload) => {
+    const { jobId } = z.strictObject({ jobId: idSchema }).parse(payload);
+    if (!deps.b01AcceptanceEnabled) throw new Error("B01_CANDIDATE_CAPABILITY_REQUIRED");
+    const authorization = repository.getB01Authorization();
+    const job = repository.getJob(jobId);
+    const record = repository.getPublishRecordByJob(jobId);
+    const article = job ? repository.getArticle(job.articleId) : null;
+    const image = authorization ? repository.getImageAsset(authorization.imageAssetId) : null;
+    const connection = authorization ? repository.getDouyinImageTextConnection(authorization.accountId) : null;
+    const settings = job ? repository.getDouyinImageTextJobSettings(job.id) : null;
+    const evidence = record?.response;
+    if (!authorization || authorization.status !== "Prepared" || authorization.jobId !== jobId
+      || !job || job.status !== "AwaitingConfirmation" || job.attemptCount !== 0
+      || !record || record.status !== "Prepared" || !record.titleFilled || !record.bodyFilled
+      || !article || !image || !connection?.active || !settings || settings.visibility !== "public" || settings.timing !== "immediate"
+      || repository.getSubmissionIntentByJob(jobId) || evidence?.imageUploaded !== true
+      || evidence?.contentTransport !== "DOUYIN_IMAGE_TEXT_BROWSER"
+      || evidence?.selectedImageAssetId !== image.id || evidence?.imageSelectionMode !== "manual"
+      || !Array.isArray(evidence?.imageHashes) || evidence.imageHashes.length !== 1 || evidence.imageHashes[0] !== authorization.imageSha256
+      || evidence?.musicModeRequested !== "NONE" || evidence?.musicResult !== "DISABLED"
+      || evidence?.expectedCreatorId !== connection.creatorId || evidence?.expectedLoginGeneration !== connection.loginGeneration)
+      throw new Error("B01_PREPARED_BINDING_REQUIRED");
+    const adapter = registry.getForContent("douyin", "article");
+    if (typeof adapter.prepareFinalSubmit !== "function" || !("inspectOwnedCreatorReadiness" in adapter)
+      || typeof adapter.inspectOwnedCreatorReadiness !== "function") throw new Error("B01_DOUYIN_FINAL_PREFLIGHT_UNAVAILABLE");
+    const ctx = accountContext(authorization.accountId, "douyin");
+    ctx.settings.expectedMusicMode = "NONE";
+    const readiness = await adapter.inspectOwnedCreatorReadiness(ctx);
+    if (!readiness.identityVerified || !readiness.contextOwnership || !readiness.sessionExists
+      || !readiness.contextExists || !readiness.canonicalPageExists || readiness.creatorId !== connection.creatorId)
+      throw new Error("B01_REMOTE_IDENTITY_UNVERIFIED");
+    const preflight = await adapter.prepareFinalSubmit(ctx, { articleId: article.id, title: article.title,
+      body: article.body, summary: article.summary, tags: article.tags, images: [image.filePath] });
+    if (preflight.response.contentBindingHash !== evidence.contentBindingHash || preflight.response.titleReadback !== true
+      || preflight.response.bodyReadback !== true || preflight.response.settingsReadback !== true
+      || preflight.response.managementReadOnlyReady !== true) throw new Error("B01_FINAL_READBACK_MISMATCH");
+    const answer = await dialog.showMessageBox({ type: "warning", title: "B01 Owner 最终批准",
+      message: "仅在 Owner 已另行明确授权这一次最终提交后确认",
+      detail: `Job：${jobId}\n账号：${authorization.accountId}\n文章：${article.title}\n\n批准后仍需单独执行最终提交；结果不确定时只能只读回查。`,
+      buttons: ["取消", "我已获得 Owner 对此 Job 唯一一次最终提交的明确授权"], cancelId: 0, defaultId: 0, noLink: true });
+    if (answer.response !== 1) throw new Error("B01_OWNER_FINAL_APPROVAL_REQUIRED");
+    const approved = repository.approveB01Final(jobId, `B01-OWNER-${randomUUID()}`);
+    logger.info("B01", "OWNER_FINAL_APPROVED", "B01 Prepared Job 获得单次最终批准", { jobId });
+    return { status: approved.status, jobId: approved.jobId, reason: "Owner 已批准此 Job 的唯一一次最终提交" };
   });
 
   const imageAssetView = (asset: ImageAsset): ImageAsset => ({ ...asset, previewUrl: pathToFileURL(asset.filePath).href });

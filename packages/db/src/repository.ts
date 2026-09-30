@@ -2229,7 +2229,7 @@ export class AppRepository {
     return this.getJob(id) as PublishJob;
   }
 
-  /** Main-only provisioning. No IPC or Renderer bridge exposes this mutation. */
+  /** Main owns the exact one-shot INSERT; Renderer can only request a validated Main decision. */
   createB01Authorization(input: { platformKey: "douyin"; accountId: string; articleId: string; imageAssetId: string; imageSha256: string; expiresAt: string }): B01Authorization {
     if (input.platformKey !== "douyin" || !/^[a-f0-9]{64}$/u.test(input.imageSha256)
       || !Number.isFinite(Date.parse(input.expiresAt)) || Date.parse(input.expiresAt) <= Date.now()

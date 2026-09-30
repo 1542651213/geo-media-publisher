@@ -1,0 +1,15 @@
+{
+  "appId": "com.geo.mediapublisher",
+  "productName": "Geo Media Publisher",
+  "directories": { "output": "output/b01-candidate-r2-build" },
+  "artifactName": "Geo Media Publisher Setup 1.1.9 - R1.15-B01 CANDIDATE-R2.${ext}",
+  "files": ["out/**/*", "package.json", "node_modules/**/*"],
+  "extraResources": [
+    { "from": "packages/db/migrations", "to": "packages/db/migrations" },
+    { "from": "PLATFORMS.csv", "to": "PLATFORMS.csv" },
+    { "from": "scripts/r115-b01-candidate-r2.json", "to": "r115-b01-candidate-r2.json" }
+  ],
+  "asarUnpack": ["node_modules/better-sqlite3/**/*"],
+  "win": { "target": [{ "target": "nsis", "arch": ["x64"] }] },
+  "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true }
+}

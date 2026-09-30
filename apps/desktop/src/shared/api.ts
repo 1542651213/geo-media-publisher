@@ -177,7 +177,11 @@ export interface ManagedVideoAsset extends VideoAsset {
 }
 
 export interface PublisherApi {
-  b01: { eligibility(input: { accountId: string; articleId: string; imageAssetId: string }): Promise<{
+  b01: { availability(): Promise<{ enabled: boolean; reason: string }>;
+    requestAuthorization(input: { platformKey: "douyin"; accountId: string; articleId: string; imageAssetId: string }): Promise<{
+      id: string; status: string; eligible: boolean; reason: string }>;
+    requestFinalApproval(jobId: string): Promise<{ status: string; jobId: string | null; reason: string }>;
+    eligibility(input: { accountId: string; articleId: string; imageAssetId: string }): Promise<{
     eligible: boolean; status: "Created" | "Bound" | "Prepared" | "FinalApproved" | "Consumed" | "Revoked" | "Missing" | "Expired"; reason: string
   }>; jobStatus(jobId: string): Promise<{ eligible: boolean; status: string; reason: string }> };
   toutiaoProduction: { readiness(accountId: string): Promise<{

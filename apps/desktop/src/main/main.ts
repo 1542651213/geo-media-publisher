@@ -11,6 +11,7 @@ import { operatorPublishBlockReason, productPlatform } from "../shared/product-p
 import { runDeepSeekBenchmarkMode } from "./deepseek-benchmark-mode";
 import { createProcessDiagnostics } from "./process-diagnostics";
 import { recordAppStartup } from "./runtime-observability";
+import { b01CandidateCapabilityEnabled } from "./b01-candidate-capability";
 
 app.setName("codex-media-publisher");
 // Installed Candidate smoke must explicitly override Electron's cached userData path.
@@ -57,11 +58,11 @@ async function createWindow(): Promise<void> {
   const logger = createFileLogger(appLogPath);
   recordAppStartup(logger, { pid: process.pid, packaged: app.isPackaged, userDataPath: app.getPath("userData"), productionDataPath: dataDirectory, appLogPath });
   const credentials = new SafeStorageCredentialStore(join(dataDirectory, "credentials.enc"), safeStorage);
-  const b01Authorization = database.repository.getB01Authorization();
+  const b01AcceptanceEnabled = b01CandidateCapabilityEnabled(app.isPackaged, process.resourcesPath);
   const registry = createRuntimeAdapterRegistry(credentials, isDevelopment, logger, join(app.getPath("userData"), "browser-profiles"), join(dataDirectory, "credentials.enc"), {
     claimDouyinImageTextFileSelection: (input) => database.repository.claimDouyinImageTextFileSelection(input),
-    douyinImageTextNativeSubmitEnabled: Boolean(b01Authorization && !["Revoked", "Consumed"].includes(b01Authorization.status)
-      && Date.parse(b01Authorization.expiresAt) > Date.now())
+    // Main and Publisher retain the exact one-shot gate; the Adapter capability must be live before a new grant is requested.
+    douyinImageTextNativeSubmitEnabled: b01AcceptanceEnabled
   });
   ownedBrowserSessionClosers.add(async () => {
     const closableAdapters = registry.listAll().filter((adapter): adapter is typeof adapter & { closeOwnedSessions(): Promise<void> } => typeof (adapter as { closeOwnedSessions?: unknown }).closeOwnedSessions === "function");
@@ -79,7 +80,7 @@ async function createWindow(): Promise<void> {
     allowScheduledJob: (job) => productPlatform(job.platformKey)?.batchPublishEnabled === true
       && operatorPublishBlockReason(job.platformKey, database.repository.listPlatforms().find((platform) => platform.platformKey === job.platformKey)) === null
   });
-  registerIpc({ repository: database.repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir: join(dataDirectory, "covers"), logger, credentials, aiCredentials: credentials, appLogPath, databasePath, processDiagnostics, restoreDatabase: (backupPath) => { scheduler?.stop(); restoreDatabaseSafely(database.db, databasePath, backupPath); app.relaunch(); app.exit(0); } });
+  registerIpc({ repository: database.repository, publisher, scheduler, registry, b01AcceptanceEnabled, resolveAccountSecrets, dataDirectory, coverDir: join(dataDirectory, "covers"), logger, credentials, aiCredentials: credentials, appLogPath, databasePath, processDiagnostics, restoreDatabase: (backupPath) => { scheduler?.stop(); restoreDatabaseSafely(database.db, databasePath, backupPath); app.relaunch(); app.exit(0); } });
   // The one-shot diagnostic process owns the sole publish lane; existing queued jobs remain untouched.
   if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true" && process.env.TOUTIAO_READONLY_PREFLIGHT !== "true"
     && !process.env.TOUTIAO_NATIVE_ACCEPTANCE_ACCOUNT_ID?.trim()
