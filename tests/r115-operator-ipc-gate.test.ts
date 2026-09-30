@@ -36,8 +36,9 @@ describe("R1.15 Main IPC operator gate", () => {
     const account = repository.createAccount({ platformKey: "douyin", name: "Owner test" });
     const other = repository.createAccount({ platformKey: "douyin", name: "Wrong" });
     repository.saveDouyinImageTextConnection({ accountId: account.id, creatorId: "b01-creator", browserSessionIdHash: "fixture" });
-    const article = repository.createArticle({ brandId: brand.id, topic: "B01", keyword: "B01", city: "", title: "B01 unique",
-      body: "B01 unique body", summary: "", tags: [], seoKeywords: [], articleType: "科普", aiProvider: "fixture", aiModel: "fixture",
+    const marker = `GMP-R115-B01-${Date.now()}`;
+    const article = repository.createArticle({ brandId: brand.id, topic: "B01", keyword: "B01", city: "", title: `${marker} unique`,
+      body: `${marker} unique body`, summary: "", tags: [], seoKeywords: [], articleType: "科普", aiProvider: "fixture", aiModel: "fixture",
       generatedAt: new Date().toISOString(), reusePolicy: "once", contentHash: "b01-ipc-unique", source: "production" });
     if (!article) throw new Error("Fixture Article missing");
     const bytes = Buffer.from("b01-ipc-image"); const imagePath = join(dir, "image.png"); writeFileSync(imagePath, bytes);

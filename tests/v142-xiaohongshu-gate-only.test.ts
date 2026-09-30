@@ -26,7 +26,7 @@ describe("v142 Xiaohongshu gate-only runner helpers", () => {
   });
 
   it("selects only an existing SELF_TEST or universal image and never fabricates a path", () => {
-    const image = (id: string, filePath: string, universal: boolean, labels: string[]): ImageAsset => ({ id, brandId: null, name: filePath, filePath, originalFileName: filePath.split("/").at(-1) ?? filePath, mimeType: "image/png", size: 1, tags: labels, business: [], city: [], usage: labels, platform: [], universal, enabled: true, lastUsedAt: null, useCount: 0, createdAt: "2026-08-27T00:00:00.000Z", updatedAt: "2026-08-27T00:00:00.000Z" });
+    const image = (id: string, filePath: string, universal: boolean, labels: string[]): ImageAsset => ({ id, brandId: null, name: filePath, filePath, originalFileName: filePath.split("/").at(-1) ?? filePath, mimeType: "image/png", size: 1, sha256: null, tags: labels, business: [], city: [], usage: labels, platform: [], universal, enabled: true, lastUsedAt: null, useCount: 0, createdAt: "2026-08-27T00:00:00.000Z", updatedAt: "2026-08-27T00:00:00.000Z" });
     expect(selectXiaohongshuSelfTestImage([image("normal", "C:/normal.png", false, ["other"]), image("fixture", "C:/fixture.png", false, ["SELF_TEST"])] )?.filePath).toBe("C:/fixture.png");
     expect(selectXiaohongshuSelfTestImage([image("normal", "C:/normal.png", false, ["other"])] )).toBeNull();
   });

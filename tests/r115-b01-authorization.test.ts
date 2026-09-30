@@ -9,7 +9,7 @@ const roots: string[] = [];
 const databases: Array<{ close(): void }> = [];
 const settings = { version: 1 as const, visibility: "public" as const, timing: "immediate" as const };
 
-function fixture() {
+function fixture(source: "production" | "excel_import" | "test" = "production") {
   const root = mkdtempSync(join(tmpdir(), "gmp-b01-")); roots.push(root);
   const opened = openDatabase(join(root, "test.db"), join(process.cwd(), "packages/db/migrations"));
   databases.push(opened.db);
@@ -20,10 +20,11 @@ function fixture() {
   const account = repo.createAccount({ platformKey: "douyin", name: "B01 test account" });
   const otherAccount = repo.createAccount({ platformKey: "douyin", name: "Other account" });
   repo.saveDouyinImageTextConnection({ accountId: account.id, creatorId: "b01-creator", browserSessionIdHash: "fixture-session" });
-  const article = repo.createArticle({ brandId: brand.id, title: "B01 unique", body: "B01 unique body", summary: "", tags: [],
+  const marker = `GMP-R115-B01-${Date.now()}`;
+  const article = repo.createArticle({ brandId: brand.id, title: `${marker} unique`, body: `${marker} unique body`, summary: "", tags: [],
     seoKeywords: [], topic: "B01", keyword: "B01", city: "", articleType: "科普", aiProvider: "fixture", aiModel: "fixture",
     generatedAt: new Date().toISOString(), reusePolicy: "once", contentHash: "b01-unique-content", qualityStatus: "passed",
-    qualityWarnings: [], source: "production" });
+    qualityWarnings: [], source });
   if (!article) throw new Error("Fixture Article missing");
   const bytes = Buffer.from("isolated B01 image bytes");
   const imagePath = join(root, "b01.png"); writeFileSync(imagePath, bytes);
@@ -32,7 +33,7 @@ function fixture() {
   const imageSha256 = createHash("sha256").update(bytes).digest("hex");
   const target = { platformKey: "douyin" as const, accountId: account.id, articleId: article.id, imageAssetId: image.id,
     imageSha256, expiresAt: new Date(Date.now() + 60_000).toISOString() };
-  return { root, repo, account, otherAccount, article, image, imagePath, imageSha256, target };
+  return { root, db: opened.db, repo, account, otherAccount, article, image, imagePath, imageSha256, target };
 }
 
 afterEach(() => {
@@ -42,6 +43,33 @@ afterEach(() => {
 });
 
 describe("R1.15-B01 Main-owned one-shot authorization", () => {
+  it("accepts a fresh ordinary-library Excel Article and rejects test sources", () => {
+    const normal = fixture("excel_import");
+    expect(normal.article.source).toBe("excel_import");
+    expect(normal.repo.createB01Authorization(normal.target).status).toBe("Created");
+    const hidden = fixture("test");
+    expect(() => hidden.repo.createB01Authorization(hidden.target)).toThrow("B01_AUTH_TARGET_INVALID");
+  });
+
+  it("rejects stale content, marker mismatch, a reused marker, and a wrong company", () => {
+    const stale = fixture("excel_import");
+    stale.db.prepare("UPDATE articles SET created_at=? WHERE id=?").run("2020-01-01T00:00:00.000Z", stale.article.id);
+    expect(() => stale.repo.createB01Authorization(stale.target)).toThrow("B01_AUTH_TARGET_INVALID");
+    const changed = fixture("excel_import");
+    changed.repo.updateArticle(changed.article.id, { body: "marker missing from body" });
+    expect(() => changed.repo.createB01Authorization(changed.target)).toThrow("B01_AUTH_TARGET_INVALID");
+    const company = fixture("excel_import");
+    company.db.prepare("UPDATE articles SET company=? WHERE id=?").run("Another company", company.article.id);
+    expect(() => company.repo.createB01Authorization(company.target)).toThrow("B01_AUTH_TARGET_INVALID");
+    const repeated = fixture("excel_import");
+    const sameMarker = repeated.article.title.match(/GMP-R115-B01-\d{10,}/u)?.[0];
+    if (!sameMarker) throw new Error("Fixture marker missing");
+    const another = repeated.repo.createArticle({ brandId: repeated.article.brandId, title: `${sameMarker} another`, body: "different body", summary: "", tags: [],
+      seoKeywords: [], topic: "B01", keyword: "B01", city: "", articleType: "科普", aiProvider: "excel_import", aiModel: "1.0",
+      generatedAt: new Date().toISOString(), reusePolicy: "once", contentHash: `other-${sameMarker}`, source: "excel_import" });
+    expect(another).not.toBeNull();
+    expect(() => repeated.repo.createB01Authorization(repeated.target)).toThrow("B01_MARKER_ALREADY_USED");
+  });
   it("persists one exact grant and never grants final submission at creation", () => {
     const { repo, target, otherAccount, article, image } = fixture();
     expect(repo.createB01Authorization(target)).toMatchObject({ status: "Created", platformKey: "douyin", accountId: target.accountId,

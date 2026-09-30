@@ -550,6 +550,8 @@ export interface ImageAsset {
   originalFileName: string;
   mimeType: string;
   size: number;
+  /** Main-computed hash of the managed file; null for assets imported before this field existed. */
+  sha256: string | null;
   tags: string[];
   business: string[];
   city: string[];

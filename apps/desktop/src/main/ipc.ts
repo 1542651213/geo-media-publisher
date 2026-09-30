@@ -635,7 +635,7 @@ export function registerIpc(deps: IpcDependencies): void {
     logger.info("IMAGE_LIBRARY", "ARTICLE_IMAGE_MATCHED", "文章已匹配图片库图片", { articleId: input.articleId, imageAssetId: image.id, platformKey: input.platformKey });
     return imageAssetView(image);
   });
-  const imageInputSchema = z.object({ brandId: idSchema, sourcePaths: z.array(z.string().min(1).max(8192)).min(1).max(100), name: z.string().trim().max(200).optional(), tags: z.array(z.string().trim().min(1).max(80)).max(30), business: z.array(z.string().trim().min(1).max(80)).max(20), city: z.array(z.string().trim().min(1).max(80)).max(20), usage: z.array(z.string().trim().min(1).max(80)).max(30), platform: z.array(z.string().trim().min(1).max(80)).max(20), universal: z.boolean() });
+  const imageInputSchema = z.strictObject({ brandId: idSchema, sourcePaths: z.array(z.string().min(1).max(8192)).min(1).max(100), name: z.string().trim().max(200).optional(), tags: z.array(z.string().trim().min(1).max(80)).max(30), business: z.array(z.string().trim().min(1).max(80)).max(20), city: z.array(z.string().trim().min(1).max(80)).max(20), usage: z.array(z.string().trim().min(1).max(80)).max(30), platform: z.array(z.string().trim().min(1).max(80)).max(20), universal: z.boolean() });
   register("image-assets:list", (_event, payload) => { const input = z.object({ brandId: idSchema.optional(), enabledOnly: z.boolean().optional() }).optional().parse(payload); return repository.listImageAssets(input?.brandId, input?.enabledOnly ?? false).map(imageAssetView); });
   register("image-assets:pick-files", async () => { const result = await dialog.showOpenDialog({ properties: ["openFile", "multiSelections"], filters: [{ name: "图片", extensions: ["jpg", "jpeg", "png", "webp", "gif", "bmp"] }] }); return result.canceled ? [] : result.filePaths; });
   register("image-assets:import", (_event, payload) => {
@@ -652,8 +652,10 @@ export function registerIpc(deps: IpcDependencies): void {
       const id = randomUUID();
       const managedPath = join(imageDirectory, `${id}${extension}`);
       copyFileSync(sourcePath, managedPath);
+      const managedBytes = readFileSync(managedPath);
+      const sha256 = createHash("sha256").update(managedBytes).digest("hex");
       const name = input.name?.trim() ? (input.sourcePaths.length === 1 ? input.name.trim() : `${input.name.trim()} ${index + 1}`) : basename(sourcePath, extension);
-      imported.push(repository.createImageAsset({ id, brandId: input.brandId, name, filePath: managedPath, originalFileName: basename(sourcePath), mimeType: imageMimeByExtension[extension] ?? "application/octet-stream", size: sourceStat.size, tags: input.tags, business: input.business, city: input.city, usage: input.usage, platform: input.platform, universal: input.universal }));
+      imported.push(repository.createImageAsset({ id, brandId: input.brandId, name, filePath: managedPath, originalFileName: basename(sourcePath), mimeType: imageMimeByExtension[extension] ?? "application/octet-stream", size: managedBytes.length, sha256, tags: input.tags, business: input.business, city: input.city, usage: input.usage, platform: input.platform, universal: input.universal }));
     });
     logger.info("IMAGE_LIBRARY", "IMAGE_IMPORT_COMPLETED", "图片已导入图片库", { brandId: input.brandId, count: imported.length });
     return imported.map(imageAssetView);

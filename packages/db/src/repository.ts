@@ -795,10 +795,10 @@ export class AppRepository {
     return row ? toImageAsset(row) : null;
   }
 
-  createImageAsset(input: { id?: string; brandId: string | null; name: string; filePath: string; originalFileName: string; mimeType: string; size: number; tags?: string[]; business?: string[]; city?: string[]; usage?: string[]; platform?: string[]; universal?: boolean; enabled?: boolean }): ImageAsset {
+  createImageAsset(input: { id?: string; brandId: string | null; name: string; filePath: string; originalFileName: string; mimeType: string; size: number; sha256?: string; tags?: string[]; business?: string[]; city?: string[]; usage?: string[]; platform?: string[]; universal?: boolean; enabled?: boolean }): ImageAsset {
     const id = input.id ?? randomUUID();
     const timestamp = now();
-    const metadata = { originalFileName: input.originalFileName, mimeType: input.mimeType, size: input.size, tags: normalizeLabels(input.tags ?? []), business: normalizeLabels(input.business ?? []), city: normalizeLabels(input.city ?? []), usage: normalizeLabels(input.usage ?? []), platform: normalizeLabels(input.platform ?? []), universal: input.universal ?? false, enabled: input.enabled ?? true, lastUsedAt: null, useCount: 0, updatedAt: timestamp };
+    const metadata = { originalFileName: input.originalFileName, mimeType: input.mimeType, size: input.size, sha256: input.sha256 ?? null, tags: normalizeLabels(input.tags ?? []), business: normalizeLabels(input.business ?? []), city: normalizeLabels(input.city ?? []), usage: normalizeLabels(input.usage ?? []), platform: normalizeLabels(input.platform ?? []), universal: input.universal ?? false, enabled: input.enabled ?? true, lastUsedAt: null, useCount: 0, updatedAt: timestamp };
     this.db.prepare("INSERT INTO media_assets (id,brand_id,type,title,file_path,provider,model,metadata_json,created_at) VALUES (?,?,?,?,?,?,?,?,?)").run(id, input.brandId, "image", input.name.trim() || input.originalFileName, input.filePath, "local", null, json(metadata), timestamp);
     return this.getImageAsset(id) as ImageAsset;
   }
@@ -807,7 +807,7 @@ export class AppRepository {
     const current = this.getImageAsset(id);
     if (!current) throw new Error("图片不存在");
     const next = { ...current, name: input.name?.trim() || current.name, tags: input.tags === undefined ? current.tags : normalizeLabels(input.tags), business: input.business === undefined ? current.business : normalizeLabels(input.business), city: input.city === undefined ? current.city : normalizeLabels(input.city), usage: input.usage === undefined ? current.usage : normalizeLabels(input.usage), platform: input.platform === undefined ? current.platform : normalizeLabels(input.platform), universal: input.universal ?? current.universal, enabled: input.enabled ?? current.enabled, updatedAt: now() };
-    this.db.prepare("UPDATE media_assets SET title=?, metadata_json=? WHERE id=? AND type='image'").run(next.name, json({ originalFileName: next.originalFileName, mimeType: next.mimeType, size: next.size, tags: next.tags, business: next.business, city: next.city, usage: next.usage, platform: next.platform, universal: next.universal, enabled: next.enabled, lastUsedAt: next.lastUsedAt, useCount: next.useCount, updatedAt: next.updatedAt }), id);
+    this.db.prepare("UPDATE media_assets SET title=?, metadata_json=? WHERE id=? AND type='image'").run(next.name, json({ originalFileName: next.originalFileName, mimeType: next.mimeType, size: next.size, sha256: next.sha256, tags: next.tags, business: next.business, city: next.city, usage: next.usage, platform: next.platform, universal: next.universal, enabled: next.enabled, lastUsedAt: next.lastUsedAt, useCount: next.useCount, updatedAt: next.updatedAt }), id);
     return this.getImageAsset(id) as ImageAsset;
   }
 
@@ -822,7 +822,7 @@ export class AppRepository {
     const current = this.getImageAsset(id);
     if (!current) throw new Error("图片不存在");
     const timestamp = now();
-    this.db.prepare("UPDATE media_assets SET metadata_json=? WHERE id=? AND type='image'").run(json({ originalFileName: current.originalFileName, mimeType: current.mimeType, size: current.size, tags: current.tags, business: current.business, city: current.city, usage: current.usage, platform: current.platform, universal: current.universal, enabled: current.enabled, lastUsedAt: timestamp, useCount: current.useCount + 1, updatedAt: timestamp }), id);
+    this.db.prepare("UPDATE media_assets SET metadata_json=? WHERE id=? AND type='image'").run(json({ originalFileName: current.originalFileName, mimeType: current.mimeType, size: current.size, sha256: current.sha256, tags: current.tags, business: current.business, city: current.city, usage: current.usage, platform: current.platform, universal: current.universal, enabled: current.enabled, lastUsedAt: timestamp, useCount: current.useCount + 1, updatedAt: timestamp }), id);
     return this.getImageAsset(id) as ImageAsset;
   }
 
@@ -2237,15 +2237,23 @@ export class AppRepository {
     const account = this.getAccountById(input.accountId, "douyin");
     const article = this.getArticle(input.articleId);
     const image = this.getImageAsset(input.imageAssetId);
-    if (!account || !article || article.source !== "production" || !Number.isFinite(Date.parse(article.createdAt))
+    const brand = article ? this.getBrand(article.brandId) : null;
+    const marker = article?.title.match(/GMP-R115-B01-\d{10,}/u)?.[0];
+    if (!account || !article || !b01OrdinaryArticleSource(article) || !brand || !marker || !article.body.includes(marker)
+      || (article.company && brand.companyName && article.company.trim() !== brand.companyName.trim())
+      || !Number.isFinite(Date.parse(article.createdAt)) || Date.parse(article.createdAt) > Date.now()
       || Date.parse(article.createdAt) < Date.now() - 24 * 60 * 60 * 1000
       || !image?.enabled || image.brandId !== article.brandId
+      || (image.sha256 !== null && image.sha256 !== input.imageSha256)
       || !existsSync(image.filePath) || createHash("sha256").update(readFileSync(image.filePath)).digest("hex") !== input.imageSha256)
       throw new Error("B01_AUTH_TARGET_INVALID");
     const used = this.db.prepare(`SELECT j.id FROM publish_jobs j JOIN articles a ON a.id=j.article_id
       WHERE j.article_id=? OR (j.platform_key='douyin' AND (a.content_hash=? OR (a.title=? AND a.body=?))) LIMIT 1`)
       .get(article.id, article.contentHash, article.title, article.body) as Row | undefined;
     if (used) throw new Error("B01_HISTORICAL_ARTICLE_OR_CONTENT_FORBIDDEN");
+    const duplicateMarker = this.db.prepare("SELECT id FROM articles WHERE id<>? AND (title LIKE ? OR body LIKE ?) LIMIT 1")
+      .get(article.id, `%${marker}%`, `%${marker}%`) as Row | undefined;
+    if (duplicateMarker) throw new Error("B01_MARKER_ALREADY_USED");
     const snapshot = createHash("sha256").update(canonicalSerialize({ title: article.title, body: article.body,
       summary: article.summary, tags: article.tags })).digest("hex");
     this.db.prepare(`INSERT INTO b01_product_e2e_authorization
@@ -2272,10 +2280,18 @@ export class AppRepository {
     const account = this.getAccountById(auth.accountId, "douyin");
     const article = this.getArticle(auth.articleId);
     const image = this.getImageAsset(auth.imageAssetId);
-    return Boolean(account && article?.source === "production" && article.contentHash === auth.articleContentHash
+    const brand = article ? this.getBrand(article.brandId) : null;
+    const marker = article?.title.match(/GMP-R115-B01-\d{10,}/u)?.[0];
+    const duplicateMarker = marker ? this.db.prepare("SELECT id FROM articles WHERE id<>? AND (title LIKE ? OR body LIKE ?) LIMIT 1")
+      .get(auth.articleId, `%${marker}%`, `%${marker}%`) as Row | undefined : undefined;
+    return Boolean(account && article && b01OrdinaryArticleSource(article) && brand && marker && article.body.includes(marker)
+      && !duplicateMarker
+      && (!article.company || !brand.companyName || article.company.trim() === brand.companyName.trim())
+      && article.contentHash === auth.articleContentHash
       && createHash("sha256").update(canonicalSerialize({ title: article.title, body: article.body,
         summary: article.summary, tags: article.tags })).digest("hex") === auth.articleSnapshotSha256
-      && image?.enabled && image.brandId === article.brandId && existsSync(image.filePath)
+      && image?.enabled && image.brandId === article.brandId
+      && (image.sha256 === null || image.sha256 === auth.imageSha256) && existsSync(image.filePath)
       && createHash("sha256").update(readFileSync(image.filePath)).digest("hex") === auth.imageSha256);
   }
 
@@ -3228,7 +3244,10 @@ function toImageAsset(row: Row): ImageAsset {
   const metadata = parseJson<Record<string, unknown>>(row.metadata_json, {});
   const labels = (key: string): string[] => Array.isArray(metadata[key]) ? metadata[key].filter((item): item is string => typeof item === "string") : [];
   const createdAt = textValue(row.created_at);
-  return { id: textValue(row.id), brandId: typeof row.brand_id === "string" ? row.brand_id : null, name: textValue(row.title), filePath: textValue(row.file_path), originalFileName: typeof metadata.originalFileName === "string" ? metadata.originalFileName : textValue(row.title), mimeType: typeof metadata.mimeType === "string" ? metadata.mimeType : "application/octet-stream", size: intValue(metadata.size), tags: labels("tags"), business: labels("business"), city: labels("city"), usage: labels("usage"), platform: labels("platform"), universal: metadata.universal === true, enabled: metadata.enabled !== false, lastUsedAt: typeof metadata.lastUsedAt === "string" ? metadata.lastUsedAt : null, useCount: intValue(metadata.useCount), createdAt, updatedAt: typeof metadata.updatedAt === "string" ? metadata.updatedAt : createdAt };
+  return { id: textValue(row.id), brandId: typeof row.brand_id === "string" ? row.brand_id : null, name: textValue(row.title), filePath: textValue(row.file_path), originalFileName: typeof metadata.originalFileName === "string" ? metadata.originalFileName : textValue(row.title), mimeType: typeof metadata.mimeType === "string" ? metadata.mimeType : "application/octet-stream", size: intValue(metadata.size), sha256: typeof metadata.sha256 === "string" && /^[a-f0-9]{64}$/u.test(metadata.sha256) ? metadata.sha256 : null, tags: labels("tags"), business: labels("business"), city: labels("city"), usage: labels("usage"), platform: labels("platform"), universal: metadata.universal === true, enabled: metadata.enabled !== false, lastUsedAt: typeof metadata.lastUsedAt === "string" ? metadata.lastUsedAt : null, useCount: intValue(metadata.useCount), createdAt, updatedAt: typeof metadata.updatedAt === "string" ? metadata.updatedAt : createdAt };
+}
+function b01OrdinaryArticleSource(article: Article): boolean {
+  return article.source === "production" || article.source === "excel_import" || article.source === "content_studio";
 }
 function toTemplate(row: Row): KeywordTemplate { return { id: textValue(row.id), brandId: textValue(row.brand_id), template: textValue(row.template), category: textValue(row.category), enabled: boolValue(row.enabled) }; }
 function toKeywordItem(row: Row): KeywordItem { return { id: textValue(row.id), brandId: textValue(row.brand_id), city: textValue(row.city), keyword: textValue(row.keyword), sourceTemplateId: textValue(row.source_template_id), status: row.status as KeywordItem["status"], createdAt: textValue(row.created_at) }; }

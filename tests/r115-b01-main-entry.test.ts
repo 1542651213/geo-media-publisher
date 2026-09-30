@@ -55,6 +55,19 @@ function fixture(capability = true) {
 }
 
 describe("B01 Candidate R2 Main authorization request", () => {
+  it("imports the selected company's image through Main and hashes managed bytes", async () => {
+    const { repo, path, invoke } = fixture();
+    const selected = repo.createBrand({ name: "Selected company", companyName: "Selected company" });
+    const payload = { brandId: selected.id, sourcePaths: [path], name: "new image", tags: [], business: [], city: [], usage: [], platform: [], universal: false };
+    const imported = await invoke("image-assets:import", payload) as Array<{ id: string; brandId: string; filePath: string; sha256: string }>;
+    expect(imported).toHaveLength(1);
+    expect(imported[0]?.brandId).toBe(selected.id);
+    expect(imported[0]?.sha256).toBe(createHash("sha256").update("B01 image bytes").digest("hex"));
+    expect(repo.getImageAsset(imported[0]!.id)?.sha256).toBe(imported[0]?.sha256);
+    repo.updateImageAsset(imported[0]!.id, { name: "renamed" });
+    expect(repo.markImageAssetUsed(imported[0]!.id).sha256).toBe(imported[0]?.sha256);
+    await expect(invoke("image-assets:import", { ...payload, sha256: "0".repeat(64) })).rejects.toThrow();
+  });
   it("creates one exact grant from Main state and leaves final approval and intent absent", async () => {
     const { repo, account, article, image, invoke } = fixture();
     const target = { platformKey: "douyin", accountId: account.id, articleId: article.id, imageAssetId: image.id };
