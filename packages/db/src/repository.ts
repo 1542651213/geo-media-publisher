@@ -1998,6 +1998,18 @@ export class AppRepository {
     return toAccount(this.db.prepare("SELECT * FROM accounts WHERE id=? AND platform_key=?").get(accountId, platformKey) as Row);
   }
 
+  configureOfficialApiAccount(input: { accountId?: string; platformKey: string; name: string; externalAccountId: string }, persistCredentials: (accountId: string) => void): Account {
+    // A Main encryption/persistence failure must not leave a new unbound account or change account authorization.
+    return this.db.transaction(() => {
+      const account = input.accountId ? this.getAccountById(input.accountId, input.platformKey)
+        : this.createAccount({ platformKey: input.platformKey, name: input.name, allowAutoPublish: false, publishMode: "assisted" });
+      if (!account || account.archivedAt) throw new Error("OFFICIAL_API_ACCOUNT_NOT_FOUND");
+      const updated = this.syncOfficialApiAccount({ accountId: account.id, platformKey: input.platformKey, accountName: input.name, externalAccountId: input.externalAccountId });
+      persistCredentials(account.id);
+      return updated;
+    })();
+  }
+
   syncOfficialApiAccount(input: { accountId: string; platformKey: string; accountName?: string | null; externalAccountId?: string | null; lastVerifiedAt?: string }): Account {
     const current = this.db.prepare("SELECT * FROM accounts WHERE id=? AND platform_key=?").get(input.accountId, input.platformKey) as Row | undefined;
     if (!current) throw new Error("账号不存在");

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { defaultAccountSelection, type ContentQualityIssue, type ContentSource } from "@publisher/domain";
 import { openDatabase } from "@publisher/db";
 import { articleListStatusLabel, canPublishWithReviewMode, orderPlatformCatalog, platformAvailability } from "../apps/desktop/src/renderer/v11-ui-model";
+import { PRE_WEBSITE_PLATFORM_KEYS } from "./fixtures/pre-website-platform-catalog";
 
 const migrationDir = join(process.cwd(), "packages", "db", "migrations");
 const platformCsv = join(process.cwd(), "PLATFORMS.csv");
@@ -118,14 +119,15 @@ describe("V1.1.1 UX Fix Pack", () => {
     expect(repository.getImageAsset(exact.id)?.useCount).toBe(1);
   });
 
-  it("returns all 41 platforms; favorites do not hide Manual or Blocked platforms", () => {
+  it("retains all 41 historical platforms plus Website; favorites do not hide Manual or Blocked platforms", () => {
     const dir = mkdtempSync(join(tmpdir(), "publisher-v111-platforms-")); tempDirs.push(dir);
     const opened = openDatabase(join(dir, "publisher.db"), migrationDir); databases.push(opened.db);
     opened.repository.seedPlatformCatalog(platformCsv);
     const platforms = opened.repository.listPlatforms();
-    expect(platforms).toHaveLength(41);
+    expect(platforms).toHaveLength(42);
+    expect(new Set(platforms.map(platform => platform.platformKey))).toEqual(new Set([...PRE_WEBSITE_PLATFORM_KEYS, "website"]));
     const ordered = orderPlatformCatalog(platforms, ["zhihu", "baijiahao"]);
-    expect(ordered).toHaveLength(41);
+    expect(ordered).toHaveLength(42);
     expect(new Set(ordered.slice(0, 2).map((platform) => platform.platformKey))).toEqual(new Set(["zhihu", "baijiahao"]));
     expect(platforms.some((platform) => platformAvailability(platform) === "manual")).toBe(true);
     expect(platforms.some((platform) => platformAvailability(platform) === "blocked")).toBe(true);

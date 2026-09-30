@@ -1,4 +1,5 @@
 import type { ControlledPostUploadDiscoveryResult, ControlledSelfTestMode } from "@publisher/adapters-core";
+import type { OfficialApiAccountView } from "./official-api";
 import type { Account, AccountStatus, ActivityLog, AIProviderProfile, Article, ArticleVariant, AuthorizationStatus, Brand, BrandAsset, BrandKnowledgeCategory, BrandKnowledgeEntry, CityRegion, ContentStudioPlatformKey, ContentStudioTopicPlan, CredentialField, DashboardStats, ExcelImportPreview, ExcelImportResult, FinalPublishMode, ImageAsset, ImageSelectionMode, KeywordItem, KeywordTemplate, KnowledgeSnapshot, LoginSession, Notification, Platform, PlatformContentRules, PlatformProfile, PlatformSelfTestLevel, PlatformSelfTestRun, PublishJob, PublishPlan, PublishRecord, PublishVerificationStatus, VideoAsset } from "@publisher/domain";
 import type { AIConnectionResult } from "@publisher/ai";
 import type { ContentQualityAuditView, ContentQualityItemView, ContentQualityReviewView, ContentQualityStateView, HumanReviewDatasetItemView, HumanReviewDatasetView, HumanReviewSubmitInput, HumanReviewItemReviewView, QualityBenchmarkContentView, QualityBenchmarkMetrics, QualityBenchmarkRunView } from "@publisher/db";
@@ -177,6 +178,9 @@ export interface ManagedVideoAsset extends VideoAsset {
 }
 
 export interface PublisherApi {
+  website: { listConnections(): Promise<OfficialApiAccountView[]>;
+    importCredentials(input: { environment: "staging" | "production"; accountId?: string }): Promise<OfficialApiAccountView>;
+    verifyConnection(accountId: string): Promise<OfficialApiAccountView> };
   b01: { availability(): Promise<{ enabled: boolean; reason: string }>;
     requestAuthorization(input: { platformKey: "douyin"; accountId: string; articleId: string; imageAssetId: string }): Promise<{
       id: string; status: string; eligible: boolean; reason: string }>;

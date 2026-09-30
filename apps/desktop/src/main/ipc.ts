@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { basename, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
+import { importOfficialApiCredential, officialApiAccountView, verifyOfficialApiConnection } from "./official-api-account";
 import { credentialFingerprint, prepareToutiaoArticleJob, ToutiaoCredentialBundleService } from "@publisher/adapters-toutiao/article-api";
 import { protocolShadowEnabled } from "@publisher/adapters-toutiao/article-api";
 import { ToutiaoArticleBrowserAdapter } from "@publisher/adapters-toutiao/browser";
@@ -1386,6 +1387,7 @@ export function registerIpc(deps: IpcDependencies): void {
   register("accounts:update", (_event, payload) => { const input = z.object({ id: idSchema, data: z.object({ accountAlias: z.string().trim().min(1).max(100).optional(), enabled: z.boolean().optional(), loginStatus: z.enum(["logged_in", "logged_out", "expired", "needs_user_action", "unknown"]).optional(), pausedReason: z.string().nullable().optional(), allowAutoPublish: z.boolean().optional(), publishMode: z.enum(["inherit", "manual", "auto", "assisted"]).optional(), minimumIntervalSeconds: z.number().int().min(0).max(86400).optional() }) }).parse(payload); return repository.updateAccount(input.id, input.data); });
   register("accounts:set-credentials", (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema, values: z.record(z.string(), z.string().max(8192)) }).parse(payload);
+    if (input.platformKey === "website") throw new Error("官网凭据须通过 Main 安全文件导入入口配置");
     accountContext(input.accountId, input.platformKey);
     const adapter = registry.get(input.platformKey);
     const allowed = new Set(adapter.getCredentialSchema().map((field) => field.key));
@@ -1399,6 +1401,32 @@ export function registerIpc(deps: IpcDependencies): void {
   register("accounts:credential-status", (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);
     return readCredentialStatus(input.accountId, input.platformKey);
+  });
+  register("website:list-connections", () => repository.listAccounts().filter(account => account.platformKey === "website" && !account.archivedAt)
+    .map(account => officialApiAccountView(repository, credentials, account.id)));
+  register("website:import-credentials", async (_event, payload) => {
+    const input = z.strictObject({ environment: z.enum(["staging", "production"]), accountId: idSchema.optional() }).parse(payload);
+    const picked = await dialog.showOpenDialog({ title: `安全导入康一官网 ${input.environment} 凭据`, properties: ["openFile"],
+      filters: [{ name: "本机受控凭据配置", extensions: ["json"] }] });
+    if (picked.canceled || picked.filePaths.length !== 1) throw new Error("WEBSITE_CREDENTIAL_IMPORT_CANCELLED");
+    const path = picked.filePaths[0]!;
+    let raw: string;
+    try {
+      const stat = statSync(path);
+      if (!stat.isFile() || stat.size > 16 * 1024 || stat.size < 1) throw new Error("Invalid file");
+      const bytes = readFileSync(path);
+      if (bytes.length > 16 * 1024 || bytes.length < 1) throw new Error("Invalid file");
+      raw = bytes.toString("utf8");
+    } catch { throw new Error("WEBSITE_CREDENTIAL_FILE_INVALID"); }
+    // File bytes and the secret never pass through Renderer or IPC payloads.
+    const result = await importOfficialApiCredential({ repository, credentials }, raw, input.environment, input.accountId);
+    logger.info("ACCOUNT", "WEBSITE_CREDENTIAL_IMPORTED", "官网签名凭据已安全导入", {
+      accountId: result.accountId, siteId: result.siteId, environment: result.environment, configured: result.configured });
+    return result;
+  });
+  register("website:verify-connection", async (_event, payload) => {
+    const { accountId } = z.strictObject({ accountId: idSchema }).parse(payload);
+    return verifyOfficialApiConnection({ repository, credentials }, accountId);
   });
   register("accounts:begin-login", async (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema, contentKind: z.enum(["article", "video"]).optional() }).parse(payload);

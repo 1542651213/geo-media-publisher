@@ -9,6 +9,7 @@ import { defaultAccountSelection } from "@publisher/domain";
 import { createRuntimeAdapterRegistry } from "../apps/desktop/src/main/adapter-registry";
 import { accountCenterPriority, orderPlatformCatalog, searchOrderedPlatforms } from "../apps/desktop/src/renderer/v11-ui-model";
 import { SafeStorageCredentialStore, type CredentialStore } from "@publisher/security";
+import { PRE_WEBSITE_PLATFORM_KEYS } from "./fixtures/pre-website-platform-catalog";
 
 const migrationDir = join(process.cwd(), "packages", "db", "migrations");
 const platformCsv = join(process.cwd(), "PLATFORMS.csv");
@@ -52,11 +53,13 @@ describe("V1.1.2 account priority and 41-platform catalog", () => {
     expect(searchOrderedPlatforms(ordered, "列举").map((platform) => platform.platformKey)).toEqual(["lieju"]);
   });
 
-  it("keeps all original platforms and exposes exactly 41 production platforms", () => {
+  it("keeps all 41 original platforms and adds one OfficialAPI Website entry", () => {
     const { repository, registry } = openProductionCatalog();
     const platforms = repository.listPlatforms();
-    expect(platforms).toHaveLength(41);
-    expect(new Set(platforms.map((platform) => platform.platformKey)).size).toBe(41);
+    expect(platforms).toHaveLength(42);
+    expect(new Set(platforms.map((platform) => platform.platformKey)).size).toBe(42);
+    expect(new Set(platforms.map(platform => platform.platformKey))).toEqual(new Set([...PRE_WEBSITE_PLATFORM_KEYS, "website"]));
+    expect(registry.get("website").manifest).toMatchObject({ integrationMode: "API", transport: "official_api", status: "WaitingForUser" });
     expect(registry.get("lieju").manifest).toMatchObject({ integrationMode: "BrowserAutomation", transport: "browser" });
     expect(registry.get("cnblogs").manifest).toMatchObject({ integrationMode: "API", transport: "official_api", authStrategy: "AppCredential" });
     expect(registry.get("zhihu").manifest.version).toBe("1.1.6");

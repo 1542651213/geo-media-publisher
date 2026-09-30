@@ -286,6 +286,8 @@ importers:
         specifier: workspace:*
         version: link:../../domain
 
+  packages/adapters/official-api: {}
+
   packages/adapters/qq-public:
     dependencies:
       '@publisher/adapters-browser':
@@ -450,6 +452,8 @@ importers:
       zod:
         specifier: ^4.0.17
         version: 4.4.3
+
+  packages/cms-v2-client: {}
 
   packages/db:
     dependencies:

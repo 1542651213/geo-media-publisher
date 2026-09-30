@@ -26,6 +26,10 @@ better-sqlite3 是原生模块：普通 host Node 与 Electron 的 ABI 可能不
 
 ## 普通运营平台定位
 
+R1.15-C 当前 durable milestone：已完成康一 OfficialAPI V2 当前合同/归档 client 对照、Main 原生文件→SafeStorage 安全凭据导入、普通账号中心 staging/production 只读连接入口。写请求不自动重发，scope 不跨环境改绑；Website ordinary/batch 仍 OFF，Douyin普通 ON/批量 OFF，其它门禁与10平台顺序不变。历史 HMAC 在当前用户下不可解密，未取得两环境新凭据，因此 ARTICLE/CASE 发布、恢复、维护、staging/prod/普通 UI验收和部门官网 Release 尚未完成，不能声明 READY。当前 GitHub实际为 PUBLIC；private交付位置或visibility变更需 Owner确认。production DB/凭据/历史 Job未改，远端写及实发均0。准确交接见 `docs/releases/R1.15-C-READY.md`，安全本机导入步骤见 `docs/integrations/kangyi-official-api-v2-operations.md`。
+
+该连接基础通过 typecheck/lint/build、full173files1201tests，无 skip；只读审查问题已修复。独立 NSIS 连接预检 Candidate SHA256 `154351CFB0939B1C118BC8BD2ED6447B99A24FFE8CB95595E99E778FA8B5EF5C`、app.asar `F0C41A24E459BB1CB4142F5BAE7E7C8E92C2033FAF266C5EFBF312E4F025D616`；显式隔离安装版普通账号 UI→Main文件导入→SafeStorage→重启验证通过，remote capability/文件选择使用公开fixture，绝不作为真实站点验收。生产 publisher.db/credentials.enc size、mtime、SHA256 完全未变。Candidate不自动启动，官网不能发布；不是部门 Website Release。
+
 CURRENT PRODUCT UI STATE（R1.15 Douyin Release）：首页、账号中心、发布抽屉、发布中心和统计统一使用十平台策略，顺序为抖音、小红书、官网、今日头条、搜狐号、网易号、百家号、微博、列举网、博客园。只有 Douyin ordinaryPublishEnabled=true；Douyin batchPublishEnabled=false，其它九个平台 ordinary/batch 全为 false。显示不等于可发布。Release 隐藏 B01 验收创建/批准入口，员工不需要 B01 marker 或授权流程，使用普通内容库、手动选择单图与账号、明确公开可见、准备后确认一次提交。Main 独立校验 Adapter capability、当前 app-owned canonical Page/Context、Creator identity 与 AUTHENTICATED；DB logged_in 不能代替验证。历史 B01 任务仍执行原一次性授权门禁，不能借 ordinary ON 绕过。
 
 最新 durable milestone：已将 Douyin Publish Success 与 Public Content Fidelity 分离。发布成功必须有持久 final_submit_count=1、可信 Remote Work ID、唯一且同一目标的 Published 管理证据；公开内容另记 PASS / FAIL / LIMITED。公开内容失败只告警，不触发 retry、第二次点击、替代 Job、Node/API replay 或 transport fallback。正文输入不再 bulk fill 多行，而通过编辑器 Enter 创建段落、逐段插入，再严格回读完整正文；不会把 `*` 忽略或归一化为换行。三段隔离 Slate 事件/DOM fixture 通过；本轮没有第二次真实发布，因此修复后的公开平台序列化未另行实发复验。

@@ -4,6 +4,9 @@ import type { PublisherApi } from "../shared/api";
 const invoke = <T>(channel: string, payload?: unknown): Promise<T> => ipcRenderer.invoke(channel, payload) as Promise<T>;
 
 const api: PublisherApi = {
+  website: { listConnections: () => invoke("website:list-connections"),
+    importCredentials: input => invoke("website:import-credentials", input),
+    verifyConnection: accountId => invoke("website:verify-connection", { accountId }) },
   b01: { availability: () => invoke("b01:availability"), requestAuthorization: (input) => invoke("b01:request-authorization", input),
     requestFinalApproval: (jobId) => invoke("b01:request-final-approval", { jobId }),
     retirePreboundary: (jobId) => invoke("b01:retire-preboundary", { jobId }),

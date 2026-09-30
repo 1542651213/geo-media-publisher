@@ -72,7 +72,7 @@ describe("R1.15 ordinary platform policy", () => {
 
   it("shows staged platforms without granting ordinary publish capability", () => {
     const views = operatorPlatformCatalog(catalog);
-    expect(operatorPublishBlockReason("website", views.find((item) => item.platformKey === "website"))).toContain("当前主线");
+    expect(operatorPublishBlockReason("website", views.find((item) => item.platformKey === "website"))).toContain("尚未验收");
     expect(operatorPublishBlockReason("netease_media", views.find((item) => item.platformKey === "netease_media"))).toContain("待开发");
     expect(operatorPublishBlockReason("baijiahao", views.find((item) => item.platformKey === "baijiahao"))).toContain("编辑器");
     expect(operatorPublishBlockReason("zhihu", platform("zhihu"))).toContain("普通运营");

@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 export interface CredentialStore {
   get(key: string): string | null;
   set(key: string, value: string): void;
+  setMany?(values: Readonly<Record<string, string>>): void;
   delete(key: string): void;
   has(key: string): boolean;
   getStatus?(key: string): CredentialStatus;
@@ -56,10 +57,16 @@ export class SafeStorageCredentialStore implements CredentialStore {
   }
 
   set(key: string, value: string): void {
+    this.setMany({ [key]: value });
+  }
+
+  /** Encrypt the complete bundle before one file replacement; no partial key rotation. */
+  setMany(values: Readonly<Record<string, string>>): void {
     if (!this.safeStorage.isEncryptionAvailable()) throw new CredentialEncryptionUnavailableError();
-    const next = { ...this.values, [key]: this.safeStorage.encryptString(value).toString("base64") };
+    const encrypted = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, this.safeStorage.encryptString(value).toString("base64")]));
+    const next = { ...this.values, ...encrypted };
     this.persist(next);
-    this.values[key] = next[key]!;
+    Object.assign(this.values, encrypted);
   }
 
   delete(key: string): void {

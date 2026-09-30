@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,6 +8,27 @@ const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 describe("SafeStorageCredentialStore", () => {
+  it("preserves every old field on a mid-bundle encryption failure and writes a complete bundle across restart", () => {
+    const dir = mkdtempSync(join(tmpdir(), "publisher-security-many-")); dirs.push(dir);
+    const path = join(dir, "credentials.enc");
+    let rejectValue = "";
+    const port = { isEncryptionAvailable: () => true, encryptString: (value: string) => {
+      if (value === rejectValue) throw Error("fixture encryption failure"); return Buffer.from(`encrypted:${value}`);
+    }, decryptString: (value: Buffer) => value.toString().replace(/^encrypted:/u, "") };
+    const store = new SafeStorageCredentialStore(path, port);
+    store.setMany({ "website:origin": "old-origin", "website:keyId": "old-key", "website:secret": "old-secret" });
+    const original = readFileSync(path);
+    rejectValue = "new-secret";
+    expect(() => store.setMany({ "website:origin": "new-origin", "website:keyId": "new-key", "website:secret": "new-secret" })).toThrow("fixture encryption failure");
+    expect(readFileSync(path)).toEqual(original);
+    expect(store.get("website:keyId")).toBe("old-key");
+    expect(new SafeStorageCredentialStore(path, port).get("website:secret")).toBe("old-secret");
+    rejectValue = "";
+    store.setMany({ "website:origin": "new-origin", "website:keyId": "new-key", "website:secret": "new-secret" });
+    const restarted = new SafeStorageCredentialStore(path, port);
+    expect(restarted.get("website:origin")).toBe("new-origin");
+    expect(restarted.get("website:secret")).toBe("new-secret");
+  });
   it("persists encrypted values and exposes only configured status", () => {
     const dir = mkdtempSync(join(tmpdir(), "publisher-security-")); dirs.push(dir);
     const fake = { isEncryptionAvailable: () => true, encryptString: (value: string) => Buffer.from(`encrypted:${value}`), decryptString: (value: Buffer) => value.toString().replace(/^encrypted:/u, "") };

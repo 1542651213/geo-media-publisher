@@ -6,6 +6,7 @@ import { AdapterRegistry } from "@publisher/adapters-core";
 import { openDatabase } from "@publisher/db";
 import { TestPlatformAdapter } from "@publisher/adapters-test";
 import { TikTokAdapter } from "@publisher/adapters-tiktok";
+import { PRE_WEBSITE_PLATFORM_KEYS } from "./fixtures/pre-website-platform-catalog";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -88,14 +89,15 @@ describe("V0.4 platform integration", () => {
     try {
       repository.seedPlatformCatalog(join(process.cwd(), "PLATFORMS.csv"));
       const platforms = repository.listPlatforms();
-      expect(platforms).toHaveLength(41);
+      expect(platforms).toHaveLength(42);
+      expect(new Set(platforms.map(platform => platform.platformKey))).toEqual(new Set([...PRE_WEBSITE_PLATFORM_KEYS, "website"]));
       expect(platforms.some((platform) => platform.platformKey === "test")).toBe(false);
       const lifecycleCounts = platforms.reduce<Record<string, number>>((counts, platform) => {
         counts[platform.verificationStatus] = (counts[platform.verificationStatus] ?? 0) + 1;
         return counts;
       }, {});
       expect(lifecycleCounts).toEqual({
-        WaitingForUser: 14,
+        WaitingForUser: 15,
         Developing: 2,
         ManualOnly: 21,
         Blocked: 1,
