@@ -1,6 +1,6 @@
 import { app, BrowserWindow, safeStorage } from "electron";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { openDatabase, restoreDatabaseSafely } from "@publisher/db";
 import { SafeStorageCredentialStore } from "@publisher/security";
 import { createFileLogger } from "@publisher/logger";
@@ -13,6 +13,16 @@ import { createProcessDiagnostics } from "./process-diagnostics";
 import { recordAppStartup } from "./runtime-observability";
 
 app.setName("codex-media-publisher");
+// Installed Candidate smoke must explicitly override Electron's cached userData path.
+const isolatedUserData = process.env.GMP_B01_ISOLATED_USER_DATA_DIR;
+if (isolatedUserData) {
+  const isolatedPath = resolve(isolatedUserData);
+  if (!isAbsolute(isolatedUserData) || basename(isolatedPath) !== "b01-isolated-user-data" || !existsSync(isolatedPath)
+    || isolatedPath.toLowerCase() === resolve(app.getPath("userData")).toLowerCase()) {
+    throw new Error("B01_ISOLATED_USER_DATA_PATH_INVALID");
+  }
+  app.setPath("userData", isolatedPath);
+}
 const processDiagnostics = createProcessDiagnostics(join(app.getPath("userData"), "production-data", "logs", "main-process-diagnostics.log"));
 processDiagnostics.installProcessHandlers();
 
@@ -47,8 +57,11 @@ async function createWindow(): Promise<void> {
   const logger = createFileLogger(appLogPath);
   recordAppStartup(logger, { pid: process.pid, packaged: app.isPackaged, userDataPath: app.getPath("userData"), productionDataPath: dataDirectory, appLogPath });
   const credentials = new SafeStorageCredentialStore(join(dataDirectory, "credentials.enc"), safeStorage);
+  const b01Authorization = database.repository.getB01Authorization();
   const registry = createRuntimeAdapterRegistry(credentials, isDevelopment, logger, join(app.getPath("userData"), "browser-profiles"), join(dataDirectory, "credentials.enc"), {
-    claimDouyinImageTextFileSelection: (input) => database.repository.claimDouyinImageTextFileSelection(input)
+    claimDouyinImageTextFileSelection: (input) => database.repository.claimDouyinImageTextFileSelection(input),
+    douyinImageTextNativeSubmitEnabled: Boolean(b01Authorization && !["Revoked", "Consumed"].includes(b01Authorization.status)
+      && Date.parse(b01Authorization.expiresAt) > Date.now())
   });
   ownedBrowserSessionClosers.add(async () => {
     const closableAdapters = registry.listAll().filter((adapter): adapter is typeof adapter & { closeOwnedSessions(): Promise<void> } => typeof (adapter as { closeOwnedSessions?: unknown }).closeOwnedSessions === "function");
@@ -61,7 +74,7 @@ async function createWindow(): Promise<void> {
     const keys = [...new Set([...adapter.getCredentialSchema().map((field) => field.key), "oauthAccessToken"])]
     return Object.fromEntries(keys.map((key) => [key, credentials.get(`account:${accountId}:${platformKey}:${key}`) ?? ""]));
   };
-  const publisher = new PublisherService(database.repository, registry, logger, { resolveSecrets: resolveAccountSecrets });
+  const publisher = new PublisherService(database.repository, registry, logger, { resolveSecrets: resolveAccountSecrets, enforceB01ForDouyin: true });
   scheduler = new PersistentScheduler(database.repository, publisher, logger, 5_000, {
     allowScheduledJob: (job) => productPlatform(job.platformKey)?.batchPublishEnabled === true
       && operatorPublishBlockReason(job.platformKey, database.repository.listPlatforms().find((platform) => platform.platformKey === job.platformKey)) === null

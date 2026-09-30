@@ -489,7 +489,14 @@ function CnblogsAccountDrawer({ rows, busy, onClose, onEnsureAccount, onSaved, o
 
 export function V11PublishCenter({ refresh, refreshKey, onNavigate }: { refresh: () => void; refreshKey: number; onNavigate: (route: V11NavigationTarget) => void }): JSX.Element {
   const [jobs, setJobs] = useState<PublishJob[]>([]); const [articles, setArticles] = useState<Article[]>([]); const [accounts, setAccounts] = useState<Account[]>([]); const [images, setImages] = useState<ImageAsset[]>([]); const [message, setMessage] = useState(""); const [running, setRunning] = useState(""); const [open, setOpen] = useState(false); const [detailsJob, setDetailsJob] = useState<PublishJob | null>(null);
-  const load = useCallback((): void => { void Promise.all([window.publisherAPI.jobs.list(), window.publisherAPI.articles.list(), window.publisherAPI.accounts.list(), window.publisherAPI.imageAssets.list()]).then(([nextJobs, nextArticles, nextAccounts, nextImages]) => { const operatingArticles = nextArticles.filter(isProductionArticle); const operatingIds = new Set(operatingArticles.map((article) => article.id)); setJobs(nextJobs.filter((job) => operatingIds.has(job.articleId))); setArticles(operatingArticles); setAccounts(nextAccounts); setImages(nextImages); }); }, []);
+  const [b01JobStatuses, setB01JobStatuses] = useState<Record<string, { eligible: boolean; reason: string }>>({});
+  const load = useCallback((): void => { void Promise.all([window.publisherAPI.jobs.list(), window.publisherAPI.articles.list(), window.publisherAPI.accounts.list(), window.publisherAPI.imageAssets.list()]).then(async ([nextJobs, nextArticles, nextAccounts, nextImages]) => {
+    const operatingArticles = nextArticles.filter(isProductionArticle); const operatingIds = new Set(operatingArticles.map((article) => article.id));
+    setJobs(nextJobs.filter((job) => operatingIds.has(job.articleId))); setArticles(operatingArticles); setAccounts(nextAccounts); setImages(nextImages);
+    const statuses = await Promise.all(nextJobs.filter((job) => job.platformKey === "douyin").map(async (job) =>
+      [job.id, await window.publisherAPI.b01.jobStatus(job.id)] as const));
+    setB01JobStatuses(Object.fromEntries(statuses));
+  }); }, []);
   useEffect(load, [load, refreshKey]);
   const articleById = new Map(articles.map((article) => [article.id, article])); const accountById = new Map(accounts.map((account) => [account.id, account])); const imageById = new Map(images.map((image) => [image.id, image]));
   const operatorJobs = jobs.filter((job) => productPlatform(job.platformKey)?.visibleInOperatorUi);
@@ -501,7 +508,10 @@ export function V11PublishCenter({ refresh, refreshKey, onNavigate }: { refresh:
       const readOnly = isReadOnlyReconciliation(job);
       if (!readOnly) {
         const reason = operatorPublishBlockReason(job.platformKey);
-        if (reason) throw new Error(reason);
+        if (job.platformKey === "douyin") {
+          const status = await window.publisherAPI.b01.jobStatus(job.id);
+          if (!status.eligible) throw new Error(status.reason);
+        } else if (reason) throw new Error(reason);
       }
       if (job.finalPublishMode === "PREPARE_ONLY" && ["AwaitingConfirmation", "DryRunPassed"].includes(job.status)) { setMessage("这条任务只准备内容，不会执行最终发布；如需发布请重新选择“发布前确认”。"); return; }
       if (!readOnly && ["AwaitingConfirmation", "DryRunPassed"].includes(job.status)) await window.publisherAPI.jobs.confirm(job.id, false);
@@ -514,9 +524,9 @@ export function V11PublishCenter({ refresh, refreshKey, onNavigate }: { refresh:
   };
   const modeLabel = (job: PublishJob): string => job.finalPublishMode === "PREPARE_ONLY" ? "只准备内容" : job.finalPublishMode === "AUTO_PUBLISH" ? "自动发布" : "发布前确认";
   return <>
-    <WorkspaceTitle eyebrow="发布中心" title="安排并开始发布" description="选择文章和渠道；内容审核是否阻止发布由当前审核模式决定，最终发布仍由你确认。" action={<button className="primary-button" onClick={() => setOpen(true)}>选择文章发布</button>} />
+    <WorkspaceTitle eyebrow="发布中心" title="安排并开始发布" description="选择文章和渠道；内容审核是否阻止发布由当前审核模式决定，最终发布仍由你确认。" action={<div className="row-actions"><button className="secondary-button" onClick={load}>刷新状态</button><button className="primary-button" onClick={() => setOpen(true)}>选择文章发布</button></div>} />
     {message && <div className="notice">{message}</div>}
-    <section className="panel table-panel"><div className="table-summary"><span>共 {operatorJobs.length} 条运营平台发布安排</span><button className="text-button" onClick={() => onNavigate("accounts")}>管理账号 →</button></div>{operatorJobs.length === 0 ? <EmptyWorkspace title="还没有发布安排" description="平台完成产品验收后，可在这里选择文章和账号。" action={<button className="secondary-button" onClick={() => setOpen(true)}>查看平台状态</button>} /> : <div className="data-table v11-publish-table"><div className="table-head v11-publish-head"><span>文章</span><span>发布渠道</span><span>账号</span><span>图片</span><span>发布模式</span><span>状态</span><span>创建时间</span><span>操作</span></div>{operatorJobs.map((job) => <div className="table-row v11-publish-row" key={job.id}><strong>{articleById.get(job.articleId)?.title ?? "文章内容"}</strong><span>{platformLabel(job.platformKey)}</span><span>{accountById.get(job.accountId)?.accountAlias || accountById.get(job.accountId)?.name || "已选账号"}</span><span>{job.selectedImageAssetId ? imageById.get(job.selectedImageAssetId)?.name || "已选图片" : "未使用"}</span><span>{modeLabel(job)}</span><Status label={publishStatusLabel(job.status)} tone={publishStatusTone(job.status)} /><span>{new Date(job.createdAt).toLocaleString("zh-CN")}</span><div className="row-actions">{isReadOnlyReconciliation(job) && <button className="mini-button" disabled={running === job.id} onClick={() => void continueJob(job)}>{running === job.id ? "查询中…" : "只读查询状态"}</button>}<button className="mini-button" onClick={() => setDetailsJob(job)}>查看详情</button></div></div>)}</div>}</section>
+    <section className="panel table-panel"><div className="table-summary"><span>共 {operatorJobs.length} 条运营平台发布安排</span><button className="text-button" onClick={() => onNavigate("accounts")}>管理账号 →</button></div>{operatorJobs.length === 0 ? <EmptyWorkspace title="还没有发布安排" description="平台完成产品验收后，可在这里选择文章和账号。" action={<button className="secondary-button" onClick={() => setOpen(true)}>查看平台状态</button>} /> : <div className="data-table v11-publish-table"><div className="table-head v11-publish-head"><span>文章</span><span>发布渠道</span><span>账号</span><span>图片</span><span>发布模式</span><span>状态</span><span>创建时间</span><span>操作</span></div>{operatorJobs.map((job) => <div className="table-row v11-publish-row" key={job.id}><strong>{articleById.get(job.articleId)?.title ?? "文章内容"}</strong><span>{platformLabel(job.platformKey)}</span><span>{accountById.get(job.accountId)?.accountAlias || accountById.get(job.accountId)?.name || "已选账号"}</span><span>{job.selectedImageAssetId ? imageById.get(job.selectedImageAssetId)?.name || "已选图片" : "未使用"}</span><span>{modeLabel(job)}</span><Status label={publishStatusLabel(job.status)} tone={publishStatusTone(job.status)} /><span>{new Date(job.createdAt).toLocaleString("zh-CN")}</span><div className="row-actions">{isReadOnlyReconciliation(job) && <button className="mini-button" disabled={running === job.id} onClick={() => void continueJob(job)}>{running === job.id ? "查询中…" : "只读查询状态"}</button>}{job.platformKey === "douyin" && !isReadOnlyReconciliation(job) && (b01JobStatuses[job.id]?.eligible ? <button className="mini-button" disabled={running === job.id} onClick={() => void continueJob(job)}>B01 单次验收 · 继续</button> : <span className="v111-unavailable">{b01JobStatuses[job.id]?.reason ?? "等待 Owner 最终授权"}</span>)}<button className="mini-button" onClick={() => setDetailsJob(job)}>查看详情</button></div></div>)}</div>}</section>
     {hiddenHistoryJobs.length > 0 && <details className="panel"><summary>历史隐藏平台任务（{hiddenHistoryJobs.length}）</summary><div className="v11-recent-list">{hiddenHistoryJobs.map((job) => <div key={job.id}><strong>{platformLabel(job.platformKey)}</strong><span>{articleById.get(job.articleId)?.title ?? "历史文章"} · {publishStatusLabel(job.status)}</span><button className="mini-button" onClick={() => setDetailsJob(job)}>只读查看详情</button></div>)}</div></details>}
     {open && <V11PublishModal onClose={() => setOpen(false)} onDone={() => { load(); refresh(); }} onNavigate={onNavigate} />}
     {detailsJob && <div className="drawer-backdrop" onClick={() => setDetailsJob(null)}><aside className="drawer v11-drawer" onClick={(event) => event.stopPropagation()}><div className="drawer-head"><div><span className="eyebrow">发布任务</span><h2>任务详情</h2></div><button className="icon-button" onClick={() => setDetailsJob(null)}>×</button></div><div className="v11-job-detail"><strong>{articleById.get(detailsJob.articleId)?.title ?? "文章内容"}</strong><span>平台：{platformLabel(detailsJob.platformKey)}</span><span>账号：{accountById.get(detailsJob.accountId)?.accountAlias || accountById.get(detailsJob.accountId)?.name || "已选账号"}</span><span>图片：{detailsJob.selectedImageAssetId ? imageById.get(detailsJob.selectedImageAssetId)?.name || "已选图片" : "未使用"}</span><span>发布模式：{modeLabel(detailsJob)}</span><span>当前状态：{publishStatusLabel(detailsJob.status)}</span><span>创建时间：{new Date(detailsJob.createdAt).toLocaleString("zh-CN")}</span>{detailsJob.lastErrorMessage && <div className="notice warning">{detailsJob.lastErrorMessage}</div>}</div><div className="drawer-footer"><button className="primary-button" onClick={() => setDetailsJob(null)}>关闭</button></div></aside></div>}
@@ -526,18 +536,89 @@ export function V11PublishCenter({ refresh, refreshKey, onNavigate }: { refresh:
 export function V11PublishModal({ initialArticle, onClose, onDone, onNavigate }: { initialArticle?: Article; onClose: () => void; onDone: () => void; onNavigate?: (route: V11NavigationTarget) => void }): JSX.Element {
   const [articles, setArticles] = useState<Article[]>(initialArticle ? [initialArticle] : []); const [articleId, setArticleId] = useState(initialArticle?.id ?? ""); const [accounts, setAccounts] = useState<Array<Account & { accountStatus?: string; runtimeAuthState?: string | null; imageTextCreatorReady?: boolean }>>([]); const [platforms, setPlatforms] = useState<Platform[]>([]); const [reviewMode, setReviewMode] = useState<ContentReviewMode>("WarningOnly"); const [finalPublishMode, setFinalPublishMode] = useState<"prepare_only" | "confirm_before_publish" | "auto_publish">("confirm_before_publish"); const [qualityStatus, setQualityStatus] = useState("Draft"); const [qualityIssues, setQualityIssues] = useState<ContentQualityIssue[]>([]); const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]); const [accountChoices, setAccountChoices] = useState<Record<string, string>>({}); const [images, setImages] = useState<ImageAsset[]>([]); const [selectedImage, setSelectedImage] = useState<ImageAsset | null>(null); const [imageMode, setImageMode] = useState<"random" | "manual" | "none">("random"); const [douyinVisibility, setDouyinVisibility] = useState<"" | "public">(""); const [manualImagesOpen, setManualImagesOpen] = useState(false); const [seenImageIds, setSeenImageIds] = useState<string[]>([]); const [busy, setBusy] = useState(false); const [message, setMessage] = useState("");
   const [liejuAccountChoices, setLiejuAccountChoices] = useState<string[]>([]);
+  const [b01EligibleAccountId, setB01EligibleAccountId] = useState<string | null>(null);
+  const [b01Reason, setB01Reason] = useState("请先选择指定的 B01 文章和图片");
   const article = articles.find((item) => item.id === articleId) ?? initialArticle;
   useEffect(() => { void Promise.all([initialArticle ? Promise.resolve([initialArticle]) : window.publisherAPI.articles.list(), window.publisherAPI.accounts.overview(), window.publisherAPI.platforms.list(), window.publisherAPI.settings.get()]).then(([nextArticles, nextAccountRows, nextPlatforms, settings]) => { const nextAccounts = nextAccountRows.map((row) => ({ ...row.account, accountStatus: row.accountStatus, runtimeAuthState: row.runtimeAuthState, imageTextCreatorReady: row.imageTextCreatorReady })); setArticles(nextArticles.filter(isProductionArticle)); setAccounts(operatorAccounts(nextAccounts)); setPlatforms(operatorPlatformCatalog(nextPlatforms)); setReviewMode(normalizeContentReviewMode(settings.contentReviewMode)); setFinalPublishMode(settings.finalPublishMode === "prepare_only" || settings.finalPublishMode === "auto_publish" ? settings.finalPublishMode : "confirm_before_publish"); setSelectedPlatforms([]); }); }, [initialArticle]);
   useEffect(() => { if (!article?.id) return; void (async () => { try { let state = await window.publisherAPI.quality.status("article", article.id); if (reviewMode === "WarningOnly" && (!state || state.status === "Draft")) { await window.publisherAPI.quality.recheck("article", article.id); state = await window.publisherAPI.quality.status("article", article.id); } setQualityStatus(state?.status ?? "Draft"); const history = await window.publisherAPI.quality.history("article", article.id); setQualityIssues(history.reviews[0]?.issues ?? []); } catch (error) { setMessage(error instanceof Error ? error.message : "内容检查暂时无法完成；仅提醒模式仍允许你本人决定。"); } })(); }, [article?.id, reviewMode]);
-  useEffect(() => { const next: Record<string, string> = {}; selectedPlatforms.forEach((key) => { const candidates = connectedAccountsForPlatform(accounts, key).filter((account) => key !== "douyin" || account.imageTextCreatorReady); const selected = defaultAccountSelection(candidates); if (selected.selectedAccountId) next[key] = selected.selectedAccountId; if (key === "lieju" && liejuAccountChoices.length === 0 && candidates[0]) setLiejuAccountChoices([candidates[0].platformAccountId ?? candidates[0].id]); }); setAccountChoices((current) => ({ ...current, ...next })); }, [accounts, selectedPlatforms, liejuAccountChoices.length]);
-  const togglePlatform = (key: string): void => { if (operatorPublishBlockReason(key, platforms.find((platform) => platform.platformKey === key))) return; setSelectedPlatforms((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]); };
+  useEffect(() => { const next: Record<string, string> = {}; selectedPlatforms.forEach((key) => {
+    const candidates = connectedAccountsForPlatform(accounts, key).filter((account) => key !== "douyin" || account.imageTextCreatorReady && account.id === b01EligibleAccountId);
+    const selected = defaultAccountSelection(candidates);
+    if (selected.selectedAccountId) next[key] = selected.selectedAccountId;
+    if (key === "lieju" && liejuAccountChoices.length === 0 && candidates[0]) setLiejuAccountChoices([candidates[0].platformAccountId ?? candidates[0].id]);
+  }); setAccountChoices((current) => ({ ...current, ...next })); }, [accounts, selectedPlatforms, liejuAccountChoices.length, b01EligibleAccountId]);
+  useEffect(() => {
+    if (!article?.id || !selectedImage?.id || imageMode !== "manual") { setB01EligibleAccountId(null); return; }
+    let active = true;
+    void Promise.all(accounts.filter((account) => account.platformKey === "douyin").map(async (account) => ({ account,
+      result: await window.publisherAPI.b01.eligibility({ accountId: account.id, articleId: article.id, imageAssetId: selectedImage.id })
+    }))).then((results) => {
+      if (!active) return;
+      const eligible = results.find(({ result }) => result.eligible);
+      setB01EligibleAccountId(eligible?.account.id ?? null);
+      setB01Reason(eligible?.result.reason ?? results[0]?.result.reason ?? "请先连接指定的 B01 测试账号");
+    }).catch(() => { if (active) { setB01EligibleAccountId(null); setB01Reason("B01 单次验收资格暂不可用"); } });
+    return () => { active = false; };
+  }, [article?.id, selectedImage?.id, imageMode, accounts]);
+  const togglePlatform = (key: string): void => {
+    if (key === "douyin") {
+      if (!b01EligibleAccountId) return;
+      const account = accounts.find((item) => item.id === b01EligibleAccountId);
+      if (account) setAccountChoices((current) => ({ ...current, douyin: account.platformAccountId ?? account.id }));
+      setSelectedPlatforms((current) => current.includes(key) ? current.filter((item) => item !== key) : [key]);
+      return;
+    }
+    if (operatorPublishBlockReason(key, platforms.find((platform) => platform.platformKey === key))) return;
+    setSelectedPlatforms((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
+  };
   const channels = platforms.filter((platform) => productPlatform(platform.platformKey)?.publishSelectorVisible);
   const primaryPlatformKey = selectedPlatforms[0] ?? "";
-  useEffect(() => { if (!article?.id || !primaryPlatformKey) return; void Promise.all([window.publisherAPI.imageAssets.list({ brandId: article.brandId, enabledOnly: true }), window.publisherAPI.imageAssets.selectForArticle({ articleId: article.id, platformKey: primaryPlatformKey })]).then(([nextImages, image]) => { setImages(nextImages); setSelectedImage(image); setSeenImageIds(image ? [image.id] : []); setImageMode(image ? "random" : "none"); }); }, [article?.id, article?.brandId, primaryPlatformKey]);
+  useEffect(() => { if (!article?.id) return; void window.publisherAPI.imageAssets.list({ brandId: article.brandId, enabledOnly: true }).then((nextImages) => {
+    setImages(nextImages); setSelectedImage(null); setSeenImageIds([]); setImageMode("none");
+  }); }, [article?.id, article?.brandId]);
+  useEffect(() => { if (!article?.id || !primaryPlatformKey || primaryPlatformKey === "douyin") return;
+    void window.publisherAPI.imageAssets.selectForArticle({ articleId: article.id, platformKey: primaryPlatformKey }).then((image) => {
+      setSelectedImage(image); setSeenImageIds(image ? [image.id] : []); setImageMode(image ? "random" : "none");
+    }); }, [article?.id, primaryPlatformKey]);
   const swapImage = async (): Promise<void> => { if (!article) return; const next = await window.publisherAPI.imageAssets.selectForArticle({ articleId: article.id, platformKey: primaryPlatformKey, excludeImageAssetIds: seenImageIds }); setSelectedImage(next); if (next) { setSeenImageIds((current) => [...new Set([...current, next.id])]); setImageMode("random"); setMessage(""); } else setMessage("没有更多匹配图片，可以手动选择或不使用图片。"); };
   const allowed = canPublishWithReviewMode(qualityStatus, reviewMode);
   const highRisk = qualityIssues.some((issue) => issue.severity === "error");
-  const start = async (): Promise<void> => { if (!article || !allowed || selectedPlatforms.length === 0) return; setBusy(true); try { const done: string[] = []; let jobCount = 0; const persistedFinalMode = finalPublishMode === "prepare_only" ? "PREPARE_ONLY" : finalPublishMode === "auto_publish" ? "AUTO_PUBLISH" : "CONFIRM_BEFORE_PUBLISH"; for (const platformKey of selectedPlatforms) { const blockReason = operatorPublishBlockReason(platformKey, platforms.find((platform) => platform.platformKey === platformKey)); if (blockReason) throw new Error(blockReason); if (platformKey === "douyin" && (imageMode !== "manual" || !selectedImage)) throw new Error("抖音图文需要手动选择当前文章的测试图片"); if (platformKey === "douyin" && douyinVisibility !== "public") throw new Error("请为抖音图文明确选择可见范围"); const accountIds = platformKey === "lieju" ? liejuAccountChoices : accountChoices[platformKey] ? [accountChoices[platformKey]] : []; if (accountIds.length === 0) throw new Error(`请选择${platformLabel(platformKey)}账号`); for (const accountId of accountIds) { let image = platformKey === "cnblogs" || imageMode === "none" ? null : selectedImage; if (imageMode === "random" && platformKey !== primaryPlatformKey && platformKey !== "cnblogs") image = await window.publisherAPI.imageAssets.selectForArticle({ articleId: article.id, platformKey, excludeImageAssetIds: image ? [image.id] : [] }); await window.publisherAPI.articles.preparePublish({ articleId: article.id, platformKey, platformAccountId: accountId, publishMode: finalPublishMode === "prepare_only" ? "MANUAL" : "ASSISTED", finalPublishMode: persistedFinalMode, selectedImageAssetId: image?.id ?? null, imageSelectionMode: image ? imageMode : "none", ...(platformKey === "douyin" ? { douyinImageTextSettings: { version: 1 as const, visibility: "public" as const, timing: "immediate" as const } } : {}) }); jobCount += 1; } done.push(platformLabel(platformKey)); } const outcome = finalPublishMode === "prepare_only" ? "内容已准备，未执行最终提交。" : finalPublishMode === "auto_publish" ? "已按自动发布设置进入任务；未验证最终提交能力的浏览器平台会降级为发布前确认。" : "内容已准备，正在等待发布前确认。"; setMessage(jobCount > selectedPlatforms.length ? `已创建 ${jobCount} 个独立发布任务。${outcome}` : `${done.join("、")}：${outcome}`); onDone(); } catch (error) { setMessage(error instanceof Error ? error.message : "开始发布失败"); } finally { setBusy(false); } };
+  const start = async (): Promise<void> => {
+    if (!article || !allowed || selectedPlatforms.length === 0) return;
+    setBusy(true);
+    try {
+      const done: string[] = [];
+      let jobCount = 0;
+      const b01 = selectedPlatforms.includes("douyin");
+      const persistedFinalMode = b01 ? "CONFIRM_BEFORE_PUBLISH" : finalPublishMode === "prepare_only" ? "PREPARE_ONLY" : finalPublishMode === "auto_publish" ? "AUTO_PUBLISH" : "CONFIRM_BEFORE_PUBLISH";
+      for (const platformKey of selectedPlatforms) {
+        const blockReason = platformKey === "douyin" && b01EligibleAccountId ? null
+          : operatorPublishBlockReason(platformKey, platforms.find((platform) => platform.platformKey === platformKey));
+        if (blockReason) throw new Error(blockReason);
+        if (platformKey === "douyin" && (imageMode !== "manual" || !selectedImage)) throw new Error("抖音图文需要手动选择当前文章的测试图片");
+        if (platformKey === "douyin" && douyinVisibility !== "public") throw new Error("请为抖音图文明确选择可见范围");
+        const accountIds = platformKey === "lieju" ? liejuAccountChoices : accountChoices[platformKey] ? [accountChoices[platformKey]] : [];
+        if (accountIds.length === 0) throw new Error(`请选择${platformLabel(platformKey)}账号`);
+        for (const accountId of accountIds) {
+          let image = platformKey === "cnblogs" || imageMode === "none" ? null : selectedImage;
+          if (imageMode === "random" && platformKey !== primaryPlatformKey && platformKey !== "cnblogs") image = await window.publisherAPI.imageAssets.selectForArticle({ articleId: article.id, platformKey, excludeImageAssetIds: image ? [image.id] : [] });
+          await window.publisherAPI.articles.preparePublish({ articleId: article.id, platformKey, platformAccountId: accountId,
+            publishMode: b01 ? "ASSISTED" : finalPublishMode === "prepare_only" ? "MANUAL" : "ASSISTED", finalPublishMode: persistedFinalMode,
+            selectedImageAssetId: image?.id ?? null, imageSelectionMode: image ? imageMode : "none",
+            ...(platformKey === "douyin" ? { douyinImageTextSettings: { version: 1 as const, visibility: "public" as const, timing: "immediate" as const } } : {}) });
+          jobCount += 1;
+        }
+        done.push(platformLabel(platformKey));
+      }
+      const outcome = b01 ? "B01 单次产品验收已准备；最终提交仍需 Owner 单独授权。"
+        : finalPublishMode === "prepare_only" ? "内容已准备，未执行最终提交。"
+          : finalPublishMode === "auto_publish" ? "已按自动发布设置进入任务；未验证最终提交能力的浏览器平台会降级为发布前确认。"
+            : "内容已准备，正在等待发布前确认。";
+      setMessage(jobCount > selectedPlatforms.length ? `已创建 ${jobCount} 个独立发布任务。${outcome}` : `${done.join("、")}：${outcome}`);
+      onDone();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "开始发布失败"); }
+    finally { setBusy(false); }
+  };
   return <div className="drawer-backdrop" onClick={onClose}>
     <aside className="drawer v11-drawer v11-publish-drawer" onClick={(event) => event.stopPropagation()}>
       <div className="drawer-head"><div><span className="eyebrow">发布文章</span><h2>选择发布渠道</h2></div><button className="icon-button" onClick={onClose}>×</button></div>
@@ -547,22 +628,22 @@ export function V11PublishModal({ initialArticle, onClose, onDone, onNavigate }:
       {reviewMode === "Strict" && !allowed && article && <div className="notice error">严格审核模式要求文章达到“已通过”后才能发布。</div>}
       {reviewMode === "WarningOnly" && qualityStatus !== "Approved" && article && <div className={`v111-quality-warning ${highRisk ? "high-risk" : ""}`}><strong>{highRisk ? "高风险内容提醒：请本人确认后决定" : `系统发现 ${qualityIssues.length || 1} 项内容提醒`}</strong>{qualityIssues.length > 0 ? <ul>{qualityIssues.map((issue, index) => <li key={`${issue.code}-${index}`}>{issue.message}</li>)}</ul> : <p>内容尚未人工批准；仅提醒模式不会强制阻止发布。</p>}</div>}
       {reviewMode === "Off" && <div className="notice">内容审核已关闭；Quality Gate 历史仍保留在高级详情中。</div>}
-      <div className="v11-publish-method"><strong>发布方式：{finalPublishMode === "prepare_only" ? "只准备内容" : finalPublishMode === "auto_publish" ? "自动发布" : "发布前确认"}</strong><span>{finalPublishMode === "auto_publish" ? "只有已验证能力的平台会自动继续；登录失效、安全验证或风险控制会立即暂停。" : finalPublishMode === "prepare_only" ? "系统填写内容和图片后停止，不点击平台最终发布。" : "系统准备内容后等待你的最终确认。"}</span></div>
+      <div className="v11-publish-method"><strong>发布方式：{selectedPlatforms.includes("douyin") ? "B01 单次产品验收 · 发布前确认" : finalPublishMode === "prepare_only" ? "只准备内容" : finalPublishMode === "auto_publish" ? "自动发布" : "发布前确认"}</strong><span>{selectedPlatforms.includes("douyin") ? "仅指定测试账号、文章和图片；准备完成后仍需 Owner 单独批准最终提交。" : finalPublishMode === "auto_publish" ? "只有已验证能力的平台会自动继续；登录失效、安全验证或风险控制会立即暂停。" : finalPublishMode === "prepare_only" ? "系统填写内容和图片后停止，不点击平台最终发布。" : "系统准备内容后等待你的最终确认。"}</span></div>
       <div className="v114-publish-steps"><span>1. 准备内容</span><span>2. 上传图片</span><span>3. 提交平台</span><span>4. 确认结果</span></div>
       <div className="v11-channel-list">{channels.map((platform) => {
-        const candidates = connectedAccountsForPlatform(accounts, platform.platformKey).filter((account) => platform.platformKey !== "douyin" || account.imageTextCreatorReady);
+        const candidates = connectedAccountsForPlatform(accounts, platform.platformKey).filter((account) => platform.platformKey !== "douyin" || account.imageTextCreatorReady && account.id === b01EligibleAccountId);
         const connected = candidates.length > 0;
-        const blockReason = operatorPublishBlockReason(platform.platformKey, platform);
+        const blockReason = platform.platformKey === "douyin" && b01EligibleAccountId ? null : platform.platformKey === "douyin" ? b01Reason : operatorPublishBlockReason(platform.platformKey, platform);
         return <div key={platform.platformKey}>
-          <label className={`check-row ${connected && !blockReason ? "" : "disabled"}`}><input type="checkbox" disabled={Boolean(blockReason) || !connected} checked={selectedPlatforms.includes(platform.platformKey)} onChange={() => togglePlatform(platform.platformKey)} /><span>{platform.displayName}</span><em>{blockReason ?? (connected ? candidates.length === 1 ? "已自动选择账号" : `${candidates.length} 个账号` : <button type="button" className="text-button" onClick={() => { onClose(); onNavigate?.("accounts"); }}>连接</button>)}</em></label>
+          <label className={`check-row ${connected && !blockReason ? "" : "disabled"}`}><input type="checkbox" disabled={Boolean(blockReason) || !connected} checked={selectedPlatforms.includes(platform.platformKey)} onChange={() => togglePlatform(platform.platformKey)} /><span>{platform.displayName}</span><em>{platform.platformKey === "douyin" && connected && !blockReason ? "B01 单次产品验收" : blockReason ?? (connected ? candidates.length === 1 ? "已自动选择账号" : `${candidates.length} 个账号` : <button type="button" className="text-button" onClick={() => { onClose(); onNavigate?.("accounts"); }}>连接</button>)}</em></label>
           {selectedPlatforms.includes(platform.platformKey) && platform.platformKey === "lieju" && candidates.length > 1 && <div className="v112-account-multiselect"><strong>默认单选；多选会创建 {liejuAccountChoices.length} 个独立任务</strong>{candidates.map((account) => { const id = account.platformAccountId ?? account.id; return <label className="check-row" key={id}><input type="checkbox" checked={liejuAccountChoices.includes(id)} onChange={() => setLiejuAccountChoices((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id])} /><span>{account.accountAlias || account.name}</span><em>独立 Session</em></label>; })}</div>}
           {selectedPlatforms.includes(platform.platformKey) && platform.platformKey !== "lieju" && candidates.length > 1 && <select value={accountChoices[platform.platformKey] ?? ""} onChange={(event) => setAccountChoices((current) => ({ ...current, [platform.platformKey]: event.target.value }))}><option value="">请选择账号</option>{candidates.map((account) => <option value={account.platformAccountId ?? account.id} key={account.id}>{account.accountAlias || account.name}</option>)}</select>}
         </div>;
       })}</div>
-      {selectedPlatforms.includes("douyin") && <div className="notice"><strong>抖音图文设置</strong><label>可见范围 <select value={douyinVisibility} onChange={(event) => setDouyinVisibility(event.target.value === "public" ? "public" : "")}><option value="">请选择</option><option value="public">公开可见</option></select></label><span>立即发布；上传后平台可能自动保留未发布图文。本操作仍需单独授权准备或发布。</span></div>}
+      {selectedPlatforms.includes("douyin") && <div className="notice"><strong>B01 单次产品验收 · 抖音图文</strong><label>可见范围 <select value={douyinVisibility} onChange={(event) => setDouyinVisibility(event.target.value === "public" ? "public" : "")}><option value="">请选择</option><option value="public">公开可见</option></select></label><span>仅当前测试账号、文章、图片和一次最终提交；本次操作只准备内容，最终提交需 Owner 另行批准。</span></div>}
       {article && <section className="v111-publish-image"><div className="panel-heading"><div><h3>配图</h3><span>列举网仅准备已选且符合官方限制的图片；博客园首版不调用未验证的图片上传接口。</span></div></div>{imageMode !== "none" && selectedImage ? <div className="v111-selected-image"><div className="image-preview">{selectedImage.previewUrl ? <img src={selectedImage.previewUrl} alt={selectedImage.name} /> : <span>▧</span>}</div><div><strong>{selectedImage.name}</strong><span>匹配原因：{imageMatchReason(article, selectedImage)}</span></div></div> : <div className="notice">本次不使用图片。</div>}<div className="row-actions"><button className="secondary-button" disabled={images.length < 2} onClick={() => void swapImage()}>换一张</button><button className="secondary-button" onClick={() => setManualImagesOpen((value) => !value)}>手动选择</button><button className="mini-button" onClick={() => { setImageMode("none"); setSelectedImage(null); }}>不使用图片</button></div>{manualImagesOpen && <div className="v111-manual-images">{images.map((image) => <button className={selectedImage?.id === image.id ? "selected" : ""} key={image.id} onClick={() => { setSelectedImage(image); setImageMode("manual"); setManualImagesOpen(false); }}><div className="image-preview">{image.previewUrl ? <img src={image.previewUrl} alt={image.name} /> : <span>▧</span>}</div><span>{image.name}</span></button>)}</div>}</section>}
       {message && <div className="notice">{message}</div>}
-      <div className="drawer-footer"><button className="secondary-button" onClick={onClose}>{reviewMode === "WarningOnly" && qualityStatus !== "Approved" ? "返回修改" : "取消"}</button><button className="primary-button" disabled={busy || !article || !allowed || selectedPlatforms.length === 0} onClick={() => void start()}>{busy ? "正在发布…" : finalPublishMode === "prepare_only" ? "准备内容" : finalPublishMode === "auto_publish" ? "开始自动发布" : reviewMode === "WarningOnly" && qualityStatus !== "Approved" ? "仍然发布" : "开始发布"}</button></div>
+      <div className="drawer-footer"><button className="secondary-button" onClick={onClose}>{reviewMode === "WarningOnly" && qualityStatus !== "Approved" ? "返回修改" : "取消"}</button><button className="primary-button" disabled={busy || !article || !allowed || selectedPlatforms.length === 0} onClick={() => void start()}>{busy ? "正在准备…" : selectedPlatforms.includes("douyin") ? "准备 B01 验收内容" : finalPublishMode === "prepare_only" ? "准备内容" : finalPublishMode === "auto_publish" ? "开始自动发布" : reviewMode === "WarningOnly" && qualityStatus !== "Approved" ? "仍然发布" : "开始发布"}</button></div>
     </aside>
   </div>;
 }

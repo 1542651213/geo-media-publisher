@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +26,65 @@ const databases: Array<{ close: () => void; open?: boolean }> = [];
 afterEach(() => { for (const db of databases.splice(0)) if (db.open !== false) db.close(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 describe("R1.15 Main IPC operator gate", () => {
+  it("accepts only the exact B01 one-shot preparation and never exposes grant or final approval IPC", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "publisher-b01-ipc-")); dirs.push(dir);
+    const opened = openDatabase(join(dir, "publisher.db"), migrationDir); databases.push(opened.db);
+    const { repository } = opened;
+    repository.seedDevelopment(platformCsv);
+    repository.setSetting("contentReviewMode", "Off");
+    const brand = repository.createBrand({ name: "B01", companyName: "B01" });
+    const account = repository.createAccount({ platformKey: "douyin", name: "Owner test" });
+    const other = repository.createAccount({ platformKey: "douyin", name: "Wrong" });
+    repository.saveDouyinImageTextConnection({ accountId: account.id, creatorId: "b01-creator", browserSessionIdHash: "fixture" });
+    const article = repository.createArticle({ brandId: brand.id, topic: "B01", keyword: "B01", city: "", title: "B01 unique",
+      body: "B01 unique body", summary: "", tags: [], seoKeywords: [], articleType: "科普", aiProvider: "fixture", aiModel: "fixture",
+      generatedAt: new Date().toISOString(), reusePolicy: "once", contentHash: "b01-ipc-unique", source: "production" });
+    if (!article) throw new Error("Fixture Article missing");
+    const bytes = Buffer.from("b01-ipc-image"); const imagePath = join(dir, "image.png"); writeFileSync(imagePath, bytes);
+    const image = repository.createImageAsset({ brandId: brand.id, name: "B01", filePath: imagePath, originalFileName: "image.png", mimeType: "image/png", size: bytes.length });
+    repository.createB01Authorization({ platformKey: "douyin", accountId: account.id, articleId: article.id, imageAssetId: image.id,
+      imageSha256: createHash("sha256").update(bytes).digest("hex"), expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    const publisher = { prepareArticle: async () => { throw new Error("STOP_BEFORE_BROWSER"); },
+      executeJob: async () => { throw new Error("STOP_BEFORE_FINAL"); } };
+    const registry = { getForContent: () => ({ manifest: { transport: "browser" } }) };
+    registerIpc({ repository, publisher, scheduler: {}, registry, resolveAccountSecrets: () => ({}), dataDirectory: dir, coverDir: dir,
+      logger: { info: () => {}, warn: () => {}, error: () => {} }, credentials: {}, aiCredentials: {}, appLogPath: "", databasePath: join(dir, "publisher.db") } as unknown as IpcDependencies);
+    const invoke = (channel: string, payload: unknown): Promise<unknown> => {
+      const handler = handlers.get(channel); if (!handler) throw new Error(`Missing IPC handler ${channel}`); return handler({}, payload);
+    };
+    const request = { articleId: article.id, platformKey: "douyin", platformAccountId: account.platformAccountId ?? account.id,
+      finalPublishMode: "CONFIRM_BEFORE_PUBLISH", imageSelectionMode: "manual", selectedImageAssetId: image.id,
+      douyinImageTextSettings: { version: 1, visibility: "public", timing: "immediate" } };
+    expect(handlers.has("b01:grant")).toBe(false);
+    expect(handlers.has("b01:approve-final")).toBe(false);
+    await expect(invoke("b01:eligibility", { accountId: account.id, articleId: article.id, imageAssetId: image.id })).resolves.toMatchObject({ eligible: true });
+    await expect(invoke("articles:prepare-publish", { ...request, platformAccountId: other.platformAccountId ?? other.id })).rejects.toThrow();
+    await expect(invoke("articles:prepare-publish", { ...request, selectedImageAssetId: "wrong" })).rejects.toThrow();
+    await expect(invoke("articles:prepare-publish", { ...request, finalPublishMode: "AUTO_PUBLISH" })).rejects.toThrow();
+    expect(repository.listJobs()).toHaveLength(0);
+    await expect(invoke("articles:prepare-publish", request)).rejects.toThrow("STOP_BEFORE_BROWSER");
+    const job = repository.listJobs()[0];
+    expect(job).toMatchObject({ accountId: account.id, articleId: article.id, selectedImageAssetId: image.id, maxAttempts: 1 });
+    expect(repository.getB01Authorization()).toMatchObject({ status: "Bound", jobId: job?.id });
+    await expect(invoke("b01:job-status", { jobId: job?.id })).resolves.toMatchObject({ eligible: false, status: "Bound" });
+    await expect(invoke("articles:prepare-publish", request)).rejects.toThrow();
+    await expect(invoke("jobs:confirm", { id: job?.id, dryRun: false })).rejects.toThrow();
+    await expect(invoke("jobs:run", { id: job?.id })).rejects.toThrow();
+    await expect(invoke("jobs:retry", { id: job?.id })).rejects.toThrow();
+    await expect(invoke("platform-self-test:confirm-publish", { testRunId: "forged" })).rejects.toThrow("B01_DIAGNOSTIC_SUBMIT_DISABLED");
+    expect(repository.getSubmissionIntentByJob(job!.id)).toBeNull();
+    repository.insertPublishRecord({ jobId: job!.id, accountId: job!.accountId, platformAccountId: job!.platformAccountId,
+      platformKey: "douyin", articleId: article.id, publishedUrl: null, publishedExternalId: null, success: false,
+      response: { fixture: "prepared" }, status: "Prepared", publishMode: "ASSISTED", automationType: "BrowserAutomation",
+      verificationStatus: "WaitingUser" });
+    repository.markB01Prepared(job!.id);
+    await expect(invoke("b01:job-status", { jobId: job!.id })).resolves.toMatchObject({ eligible: false, status: "Prepared" });
+    repository.approveB01Final(job!.id, "B01-OWNER-FIXTURE-IPC");
+    await expect(invoke("b01:job-status", { jobId: job!.id })).resolves.toMatchObject({ eligible: true, status: "FinalApproved" });
+    await expect(invoke("jobs:confirm", { id: job!.id, dryRun: false })).resolves.toMatchObject({ id: job!.id, status: "Scheduled" });
+    await expect(invoke("jobs:run", { id: job!.id })).rejects.toThrow("STOP_BEFORE_FINAL");
+    expect(repository.getSubmissionIntentByJob(job!.id)).toBeNull();
+  });
   it("rejects forged publish requests before Job creation while hidden Job and PublishRecord remain readable", async () => {
     const dir = mkdtempSync(join(tmpdir(), "publisher-r115-ipc-")); dirs.push(dir);
     const opened = openDatabase(join(dir, "publisher.db"), migrationDir); databases.push(opened.db);

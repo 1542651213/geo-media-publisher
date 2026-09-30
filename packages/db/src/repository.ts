@@ -35,6 +35,29 @@ export interface AccountAuthorizationView {
   updatedAt: string;
 }
 
+export type B01AuthorizationStatus = "Created" | "Bound" | "Prepared" | "FinalApproved" | "Consumed" | "Revoked";
+export interface B01Authorization {
+  platformKey: "douyin";
+  authorizationPurpose: "R1.15-B01";
+  accountId: string;
+  articleId: string;
+  articleContentHash: string;
+  articleSnapshotSha256: string;
+  imageAssetId: string;
+  imageSha256: string;
+  jobId: string | null;
+  status: B01AuthorizationStatus;
+  createdAt: string;
+  expiresAt: string;
+  preparedAt: string | null;
+  finalAuthorizedAt: string | null;
+  ownerFinalApprovalReference: string | null;
+  consumedAt: string | null;
+  revokedAt: string | null;
+}
+
+export interface B01Eligibility { eligible: boolean; status: B01AuthorizationStatus | "Missing" | "Expired"; reason: string }
+
 const now = (): string => new Date().toISOString();
 const json = (value: unknown): string => JSON.stringify(value);
 const studioContentHash = (title: string, body: string, platformKey?: string): string => createHash("sha256").update(`${title}\n${body}${platformKey ? `\n${platformKey}` : ""}`).digest("hex");
@@ -2206,6 +2229,139 @@ export class AppRepository {
     return this.getJob(id) as PublishJob;
   }
 
+  /** Main-only provisioning. No IPC or Renderer bridge exposes this mutation. */
+  createB01Authorization(input: { platformKey: "douyin"; accountId: string; articleId: string; imageAssetId: string; imageSha256: string; expiresAt: string }): B01Authorization {
+    if (input.platformKey !== "douyin" || !/^[a-f0-9]{64}$/u.test(input.imageSha256)
+      || !Number.isFinite(Date.parse(input.expiresAt)) || Date.parse(input.expiresAt) <= Date.now()
+      || Date.parse(input.expiresAt) > Date.now() + 24 * 60 * 60 * 1000) throw new Error("B01_AUTH_TARGET_INVALID");
+    const account = this.getAccountById(input.accountId, "douyin");
+    const article = this.getArticle(input.articleId);
+    const image = this.getImageAsset(input.imageAssetId);
+    if (!account || !article || article.source !== "production" || !Number.isFinite(Date.parse(article.createdAt))
+      || Date.parse(article.createdAt) < Date.now() - 24 * 60 * 60 * 1000
+      || !image?.enabled || image.brandId !== article.brandId
+      || !existsSync(image.filePath) || createHash("sha256").update(readFileSync(image.filePath)).digest("hex") !== input.imageSha256)
+      throw new Error("B01_AUTH_TARGET_INVALID");
+    const used = this.db.prepare(`SELECT j.id FROM publish_jobs j JOIN articles a ON a.id=j.article_id
+      WHERE j.article_id=? OR (j.platform_key='douyin' AND (a.content_hash=? OR (a.title=? AND a.body=?))) LIMIT 1`)
+      .get(article.id, article.contentHash, article.title, article.body) as Row | undefined;
+    if (used) throw new Error("B01_HISTORICAL_ARTICLE_OR_CONTENT_FORBIDDEN");
+    const snapshot = createHash("sha256").update(canonicalSerialize({ title: article.title, body: article.body,
+      summary: article.summary, tags: article.tags })).digest("hex");
+    this.db.prepare(`INSERT INTO b01_product_e2e_authorization
+      (id,platform_key,authorization_purpose,account_id,article_id,article_content_hash,article_snapshot_sha256,image_asset_id,image_sha256,status,created_at,expires_at)
+      VALUES ('R1.15-B01','douyin','R1.15-B01',?,?,?,?,?,?,'Created',?,?)`)
+      .run(account.id, article.id, article.contentHash, snapshot, image.id, input.imageSha256, now(), input.expiresAt);
+    return this.getB01Authorization() as B01Authorization;
+  }
+
+  getB01Authorization(): B01Authorization | null {
+    const row = this.db.prepare("SELECT * FROM b01_product_e2e_authorization WHERE id='R1.15-B01'").get() as Row | undefined;
+    if (!row) return null;
+    return { platformKey: "douyin", authorizationPurpose: "R1.15-B01", accountId: textValue(row.account_id), articleId: textValue(row.article_id),
+      articleContentHash: textValue(row.article_content_hash), articleSnapshotSha256: textValue(row.article_snapshot_sha256),
+      imageAssetId: textValue(row.image_asset_id), imageSha256: textValue(row.image_sha256),
+      jobId: typeof row.job_id === "string" ? row.job_id : null, status: textValue(row.status) as B01AuthorizationStatus,
+      createdAt: textValue(row.created_at), expiresAt: textValue(row.expires_at), preparedAt: typeof row.prepared_at === "string" ? row.prepared_at : null,
+      finalAuthorizedAt: typeof row.final_authorized_at === "string" ? row.final_authorized_at : null,
+      ownerFinalApprovalReference: typeof row.owner_final_approval_reference === "string" ? row.owner_final_approval_reference : null,
+      consumedAt: typeof row.consumed_at === "string" ? row.consumed_at : null, revokedAt: typeof row.revoked_at === "string" ? row.revoked_at : null };
+  }
+
+  private b01BindingValid(auth: B01Authorization): boolean {
+    const account = this.getAccountById(auth.accountId, "douyin");
+    const article = this.getArticle(auth.articleId);
+    const image = this.getImageAsset(auth.imageAssetId);
+    return Boolean(account && article?.source === "production" && article.contentHash === auth.articleContentHash
+      && createHash("sha256").update(canonicalSerialize({ title: article.title, body: article.body,
+        summary: article.summary, tags: article.tags })).digest("hex") === auth.articleSnapshotSha256
+      && image?.enabled && image.brandId === article.brandId && existsSync(image.filePath)
+      && createHash("sha256").update(readFileSync(image.filePath)).digest("hex") === auth.imageSha256);
+  }
+
+  b01Eligibility(input: { accountId: string; articleId: string; imageAssetId: string }): B01Eligibility {
+    const auth = this.getB01Authorization();
+    if (!auth) return { eligible: false, status: "Missing", reason: "抖音普通发布未开放；尚无 B01 单次验收授权" };
+    if (Date.parse(auth.expiresAt) <= Date.now()) return { eligible: false, status: "Expired", reason: "B01 单次验收授权已过期" };
+    if (auth.status !== "Created") return { eligible: false, status: auth.status, reason: "B01 单次验收已绑定或不可再次使用" };
+    if (input.accountId !== auth.accountId || input.articleId !== auth.articleId || input.imageAssetId !== auth.imageAssetId
+      || !this.b01BindingValid(auth)) return { eligible: false, status: auth.status, reason: "当前账号、文章或图片不符合 B01 单次验收授权" };
+    const article = this.getArticle(auth.articleId);
+    if (!article) return { eligible: false, status: auth.status, reason: "B01 测试文章不存在" };
+    const used = this.db.prepare(`SELECT j.id FROM publish_jobs j JOIN articles a ON a.id=j.article_id
+      WHERE j.article_id=? OR (j.platform_key='douyin' AND (a.content_hash=? OR (a.title=? AND a.body=?))) LIMIT 1`)
+      .get(auth.articleId, auth.articleContentHash, article.title, article.body) as Row | undefined;
+    if (used) return { eligible: false, status: auth.status, reason: "这篇内容已有历史任务，不能再次用于验收" };
+    return { eligible: true, status: auth.status, reason: "仅当前测试账号、文章和图片可进行一次 B01 产品验收" };
+  }
+
+  createB01Job(input: Parameters<AppRepository["createArticlePublishJob"]>[0]): PublishJob {
+    return this.db.transaction(() => {
+      if (input.platformKey !== "douyin" || input.finalPublishMode !== "CONFIRM_BEFORE_PUBLISH"
+        || input.imageSelectionMode !== "manual" || !input.selectedImageAssetId
+        || input.douyinImageTextSettings?.version !== 1 || input.douyinImageTextSettings.visibility !== "public"
+        || input.douyinImageTextSettings.timing !== "immediate" || input.douyinImageTextSettings.musicMode === "AUTO_RECOMMENDED")
+        throw new Error("B01_ONLY_ONE_DOUYIN_IMAGE_TEXT_CONFIRM_JOB");
+      const account = this.listAccounts().find((item) => item.platformKey === "douyin" && (item.platformAccountId ?? item.id) === input.platformAccountId);
+      if (!account || !this.b01Eligibility({ accountId: account.id, articleId: input.articleId,
+        imageAssetId: input.selectedImageAssetId }).eligible) throw new Error("B01_EXACT_AUTHORIZATION_REQUIRED");
+      const job = this.createArticlePublishJob(input);
+      const changed = this.db.prepare("UPDATE b01_product_e2e_authorization SET job_id=?,status='Bound' WHERE id='R1.15-B01' AND status='Created' AND job_id IS NULL")
+        .run(job.id).changes;
+      if (changed !== 1 || job.attemptCount !== 0 || job.status !== "AwaitingConfirmation") throw new Error("B01_JOB_BINDING_FAILED");
+      this.db.prepare("UPDATE publish_jobs SET max_attempts=1 WHERE id=?").run(job.id);
+      return this.getJob(job.id) as PublishJob;
+    })();
+  }
+
+  assertB01Job(jobId: string, stage: "prepare" | "final"): B01Authorization {
+    const auth = this.getB01Authorization();
+    const job = this.getJob(jobId);
+    if (!auth || !job || auth.jobId !== job.id || job.platformKey !== "douyin" || job.contentKind === "video"
+      || job.accountId !== auth.accountId || job.articleId !== auth.articleId || job.selectedImageAssetId !== auth.imageAssetId
+      || job.imageSelectionMode !== "manual" || Date.parse(auth.expiresAt) <= Date.now() || !this.b01BindingValid(auth))
+      throw new Error("B01_EXACT_JOB_AUTHORIZATION_REQUIRED");
+    if (stage === "prepare" && (job.status !== "AwaitingConfirmation" || job.attemptCount !== 0))
+      throw new Error("B01_PREPARE_JOB_STATE_INVALID");
+    if (stage === "final" && (!["AwaitingConfirmation", "Scheduled", "Preparing", "Submitting"].includes(job.status)
+      || job.attemptCount > 1)) throw new Error("B01_FINAL_JOB_STATE_INVALID");
+    const intent = this.getSubmissionIntentByJob(jobId);
+    if (intent && (intent.finalSubmitCount !== 0 || intent.submitBoundaryEnteredAt || ["Unknown", "Submitted"].includes(intent.state)))
+      throw new Error("B01_FINAL_SUBMIT_ALREADY_USED");
+    if (stage === "prepare" && auth.status !== "Bound") throw new Error("B01_PREPARE_STATE_INVALID");
+    if (stage === "final" && (auth.status !== "FinalApproved" || this.getPublishRecordByJob(jobId)?.status !== "Prepared"))
+      throw new Error("B01_OWNER_FINAL_APPROVAL_REQUIRED");
+    return auth;
+  }
+
+  markB01Prepared(jobId: string): B01Authorization {
+    this.assertB01Job(jobId, "prepare");
+    if (this.getPublishRecordByJob(jobId)?.status !== "Prepared") throw new Error("B01_PREPARED_RECORD_REQUIRED");
+    const changed = this.db.prepare("UPDATE b01_product_e2e_authorization SET status='Prepared',prepared_at=? WHERE id='R1.15-B01' AND job_id=? AND status='Bound'")
+      .run(now(), jobId).changes;
+    if (changed !== 1) throw new Error("B01_PREPARE_STATE_INVALID");
+    return this.getB01Authorization() as B01Authorization;
+  }
+
+  /** Called by Main only after separate, explicit Owner approval in the real E2E turn. */
+  approveB01Final(jobId: string, ownerApprovalReference: string): B01Authorization {
+    const auth = this.getB01Authorization();
+    if (!/^B01-OWNER-[A-Za-z0-9-]{8,80}$/u.test(ownerApprovalReference)
+      || !auth || auth.jobId !== jobId || auth.status !== "Prepared" || Date.parse(auth.expiresAt) <= Date.now()
+      || !this.b01BindingValid(auth) || this.getPublishRecordByJob(jobId)?.status !== "Prepared"
+      || this.getJob(jobId)?.status !== "AwaitingConfirmation" || this.getJob(jobId)?.attemptCount !== 0
+      || this.getSubmissionIntentByJob(jobId)) throw new Error("B01_FINAL_APPROVAL_NOT_ELIGIBLE");
+    const changed = this.db.prepare("UPDATE b01_product_e2e_authorization SET status='FinalApproved',final_authorized_at=?,owner_final_approval_reference=? WHERE id='R1.15-B01' AND job_id=? AND status='Prepared'")
+      .run(now(), ownerApprovalReference, jobId).changes;
+    if (changed !== 1) throw new Error("B01_FINAL_APPROVAL_NOT_ELIGIBLE");
+    return this.getB01Authorization() as B01Authorization;
+  }
+
+  revokeB01Authorization(): void {
+    this.db.prepare("UPDATE b01_product_e2e_authorization SET status='Revoked',revoked_at=? WHERE id='R1.15-B01' AND status IN ('Created','Bound','Prepared','FinalApproved')")
+      .run(now());
+  }
+
   createArticlePublishJob(input: { articleId: string; platformKey: string; platformAccountId: string; publishMode?: "ASSISTED" | "MANUAL"; finalPublishMode?: FinalPublishMode; selectedImageAssetId?: string | null; imageSelectionMode?: ImageSelectionMode; articleTransport?: "browser" | "api"; douyinImageTextSettings?: DouyinImageTextJobSettings }): PublishJob {
     const article = this.getArticle(input.articleId);
     if (!article) throw new Error("文章不存在");
@@ -2512,14 +2668,23 @@ export class AppRepository {
     return { id: textValue(row.id), jobId: textValue(row.job_id), state: textValue(row.state), externalId: typeof row.external_id === "string" ? row.external_id : null, attempt: intValue(row.attempt), finalSubmitCount: intValue(row.final_submit_count), errorCode: typeof row.error_code === "string" ? row.error_code : null, updatedAt: textValue(row.updated_at), submissionAttemptId: typeof row.submission_attempt_id === "string" ? row.submission_attempt_id : null, submitBoundaryEnteredAt: typeof row.submit_boundary_entered_at === "string" ? row.submit_boundary_entered_at : null, remoteStatus: textValue(row.remote_status) as PublishRemoteStatus, payloadHash: typeof row.payload_hash === "string" ? row.payload_hash : null, adapterId: typeof row.adapter_id === "string" ? row.adapter_id : null, credentialVersion: typeof row.credential_version === "string" ? row.credential_version : null };
   }
 
-  claimFinalSubmitAttempt(intentId: string, evidence: { payloadHash?: string; adapterId?: string; credentialVersion?: string } = {}): { id: string; jobId: string; attempt: number; submissionAttemptId: string } {
+  claimFinalSubmitAttempt(intentId: string, evidence: { payloadHash?: string; adapterId?: string; credentialVersion?: string; requireB01?: boolean } = {}): { id: string; jobId: string; attempt: number; submissionAttemptId: string } {
     const timestamp = now();
     return this.db.transaction(() => {
+      const target = this.db.prepare("SELECT job_id FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
+      if (!target) throw new Error("Submission intent not found");
+      const jobId = textValue(target.job_id);
+      if (evidence.requireB01) this.assertB01Job(jobId, "final");
       const submissionAttemptId = this.reserveSubmissionAttempt(intentId);
       const update = this.db.prepare("UPDATE submission_intents SET final_submit_count=1,state='Submitting',submit_boundary_entered_at=?,payload_hash=?,adapter_id=?,credential_version=?,remote_request_started_at=?,remote_status='SUBMITTING',updated_at=? WHERE id=? AND state='Prepared' AND final_submit_count=0 AND submit_boundary_entered_at IS NULL").run(timestamp, evidence.payloadHash ?? null, evidence.adapterId ?? null, evidence.credentialVersion ?? null, timestamp, timestamp, intentId);
       if (update.changes === 0) throw Object.assign(new Error("The persisted publish attempt has already been used or is not ready for final submit"), { code: "FINAL_SUBMIT_ALREADY_USED" });
       const row = this.db.prepare("SELECT id,job_id,attempt FROM submission_intents WHERE id=?").get(intentId) as Row | undefined;
       if (!row) throw new Error("Submission intent not found");
+      if (evidence.requireB01) {
+        const consumed = this.db.prepare("UPDATE b01_product_e2e_authorization SET status='Consumed',consumed_at=? WHERE id='R1.15-B01' AND job_id=? AND status='FinalApproved'")
+          .run(timestamp, jobId).changes;
+        if (consumed !== 1) throw new Error("B01_FINAL_AUTHORIZATION_CONSUME_FAILED");
+      }
       this.updateGlobalFormalPublishExecution(textValue(row.job_id), "SUBMITTING");
       return { id: textValue(row.id), jobId: textValue(row.job_id), attempt: intValue(row.attempt), submissionAttemptId };
     })();

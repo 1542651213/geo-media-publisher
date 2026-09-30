@@ -88,7 +88,7 @@ async function setup(platformKey: "douyin" | "toutiao") {
       loginGeneration: 1, sessionIdHash: sessionHash, imageSha256: frozen.imageHashes[0]!,
       sourceContentHash: frozen.sourceContentHash });
   };
-  return { repo, account, article, image, job, adapter, publisher, claimUpload };
+  return { repo, account, article, image, job, adapter, registry, publisher, claimUpload };
 }
 
 afterEach(() => {
@@ -97,6 +97,15 @@ afterEach(() => {
 });
 
 describe("Douyin image-text preparation failure before a durable final boundary", () => {
+  it("blocks direct Publisher calls for a historical Douyin Job in the Main B01 runtime", async () => {
+    const scope = await setup("douyin");
+    const publisher = new PublisherService(scope.repo, scope.registry, createConsoleLogger(), { enforceB01ForDouyin: true });
+    await expect(publisher.prepareArticle(scope.job.id)).rejects.toThrow("B01_EXACT_JOB_AUTHORIZATION_REQUIRED");
+    await expect(publisher.executeJob(scope.job.id)).rejects.toThrow("B01_EXACT_JOB_AUTHORIZATION_REQUIRED");
+    expect(scope.repo.getSubmissionIntentByJob(scope.job.id)).toBeNull();
+    expect(scope.repo.getPublishRecordByJob(scope.job.id)).toBeNull();
+    expect(scope.repo.getJob(scope.job.id)?.attemptCount).toBe(0);
+  });
   it("moves a claimed upload with failed preparation to NeedsUserAction without a Record or Intent", async () => {
     const scope = await setup("douyin");
     scope.adapter.onPrepare = async () => { await scope.claimUpload(); };

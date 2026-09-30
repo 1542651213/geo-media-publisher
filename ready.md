@@ -26,9 +26,9 @@ better-sqlite3 是原生模块：普通 host Node 与 Electron 的 ABI 可能不
 
 ## 普通运营平台定位
 
-CURRENT PRODUCT UI STATE（R1.15-A01）：普通运营首页、账号中心、发布抽屉、发布中心和统计统一展示抖音、小红书、官网、今日头条、搜狐号、网易号、百家号、微博、列举网、博客园，按此顺序排列。十个平台的普通正式提交与批量发布仍关闭；展示不代表 production-ready。Main IPC 和持久调度均执行产品门禁，隐藏平台的账号、Job、PublishRecord 与原有配置不迁移、不删除，历史详情仍可读取。
+CURRENT PRODUCT UI STATE（R1.15-A01 + B01 Candidate）：普通运营首页、账号中心、发布抽屉、发布中心和统计统一展示抖音、小红书、官网、今日头条、搜狐号、网易号、百家号、微博、列举网、博客园，按此顺序排列。十个平台的普通正式提交与批量发布仍关闭；展示不代表 production-ready。Douyin 仅在 Main 持久化的一次性 B01 授权精确匹配账号、Article、图片及 Job，且 Owner 另行批准最终提交后，才可走单次验收路径。Main IPC 和持久调度继续执行产品门禁，隐藏平台的账号、Job、PublishRecord 与原有配置不迁移、不删除，历史详情仍可读取。
 
-最新 durable milestone：R1.15-A01 完成平台白名单与普通 UI 统一，并通过隔离数据 Electron UI smoke；下一步为 R1.15-B01 抖音普通 UI Product E2E，正式安装版验收尚未完成。
+最新 durable milestone：R1.15-B01 Candidate 的持久一次性门禁、Main/Publisher 原子 final claim 接线和 diagnostic IPC 隔离已实现；隔离数据安装版 UI、授权状态与重启 smoke 通过，真实 Product E2E 尚未执行。Candidate：`Geo Media Publisher Setup 1.1.9 - R1.15-B01 CANDIDATE.exe`，SHA-256 `2B010751713C2CD998EF897221AB732D31DA5F1E165B4A3E3F5AED92B7F558EE`；普通/批量默认仍 OFF。首次 Candidate smoke 暴露 Electron 忽略 `APPDATA` 测试隔离，现有 production DB 因此应用了 B01 表 migration，但 B01 授权表为空、未创建提交；已加入显式隔离目录并验证其不再触碰现有 DB，未回滚或清理现有数据。下一步由 Owner 选择唯一测试账号、Article、图片并完成登录验证；最终提交仍需下一轮单独明确授权。
 
 暂时隐藏：视频号、公众号、腾讯新闻、闲鱼、58 同城、地方新媒体、权威媒体及其它当前没有业务需求的平台。隐藏是产品展示决定，不删除历史数据、账号、Job 或 Adapter；有新业务需求时重新评估能力与验收。
 

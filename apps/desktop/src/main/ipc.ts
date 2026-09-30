@@ -42,6 +42,7 @@ import { selectDouyinBodyDiagnosticTarget } from "./douyin-body-diagnostic-gate"
 import { selectDouyinMusicDiagnosticTarget } from "./douyin-music-diagnostic-gate";
 import { assertDouyinR14ReadOnlyChannel } from "./douyin-r14-readonly-gate";
 import { assertOperatorBatchPlanAllowed, assertOperatorPublishIpcRequest } from "./operator-publish-gate";
+import { assertB01OperatorIpcException, assertNoProductE2EDiagnosticSubmit } from "./b01-product-e2e-gate";
 
 const idSchema = z.string().min(1);
 function safeErrorCode(error: unknown): string {
@@ -106,10 +107,12 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
   ipcMain.removeHandler(channel);
   ipcMain.handle(channel, async (event, payload) => {
     try {
+      assertNoProductE2EDiagnosticSubmit(channel);
       if (acceptanceRepository) assertOperatorPublishIpcRequest(
         channel, payload,
         (platformKey) => acceptanceRepository?.listPlatforms().find((platform) => platform.platformKey === platformKey),
-        (jobId) => acceptanceRepository?.getJob(jobId)
+        (jobId) => acceptanceRepository?.getJob(jobId),
+        (requestChannel, requestPayload) => assertB01OperatorIpcException(requestChannel, requestPayload, acceptanceRepository!)
       );
       const douyinR14JobId = process.env.DOUYIN_R1_14_READONLY_JOB_ID?.trim();
       if (douyinR14JobId) assertDouyinR14ReadOnlyChannel(channel, payload, {
@@ -496,7 +499,10 @@ export function registerIpc(deps: IpcDependencies): void {
     const isToutiaoArticleApi = input.platformKey === "toutiao" && articleAdapter.manifest.transport === "web_api";
     const job = isToutiaoArticleApi
       ? repository.createToutiaoArticlePublishJob({ ...input, finalPublishMode, settings: input.toutiaoArticleSettings })
-      : repository.createArticlePublishJob({ ...input, finalPublishMode, articleTransport: isApiPlatform ? "api" : "browser" });
+      : input.platformKey === "douyin"
+        ? repository.createB01Job({ ...input, finalPublishMode, articleTransport: "browser" })
+        : repository.createArticlePublishJob({ ...input, finalPublishMode, articleTransport: isApiPlatform ? "api" : "browser" });
+    if (input.platformKey === "douyin") logger.info("B01", "ONE_SHOT_JOB_BOUND", "B01 单次验收 Job 已绑定", { jobId: job.id, accountId: job.accountId, articleId: job.articleId, imageAssetId: job.selectedImageAssetId });
     logger.info("QUALITY_GATE", "CONTENT_REVIEW_MODE_APPLIED", "文章按当前内容审核模式进入发布流程", { articleId: input.articleId, platformKey: input.platformKey, contentReviewMode: repository.getContentReviewMode() });
     if (isToutiaoArticleApi) {
       const prepared = prepareToutiaoArticleJob(repository, job.id);
@@ -515,9 +521,23 @@ export function registerIpc(deps: IpcDependencies): void {
       return { ...result, record: repository.getPublishRecordByJob(result.job.id) };
     }
     const prepared = await publisher.prepareArticle(job.id, action);
+    if (input.platformKey === "douyin") {
+      repository.markB01Prepared(job.id);
+      logger.info("B01", "AWAITING_OWNER_FINAL_APPROVAL", "B01 内容已准备，等待 Owner 单独批准最终提交", { jobId: job.id });
+    }
     return finalPublishMode === "AUTO_PUBLISH"
       ? { ...prepared, message: `${prepared.message}；该浏览器平台尚无已验证的最终提交能力，已降级为发布前确认。` }
       : prepared;
+  });
+  register("b01:eligibility", (_event, payload) => {
+    const input = z.object({ accountId: idSchema, articleId: idSchema, imageAssetId: idSchema }).parse(payload);
+    return repository.b01Eligibility(input);
+  });
+  register("b01:job-status", (_event, payload) => {
+    const jobId = z.object({ jobId: idSchema }).parse(payload).jobId;
+    const status = repository.getB01Authorization()?.status ?? "Missing";
+    try { repository.assertB01Job(jobId, "final"); return { eligible: true, status, reason: "仅此任务可进行一次 B01 最终提交" }; }
+    catch { return { eligible: false, status, reason: status === "Prepared" ? "B01 内容已准备，等待 Owner 单独批准最终提交" : "当前任务没有 B01 最终提交资格" }; }
   });
 
   const imageAssetView = (asset: ImageAsset): ImageAsset => ({ ...asset, previewUrl: pathToFileURL(asset.filePath).href });
@@ -1446,6 +1466,7 @@ export function registerIpc(deps: IpcDependencies): void {
   register("plans:generate-jobs", (_event, payload) => { const input = z.object({ id: idSchema, scheduledAt: z.string() }).parse(payload); assertOperatorBatchPlanAllowed(repository.listPlans().find((plan) => plan.id === input.id), repository.listAccounts(), repository.listPlatforms()); const blockers = repository.validatePlanContentQuality(input.id); if (blockers.length > 0) throw Object.assign(new Error(`Quality Gate blocked publishing: ${blockers.length} content item(s) are not Approved`), { code: "CONTENT_REJECTED", blockers }); return repository.createJobsForPlan(input.id, input.scheduledAt); });
   register("jobs:create-video", async (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema, articleId: idSchema, videoAssetId: idSchema, scheduledAt: z.string().datetime().optional() }).parse(payload);
+    if (input.platformKey === "douyin") throw new Error("B01_DOUYIN_VIDEO_ROUTE_DISABLED");
     const account = repository.listAccounts().find((item) => item.id === input.accountId);
     const article = repository.getArticle(input.articleId);
     const asset = repository.getManagedVideoAsset(input.videoAssetId);

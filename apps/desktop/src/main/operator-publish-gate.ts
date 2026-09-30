@@ -7,7 +7,8 @@ export function assertOperatorPublishIpcRequest(
   channel: string,
   payload: unknown,
   findPlatform: (platformKey: string) => Platform | undefined,
-  findJob: (jobId: string) => JobPlatform | null | undefined
+  findJob: (jobId: string) => JobPlatform | null | undefined,
+  allowOneShot?: (channel: string, payload: unknown) => boolean
 ): void {
   const data = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
   let platformKey: string | null = null;
@@ -19,7 +20,7 @@ export function assertOperatorPublishIpcRequest(
   }
   if (platformKey === null) return;
   const reason = operatorPublishBlockReason(platformKey, findPlatform(platformKey));
-  if (reason) throw new Error(`普通运营发布已阻止：${reason}`);
+  if (reason && !allowOneShot?.(channel, payload)) throw new Error(`普通运营发布已阻止：${reason}`);
 }
 
 export function assertOperatorBatchPlanAllowed(
