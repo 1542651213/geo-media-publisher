@@ -16,7 +16,7 @@ import { AIProviderError, DeepSeekErrorMapper, DeepSeekProvider, FallbackAIProvi
 import { MockImageProvider, OpenAICompatibleImageProvider, persistGeneratedImage, type ImageProvider } from "@publisher/image";
 import { exportLogBundle } from "@publisher/logger";
 import { CredentialDecryptError, SafeStorageCredentialStore, type CredentialStatus, type CredentialStore } from "@publisher/security";
-import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STUDIO_PLATFORM_KEYS, EXCEL_ADVANCED_ARTICLE_HEADERS, EXCEL_SIMPLE_ARTICLE_HEADERS, PROMOTION_STRENGTHS, SEARCH_INTENTS, checkGeneratedArticleQuality, selectRelevantBrandFacts, type AccountContext, type AccountProfile, type AccountStatus, type AIUsage, type CredentialField, type ContentStudioPlatformKey, type ExcelImportPreview, type ImageAsset } from "@publisher/domain";
+import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STUDIO_PLATFORM_KEYS, EXCEL_ADVANCED_ARTICLE_HEADERS, EXCEL_SIMPLE_ARTICLE_HEADERS, PROMOTION_STRENGTHS, SEARCH_INTENTS, checkGeneratedArticleQuality, selectRelevantBrandFacts, type AccountContext, type AccountProfile, type AccountStatus, type AIUsage, type CredentialField, type ContentStudioPlatformKey, type ExcelImportPreview, type ImageAsset, type Platform } from "@publisher/domain";
 import { BrowserRuntimeError, assertExternalLaunchAllowed, browserSessionCredentialKey, browserSessionIdHash, isAutomationAdapter, type AdapterRegistry, type AutomationAdapter, type ExternalLaunchTriggerSource, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
 import type { PublisherService, PersistentScheduler } from "@publisher/publisher";
@@ -104,6 +104,7 @@ export interface IpcDependencies {
 let processDiagnostics: ProcessDiagnostics | null = null;
 let acceptanceRepository: AppRepository | null = null;
 let b01CandidateActive = false;
+let operatorPlatformFinder: ((key: string) => Platform | undefined) | null = null;
 const mvp5PausedChannels = new Set(["articles:prepare-publish", "jobs:run", "jobs:confirm", "jobs:retry", "jobs:prepare-existing-douyin",
   "platform-self-test:run-post-upload-discovery", "platform-self-test:continue", "platform-self-test:run-level",
   "platform-self-test:request-publish", "platform-self-test:confirm-publish"]);
@@ -115,11 +116,23 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
       assertNoProductE2EDiagnosticSubmit(channel);
       if (acceptanceRepository) assertOperatorPublishIpcRequest(
         channel, payload,
-        (platformKey) => acceptanceRepository?.listPlatforms().find((platform) => platform.platformKey === platformKey),
+        (platformKey) => operatorPlatformFinder?.(platformKey),
         (jobId) => acceptanceRepository?.getJob(jobId),
         (requestChannel, requestPayload) => b01CandidateActive
           && assertB01OperatorIpcException(requestChannel, requestPayload, acceptanceRepository!)
       );
+      if (acceptanceRepository && ["jobs:confirm", "jobs:run", "jobs:retry"].includes(channel)) {
+        const input = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+        const job = typeof input.id === "string" ? acceptanceRepository.getJob(input.id) : null;
+        if (job?.platformKey === "douyin") {
+          if ((job.contentKind ?? "article") !== "article") throw new Error("DOUYIN_ORDINARY_IMAGE_TEXT_ONLY");
+          acceptanceRepository.assertArticlePublishAllowed(job.articleId);
+        }
+        if (typeof input.id === "string" && acceptanceRepository.getB01Authorization(input.id)) {
+          if (channel === "jobs:retry") throw new Error("B01_RETRY_DISABLED");
+          acceptanceRepository.assertB01Job(input.id, "final");
+        }
+      }
       const douyinR14JobId = process.env.DOUYIN_R1_14_READONLY_JOB_ID?.trim();
       if (douyinR14JobId) assertDouyinR14ReadOnlyChannel(channel, payload, {
         jobId: douyinR14JobId,
@@ -158,11 +171,17 @@ export function registerIpc(deps: IpcDependencies): void {
   acceptanceRepository = deps.repository;
   b01CandidateActive = deps.b01AcceptanceEnabled === true;
   const { repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir, logger, credentials, aiCredentials } = deps;
+  operatorPlatformFinder = key => {
+    const platform = repository.listPlatforms().find(item => item.platformKey === key);
+    if (!platform || key !== "douyin") return platform;
+    try { return { ...platform, capabilities: { ...platform.capabilities, ...registry.getForContent("douyin", "article").getCapabilities() } }; }
+    catch { return platform; }
+  };
   const capturedDouyinBodyDiagnosticJobs = new Set<string>();
   const capturedDouyinMusicDiagnosticJobs = new Set<string>();
   const listPlatformViews = (): ReturnType<AppRepository["listPlatforms"]> => addAccountConnectionModes(repository.listPlatforms(), registry).map((platform) =>
     platform.platformKey === "douyin" ? { ...platform,
-      capabilities: { ...platform.capabilities, article: true, imagePost: true, maxImageCount: 1,
+      capabilities: { ...platform.capabilities, ...registry.getForContent("douyin", "article").getCapabilities(), maxTitleLength: 20, maxImageCount: 1,
         scheduledPublish: false, draft: false, tags: false } } : platform);
   const createUserAction = (triggerSource: Exclude<ExternalLaunchTriggerSource, "APP_STARTUP">): UserInitiatedAction => {
     const action = { userActionId: randomUUID(), triggerSource } satisfies UserInitiatedAction;
@@ -498,18 +517,29 @@ export function registerIpc(deps: IpcDependencies): void {
     return result.filePath;
   });
   register("articles:prepare-publish", async (_event, payload) => {
-    const input = z.object({ articleId: idSchema, platformKey: idSchema, platformAccountId: idSchema, publishMode: z.enum(["ASSISTED", "MANUAL"]).optional(), finalPublishMode: z.enum(["PREPARE_ONLY", "CONFIRM_BEFORE_PUBLISH", "AUTO_PUBLISH"]).optional(), selectedImageAssetId: idSchema.nullable().optional(), imageSelectionMode: z.enum(["random", "manual", "none"]).optional(), douyinImageTextSettings: z.object({ version: z.literal(1), visibility: z.literal("public"), timing: z.literal("immediate") }).optional(), toutiaoArticleSettings: z.object({ version: z.literal(1), coverMode: z.enum(["auto", "none", "single", "multiple"]), coverImages: z.array(idSchema), articleAdType: z.enum(["none", "platform_default"]), remoteScheduledAt: z.string().nullable() }).optional() }).parse(payload);
+    const input = z.object({ articleId: idSchema, platformKey: idSchema, platformAccountId: idSchema, publishMode: z.enum(["ASSISTED", "MANUAL"]).optional(), finalPublishMode: z.enum(["PREPARE_ONLY", "CONFIRM_BEFORE_PUBLISH", "AUTO_PUBLISH"]).optional(), selectedImageAssetId: idSchema.nullable().optional(), imageSelectionMode: z.enum(["random", "manual", "none"]).optional(), douyinImageTextSettings: z.strictObject({ version: z.literal(1), visibility: z.literal("public"), timing: z.literal("immediate"), musicMode: z.literal("NONE").optional() }).optional(), toutiaoArticleSettings: z.object({ version: z.literal(1), coverMode: z.enum(["auto", "none", "single", "multiple"]), coverImages: z.array(idSchema), articleAdType: z.enum(["none", "platform_default"]), remoteScheduledAt: z.string().nullable() }).optional() }).parse(payload);
     const configuredMode = repository.getSettings().finalPublishMode;
-    const finalPublishMode = input.finalPublishMode ?? (configuredMode === "prepare_only" ? "PREPARE_ONLY" : configuredMode === "auto_publish" ? "AUTO_PUBLISH" : "CONFIRM_BEFORE_PUBLISH");
+    const finalPublishMode = input.platformKey === "douyin" ? input.finalPublishMode === "PREPARE_ONLY" ? "PREPARE_ONLY" : "CONFIRM_BEFORE_PUBLISH" : input.finalPublishMode ?? (configuredMode === "prepare_only" ? "PREPARE_ONLY" : configuredMode === "auto_publish" ? "AUTO_PUBLISH" : "CONFIRM_BEFORE_PUBLISH");
     const articleAdapter = registry.getForContent(input.platformKey, "article");
+    const b01 = input.platformKey === "douyin" && deps.b01AcceptanceEnabled === true;
+    if (input.platformKey === "douyin" && !b01) {
+      const account = repository.listAccounts().find(item => item.platformKey === "douyin" && item.platformAccountId === input.platformAccountId);
+      const binding = account && repository.getDouyinImageTextConnection(account.id);
+      if (!account || !binding?.active || !binding.creatorId || !("inspectOwnedCreatorReadiness" in articleAdapter)
+        || typeof articleAdapter.inspectOwnedCreatorReadiness !== "function") throw new Error("DOUYIN_CREATOR_IDENTITY_REQUIRED");
+      const readiness = await articleAdapter.inspectOwnedCreatorReadiness(accountContext(account.id, "douyin"));
+      if (!readiness.identityVerified || !readiness.contextOwnership || !readiness.sessionExists || !readiness.contextExists
+        || !readiness.canonicalPageExists || readiness.creatorId !== binding.creatorId || readiness.runtimeAuthState !== "AUTHENTICATED")
+        throw new Error("DOUYIN_CREATOR_IDENTITY_UNVERIFIED");
+    }
     const isApiPlatform = articleAdapter.manifest.transport === "official_api" || articleAdapter.manifest.transport === "web_api";
     const isToutiaoArticleApi = input.platformKey === "toutiao" && articleAdapter.manifest.transport === "web_api";
     const job = isToutiaoArticleApi
       ? repository.createToutiaoArticlePublishJob({ ...input, finalPublishMode, settings: input.toutiaoArticleSettings })
-      : input.platformKey === "douyin"
+      : b01
         ? repository.createB01Job({ ...input, finalPublishMode, articleTransport: "browser" })
         : repository.createArticlePublishJob({ ...input, finalPublishMode, articleTransport: isApiPlatform ? "api" : "browser" });
-    if (input.platformKey === "douyin") logger.info("B01", "ONE_SHOT_JOB_BOUND", "B01 单次验收 Job 已绑定", { jobId: job.id, accountId: job.accountId, articleId: job.articleId, imageAssetId: job.selectedImageAssetId });
+    if (b01) logger.info("B01", "ONE_SHOT_JOB_BOUND", "B01 单次验收 Job 已绑定", { jobId: job.id, accountId: job.accountId, articleId: job.articleId, imageAssetId: job.selectedImageAssetId });
     logger.info("QUALITY_GATE", "CONTENT_REVIEW_MODE_APPLIED", "文章按当前内容审核模式进入发布流程", { articleId: input.articleId, platformKey: input.platformKey, contentReviewMode: repository.getContentReviewMode() });
     if (isToutiaoArticleApi) {
       const prepared = prepareToutiaoArticleJob(repository, job.id);
@@ -528,7 +558,7 @@ export function registerIpc(deps: IpcDependencies): void {
       return { ...result, record: repository.getPublishRecordByJob(result.job.id) };
     }
     const prepared = await publisher.prepareArticle(job.id, action);
-    if (input.platformKey === "douyin") {
+    if (b01) {
       repository.markB01Prepared(job.id);
       logger.info("B01", "AWAITING_OWNER_FINAL_APPROVAL", "B01 内容已准备，等待 Owner 单独批准最终提交", { jobId: job.id });
     }
@@ -584,8 +614,9 @@ export function registerIpc(deps: IpcDependencies): void {
   });
   register("b01:job-status", (_event, payload) => {
     const jobId = z.object({ jobId: idSchema }).parse(payload).jobId;
-    if (!deps.b01AcceptanceEnabled) return { eligible: false, status: "Missing", reason: "当前安装版未开放 B01 单次验收" };
     const status = repository.getB01Authorization(jobId)?.status ?? "Missing";
+    if (!deps.b01AcceptanceEnabled) return { eligible: false, status, reason: status === "Missing"
+      ? "当前安装版未开放 B01 单次验收" : "历史验收任务保留原授权边界，不允许再次提交" };
     try { repository.assertB01Job(jobId, "final"); return { eligible: true, status, reason: "仅此任务可进行一次 B01 最终提交" }; }
     catch { return { eligible: false, status, reason: status === "Prepared" ? "B01 内容已准备，等待 Owner 单独批准最终提交" : "当前任务没有 B01 最终提交资格" }; }
   });

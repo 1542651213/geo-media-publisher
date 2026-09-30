@@ -25,7 +25,7 @@ const define = (platformKey: string, displayName: string, order: number, automat
 });
 
 export const PRODUCT_PLATFORM_POLICY: readonly ProductPlatformDefinition[] = [
-  define("douyin", "抖音", 1, "HISTORICALLY_CONFIRMED", "普通 UI 待验收", "历史单次图文已确认；普通正式提交仍关闭。", "抖音普通 UI Product E2E 尚未完成，正式提交开关关闭"),
+  { ...define("douyin", "抖音", 1, "PRODUCT_E2E_PUBLISHED", "图文可发布", "单账号、单图、标题最多20字符、公开、立即发布、无音乐。", ""), ordinaryPublishEnabled: true },
   define("xiaohongshu", "小红书", 2, "PRODUCT_E2E_PENDING", "正式链路待验收", "普通生产链路尚未完整验收。", "小红书正式生产链路尚未完整验收"),
   define("website", "官网", 3, "ARCHIVED_ONLY", "待接入当前主线", "Publishing API 与 Adapter 保存在归档 Tag，当前 main 尚未接入。", "当前主线尚未接入官网 Adapter"),
   define("toutiao", "今日头条", 4, "HISTORICALLY_CONFIRMED", "普通 UI 待验收", "历史限定路线已确认；普通正式提交仍关闭。", "今日头条普通 UI Product E2E 尚未完成，正式提交开关关闭"),

@@ -1,12 +1,12 @@
 # Geo Media Publisher
 
-Geo Media Publisher 是 Windows 上的多平台内容运营工作台，用于管理文章、图片素材、平台账号、发布任务和发布后的作品回查，并为网站 Publishing API 与未来 AI 内容生成提供统一入口。当前应用版本是 1.1.9；正式归档基线为 Douyin image/text R1.14。它是持续开发中的产品，不应把单次平台验收解释为所有普通运营入口已可批量生产。
+Geo Media Publisher 是 Windows 上的多平台内容运营工作台，用于管理文章、图片素材、平台账号、发布任务和发布后的作品回查，并为网站 Publishing API 与未来 AI 内容生成提供统一入口。当前应用版本是 1.1.9；当前部门交付版本为 R1.15 Douyin Release，R1.14 FINAL 保留为历史归档。它是持续开发中的产品，不应把单次平台验收解释为所有普通运营入口已可批量生产。
 
 本仓库的长期正式分支是 main。R1.14 的公开纯源码快照为 85707e7bec68c01f3959d8447e61ab0b359b133f；本文件随 main promotion commit 加入，因此当前 main HEAD 请运行 git rev-parse HEAD 查询，不在此写入自引用 SHA。原始经过真实验收的运行时代码提交为 31a7495bcb24ee5a85e992d3f8f0a1d28c4d7575。公开历史经过净化，移除了历史生成二进制和私有加密凭据备份；本地原始 all-refs Git Bundle 仅供受控灾难恢复，绝不可上传。
 
 ## 先读：能力与开关
 
-- Douyin 图文：一次真实 BrowserNative 发布经作品管理和公开页严格回查达到 PUBLISHED_CONFIRMED。只证明一个已授权账号、一张图片、普通标题/正文、公开、立即发布、无音乐。可信历史 Remote ID 为 7690435917298928942。Smart Music 延后；普通 Douyin native submit 默认 OFF；批量发布 OFF。
+- Douyin 图文：普通 UI B01 已完成一次真实发布（Remote Work ID `7691247987888016655`），可信 ID 与唯一管理页 Published 确认后为 PUBLISHED_CONFIRMED；公开内容一致性独立为 FAIL（旧正文换行显示成字面 `*`）。Release 已改为逐段输入并保留严格正文回读，离线隔离编辑器测试通过；禁止为验证修复再发第二条。普通图文发布 ON，批量 OFF；支持每 Job 一个明确选择的账号、一张图片、标题最多 20 个 UTF-16 计数单位、公开、立即、无音乐。Smart Music deferred。
 - Toutiao 图文：一个限定范围的 BrowserNative 候选达到 PUBLISHED_CONFIRMED；普通发布入口仍 OFF。
 - Weibo：已有真实发布 PASS 的历史证据；普通 UI 需要产品级复验。
 - Sohu：历史单次发布经更正后的只读回查为 Published / Verified；普通 UI 仍需复验。
@@ -26,15 +26,15 @@ better-sqlite3 是原生模块：普通 host Node 与 Electron 的 ABI 可能不
 
 ## 普通运营平台定位
 
-CURRENT PRODUCT UI STATE（R1.15-A01 + B01 Candidate）：普通运营首页、账号中心、发布抽屉、发布中心和统计统一展示抖音、小红书、官网、今日头条、搜狐号、网易号、百家号、微博、列举网、博客园，按此顺序排列。十个平台的普通正式提交与批量发布仍关闭；展示不代表 production-ready。Douyin 仅在 Main 持久化的一次性 B01 授权精确匹配账号、Article、图片及 Job，且 Owner 另行批准最终提交后，才可走单次验收路径。Main IPC 和持久调度继续执行产品门禁，隐藏平台的账号、Job、PublishRecord 与原有配置不迁移、不删除，历史详情仍可读取。
+CURRENT PRODUCT UI STATE（R1.15 Douyin Release）：首页、账号中心、发布抽屉、发布中心和统计统一使用十平台策略，顺序为抖音、小红书、官网、今日头条、搜狐号、网易号、百家号、微博、列举网、博客园。只有 Douyin ordinaryPublishEnabled=true；Douyin batchPublishEnabled=false，其它九个平台 ordinary/batch 全为 false。显示不等于可发布。Release 隐藏 B01 验收创建/批准入口，员工不需要 B01 marker 或授权流程，使用普通内容库、手动选择单图与账号、明确公开可见、准备后确认一次提交。Main 独立校验 Adapter capability、当前 app-owned canonical Page/Context、Creator identity 与 AUTHENTICATED；DB logged_in 不能代替验证。历史 B01 任务仍执行原一次性授权门禁，不能借 ordinary ON 绕过。
 
-最新 durable milestone：B01 HOTFIX 已实现并构建：抖音图文标题在普通 UI、Main/Repository Job 创建与 Adapter 内容冻结前统一校验最多 20 个 UTF-16 计数单位；B01 专用标题/正文改用同一个 `B01-<6~8 位十六进制值>` 短 marker，普通生产文章无 marker 要求。正文严格回读新增真实 Creator 多段 Slate DOM 支持，只忽略逐段独立 `data-enter` 占位叶，保留用户正文字符、段落顺序和完整语义严格比较。focused Douyin/editor/product/session tests、typecheck、lint、build 通过；按 Owner 要求最终 full suite 留在真实 B01 PASS 后的 Release 回归。
+最新 durable milestone：已将 Douyin Publish Success 与 Public Content Fidelity 分离。发布成功必须有持久 final_submit_count=1、可信 Remote Work ID、唯一且同一目标的 Published 管理证据；公开内容另记 PASS / FAIL / LIMITED。公开内容失败只告警，不触发 retry、第二次点击、替代 Job、Node/API replay 或 transport fallback。正文输入不再 bulk fill 多行，而通过编辑器 Enter 创建段落、逐段插入，再严格回读完整正文；不会把 `*` 忽略或归一化为换行。三段隔离 Slate 事件/DOM fixture 通过；本轮没有第二次真实发布，因此修复后的公开平台序列化未另行实发复验。
 
-HOTFIX 安装包 `Geo Media Publisher Setup 1.1.9 - R1.15-B01 HOTFIX.exe`，SHA-256 `FEE215498229AB8B4553747BF0444A699FC1DBB2558A69CAAE0B3C361108D990`，`app.asar` SHA-256 `84F7A99D6711567D5E5C9A8E8DE609D7E62E01F21F482B68546F68B02C50DCAC`。历史 R1.14 FINAL 和 R2/R3/R4 安装包保留。迁移 `0028_b01_preboundary_retirement.sql` 保留所有旧授权/冻结绑定，并限制同一 purpose 只有一份非撤销授权；只有 Main 证明无 Intent、Record 或任何提交尝试且 Job 为 NeedsUserAction 时，才可撤销/取消并为不同的新 Article 建立新授权，已批准、已消费或未知提交绝不允许替换。迁移在生产库受控副本上验证冻结记录/业务数量不变，实际应用后 integrity/foreign-key check 通过；迁移前快照仅本地受保护保存。
+当前 B01：PUBLISH_RESULT=PUBLISHED_CONFIRMED，MANAGEMENT_PAGE_VERIFIED=PASS，PUBLIC_CONTENT_VERIFIED=FAIL，质量告警 BODY_LINEBREAK_RENDERED_AS_LITERAL_ASTERISK。Article `11c657d8-157a-47f9-97ae-071391c30ba7`，短 marker `B01-E30344`；Image `19e321db-6fb0-4f8b-ba40-255e19cc4d6c`，Main 实读 SHA256 `9427f88b5c190102dfcc1a03a9dc9031540dbdb3a0c26bda22ceaaadbf9a66aa`。授权 `74c08921-5278-475a-aab3-d840687d60bb` Consumed；Job `ee500df1-8dd7-4cae-b047-dece77884874` Success；Intent `5f2f0c33-0f8b-4c2b-b068-78eaa88cbbcc`；Record `f79087cb-b574-4c46-b22e-f6311106f54d` Published。Remote Work ID `7691247987888016655`，实际观察的公开 URL https://www.douyin.com/note/7691247987888016655 。一次 final claim、一次 BrowserNative final action、一次真实发布，Node replay=0，重启持久化正常。
 
-B01 最新真实结果：Owner 明确批准当前唯一 Job 后，普通发布中心经 Main 再次验证账号、冻结绑定及严格编辑器回读，完成一次 BrowserNative final action。Article `11c657d8-157a-47f9-97ae-071391c30ba7`，标题 `室内空气管理 B01-E30344`（17/20）；图片 `19e321db-6fb0-4f8b-ba40-255e19cc4d6c`，Main 实读 SHA-256 `9427f88b5c190102dfcc1a03a9dc9031540dbdb3a0c26bda22ceaaadbf9a66aa`。授权 `74c08921-5278-475a-aab3-d840687d60bb` 已 Consumed；Job `ee500df1-8dd7-4cae-b047-dece77884874`；SubmissionIntent `5f2f0c33-0f8b-4c2b-b068-78eaa88cbbcc`；PublishRecord `f79087cb-b574-4c46-b22e-f6311106f54d`。final_submit_count=1，BrowserNative finalActionCount=1，observedPublishRequestCount=1，Node/API replay=0。真实提交响应的可信 Remote Work ID `7691247987888016655` 与唯一已发布管理卡片及实际公开作品 href 匹配，公开 URL 为 https://www.douyin.com/note/7691247987888016655 ，没有拼猜 URL。当前 Windows 原生窗口不能接收输入，应用确认弹窗使用绑定精确账号/标题/Job 的受控自动化输入结果；Main 独立验证与生产写入均走正式产品路径，没有直接调用 Repository/SQL 写生产库。
+迁移 `0029_douyin_publish_content_outcome.sql` 仅新增独立结果/质量表，为这个精确已发布作品追加解释；原 Job / SubmissionIntent / PublishRecord、Remote Work ID、冻结内容和 final_submit_count 不变。原 Intent.remote_status=PUBLISHED_MANAGEMENT、Record.verification_status=WaitingUser、原公开证据仍原样保留，不篡改成正文保真 PASS。Repository/UI 读取独立结果层显示“已发布 / 公开内容不一致”，禁止重发。迁移在受保护生产副本上首次应用及重启通过，原既有业务表逐表内容未变；生产快照只留本机，不上传。
 
-B01 未达到 PUBLISHED_CONFIRMED / Product E2E PASS：公开页标题与图片可见，但目标正文 DOM 的两处段落换行成为字面 `*`，冻结正文的完整字符串及空白规范化比较均不匹配。不得忽略这些字符来虚假标记 PASS。第一次回查因当前 Creator 身份证据不可用停在 NeedsReconciliation；之后只读进入同一 canonical Page/Context 的 Creator 首页重新读取账号 `72388977613`（loginGeneration=4 未变），再由 Main 只读管理/公开回查得到 PUBLISHED_MANAGEMENT。现有生命周期将 Job 记为 Success、Record 为 Published，但 Intent.remote_status=PUBLISHED_MANAGEMENT、Record.verification_status=WaitingUser、publicVerification=LIMITED；这是管理页已发布，不是严格公开验收成功。重启后上述状态与提交次数保持，普通 UI 显示已发布且无再次提交按钮。禁止 retry、第二次点击、替代 Job/授权、再次上传、修改冻结内容或 replay；下一步仅评审已发布内容的公开正文差异及只读验证契约。普通/批量发布继续 OFF，未构建部门 Release。
+Release identity / validation：`Geo Media Publisher Setup 1.1.9 - R1.15 DOUYIN RELEASE.exe`，SHA256 `CCD6BBFC1C0129B6F7B46997F906197868881FC3A93BD47B45723E7AB964C021`；`app.asar` SHA256 `BF66B578639E5AF6C8376838E1C381F6F85E797A41D51C00160FDBD5F3D4D2A1`。typecheck / lint / build 全部 PASS；full suite 170 files / 1165 tests PASS，无 skip。NSIS 安装和 Main/Renderer 包内字节一致性通过；显式隔离 userData 与正常 production userData 的首页、文章、图片、账号、发布详情、统计及重启 smoke 通过，B01 入口隐藏，未验证账号仍禁用。实际生产迁移后逐表对照保护快照，原 62 个业务表完全未变；当前及历史 unresolved Job/Intent/Record 未变、提交总计数不变，integrity / foreign_key check PASS，独立 outcome 表一行。本轮 REAL_PUBLISH=0、FINAL_CLAIM=0，不访问真实 Douyin。历史 R1.14 FINAL、Candidate R2/R3/R4 和 HOTFIX 不覆盖、不删除。B01 Product E2E 的发布成功已由 Owner 按两层契约接受；旧作品公开内容 FAIL 将永久保留。NEXT_TASK=R1.15-B02_WEIBO_NORMAL_UI_PRODUCT_E2E。
 
 旧未提交 Job `76748f23-d2d5-4a18-baf8-4770e1b39118` 已经普通 UI/Main 永久取消，旧授权 `R1.15-B01` 为 Revoked；旧冻结内容/绑定保留且未改变。历史 unresolved Job `fc78bf51-812a-490e-91eb-a9320793adc2` 与其 Intent/Record 再次逐行对照受控快照确认完全未变；生产 integrity_check / foreign_key_check 通过。所有凭据、browser-profiles、受控快照、Git Bundle 和历史安装包继续保护。
 
@@ -42,7 +42,7 @@ B01 未达到 PUBLISHED_CONFIRMED / Product E2E PASS：公开页标题与图片�
 
 | 平台 | 截至 R1.14 的证据状态 | 下一门禁 |
 | --- | --- | --- |
-| Douyin image/text | PUBLISHED_CONFIRMED；一个账号、一图、普通标题/正文、公开、立即、无音乐 | 普通 UI Product E2E；Smart Music 单独验收；普通提交与批量仍 OFF |
+| Douyin image/text | PUBLISHED_CONFIRMED；一个账号、一图、普通标题/正文、公开、立即、无音乐 | 普通 UI 发布成功已接受；普通图文 ON、批量 OFF；Smart Music deferred |
 | Toutiao article | 限定 BrowserNative 路线 PUBLISHED_CONFIRMED | 普通 UI Product E2E；普通提交仍 OFF |
 | Weibo | 历史真实 PublishPassed=PASS | 普通 UI 产品复验 |
 | Sohu | 历史 Published / Verified | 普通 UI 产品复验 |
@@ -60,7 +60,7 @@ B01 未达到 PUBLISHED_CONFIRMED / Product E2E PASS：公开页标题与图片�
 
 全局正式发布并发为 1。每一次正式发布必须有持久化 Article/Job、SubmissionIntent 和 PublishRecord，且 Job Queue 可审计、可在崩溃或重启后安全恢复。平台专用 selector、登录判断、编辑器填写、设置、最终动作和回查必须封装在该平台的 PlatformAdapter；不要让某平台修复污染共享 Publisher 或其它 Adapter。
 
-最终不可逆浏览器动作之前，Main 必须原子地把 final_submit_count 从 0 claim 到 1，并记录 submission attempt。claim 失败时不点击。claim 成功后，只允许该任务的一次最终动作；禁止再次点击、Node replay、API fallback、换 transport 或创建替代 Job 再投一次。超时、响应丢失、页面关闭和未知结果都进入 NeedsReconciliation，之后仅做只读管理页/公开页回查。HTTP 200、success toast 或页面跳转本身都不等于 Published。必须有可信作品 ID 或唯一管理页匹配；PUBLISHED_CONFIRMED 还要求可靠公开内容回读。
+最终不可逆浏览器动作之前，Main 必须原子地把 final_submit_count 从 0 claim 到 1，并记录 submission attempt。claim 失败时不点击。claim 成功后，只允许该任务的一次最终动作；禁止再次点击、Node replay、API fallback、换 transport 或创建替代 Job 再投一次。超时、响应丢失、页面关闭和未知结果都进入 NeedsReconciliation，之后仅做只读管理页/公开页回查。HTTP 200、success toast 或页面跳转本身都不等于 Published。Douyin 必须有可信作品 ID 与唯一 Published 管理页确认才能 PUBLISHED_CONFIRMED；公开内容一致性为独立 PASS / FAIL / LIMITED 质量状态，不能触发重试。其它平台按其独立已验收契约执行。
 
 准备阶段的内容与设置要严格回读，并与冻结的 account、Article、Job、标题、正文、图片、可见性、时机和已启用的附加功能绑定。失败在 final claim 之前应停在安全的 pre-boundary 状态；不要把未提交误记成 NeedsReconciliation，也不要为了赶进度跳过门禁。
 
@@ -80,7 +80,7 @@ BrowserSession、BrowserContext、canonical app-owned Playwright Page 和稳定�
 4. 只有被本任务明确启用的附加功能才进入其独立准备与回读；未启用音乐的 Core NO-MUSIC 路径不运行音乐 DOM 自动化。
 5. Douyin B01 准备门禁通过后先持久化 Prepared PublishRecord，授权保持 Prepared（等待 Owner 最终批准）；此时尚无 SubmissionIntent。Main 在另一次 Owner 批准请求中重核冻结绑定、应用自有远端身份及编辑器严格回读，然后才可进入 FinalApproved。
 6. 正式执行阶段才创建现有 SubmissionIntent；Main 在不可逆动作前原子 claim final_submit_count 0→1，同时消费 B01 授权。只在成功后执行一次 BrowserNative 最终动作。被动观察真实 Browser 响应，不重放请求。
-7. 最终动作后只读 reconcile：可信 ID 优先；否则必须在当前账号、标题、时间和唯一标识下找到唯一作品。按审核中、未通过、已发布、公开页严格证据记录真实状态。
+7. 最终动作后只读 reconcile：Douyin 可信 Remote ID 与唯一管理页 Published 匹配后为 PUBLISHED_CONFIRMED；公开页完整标题/正文/图片回读单独记录 Public Content Fidelity。审核中、未通过、结果未知不得提前记成功。
 8. 无论结果如何，保留 Job/Intent/Record、操作次数和证据。NeedsUserAction、NeedsReconciliation、Failed、Published/Verified 的区别不能用乐观猜测抹平。
 
 ## 本地开发与验证
@@ -103,7 +103,7 @@ Canonical branch: main
 
 ## 正式 Release 与历史恢复
 
-最终安装包：Geo Media Publisher Setup 1.1.9 - R1.14 FINAL.exe。SHA-256：417D94CD4CD47569C40E5F0B55339A2069F3DA1618785AAD6A048A5D4BBE6214。GitHub Release Tag：geo-media-publisher-r1.14-20260928。安装包是 Release Asset，不加入 Git 源码历史；不因本文件而重建安装包或声称 R1.15。
+历史安装包（继续保护）：Geo Media Publisher Setup 1.1.9 - R1.14 FINAL.exe。SHA-256：417D94CD4CD47569C40E5F0B55339A2069F3DA1618785AAD6A048A5D4BBE6214。GitHub Release Tag：geo-media-publisher-r1.14-20260928。安装包是 Release Asset，不加入 Git 源码历史；R1.15 使用独立新安装包，不覆盖这个历史文件。
 
 | 保留 Tag | 指向的提交 | 原分支/用途 |
 | --- | --- | --- |

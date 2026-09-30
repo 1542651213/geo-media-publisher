@@ -28,14 +28,13 @@ const publicPath = /^\/(?:note|video)\/(\d{10,30})(?:\/|$)/u;
 /** A management result may be persisted only after its actual view href proves the trusted response ID. */
 export function isTrustedDouyinPublishedProbe(probe: DouyinManagementPublicProbe,
   expectedRemoteId: string): probe is DouyinManagementPublicProbe & { actualPublicUrl: string } {
-  return /^\d{10,30}$/u.test(expectedRemoteId) && probe.reason === "ACTUAL_PUBLIC_WORK_OPENED"
+  return /^\d{10,30}$/u.test(expectedRemoteId) && ["ACTUAL_PUBLIC_WORK_OPENED", "PUBLIC_CONTENT_READ_LIMITED", "PROFILE_LINK_NAVIGATION_CHANGED"].includes(probe.reason)
     && probe.exactTargetCardCount === 1 && probe.cardState === "PUBLISHED"
     && probe.cardTimeMatchesBoundary && probe.exactRemoteIdMatch
     && probe.actualRemoteId === expectedRemoteId
     && (probe.actualPublicUrl === `https://www.douyin.com/note/${expectedRemoteId}`
       || probe.actualPublicUrl === `https://www.douyin.com/video/${expectedRemoteId}`)
-    && probe.publicUrlSource !== null && probe.publicReachable
-    && probe.publicTitleMatch && probe.publicImageEvidence;
+    && probe.publicUrlSource !== null;
 }
 
 function publishedTime(raw: string | null): number | null {
@@ -111,6 +110,7 @@ export async function probeDouyinPublishedCardPublicUrl(page: Page, context: Bro
   catch { return empty("TARGET_COVER_CLICK_UNCERTAIN", { ...details, attempted: true }); }
   const popup = await popupPromise;
   const observed = popup ?? page;
+  let observedWork: Partial<DouyinManagementPublicProbe> | null = null;
   try {
     if (observed.url() === "about:blank") await observed.waitForURL((url) => url.toString() !== "about:blank", { timeout: 8_000 });
     await observed.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => undefined);
@@ -148,6 +148,8 @@ export async function probeDouyinPublishedCardPublicUrl(page: Page, context: Bro
     const actualRemoteId = actualPublicUrl ? publicPath.exec(new URL(actualPublicUrl).pathname)?.[1] ?? null : null;
     const publicUrlSource = openedId ? "OPENED_PAGE" : actualPublicUrl ? "ACTUAL_VIEW_HREF" : null;
     if (!actualPublicUrl) return empty("COVER_DID_NOT_OPEN_PUBLIC_WORK", viewDetails);
+    observedWork = { ...viewDetails, actualPublicUrl, actualRemoteId, publicUrlSource,
+      exactRemoteIdMatch: actualRemoteId === input.remoteId };
     if (publicUrlSource === "ACTUAL_VIEW_HREF") {
       await observed.goto(actualPublicUrl, { waitUntil: "domcontentloaded", timeout: 20_000 });
       if (new URL(observed.url()).origin !== "https://www.douyin.com"
@@ -165,7 +167,8 @@ export async function probeDouyinPublishedCardPublicUrl(page: Page, context: Bro
       publicReachable: true, publicTitleMatch: evidence.title, publicMarkerMatch: evidence.marker,
       publicImageEvidence: evidence.images };
   } catch {
-    return empty("PUBLIC_VIEW_READ_FAILED_AFTER_CLICK", { ...details, attempted: true });
+    return empty(observedWork ? "PUBLIC_CONTENT_READ_LIMITED" : "PUBLIC_VIEW_READ_FAILED_AFTER_CLICK",
+      { ...details, ...observedWork, attempted: true });
   } finally {
     if (popup && !popup.isClosed()) await popup.close().catch(() => undefined);
     if (!popup && !page.isClosed() && page.url() !== pageBefore) {

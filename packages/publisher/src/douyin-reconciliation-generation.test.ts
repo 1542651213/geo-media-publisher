@@ -105,6 +105,48 @@ afterEach(() => {
 });
 
 describe("Douyin accepted submission read-only generation binding", () => {
+  it("confirms management publication with LIMITED public fidelity when public verification is unavailable", async () => {
+    const scope = await submittedFixture(1);
+    scope.adapter.reconcile.mockResolvedValue({ status: "FOUND_PUBLISHED", remoteState: "PUBLISHED", externalId: remoteId,
+      titleMatch: true, accountMatch: true, timeWindowMatch: true,
+      response: { readOnly: true, matchedBy: "REMOTE_ID", exactRemoteIdMatch: true, managementCardCount: 1 }, message: "Published fixture" });
+    expect((await scope.publisher.reconcileBrowserJob(scope.job.id)).job.status).toBe("Success");
+    expect(scope.repo.getPublishRecordByJob(scope.job.id)?.response).toMatchObject({ publishResult: "PUBLISHED_CONFIRMED", publicContentVerified: "LIMITED" });
+    expect(scope.repo.getSubmissionIntentByJob(scope.job.id)?.finalSubmitCount).toBe(1);
+    expect(scope.adapter.finalSubmit).not.toHaveBeenCalled();
+  });
+  it("never replaces a claimed article, and cannot confirm without unique management evidence", async () => {
+    const scope = await submittedFixture(1);
+    expect(() => scope.repo.createArticlePublishJob({ articleId: scope.article.id, platformKey: "douyin", platformAccountId: scope.account.id,
+      selectedImageAssetId: scope.image.id, imageSelectionMode: "manual", douyinImageTextSettings: { version: 1, visibility: "public", timing: "immediate" } }))
+      .toThrow("NO_REPLACEMENT");
+    scope.adapter.reconcile.mockResolvedValue({ status: "FOUND_PUBLISHED", remoteState: "PUBLISHED", externalId: remoteId,
+      titleMatch: true, accountMatch: true, timeWindowMatch: true,
+      response: { readOnly: true, matchedBy: "REMOTE_ID", exactRemoteIdMatch: true, managementCardCount: 2 }, message: "Duplicate fixture" });
+    const before = scope.repo.getSubmissionIntentByJob(scope.job.id);
+    expect((await scope.publisher.reconcileBrowserJob(scope.job.id)).job.status).toBe("NeedsReconciliation");
+    expect(scope.repo.getSubmissionIntentByJob(scope.job.id)?.finalSubmitCount).toBe(before?.finalSubmitCount);
+    expect(scope.adapter.finalSubmit).not.toHaveBeenCalled();
+    expect(scope.repo.listJobs()).toHaveLength(1);
+  });
+  it("confirms a uniquely published remote work independently of a failing public body fidelity check", async () => {
+    const scope = await submittedFixture(1);
+    scope.adapter.reconcile.mockResolvedValue({ status: "FOUND_PUBLISHED", remoteState: "PUBLISHED", externalId: remoteId,
+      publishedUrl: `https://www.douyin.com/note/${remoteId}`, titleMatch: true, accountMatch: true, timeWindowMatch: true,
+      response: { readOnly: true, matchedBy: "REMOTE_ID", exactRemoteIdMatch: true, managementCardCount: 1 }, message: "Published fixture" });
+    Object.assign(scope.adapter, { verifyPublished: vi.fn(async () => ({ status: "published", externalId: remoteId,
+      publishedUrl: `https://www.douyin.com/note/${remoteId}`, response: { urlReachable: true, titleMatch: true, bodyMatch: false,
+        imageMatch: true, publicContentVerified: "FAIL", contentFidelityWarning: "BODY_LINEBREAK_RENDERED_AS_LITERAL_ASTERISK" } })) });
+    const result = await scope.publisher.reconcileBrowserJob(scope.job.id);
+    expect(result.job.status).toBe("Success");
+    expect(scope.repo.getPublishRecordByJob(scope.job.id)?.response).toMatchObject({ publishResult: "PUBLISHED_CONFIRMED",
+      managementPageVerified: "PASS", publicContentVerified: "FAIL", contentFidelityWarning: "BODY_LINEBREAK_RENDERED_AS_LITERAL_ASTERISK" });
+    expect(scope.repo.getSubmissionIntentByJob(scope.job.id)?.finalSubmitCount).toBe(1);
+    expect(scope.adapter.finalSubmit).not.toHaveBeenCalled();
+    expect(scope.adapter.publishArticle).not.toHaveBeenCalled();
+    await scope.publisher.executeJob(scope.job.id);
+    expect(scope.adapter.finalSubmit).not.toHaveBeenCalled();
+  });
   it("retains the prepared login generation in future accepted final results", async () => {
     const scope = await submittedFixture(1, true);
     const result = await scope.publisher.executeJob(scope.job.id);

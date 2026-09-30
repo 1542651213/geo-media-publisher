@@ -120,6 +120,8 @@ describe.skipIf(!existsSync(chrome))("Douyin exact-card read-only public view", 
       exactRemoteIdMatch: true, actualPublicUrl: `https://www.douyin.com/note/${remoteId}`,
       publicTitleMatch: true, publicMarkerMatch: false });
     expect(isTrustedDouyinPublishedProbe(result, remoteId)).toBe(true);
+    expect(isTrustedDouyinPublishedProbe({ ...result, publicTitleMatch: false, publicImageEvidence: false, publicReachable: false }, remoteId)).toBe(true);
+    expect(isTrustedDouyinPublishedProbe({ ...result, reason: "PUBLIC_CONTENT_READ_LIMITED" }, remoteId)).toBe(true);
     for (const weakened of [
       { ...result, cardState: "REVIEWING" as const },
       { ...result, cardTimeMatchesBoundary: false },
@@ -127,8 +129,6 @@ describe.skipIf(!existsSync(chrome))("Douyin exact-card read-only public view", 
       { ...result, actualRemoteId: "7690435917298928999" },
       { ...result, actualPublicUrl: "https://www.douyin.com/note/7690435917298928999" },
       { ...result, actualPublicUrl: `https://other.douyin.com/note/${remoteId}` },
-      { ...result, publicTitleMatch: false },
-      { ...result, publicImageEvidence: false },
       { ...result, reason: "PUBLIC_VIEW_READ_FAILED_AFTER_CLICK" }
     ]) expect(isTrustedDouyinPublishedProbe(weakened, remoteId)).toBe(false);
   }, 20_000);

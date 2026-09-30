@@ -63,6 +63,13 @@ export interface B01Eligibility { eligible: boolean; status: B01AuthorizationSta
 
 const now = (): string => new Date().toISOString();
 const json = (value: unknown): string => JSON.stringify(value);
+function verifiedDouyinManagement(response: Record<string, unknown>): boolean {
+  const evidence = response.reconciliation;
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return false;
+  const proof = evidence as Record<string, unknown>;
+  return proof.readOnly === true && proof.matchedBy === "REMOTE_ID" && proof.remoteState === "PUBLISHED"
+    && proof.exactRemoteIdMatch === true && proof.managementCardCount === 1;
+}
 const studioContentHash = (title: string, body: string, platformKey?: string): string => createHash("sha256").update(`${title}\n${body}${platformKey ? `\n${platformKey}` : ""}`).digest("hex");
 const excelContentHash = (title: string, body: string): string => createHash("sha256").update(`${title.trim()}\n${body.trim()}`).digest("hex");
 const CONTENT_REVIEW_PLATFORM_KEYS = [...CONTENT_STUDIO_PLATFORM_KEYS];
@@ -2417,6 +2424,14 @@ export class AppRepository {
     const account = this.listAccounts().find((item) => item.platformAccountId === input.platformAccountId && item.platformKey === input.platformKey);
     if (!account) throw new Error("目标平台账号不存在");
     if (input.platformKey === "douyin") {
+      const priorSubmission = this.db.prepare(`SELECT j.id FROM publish_jobs j JOIN articles a ON a.id=j.article_id
+        LEFT JOIN submission_intents i ON i.job_id=j.id
+        LEFT JOIN b01_product_e2e_authorization b ON b.job_id=j.id
+        WHERE j.platform_key='douyin' AND (a.id=? OR a.content_hash=? OR (a.title=? AND a.body=?))
+          AND (COALESCE(i.final_submit_count,0)>=1 OR j.status IN ('NeedsReconciliation','Unknown')
+            OR b.retired_preboundary_at IS NOT NULL) LIMIT 1`)
+        .get(article.id, article.contentHash, article.title, article.body);
+      if (priorSubmission) throw new Error("DOUYIN_PRIOR_SUBMISSION_OR_RETIRED_CONTENT_NO_REPLACEMENT");
       if (input.douyinImageTextSettings?.version !== 1 || input.douyinImageTextSettings.visibility !== "public"
         || input.douyinImageTextSettings.timing !== "immediate") throw new Error("抖音图文需要 Owner 明确选择公开可见与立即发布");
       const connection = this.getDouyinImageTextConnection(account.id);
@@ -2951,7 +2966,30 @@ export class AppRepository {
 
   getPublishRecords(articleId?: string): PublishRecord[] {
     const rows = articleId ? this.db.prepare("SELECT * FROM publish_records WHERE article_id=? ORDER BY published_at DESC").all(articleId) : this.db.prepare("SELECT * FROM publish_records ORDER BY published_at DESC").all();
-    return (rows as Row[]).map(toRecord);
+    return (rows as Row[]).map(row => this.withDouyinPublishOutcome(toRecord(row)));
+  }
+
+  private withDouyinPublishOutcome(record: PublishRecord): PublishRecord {
+    if (record.platformKey !== "douyin") return record;
+    const outcome = this.db.prepare("SELECT * FROM douyin_publish_outcomes WHERE job_id=? AND record_id=?").get(record.jobId, record.id) as Row | undefined;
+    return outcome ? { ...record, response: { ...record.response, publishResult: outcome.publish_result,
+      managementPageVerified: outcome.management_page_verified, publicContentVerified: outcome.public_content_verified,
+      contentFidelityWarning: outcome.content_fidelity_warning } } : record;
+  }
+
+  private recordDouyinPublishOutcome(record: PublishRecord, publicContentVerified: "PASS" | "FAIL" | "LIMITED", warning: string | null): void {
+    const intent = this.getSubmissionIntentByJob(record.jobId);
+    if (record.platformKey !== "douyin" || record.status !== "Published" || !record.publishedExternalId
+      || !/^\d{10,30}$/u.test(record.publishedExternalId) || intent?.finalSubmitCount !== 1
+      || intent.externalId !== record.publishedExternalId || !verifiedDouyinManagement(record.response))
+      throw new Error("DOUYIN_PUBLISHED_MANAGEMENT_EVIDENCE_REQUIRED");
+    const prior = this.db.prepare("SELECT remote_work_id FROM douyin_publish_outcomes WHERE job_id=?").get(record.jobId) as Row | undefined;
+    if (prior && prior.remote_work_id !== record.publishedExternalId) throw new Error("DOUYIN_REMOTE_WORK_ID_IMMUTABLE");
+    const timestamp = now();
+    this.db.prepare(`INSERT INTO douyin_publish_outcomes VALUES (?,?,?,'PUBLISHED_CONFIRMED','PASS',?,?,?,?)
+      ON CONFLICT(job_id) DO UPDATE SET public_content_verified=excluded.public_content_verified,
+      content_fidelity_warning=excluded.content_fidelity_warning,updated_at=excluded.updated_at`)
+      .run(record.jobId, record.id, record.publishedExternalId, publicContentVerified, warning, timestamp, timestamp);
   }
 
   insertPublishRecord(input: Omit<PublishRecord, "id" | "publishedAt" | "dryRun" | "status"> & { dryRun?: boolean; status?: PublishRecord["status"] }): PublishRecord {
@@ -2964,7 +3002,7 @@ export class AppRepository {
 
   getPublishRecordByJob(jobId: string): PublishRecord | null {
     const row = this.db.prepare("SELECT * FROM publish_records WHERE job_id=? ORDER BY published_at DESC LIMIT 1").get(jobId) as Row | undefined;
-    return row ? toRecord(row) : null;
+    return row ? this.withDouyinPublishOutcome(toRecord(row)) : null;
   }
 
   updatePublishRecord(id: string, input: { status: PublishRecord["status"]; success: boolean; publishedUrl?: string | null; publishedExternalId?: string | null; response?: Record<string, unknown>; verificationStatus?: PublishRecord["verificationStatus"] }): PublishRecord {
@@ -2978,7 +3016,11 @@ export class AppRepository {
     if (!job || !["NeedsReconciliation", "Submitted", "Publishing"].includes(job.status)) throw new Error("Only a claimed submission can be closed by read-only publish reconciliation");
     const intent = this.getSubmissionIntentByJob(jobId);
     if (!intent || intent.finalSubmitCount < 1) throw new Error("Read-only publication confirmation requires a durable final submit claim");
-    const remoteStatus = input.publicVerified === false ? "PUBLISHED_MANAGEMENT" : "PUBLISHED_CONFIRMED";
+    const managementConfirmed = job.platformKey === "douyin" && verifiedDouyinManagement(input.response);
+    if (job.platformKey === "douyin" && (!managementConfirmed || intent.finalSubmitCount !== 1
+      || intent.externalId !== input.externalId || !/^\d{10,30}$/u.test(input.externalId)))
+      throw new Error("DOUYIN_PUBLISHED_MANAGEMENT_EVIDENCE_REQUIRED");
+    const remoteStatus = input.publicVerified === false && !managementConfirmed ? "PUBLISHED_MANAGEMENT" : "PUBLISHED_CONFIRMED";
     const verificationStatus = input.publicVerified === false ? "WaitingUser" : "Verified";
     if (intent) this.db.prepare("UPDATE submission_intents SET state='Submitted',external_id=?,remote_status=?,reconciliation_required=0,updated_at=? WHERE id=?").run(input.externalId, remoteStatus, now(), intent.id);
     const existing = this.getPublishRecordByJob(jobId);
@@ -2990,7 +3032,11 @@ export class AppRepository {
       this.markArticlePublished(job.articleId);
       this.markAccountPublished(job.accountId);
     }
-    return { job: this.getJob(jobId) as PublishJob, record };
+    if (managementConfirmed) {
+      const fidelity = input.response.publicContentVerified === "PASS" ? "PASS" : input.response.publicContentVerified === "FAIL" ? "FAIL" : "LIMITED";
+      this.recordDouyinPublishOutcome(record, fidelity, typeof input.response.contentFidelityWarning === "string" ? input.response.contentFidelityWarning : null);
+    }
+    return { job: this.getJob(jobId) as PublishJob, record: this.withDouyinPublishOutcome(record) };
   }
 
   markJobReconciledNotPublished(id: string, message: string, response: Record<string, unknown> = {}): PublishJob {

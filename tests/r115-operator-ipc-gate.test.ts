@@ -1,3 +1,5 @@
+import type * as ProductPolicy from "../apps/desktop/src/shared/product-platform-policy";
+import type { Platform } from "@publisher/domain";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -16,6 +18,15 @@ vi.mock("electron", () => ({
   dialog: {},
   shell: {}
 }));
+
+// Retain the historical Candidate contract as an explicit OFF-policy fixture.
+vi.mock("../apps/desktop/src/shared/product-platform-policy", async (importOriginal) => {
+  const actual = await importOriginal<typeof ProductPolicy>();
+  return { ...actual,
+    productPlatform: (key: string) => key === "douyin" ? { ...actual.productPlatform(key), ordinaryPublishEnabled: false } : actual.productPlatform(key),
+    operatorPublishBlockReason: (key: string, platform?: Platform) => key === "douyin" ? "普通 UI 待验收" : actual.operatorPublishBlockReason(key, platform)
+  };
+});
 
 import { registerIpc } from "../apps/desktop/src/main/ipc";
 

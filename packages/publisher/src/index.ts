@@ -167,6 +167,11 @@ export class PublisherService {
     return this.adapters.tryGet(platformKey) !== null;
   }
 
+  private requiresB01(job: Pick<PublishJob, "id" | "platformKey">): boolean {
+    return job.platformKey === "douyin" && (this.options.enforceB01ForDouyin === true
+      || this.repository.getB01Authorization(job.id) !== null);
+  }
+
   isBrowserAutomationPlatform(platformKey: string, contentKind?: string): boolean {
     let adapter = this.adapters.tryGet(platformKey);
     if (contentKind) {
@@ -289,8 +294,9 @@ export class PublisherService {
       if (!matchedTarget || result.remoteState !== "PUBLISHED") return preserveUncertain(`STILL_UNCERTAIN: ${result.remoteState ?? "UNKNOWN"}; no resubmission permitted`);
     }
     if (result.status === "FOUND_PUBLISHED") {
-      if (job.platformKey === "douyin" && matchedByTrustedId && result.remoteState === "PUBLISHED" && result.externalId) {
-        const verification = result.publishedUrl && adapter.verifyPublished
+      if (job.platformKey === "douyin" && matchedByTrustedId && result.remoteState === "PUBLISHED" && result.externalId
+        && result.response.exactRemoteIdMatch === true && result.response.managementCardCount === 1) {
+        const verification: PublishStatusResult = result.publishedUrl && adapter.verifyPublished
           ? await withTimeout(adapter.verifyPublished(ctx, input, { externalId: result.externalId, publishedUrl: result.publishedUrl }),
             this.options.operationTimeoutMs ?? 120_000, "Douyin public read-only verification").catch((error: unknown) => ({
               status: "publishing" as const, response: { errorCode: errorCode(error), publicVerification: "LIMITED" } }))
@@ -298,14 +304,17 @@ export class PublisherService {
         const publicVerified = verification.status === "published" && verification.externalId === result.externalId
           && verification.response.urlReachable === true && verification.response.titleMatch === true
           && verification.response.bodyMatch === true && verification.response.imageMatch === true;
+        const publicContentVerified = publicVerified ? "PASS" : verification.response.publicContentVerified === "FAIL" ? "FAIL" : "LIMITED";
         const reconciled = this.repository.reconcileJobAsPublished(job.id, { externalId: result.externalId,
           publishedUrl: result.publishedUrl ?? null, publicVerified,
-          response: { ...existingRecord?.response, reconciliation: result.response, verification: verification.response,
-            publicVerification: publicVerified ? "CONFIRMED" : "LIMITED" } });
-        return { job: reconciled.job, message: publicVerified
-          ? `PUBLISHED_CONFIRMED: Douyin work and public page verified (PublishRecord ${reconciled.record.id})`
-          : `PUBLISHED: Douyin management row verified; public verification limited (PublishRecord ${reconciled.record.id})` };
+          response: { ...existingRecord?.response, reconciliation: { ...result.response, remoteState: "PUBLISHED" }, verification: verification.response,
+            publicVerification: publicVerified ? "CONFIRMED" : "LIMITED", publicContentVerified,
+            contentFidelityWarning: typeof verification.response.contentFidelityWarning === "string"
+              ? verification.response.contentFidelityWarning : publicVerified ? null : "PUBLIC_CONTENT_VERIFICATION_LIMITED" } });
+        if (!publicVerified) this.logger.warn("PUBLISHER", "PUBLIC_CONTENT_FIDELITY_WARNING", "作品已发布；公开内容质量告警不会触发重试", { jobId: job.id, publicContentVerified });
+        return { job: reconciled.job, message: `PUBLISHED_CONFIRMED: Douyin management verified; public content ${publicContentVerified} (PublishRecord ${reconciled.record.id})` };
       }
+      if (job.platformKey === "douyin") return preserveUncertain("STILL_UNCERTAIN: Douyin unique Published management evidence or trusted remote ID missing; no resubmission");
       if (!result.externalId || !result.publishedUrl || !(matchedByTrustedId || result.titleMatch && result.accountMatch && result.timeWindowMatch) || !adapter.verifyPublished) return preserveUncertain("STILL_UNCERTAIN: 回查未同时取得真实 External ID、URL、目标身份和匹配证据，未写入成功");
       const verification = await withTimeout(adapter.verifyPublished(ctx, input, { externalId: result.externalId, publishedUrl: result.publishedUrl }), this.options.operationTimeoutMs ?? 120_000, "Browser publish result verification").catch((error: unknown) => {
         if (!managementReconciliation) throw error;
@@ -362,7 +371,7 @@ export class PublisherService {
   async prepareArticle(jobId: string, action?: UserInitiatedAction, browserExecutionMode?: BrowserExecutionMode): Promise<AssistedPrepareResult> {
     const job = this.repository.getJob(jobId);
     if (!job) throw new Error("Publish job not found");
-    if (this.options.enforceB01ForDouyin && job.platformKey === "douyin") this.repository.assertB01Job(job.id, "prepare");
+    if (this.requiresB01(job)) this.repository.assertB01Job(job.id, "prepare");
     const adapter = this.adapters.getForContent(job.platformKey, job.contentKind ?? "article");
     const managementReconciliation = usesBrowserManagementReconciliation(adapter);
     const frozenTransport = this.repository.getFrozenContentTransport(job.id);
@@ -463,7 +472,7 @@ export class PublisherService {
   async executeJob(jobId: string, action?: UserInitiatedAction, browserExecutionMode?: BrowserExecutionMode): Promise<PublishExecutionResult> {
     const job = this.repository.getJob(jobId);
     if (!job) throw new Error("Publish job not found");
-    if (this.options.enforceB01ForDouyin && job.platformKey === "douyin"
+    if (this.requiresB01(job)
       && !["NeedsReconciliation", "Submitted", "Publishing", "Published", "Success"].includes(job.status))
       this.repository.assertB01Job(job.id, "final");
     if (job.dryRun || ["NeedsReconciliation", "Submitted", "Publishing", "Published", "Success"].includes(job.status)) return this.executeJobWithinGate(jobId, action, browserExecutionMode);
@@ -476,7 +485,7 @@ export class PublisherService {
     if (existing.status === "NeedsReconciliation") return { job: existing, message: "Submission result is unknown; reconcile before retry" };
     if (existing.status === "Submitted") return this.repairSubmittedJob(existing);
     if (["Publishing", "Published", "Success"].includes(existing.status)) return { job: existing, message: "Publish job already completed or is being polled" };
-    if (this.options.enforceB01ForDouyin && existing.platformKey === "douyin") this.repository.assertB01Job(existing.id, "final");
+    if (this.requiresB01(existing)) this.repository.assertB01Job(existing.id, "final");
     const job = this.repository.claimJob(jobId);
     const account = this.repository.listAccounts().find((item) => item.id === job.accountId);
     const article = this.repository.getArticle(job.articleId);
@@ -533,7 +542,7 @@ export class PublisherService {
         }
         if (!job.dryRun) {
           submissionIntentId = this.repository.prepareSubmissionIntent(job.id).id;
-          const claimed = this.repository.claimFinalSubmitAttempt(submissionIntentId, { payloadHash: publishInputHash(input), adapterId: `${adapter.platformKey}@${adapter.manifest.version}`, requireB01: this.options.enforceB01ForDouyin && job.platformKey === "douyin" });
+          const claimed = this.repository.claimFinalSubmitAttempt(submissionIntentId, { payloadHash: publishInputHash(input), adapterId: `${adapter.platformKey}@${adapter.manifest.version}`, requireB01: this.requiresB01(job) });
           this.logger.info("PUBLISHER", "FINAL_SUBMIT_BOUNDARY_ENTERED", "Durable formal submit boundary entered", { jobId: job.id, submissionAttemptId: claimed.submissionAttemptId, platformKey: job.platformKey });
         }
         result = await withTimeout(adapter.publishVideo(ctx, input), this.options.operationTimeoutMs ?? 120_000, "Platform video publish").finally(async () => {
@@ -585,7 +594,7 @@ export class PublisherService {
             submissionAttemptId,
             attempt: intent.attempt,
             markSubmissionSideEffect: () => {
-              const claimed = this.repository.claimFinalSubmitAttempt(intent.id, { payloadHash: publishInputHash(input), adapterId: `${adapter.platformKey}@${adapter.manifest.version}`, requireB01: this.options.enforceB01ForDouyin && job.platformKey === "douyin" });
+              const claimed = this.repository.claimFinalSubmitAttempt(intent.id, { payloadHash: publishInputHash(input), adapterId: `${adapter.platformKey}@${adapter.manifest.version}`, requireB01: this.requiresB01(job) });
               finalSubmitSideEffectTriggered = true;
               this.logger.info("PUBLISHER", "FINAL_SUBMIT_BOUNDARY_ENTERED", "Durable formal submit boundary entered", { jobId: job.id, submissionAttemptId: claimed.submissionAttemptId, platformKey: job.platformKey });
             }
@@ -613,7 +622,7 @@ export class PublisherService {
           if (isAutomationAdapter(adapter)) await adapter.releaseOperationSession?.(ctx).catch(() => undefined);
         } else {
           if (submissionIntentId) {
-            const claimed = this.repository.claimFinalSubmitAttempt(submissionIntentId, { payloadHash: publishInputHash(input), adapterId: `${adapter.platformKey}@${adapter.manifest.version}`, requireB01: this.options.enforceB01ForDouyin && job.platformKey === "douyin" });
+            const claimed = this.repository.claimFinalSubmitAttempt(submissionIntentId, { payloadHash: publishInputHash(input), adapterId: `${adapter.platformKey}@${adapter.manifest.version}`, requireB01: this.requiresB01(job) });
             this.logger.info("PUBLISHER", "FINAL_SUBMIT_BOUNDARY_ENTERED", "Durable formal submit boundary entered", { jobId: job.id, submissionAttemptId: claimed.submissionAttemptId, platformKey: job.platformKey });
           }
           result = await withTimeout(adapter.publishArticle(ctx, input), this.options.operationTimeoutMs ?? 120_000, "Platform article publish").finally(async () => {

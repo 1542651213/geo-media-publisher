@@ -24,7 +24,7 @@ function html(input: { preselected?: boolean; corruptBody?: boolean; trackOnClic
   const selected = (title: string) => `<div data-selected-music="track-a"><span data-track-title>${title}</span><span data-track-artist>音乐人</span><time>01:30</time></div>`;
   return `<html><body><main>
     <div class="upload-preview"><img src="${imageData}"></div><span>已添加1张图片</span>
-    <input placeholder="添加作品标题"><div contenteditable="true"></div>
+    <input placeholder="添加作品标题"><div contenteditable="true" data-slate-editor="true"></div>
     <div data-douyin-music-region><button id="music-entry">选择音乐</button>${input.preselected ? selected("舒缓纯音乐") : ""}</div>
     <label><input type="radio" checked>公开</label><label><input type="radio">仅自己可见</label>
     <label><input type="radio" checked>立即发布</label><label><input type="radio">定时发布</label>

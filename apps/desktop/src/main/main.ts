@@ -58,11 +58,12 @@ async function createWindow(): Promise<void> {
   const logger = createFileLogger(appLogPath);
   recordAppStartup(logger, { pid: process.pid, packaged: app.isPackaged, userDataPath: app.getPath("userData"), productionDataPath: dataDirectory, appLogPath });
   const credentials = new SafeStorageCredentialStore(join(dataDirectory, "credentials.enc"), safeStorage);
-  const b01AcceptanceEnabled = b01CandidateCapabilityEnabled(app.isPackaged, process.resourcesPath);
+  const ordinaryDouyinEnabled = productPlatform("douyin")?.ordinaryPublishEnabled === true;
+  const b01AcceptanceEnabled = !ordinaryDouyinEnabled && b01CandidateCapabilityEnabled(app.isPackaged, process.resourcesPath);
   const registry = createRuntimeAdapterRegistry(credentials, isDevelopment, logger, join(app.getPath("userData"), "browser-profiles"), join(dataDirectory, "credentials.enc"), {
     claimDouyinImageTextFileSelection: (input) => database.repository.claimDouyinImageTextFileSelection(input),
     // Main and Publisher retain the exact one-shot gate; the Adapter capability must be live before a new grant is requested.
-    douyinImageTextNativeSubmitEnabled: b01AcceptanceEnabled
+    douyinImageTextNativeSubmitEnabled: ordinaryDouyinEnabled || b01AcceptanceEnabled
   });
   ownedBrowserSessionClosers.add(async () => {
     const closableAdapters = registry.listAll().filter((adapter): adapter is typeof adapter & { closeOwnedSessions(): Promise<void> } => typeof (adapter as { closeOwnedSessions?: unknown }).closeOwnedSessions === "function");
@@ -75,7 +76,7 @@ async function createWindow(): Promise<void> {
     const keys = [...new Set([...adapter.getCredentialSchema().map((field) => field.key), "oauthAccessToken"])]
     return Object.fromEntries(keys.map((key) => [key, credentials.get(`account:${accountId}:${platformKey}:${key}`) ?? ""]));
   };
-  const publisher = new PublisherService(database.repository, registry, logger, { resolveSecrets: resolveAccountSecrets, enforceB01ForDouyin: true });
+  const publisher = new PublisherService(database.repository, registry, logger, { resolveSecrets: resolveAccountSecrets, enforceB01ForDouyin: !ordinaryDouyinEnabled });
   scheduler = new PersistentScheduler(database.repository, publisher, logger, 5_000, {
     allowScheduledJob: (job) => productPlatform(job.platformKey)?.batchPublishEnabled === true
       && operatorPublishBlockReason(job.platformKey, database.repository.listPlatforms().find((platform) => platform.platformKey === job.platformKey)) === null

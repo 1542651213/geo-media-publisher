@@ -17,7 +17,7 @@ import { inspectDouyinManagementTopology, type DouyinManagementTopology } from "
 import { revealDouyinCreatorIdentityReadOnly, type DouyinIdentityMenuProbe } from "./image-text-identity-menu";
 import { isTrustedDouyinPublishedProbe, probeDouyinPublishedCardPublicUrl, type DouyinManagementPublicProbe } from "./image-text-management-public-probe";
 import { inspectDouyinBodyPage, type DouyinBodyPageDiagnostic } from "./image-text-body-diagnostic";
-import { readDouyinBodyText, type DouyinBodyReadback } from "./image-text-body-readback";
+import { readDouyinBodyText, writeDouyinBodyParagraphs, type DouyinBodyReadback } from "./image-text-body-readback";
 import { assertDouyinMusicReadback, chooseDouyinMusic, clickRecommendedDouyinMusicOnce, douyinMusicDrawerRows, douyinMusicIdentityKey,
   inspectRecommendedDouyinMusic, readSelectedDouyinMusic, type DouyinMusicIdentity, type DouyinMusicReadback } from "./image-text-music";
 import { DouyinPreMusicInvariantError, hashDouyinPreMusicEditorObservation, inspectDouyinPreMusicReadOnly,
@@ -127,12 +127,12 @@ const definition: BrowserPlatformDefinition = {
   backendUrl: creatorHome,
   officialSources: ["https://creator.douyin.com/", "https://partner.open-douyin.com/docs/resource/zh-CN/dop/develop/openapi/video-management/douyin/create-image-text/create-image-text"],
   version: "0.1.0-r0",
-  blockingReason: "图文 BrowserNative 尚需完整编辑器设置与管理页验收；正式提交默认关闭。",
+  blockingReason: "仅支持单账号单图、公开、立即发布、无音乐；Smart Music 尚未验收。",
   researchStatus: "partial",
   loginUrlPattern: /\/login(?:[/?#]|$)|passport/iu,
   capabilities: {
     article: true, imagePost: true, video: false, coverImage: false, tags: false, categories: false,
-    scheduledPublish: false, draft: false, markdown: false, richText: false, maxTitleLength: 0,
+    scheduledPublish: false, draft: false, markdown: false, richText: false, maxTitleLength: 20,
     maxImageCount: 1, maxTagCount: 0, videoFormats: [], supportsVideoCover: false,
     supportsVideoTags: false, videoPublishAsync: false, contentTransport: "DOUYIN_IMAGE_TEXT_BROWSER",
     browserManagementReconciliation: true
@@ -636,7 +636,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
       || (await body.innerText()).trim() && await body.innerText() !== initialFrozen.body))
       throw new BrowserAutomationError("CONTENT_REJECTED", "DOUYIN_RESUMED_EDITOR_CONTENT_MISMATCH");
     await title.fill(initialFrozen.title);
-    await body.fill(initialFrozen.body);
+    await writeDouyinBodyParagraphs(page, initialFrozen.body);
     const titleReadback = await title.inputValue();
     const bodyReadback = await readDouyinBodyText(page);
     const imageCount = await images.count();
@@ -995,7 +995,9 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
       return { status: match.state === "PUBLISHED" ? "FOUND_PUBLISHED" : "STILL_UNCERTAIN", remoteState: match.state,
         externalId: match.remoteId, publishedUrl: match.publicUrl ?? undefined, titleMatch: true, accountMatch: true,
         timeWindowMatch: false, response: { adapter: "douyin-image-text-browser", readOnly: true,
-          matchedBy: "REMOTE_ID", remoteState: match.state, rowCount: rows.length, scopeComplete: false },
+          matchedBy: "REMOTE_ID", remoteState: match.state, rowCount: rows.length, scopeComplete: false,
+          exactRemoteIdMatch: match.remoteId === input.expectedExternalId,
+          managementCardCount: rows.filter(row => row.remoteId === match.remoteId).length },
         message: `Douyin unique management row: ${match.state}` };
     } catch { return unknown("MANAGEMENT_READ_FAILED"); }
     finally { await tab.close().catch(() => undefined); }
@@ -1005,7 +1007,7 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     const id = result.externalId;
     const url = result.publishedUrl;
     const limited = (reason: string): PublishStatusResult => ({ status: "publishing", externalId: id, publishedUrl: url,
-      response: { adapter: "douyin-image-text-browser", publicVerification: "LIMITED", reason },
+      response: { adapter: "douyin-image-text-browser", publicVerification: "LIMITED", publicContentVerified: "LIMITED", reason },
       errorCode: "RECONCILIATION_UNCERTAIN", errorMessage: "PUBLIC_VERIFICATION_LIMITED" });
     if (!id || !url) return limited("PUBLIC_URL_UNAVAILABLE");
     let parsed: URL;
@@ -1016,15 +1018,15 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
     const tab = await owned.session.context.newPage();
     try {
       await tab.goto(url, { waitUntil: "domcontentloaded", timeout: 20_000 });
-      const evidence = await tab.evaluate(() => ({ text: document.body.innerText, imageCount: [...document.images]
-        .filter((image) => image.complete && image.naturalWidth > 0).length }));
-      const titleMatch = evidence.text.includes(article.title);
-      const bodyMatch = evidence.text.includes(article.body);
-      const imageMatch = evidence.imageCount > 0;
-      if (!titleMatch || !bodyMatch || !imageMatch) return limited("PUBLIC_TEXT_OR_IMAGE_UNVERIFIED");
+      const detail = tab.locator('[data-e2e="note-detail"]');
+      await detail.waitFor({ state: "visible", timeout: 10_000 });
+      if (await detail.count() !== 1) return limited("PUBLIC_WORK_SCOPE_UNVERIFIED");
+      const evidence = await detail.evaluate((element) => ({ text: (element as HTMLElement).innerText,
+        imageCount: [...element.querySelectorAll("img")].filter((image) => image.complete && image.naturalWidth > 0).length }));
+      const fidelity = classifyDouyinPublicContent(article, evidence);
       return { status: "published", externalId: id, publishedUrl: url,
-        response: { adapter: "douyin-image-text-browser", urlReachable: true, titleMatch, bodyMatch, imageMatch,
-          publicVerification: "CONFIRMED" } };
+        response: { adapter: "douyin-image-text-browser", urlReachable: true, ...fidelity,
+          publicVerification: fidelity.publicContentVerified === "PASS" ? "CONFIRMED" : "FAILED" } };
     } catch { return limited("PUBLIC_READ_FAILED"); }
     finally { await tab.close().catch(() => undefined); }
   }
@@ -1036,4 +1038,17 @@ export class DouyinImageTextBrowserAdapter extends BrowserAutomationAdapter {
       adapter: "douyin-image-text-browser", stage: "local_validation_only", networkCalls: 0, finalSubmitCount: 0 } };
     throw new BrowserAutomationError("USER_ACTION_REQUIRED", "Douyin image-text requires a persisted Prepared record and one-shot final submit boundary");
   }
+}
+
+/** Content quality never changes the already verified management publication or submit count. */
+export function classifyDouyinPublicContent(article: Pick<PublishArticleInput, "title" | "body">,
+  evidence: { text: string; imageCount: number }): { titleMatch: boolean; bodyMatch: boolean; imageMatch: boolean;
+    publicContentVerified: "PASS" | "FAIL"; contentFidelityWarning: string | null } {
+  const titleMatch = evidence.text.includes(article.title);
+  const bodyMatch = evidence.text.includes(article.body);
+  const imageMatch = evidence.imageCount > 0;
+  const pass = titleMatch && bodyMatch && imageMatch;
+  const literalBreak = !bodyMatch && article.body.includes("\n") && evidence.text.includes(article.body.replace(/\n/gu, "*"));
+  return { titleMatch, bodyMatch, imageMatch, publicContentVerified: pass ? "PASS" : "FAIL",
+    contentFidelityWarning: pass ? null : literalBreak ? "BODY_LINEBREAK_RENDERED_AS_LITERAL_ASTERISK" : "PUBLIC_CONTENT_MISMATCH" };
 }

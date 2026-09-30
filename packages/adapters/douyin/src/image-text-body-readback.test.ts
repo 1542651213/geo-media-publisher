@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { chromium, type Browser, type Page } from "playwright-core";
 import { readDouyinBodyText } from "./image-text-body-readback";
+import * as bodyIO from "./image-text-body-readback";
 
 const chrome = process.env.CHROME_PATH ?? "C:/Program Files/Google/Chrome/Application/chrome.exe";
 const browsers: Browser[] = [];
@@ -20,6 +21,50 @@ const leaf = (value: string) => `<span><span>${value}</span></span>`;
 
 describe.skipIf(!existsSync(chrome))("Douyin Slate semantic body readback", () => {
   const liveParagraph = (text: string) => `<div class="ace-line" data-node="true"><div data-line-wrapper="true" dir="auto"><span data-leaf="true"><span data-string="true">${text}</span></span><span data-leaf="true"><span data-string="true" data-enter="true">\u200B</span></span></div></div>`;
+  it("enters three paragraphs through editor Enter handling rather than a bulk multiline insertText", async () => {
+    const page = await fixture(`<div contenteditable="true" data-slate-editor="true"></div>`);
+    await page.evaluate(() => {
+      const editor = document.querySelector<HTMLElement>('[contenteditable="true"]')!;
+      const paragraphs = [""];
+      const events: string[] = [];
+      const render = (): void => {
+        editor.replaceChildren(...paragraphs.map((text) => {
+          const node = document.createElement("div"); node.dataset.node = "true";
+          const line = document.createElement("div"); line.dataset.lineWrapper = "true";
+          for (const [value, terminal] of [[text, false], ["\u200B", true]] as const) {
+            const leaf = document.createElement("span"); leaf.dataset.leaf = "true";
+            const content = document.createElement("span"); content.dataset.string = "true";
+            if (terminal) content.dataset.enter = "true";
+            content.append(document.createTextNode(value)); leaf.append(content); line.append(leaf);
+          }
+          node.append(line); return node;
+        }));
+        const range = document.createRange(); range.selectNodeContents(editor); range.collapse(false);
+        const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range);
+      };
+      editor.addEventListener("beforeinput", (event) => {
+        const input = event as InputEvent;
+        events.push(`${input.inputType}:${input.data ?? ""}`);
+        if (input.inputType === "insertText") { event.preventDefault(); paragraphs[paragraphs.length - 1] += input.data ?? ""; render(); }
+        if (input.inputType.startsWith("delete")) { event.preventDefault(); paragraphs.splice(0, paragraphs.length, ""); render(); }
+      });
+      editor.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") { event.preventDefault(); events.push("EDITOR_ENTER"); paragraphs.push(""); render(); }
+      });
+      Object.assign(window, { paragraphInputEvents: events }); render();
+    });
+    const text = "第一段\n第二段\n第三段";
+    // The fallback reproduces the pre-fix production bulk-fill path if the writer is absent.
+    const writer = (bodyIO as unknown as { writeDouyinBodyParagraphs?: (page: Page, text: string) => Promise<void> }).writeDouyinBodyParagraphs
+      ?? (async (target: Page, value: string) => { await target.locator('[contenteditable="true"]').fill(value); });
+    await writer(page, text);
+    expect(await page.locator('[data-node="true"]').count()).toBe(3);
+    expect((await readDouyinBodyText(page)).semanticText).toBe(text);
+    expect(await page.locator('[contenteditable="true"]').textContent()).not.toContain("*");
+    const events = await page.evaluate(() => (window as unknown as { paragraphInputEvents: string[] }).paragraphInputEvents);
+    expect(events.filter((event) => event === "EDITOR_ENTER")).toHaveLength(2);
+    expect(events.some((event) => event.startsWith("insertText:") && event.includes("\n"))).toBe(false);
+  });
   it("reads the observed Creator multi-paragraph Slate structure in DOM order", async () => {
     const parts = ["保持合理通风。", "不能只凭气味判断空气状况。", "B01-A7F39C"];
     const page = await fixture(`<div contenteditable="true" data-slate-editor="true">${parts.map(liveParagraph).join("")}</div>`);

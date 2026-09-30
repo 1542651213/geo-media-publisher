@@ -9,6 +9,23 @@ export type DouyinBodyReadback = {
   structureClass: "SLATE_TERMINAL_ZWSP" | "SLATE_PARAGRAPHS" | "SLATE_OTHER" | "NON_SLATE";
 };
 
+/** Use the editor's paragraph command; bulk fill inserts multiline text without Enter handling. */
+export async function writeDouyinBodyParagraphs(page: Page, text: string): Promise<void> {
+  const editor = page.locator('[contenteditable="true"]');
+  if (await editor.count() !== 1) throw new Error("DOUYIN_BODY_EDITOR_AMBIGUOUS");
+  if (!await editor.evaluate(element => element.hasAttribute("data-slate-editor")))
+    throw new Error("DOUYIN_BODY_SLATE_STRUCTURE_UNVERIFIED");
+  await editor.click();
+  await editor.press("ControlOrMeta+A");
+  await editor.press("Backspace");
+  const paragraphs = text.split("\n");
+  for (let index = 0; index < paragraphs.length; index++) {
+    if (index > 0) await editor.press("Enter");
+    if (paragraphs[index]) await page.keyboard.insertText(paragraphs[index]!);
+  }
+  if ((await readDouyinBodyText(page)).semanticText !== text) throw new Error("DOUYIN_BODY_MISMATCH_AFTER_PARAGRAPH_INPUT");
+}
+
 /** Read the unique editor. Only the exact observed Slate leaf pair has a removable terminal placeholder. */
 export async function readDouyinBodyText(page: Page): Promise<DouyinBodyReadback> {
   const selector = '[contenteditable="true"]';

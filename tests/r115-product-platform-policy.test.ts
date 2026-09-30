@@ -26,6 +26,12 @@ const platform = (platformKey: string, extra: Partial<Platform> = {}): Platform 
 
 describe("R1.15 ordinary platform policy", () => {
   const catalog = [platform("zhihu"), platform("bilibili"), platform("douyin"), platform("netease_media"), platform("baijiahao")];
+  it("opens only ordinary Douyin image/text and leaves every batch and other platform gate OFF", () => {
+    expect(PRODUCT_PLATFORM_POLICY.filter((item) => item.ordinaryPublishEnabled).map((item) => item.platformKey)).toEqual(["douyin"]);
+    expect(PRODUCT_PLATFORM_POLICY.every((item) => !item.batchPublishEnabled)).toBe(true);
+    expect(operatorPublishBlockReason("douyin", platform("douyin"))).toBeNull();
+    expect(operatorPublishBlockReason("douyin", platform("douyin", { enabled: false }))).toBeTruthy();
+  });
 
   it("presents exactly ten platforms in the required order even when current main lacks Website", () => {
     expect(PRODUCT_PLATFORM_POLICY.map((item) => item.displayName)).toEqual([
@@ -45,7 +51,7 @@ describe("R1.15 ordinary platform policy", () => {
     expect(accounts).toEqual(before);
     expect(operatorFavoriteKeys(["zhihu", "bilibili", "douyin"])).toEqual(["douyin"]);
     expect(safeOperatorSelection("zhihu", operatorPlatformCatalog(catalog))).toBeNull();
-    expect(safeOperatorSelection("douyin", operatorPlatformCatalog(catalog))).toBeNull();
+    expect(safeOperatorSelection("douyin", operatorPlatformCatalog(catalog))).toBe("douyin");
   });
 
   it("loads a ten-platform account center without leaking old favorites or hidden accounts", async () => {
@@ -92,7 +98,8 @@ describe("R1.15 ordinary platform policy", () => {
     const resolvePlatform = (key: string): Platform | undefined => operatorPlatformCatalog(catalog).find((item) => item.platformKey === key);
     expect(() => assertOperatorPublishIpcRequest("articles:prepare-publish", { platformKey: "zhihu" }, resolvePlatform, () => null)).toThrow();
     expect(() => assertOperatorPublishIpcRequest("articles:prepare-publish", { platformKey: "netease_media" }, resolvePlatform, () => null)).toThrow();
-    expect(() => assertOperatorPublishIpcRequest("articles:prepare-publish", { platformKey: "douyin" }, resolvePlatform, () => null)).toThrow();
+    expect(() => assertOperatorPublishIpcRequest("articles:prepare-publish", { platformKey: "douyin" }, resolvePlatform, () => null)).not.toThrow();
+    expect(() => assertOperatorPublishIpcRequest("articles:prepare-publish", { platformKey: "douyin" }, () => ({ ...platform("douyin"), capabilities: { ...platform("douyin").capabilities, article: false } }), () => null)).toThrow();
     expect(() => assertOperatorPublishIpcRequest("jobs:run", { id: "old-job" }, resolvePlatform, () => ({ platformKey: "zhihu" }))).toThrow();
     expect(() => assertOperatorPublishIpcRequest("jobs:reconcile", { id: "old-job" }, resolvePlatform, () => ({ platformKey: "zhihu" }))).not.toThrow();
   });

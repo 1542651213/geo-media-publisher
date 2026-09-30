@@ -1,5 +1,13 @@
 # Douyin image/text R1 runbook
 
+## R1.15 ordinary delivery and independent content fidelity (2026-09-30)
+
+This is the current contract; the R1.14 sections below are historical evidence. Douyin publish success requires the existing durable `final_submit_count=1`, a credible exact Remote Work ID, and unique management/backend confirmation that this work is Published. Public title/body/image fidelity is a separate `PASS / FAIL / LIMITED` result. Fidelity failure is a quality warning, never permission to retry, click twice, create a replacement Job, replay a request or switch transports.
+
+Owner accepted B01 work `7691247987888016655` as `PUBLISHED_CONFIRMED` (one BrowserNative action). Its public fidelity remains `FAIL / BODY_LINEBREAK_RENDERED_AS_LITERAL_ASTERISK`. Migration 0029 appends this interpretation to `douyin_publish_outcomes`; original Intent, counter, Record and submit evidence remain unchanged. The Release replaces bulk multiline body fill with Enter-driven paragraphs and strict full editor readback. Isolated three-paragraph Slate event/DOM fixtures pass without generated literal stars; no second live post was made to revalidate the platform serializer.
+
+Only ordinary Douyin image/text is enabled: one explicitly selected verified Creator account per Job, one image, title <=20 UTF-16 units, public, immediate, no music. Batch and all nine other operator platform submit gates stay OFF. The B01 creation/approval UI is hidden in Release; persisted historical B01 grants remain enforced. Main still revalidates current app-owned canonical identity, prepares the existing Intent only in the final phase, atomically claims once under global concurrency 1, and reconciles uncertain results read-only. OAuth video publishing cannot use this ordinary image/text gate. Smart Music is deferred.
+
 ## R1.14 exact remote-ID reconciliation closure (2026-09-28)
 
 The R1.13 Core no-music Job `1d3a3bca-573b-46c1-9f80-6fd5753a0de0` has now been reconciled **without another submit**. Its original Intent `1479bf13-48f7-432d-b4b7-9e3300abe66d` retains `final_submit_count=1`; original Record `ecc6d4dc-599a-4b94-a063-e1700dbb5c1f` is `Published / Verified / success=true`, and the Job is `Success`. The trusted Browser response ID is `7690435917298928942`; the actual platform work URL is `https://www.douyin.com/note/7690435917298928942`. The current remote status is `PUBLISHED_CONFIRMED`.

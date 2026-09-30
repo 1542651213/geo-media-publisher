@@ -120,14 +120,17 @@ describe("Douyin image/text Creator binding", () => {
     repo.confirmJob(job.id, false);
     const intent = repo.prepareSubmissionIntent(job.id);
     repo.claimFinalSubmitAttempt(intent.id);
+    repo.markSubmissionIntentSubmitted(intent.id, "7361234567890123456");
     repo.markSubmissionIntentUncertain(intent.id, "SUBMISSION_UNCERTAIN");
     const before = { jobs: repo.listJobs().length, records: repo.getPublishRecords().length };
     const closed = repo.reconcileJobAsPublished(job.id, { externalId: "7361234567890123456", publishedUrl: null,
-      publicVerified: false, response: { managementState: "PUBLISHED", publicVerification: "LIMITED" } });
+      publicVerified: false, response: { managementState: "PUBLISHED", publicVerification: "LIMITED",
+        reconciliation: { readOnly: true, matchedBy: "REMOTE_ID", remoteState: "PUBLISHED", exactRemoteIdMatch: true, managementCardCount: 1 } } });
     expect(closed.job.status).toBe("Success");
     expect(closed.record).toMatchObject({ status: "Published", publishedUrl: null, success: true,
-      remoteStatus: "PUBLISHED_MANAGEMENT", verificationStatus: "WaitingUser" });
-    expect(repo.getSubmissionIntentByJob(job.id)).toMatchObject({ finalSubmitCount: 1, remoteStatus: "PUBLISHED_MANAGEMENT",
+      remoteStatus: "PUBLISHED_CONFIRMED", verificationStatus: "WaitingUser" });
+    expect(closed.record.response).toMatchObject({ publishResult: "PUBLISHED_CONFIRMED", managementPageVerified: "PASS", publicContentVerified: "LIMITED" });
+    expect(repo.getSubmissionIntentByJob(job.id)).toMatchObject({ finalSubmitCount: 1, remoteStatus: "PUBLISHED_CONFIRMED",
       externalId: "7361234567890123456" });
     expect({ jobs: repo.listJobs().length, records: repo.getPublishRecords().length }).toEqual(before);
   });
