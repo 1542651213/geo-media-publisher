@@ -12,6 +12,11 @@ import { runDeepSeekBenchmarkMode } from "./deepseek-benchmark-mode";
 import { createProcessDiagnostics } from "./process-diagnostics";
 import { recordAppStartup } from "./runtime-observability";
 import { b01CandidateCapabilityEnabled } from "./b01-candidate-capability";
+import { OfficialApiAdapter } from "../../../../packages/adapters/official-api/src";
+import { readOfficialApiAcceptance } from "./official-api-candidate";
+import { OfficialApiController } from "./official-api-controller";
+import { SqliteOfficialApiOperationStore } from "./official-api-operation-store";
+import { verifyOfficialApiPublicContent } from "./official-api-public-verifier";
 
 app.setName("codex-media-publisher");
 // Installed Candidate smoke must explicitly override Electron's cached userData path.
@@ -60,10 +65,16 @@ async function createWindow(): Promise<void> {
   const credentials = new SafeStorageCredentialStore(join(dataDirectory, "credentials.enc"), safeStorage);
   const ordinaryDouyinEnabled = productPlatform("douyin")?.ordinaryPublishEnabled === true;
   const b01AcceptanceEnabled = !ordinaryDouyinEnabled && b01CandidateCapabilityEnabled(app.isPackaged, process.resourcesPath);
+  const ordinaryWebsiteEnabled = productPlatform("website")?.ordinaryPublishEnabled === true;
+  const officialApiGrants = readOfficialApiAcceptance(app.isPackaged, process.resourcesPath);
+  const officialApiStore = new SqliteOfficialApiOperationStore(database.repository);
   const registry = createRuntimeAdapterRegistry(credentials, isDevelopment, logger, join(app.getPath("userData"), "browser-profiles"), join(dataDirectory, "credentials.enc"), {
     claimDouyinImageTextFileSelection: (input) => database.repository.claimDouyinImageTextFileSelection(input),
     // Main and Publisher retain the exact one-shot gate; the Adapter capability must be live before a new grant is requested.
-    douyinImageTextNativeSubmitEnabled: ordinaryDouyinEnabled || b01AcceptanceEnabled
+    douyinImageTextNativeSubmitEnabled: ordinaryDouyinEnabled || b01AcceptanceEnabled,
+    officialApiOptions: { operationStore: officialApiStore, publicVerifier: verifyOfficialApiPublicContent,
+      formalExecution: { available: ordinaryWebsiteEnabled || officialApiGrants.length > 0,
+        ...(ordinaryWebsiteEnabled ? {} : { allowedBindings: officialApiGrants.map(({ accountId, articleId, contentBindingId }) => ({ accountId, articleId, contentBindingId })) }) } }
   });
   ownedBrowserSessionClosers.add(async () => {
     const closableAdapters = registry.listAll().filter((adapter): adapter is typeof adapter & { closeOwnedSessions(): Promise<void> } => typeof (adapter as { closeOwnedSessions?: unknown }).closeOwnedSessions === "function");
@@ -77,11 +88,15 @@ async function createWindow(): Promise<void> {
     return Object.fromEntries(keys.map((key) => [key, credentials.get(`account:${accountId}:${platformKey}:${key}`) ?? ""]));
   };
   const publisher = new PublisherService(database.repository, registry, logger, { resolveSecrets: resolveAccountSecrets, enforceB01ForDouyin: !ordinaryDouyinEnabled });
+  const officialApiAdapter = registry.get("website");
+  if (!(officialApiAdapter instanceof OfficialApiAdapter)) throw new Error("WEBSITE_MAIN_ADAPTER_REQUIRED");
+  const officialApi = new OfficialApiController({ repository: database.repository, credentials, store: officialApiStore,
+    adapter: officialApiAdapter, ordinaryEnabled: ordinaryWebsiteEnabled, grants: officialApiGrants });
   scheduler = new PersistentScheduler(database.repository, publisher, logger, 5_000, {
     allowScheduledJob: (job) => productPlatform(job.platformKey)?.batchPublishEnabled === true
       && operatorPublishBlockReason(job.platformKey, database.repository.listPlatforms().find((platform) => platform.platformKey === job.platformKey)) === null
   });
-  registerIpc({ repository: database.repository, publisher, scheduler, registry, b01AcceptanceEnabled, resolveAccountSecrets, dataDirectory, coverDir: join(dataDirectory, "covers"), logger, credentials, aiCredentials: credentials, appLogPath, databasePath, processDiagnostics, restoreDatabase: (backupPath) => { scheduler?.stop(); restoreDatabaseSafely(database.db, databasePath, backupPath); app.relaunch(); app.exit(0); } });
+  registerIpc({ repository: database.repository, publisher, scheduler, registry, b01AcceptanceEnabled, officialApi, resolveAccountSecrets, dataDirectory, coverDir: join(dataDirectory, "covers"), logger, credentials, aiCredentials: credentials, appLogPath, databasePath, processDiagnostics, restoreDatabase: (backupPath) => { scheduler?.stop(); restoreDatabaseSafely(database.db, databasePath, backupPath); app.relaunch(); app.exit(0); } });
   // The one-shot diagnostic process owns the sole publish lane; existing queued jobs remain untouched.
   if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true" && process.env.TOUTIAO_READONLY_PREFLIGHT !== "true"
     && !process.env.TOUTIAO_NATIVE_ACCEPTANCE_ACCOUNT_ID?.trim()

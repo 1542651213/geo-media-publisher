@@ -513,9 +513,11 @@ export class PublisherService {
       if (job.platformKey === "douyin" && !douyinSettings) throw Object.assign(new Error("Douyin Owner-selected image/text settings are missing"), { code: "CONTENT_REJECTED" });
       const douyinConnection = job.platformKey === "douyin" ? this.repository.getDouyinImageTextConnection(account.id) : null;
       const expectedCreatorId = job.platformKey === "douyin" ? douyinConnection?.creatorId : account.externalAccountId;
-      const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: job.dryRun, manualConfirmationRequired: job.manualConfirmationRequired, ...browserIdentitySettings(account, managementReconciliation, douyinConnection), ...(douyinSettings ? { expectedVisibility: douyinSettings.visibility, expectedMusicMode: douyinSettings.musicMode ?? "NONE" } : {}) }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
+      const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: job.dryRun, manualConfirmationRequired: job.manualConfirmationRequired, ...browserIdentitySettings(account, managementReconciliation, douyinConnection), ...(douyinSettings ? { expectedVisibility: douyinSettings.visibility, expectedMusicMode: douyinSettings.musicMode ?? "NONE" } : {}), ...(job.platformKey === "website" ? { publishJobId: job.id } : {}) }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
       const preparedRecord = this.repository.getPublishRecordByJob(job.id);
       const usePlatformFinalSubmit = !job.dryRun && typeof adapter.finalSubmit === "function" && preparedRecord?.status === "Prepared";
+      if (!job.dryRun && job.platformKey === "website" && !usePlatformFinalSubmit)
+        throw Object.assign(new Error("Website requires its persisted prepared revision before final submission"), { code: "USER_ACTION_REQUIRED" });
       if (!job.dryRun && managementReconciliation && !usePlatformFinalSubmit) throw Object.assign(new Error("Toutiao BrowserNative requires a persisted prepared editor before final submission"), { code: "USER_ACTION_REQUIRED" });
       platformFinalSubmitPath = usePlatformFinalSubmit;
       if (!usePlatformFinalSubmit) {
@@ -554,7 +556,9 @@ export class PublisherService {
           ? this.repository.getMediaAsset((variant?.coverAssetId ?? article.coverAssetId) as string) : null;
         const selectedImage = job.selectedImageAssetId ? this.repository.getImageAsset(job.selectedImageAssetId) : null;
         if (job.selectedImageAssetId && !selectedImage) throw Object.assign(new Error("任务所选图片不存在，已停止发布"), { code: "UPLOAD_FAILED" });
-        const input = { articleId: article.id, title: variant?.title ?? article.title, body: variant?.body ?? article.body, summary: variant?.summary ?? article.summary, tags: article.tags, ...(cover ? { coverPath: cover.filePath } : {}), ...(selectedImage ? { images: [selectedImage.filePath] } : {}) };
+        const liveInput = { articleId: article.id, title: variant?.title ?? article.title, body: variant?.body ?? article.body, summary: variant?.summary ?? article.summary, tags: article.tags, ...(cover ? { coverPath: cover.filePath } : {}), ...(selectedImage ? { images: [selectedImage.filePath] } : {}) };
+        const input = job.platformKey === "website" ? adapter.getPreparedArticleInput?.(ctx) : liveInput;
+        if (!input || input.articleId !== job.articleId) throw Object.assign(new Error("Website frozen input is missing or belongs to another Article"), { code: "CONTENT_REJECTED" });
         if (!job.dryRun && job.platformKey === "douyin") {
           if (!selectedImage || job.imageSelectionMode !== "manual" || selectedImage.brandId !== article.brandId)
             throw Object.assign(new Error("Douyin image binding is missing or no longer belongs to this Article brand"), { code: "CONTENT_REJECTED" });
@@ -607,8 +611,13 @@ export class PublisherService {
                   throw Object.assign(new Error("Toutiao submit has no explicit accepted evidence; management reconciliation is required"), { code: "SUBMISSION_UNCERTAIN" });
                 return submitted;
               }
+              // Persist an accepted Website submission before any uncertain job-status GET.
+              if (job.platformKey === "website" && submitted.success && submitted.status === "publishing" && submitted.externalId)
+                return submitted;
               let collected = submitted;
               if (adapter.collectPublishResult) collected = await withTimeout(adapter.collectPublishResult(ctx, input, attempt), this.options.operationTimeoutMs ?? 120_000, "Platform publish result collection");
+              if (job.platformKey === "website" && collected.success && collected.status === "publishing" && collected.externalId)
+                return collected;
               if (!collected.externalId || !collected.publishedUrl) throw Object.assign(new Error("Platform final submit did not return a verifiable External ID and URL"), { code: "EXTERNAL_EVIDENCE_INCOMPLETE" });
               if (!adapter.verifyPublished) throw Object.assign(new Error("Platform final submit has no platform-specific verification contract"), { code: "RECONCILIATION_UNCERTAIN" });
               const verification = await withTimeout(adapter.verifyPublished(ctx, input, { externalId: collected.externalId, publishedUrl: collected.publishedUrl }), this.options.operationTimeoutMs ?? 120_000, "Platform publish verification");
@@ -723,7 +732,7 @@ export class PublisherService {
       const adapter = this.adapters.getForContent(job.platformKey, job.contentKind ?? "article");
       if (!adapter.getPublishStatus) return { job, message: "This platform does not support status reconciliation" };
       const effectiveBrowserExecutionMode = this.resolveBrowserExecutionMode(job.platformKey, browserExecutionMode, job.contentKind ?? "article");
-      const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: false, manualConfirmationRequired: false }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
+      const ctx = { accountId: account.id, accountName: account.name, platformKey: account.platformKey, settings: operationSettings({ dryRun: false, manualConfirmationRequired: false, ...(job.platformKey === "website" ? { publishJobId: job.id } : {}) }, action, effectiveBrowserExecutionMode), secrets: this.options.resolveSecrets?.(account.id, account.platformKey) };
       const status = await withTimeout(adapter.getPublishStatus(ctx, externalId), this.options.statusCheckTimeoutMs ?? 30_000, "Platform publish status check");
       this.repository.markJobPolled(job.id);
       if (status.status === "scheduled") {

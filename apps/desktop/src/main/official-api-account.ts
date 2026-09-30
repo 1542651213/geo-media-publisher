@@ -4,7 +4,8 @@ import { KANGYI_SITE_CONFIG, OfficialApiAdapter, assertOfficialApiCapabilities, 
   parseOfficialApiCredential, readOfficialApiCredential, type OfficialApiCredential, type WebsiteEnvironment } from "../../../../packages/adapters/official-api/src";
 import type { OfficialApiAccountView } from "../shared/official-api";
 
-interface ConnectionDependencies { repository: AppRepository; credentials: CredentialStore; verify?: (config: OfficialApiCredential) => Promise<unknown> }
+interface ConnectionDependencies { repository: AppRepository; credentials: CredentialStore; verify?: (config: OfficialApiCredential) => Promise<unknown>;
+  assertReconfiguration?: (accountId: string, config: OfficialApiCredential) => void }
 
 export function officialApiAccountView(repository: AppRepository, credentials: CredentialStore, accountId: string): OfficialApiAccountView {
   const account = repository.getAccountById(accountId, "website");
@@ -33,6 +34,7 @@ export async function importOfficialApiCredential(deps: ConnectionDependencies, 
     const view = officialApiAccountView(repository, credentials, accountId);
     if ((selected.externalAccountId && selected.externalAccountId !== `${config.siteId}:${environment}`)
       || (view.configured && view.environment !== environment)) throw new Error("WEBSITE_ACCOUNT_SCOPE_IMMUTABLE");
+    if (view.configured) deps.assertReconfiguration?.(accountId, config);
   };
   assertSelectedAccountScope();
   const assertUniqueScope = () => {

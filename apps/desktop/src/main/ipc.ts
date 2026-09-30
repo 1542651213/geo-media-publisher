@@ -5,6 +5,8 @@ import { basename, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { importOfficialApiCredential, officialApiAccountView, verifyOfficialApiConnection } from "./official-api-account";
+import type { OfficialApiController } from "./official-api-controller";
+import { officialApiContentSettingsSchema } from "../../../../packages/adapters/official-api/src/mapping";
 import { credentialFingerprint, prepareToutiaoArticleJob, ToutiaoCredentialBundleService } from "@publisher/adapters-toutiao/article-api";
 import { protocolShadowEnabled } from "@publisher/adapters-toutiao/article-api";
 import { ToutiaoArticleBrowserAdapter } from "@publisher/adapters-toutiao/browser";
@@ -100,11 +102,13 @@ export interface IpcDependencies {
   processDiagnostics?: ProcessDiagnostics;
   /** True only for an explicitly marked B01 Candidate package. */
   b01AcceptanceEnabled?: boolean;
+  officialApi?: OfficialApiController;
 }
 
 let processDiagnostics: ProcessDiagnostics | null = null;
 let acceptanceRepository: AppRepository | null = null;
 let b01CandidateActive = false;
+let officialApiController: OfficialApiController | null = null;
 let operatorPlatformFinder: ((key: string) => Platform | undefined) | null = null;
 const mvp5PausedChannels = new Set(["articles:prepare-publish", "jobs:run", "jobs:confirm", "jobs:retry", "jobs:prepare-existing-douyin",
   "platform-self-test:run-post-upload-discovery", "platform-self-test:continue", "platform-self-test:run-level",
@@ -119,12 +123,21 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
         channel, payload,
         (platformKey) => operatorPlatformFinder?.(platformKey),
         (jobId) => acceptanceRepository?.getJob(jobId),
-        (requestChannel, requestPayload) => b01CandidateActive
-          && assertB01OperatorIpcException(requestChannel, requestPayload, acceptanceRepository!)
+        (requestChannel, requestPayload) => (b01CandidateActive
+          && assertB01OperatorIpcException(requestChannel, requestPayload, acceptanceRepository!))
+          || officialApiController?.allowsCandidateRequest(requestChannel, requestPayload) === true
       );
       if (acceptanceRepository && ["jobs:confirm", "jobs:run", "jobs:retry"].includes(channel)) {
         const input = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
         const job = typeof input.id === "string" ? acceptanceRepository.getJob(input.id) : null;
+        if (job?.platformKey === "website") {
+          if (channel === "jobs:retry") throw new Error("WEBSITE_ORIGINAL_OPERATION_RECOVERY_REQUIRED");
+          if (channel === "jobs:confirm" && input.dryRun !== false) throw new Error("WEBSITE_CONFIRMED_FINAL_ONLY");
+          const state = officialApiController?.jobState(job.id);
+          if (state?.phase !== "PREPARED" || job.status !== (channel === "jobs:confirm" ? "AwaitingConfirmation" : "Scheduled")
+            || (acceptanceRepository.getSubmissionIntentByJob(job.id)?.finalSubmitCount ?? 0) !== 0)
+            throw new Error("WEBSITE_PREPARED_ORIGINAL_JOB_REQUIRED");
+        }
         if (job?.platformKey === "douyin") {
           if ((job.contentKind ?? "article") !== "article") throw new Error("DOUYIN_ORDINARY_IMAGE_TEXT_ONLY");
           acceptanceRepository.assertArticlePublishAllowed(job.articleId);
@@ -171,6 +184,7 @@ export function registerIpc(deps: IpcDependencies): void {
   processDiagnostics = deps.processDiagnostics ?? null;
   acceptanceRepository = deps.repository;
   b01CandidateActive = deps.b01AcceptanceEnabled === true;
+  officialApiController = deps.officialApi ?? null;
   const { repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir, logger, credentials, aiCredentials } = deps;
   operatorPlatformFinder = key => {
     const platform = repository.listPlatforms().find(item => item.platformKey === key);
@@ -518,7 +532,11 @@ export function registerIpc(deps: IpcDependencies): void {
     return result.filePath;
   });
   register("articles:prepare-publish", async (_event, payload) => {
-    const input = z.object({ articleId: idSchema, platformKey: idSchema, platformAccountId: idSchema, publishMode: z.enum(["ASSISTED", "MANUAL"]).optional(), finalPublishMode: z.enum(["PREPARE_ONLY", "CONFIRM_BEFORE_PUBLISH", "AUTO_PUBLISH"]).optional(), selectedImageAssetId: idSchema.nullable().optional(), imageSelectionMode: z.enum(["random", "manual", "none"]).optional(), douyinImageTextSettings: z.strictObject({ version: z.literal(1), visibility: z.literal("public"), timing: z.literal("immediate"), musicMode: z.literal("NONE").optional() }).optional(), toutiaoArticleSettings: z.object({ version: z.literal(1), coverMode: z.enum(["auto", "none", "single", "multiple"]), coverImages: z.array(idSchema), articleAdType: z.enum(["none", "platform_default"]), remoteScheduledAt: z.string().nullable() }).optional() }).parse(payload);
+    const input = z.object({ articleId: idSchema, platformKey: idSchema, platformAccountId: idSchema, publishMode: z.enum(["ASSISTED", "MANUAL"]).optional(), finalPublishMode: z.enum(["PREPARE_ONLY", "CONFIRM_BEFORE_PUBLISH", "AUTO_PUBLISH"]).optional(), selectedImageAssetId: idSchema.nullable().optional(), imageSelectionMode: z.enum(["random", "manual", "none"]).optional(), websiteSettings: officialApiContentSettingsSchema.optional(), douyinImageTextSettings: z.strictObject({ version: z.literal(1), visibility: z.literal("public"), timing: z.literal("immediate"), musicMode: z.literal("NONE").optional() }).optional(), toutiaoArticleSettings: z.object({ version: z.literal(1), coverMode: z.enum(["auto", "none", "single", "multiple"]), coverImages: z.array(idSchema), articleAdType: z.enum(["none", "platform_default"]), remoteScheduledAt: z.string().nullable() }).optional() }).parse(payload);
+    if (input.platformKey === "website") {
+      if (!deps.officialApi || input.finalPublishMode === "AUTO_PUBLISH") throw new Error("WEBSITE_MAIN_CONFIRMED_PATH_REQUIRED");
+      return deps.officialApi.prepare({ articleId: input.articleId, platformAccountId: input.platformAccountId, websiteSettings: input.websiteSettings });
+    }
     const configuredMode = repository.getSettings().finalPublishMode;
     const finalPublishMode = input.platformKey === "douyin" ? input.finalPublishMode === "PREPARE_ONLY" ? "PREPARE_ONLY" : "CONFIRM_BEFORE_PUBLISH" : input.finalPublishMode ?? (configuredMode === "prepare_only" ? "PREPARE_ONLY" : configuredMode === "auto_publish" ? "AUTO_PUBLISH" : "CONFIRM_BEFORE_PUBLISH");
     const articleAdapter = registry.getForContent(input.platformKey, "article");
@@ -1404,6 +1422,28 @@ export function registerIpc(deps: IpcDependencies): void {
   });
   register("website:list-connections", () => repository.listAccounts().filter(account => account.platformKey === "website" && !account.archivedAt)
     .map(account => officialApiAccountView(repository, credentials, account.id)));
+  register("website:availability", () => deps.officialApi?.availability() ?? { ordinaryEnabled: false, candidateSelections: [] });
+  register("website:image-choices", (_event, payload) => {
+    const { articleId } = z.strictObject({ articleId: idSchema }).parse(payload);
+    const article = repository.getArticle(articleId);
+    if (!article || repository.getBrand(article.brandId)?.companyName !== "江苏康一环保科技有限公司") throw new Error("WEBSITE_KANGYI_BRAND_REQUIRED");
+    return repository.listImageAssets().filter(value => value.enabled && (value.brandId === article.brandId || value.universal))
+      .map(({ id, brandId, universal, enabled, name }) => ({ id, brandId, universal, enabled, name }));
+  });
+  register("website:job-state", (_event, payload) => {
+    const { jobId } = z.strictObject({ jobId: idSchema }).parse(payload);
+    return deps.officialApi?.jobState(jobId) ?? null;
+  });
+  register("website:recover", (_event, payload) => {
+    const { jobId } = z.strictObject({ jobId: idSchema }).parse(payload);
+    if (!deps.officialApi) throw new Error("WEBSITE_MAIN_CONTROLLER_UNAVAILABLE");
+    return deps.officialApi.recover(jobId);
+  });
+  register("website:maintain", (_event, payload) => {
+    const input = z.strictObject({ jobId: idSchema, operation: z.enum(["unpublish", "delete", "restore", "purge"]) }).parse(payload);
+    if (!deps.officialApi) throw new Error("WEBSITE_MAIN_CONTROLLER_UNAVAILABLE");
+    return deps.officialApi.maintain(input);
+  });
   register("website:import-credentials", async (_event, payload) => {
     const input = z.strictObject({ environment: z.enum(["staging", "production"]), accountId: idSchema.optional() }).parse(payload);
     const picked = await dialog.showOpenDialog({ title: `安全导入康一官网 ${input.environment} 凭据`, properties: ["openFile"],
@@ -1419,7 +1459,8 @@ export function registerIpc(deps: IpcDependencies): void {
       raw = bytes.toString("utf8");
     } catch { throw new Error("WEBSITE_CREDENTIAL_FILE_INVALID"); }
     // File bytes and the secret never pass through Renderer or IPC payloads.
-    const result = await importOfficialApiCredential({ repository, credentials }, raw, input.environment, input.accountId);
+    const result = await importOfficialApiCredential({ repository, credentials,
+      assertReconfiguration: (accountId, config) => deps.officialApi?.assertCredentialReconfiguration(accountId, config) }, raw, input.environment, input.accountId);
     logger.info("ACCOUNT", "WEBSITE_CREDENTIAL_IMPORTED", "官网签名凭据已安全导入", {
       accountId: result.accountId, siteId: result.siteId, environment: result.environment, configured: result.configured });
     return result;

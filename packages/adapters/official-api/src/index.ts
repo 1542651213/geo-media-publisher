@@ -1,8 +1,13 @@
 import { z } from "zod";
 import { PlatformAdapterError, type PlatformAdapter } from "@publisher/adapters-core";
-import type { AccountContext, AdapterManifest, CredentialField, LoginStatus, PublishArticleInput, ValidationResult } from "@publisher/domain";
+import type { AccountContext, AdapterManifest, CredentialField, LoginStatus, PublishArticleInput, PublishResult, PublishStatusResult, ValidationResult } from "@publisher/domain";
 import type { CredentialStore } from "@publisher/security";
 import { ClientError, CmsV2Client, type Capabilities, type ClientConfig } from "../../../cms-v2-client/src";
+import { OfficialApiDurableRuntime, type OfficialApiFormalBinding, type OfficialApiOperationStore,
+  type OfficialApiRuntimeClient, type OfficialApiRuntimeOptions } from "./runtime";
+export * from "./mapping";
+export * from "./runtime";
+import type { OfficialApiPreparedContent } from "./mapping";
 
 export type WebsiteEnvironment = "staging" | "production";
 export const KANGYI_SITE_CONFIG = { siteId: "kangyi", brand: "江苏康一环保科技有限公司",
@@ -11,6 +16,15 @@ export const KANGYI_SITE_CONFIG = { siteId: "kangyi", brand: "江苏康一环保
 const credentialSchema = z.strictObject({ origin: z.string().max(200), siteId: z.literal("kangyi"),
   environment: z.enum(["staging", "production"]), keyId: z.string().regex(/^[A-Za-z0-9._~-]{1,128}$/u), secret: z.string().min(1).max(8192) });
 export type OfficialApiCredential = z.infer<typeof credentialSchema>;
+
+export interface OfficialApiAdapterOptions {
+  credentials?: CredentialStore;
+  operationStore?: OfficialApiOperationStore;
+  clientFactory?: (config: ClientConfig) => OfficialApiRuntimeClient & Pick<CmsV2Client, "health" | "capabilities">;
+  formalExecution?: { available: boolean; allowedBindings?: OfficialApiFormalBinding[] };
+  readMediaBytes?: OfficialApiRuntimeOptions["readMediaBytes"];
+  publicVerifier?: OfficialApiRuntimeOptions["publicVerifier"];
+}
 
 /** Main-only input; no secret value is returned through the application bridge. */
 export function parseOfficialApiCredential(raw: string, expectedEnvironment: WebsiteEnvironment): OfficialApiCredential {
@@ -63,8 +77,32 @@ export class OfficialApiAdapter implements PlatformAdapter {
     officialWebsite: KANGYI_SITE_CONFIG.origins.production, developerPortal: `${KANGYI_SITE_CONFIG.origins.staging}/_publish-api/v2/capabilities`,
     lastVerifiedAt: "2026-09-30", blockingReason: "官网 OfficialAPI 尚待 staging、production 和普通 UI 验收。",
     credentialSchema: officialApiCredentialFields, officialSources: ["https://staging.kangyihb.com/_publish-api/v2/health", "https://xn--4gq502b.com/_publish-api/v2/health"] };
-  constructor(private readonly credentials?: CredentialStore,
-    private readonly clientFactory: (config: ClientConfig) => Pick<CmsV2Client, "health" | "capabilities"> = config => new CmsV2Client({ ...config, maxRetries: 0 })) {}
+  private readonly credentials?: CredentialStore;
+  private readonly clientFactory: (config: ClientConfig) => OfficialApiRuntimeClient & Pick<CmsV2Client, "health" | "capabilities">;
+  private readonly runtime?: OfficialApiDurableRuntime;
+
+  constructor();
+  constructor(credentials?: CredentialStore, clientFactory?: (config: ClientConfig) => Pick<CmsV2Client, "health" | "capabilities">);
+  constructor(options?: OfficialApiAdapterOptions);
+  constructor(first?: CredentialStore | OfficialApiAdapterOptions,
+    legacyFactory?: (config: ClientConfig) => Pick<CmsV2Client, "health" | "capabilities">) {
+    const options: OfficialApiAdapterOptions = first && ("operationStore" in first || "credentials" in first || "formalExecution" in first
+      || "clientFactory" in first || "readMediaBytes" in first || "publicVerifier" in first) ? first as OfficialApiAdapterOptions
+      : { credentials: first as CredentialStore | undefined };
+    this.credentials = options.credentials;
+    this.clientFactory = (options.clientFactory ?? legacyFactory ?? (config => new CmsV2Client({ ...config, maxRetries: 0 }))) as
+      (config: ClientConfig) => OfficialApiRuntimeClient & Pick<CmsV2Client, "health" | "capabilities">;
+    if (options.operationStore) this.runtime = new OfficialApiDurableRuntime({ operationStore: options.operationStore,
+      clientFactory: (ctx, scope) => {
+        const config = readOfficialApiCredential(this.requireCredentials(), ctx.accountId);
+        if (config.siteId !== scope.siteId || config.environment !== scope.environment || config.keyId !== scope.keyId
+          || config.origin !== KANGYI_SITE_CONFIG.origins[scope.environment]) throw new Error("WEBSITE_FROZEN_CREDENTIAL_SCOPE_MISMATCH");
+        return this.clientFactory({ ...config, maxRetries: 0 });
+      },
+      formalExecution: options.formalExecution ?? { available: false, allowedBindings: [] },
+      ...(options.readMediaBytes ? { readMediaBytes: options.readMediaBytes } : {}),
+      ...(options.publicVerifier ? { publicVerifier: options.publicVerifier } : {}) });
+  }
   getCapabilities() { return { article: true, imagePost: true, video: false, coverImage: true, tags: true, categories: true,
     scheduledPublish: false, draft: true, markdown: false, richText: true, maxTitleLength: 200, maxImageCount: 20, maxTagCount: 20 }; }
   getCredentialSchema() { return officialApiCredentialFields.map(field => ({ ...field })); }
@@ -101,6 +139,42 @@ export class OfficialApiAdapter implements PlatformAdapter {
     if (!input.body.trim()) errors.push("官网正文不能为空");
     return { valid: errors.length === 0, errors, warnings: [] };
   }
-  assertFormalSubmitAvailable(): never { throw new PlatformAdapterError("API_REVIEW_REQUIRED", "WEBSITE_ACCEPTANCE_REQUIRED"); }
-  async publishArticle(_ctx: AccountContext, _input: PublishArticleInput): Promise<never> { return this.assertFormalSubmitAvailable(); }
+  async prepare(ctx: AccountContext, prepared: OfficialApiPreparedContent, jobId: string) {
+    return this.requireRuntime().prepare(ctx, prepared, jobId);
+  }
+  getPreparedArticleInput(ctx: AccountContext): PublishArticleInput { return this.requireRuntime().getPreparedArticleInput(ctx); }
+  assertFormalSubmitAvailable(): void {
+    if (!this.runtime) throw new PlatformAdapterError("API_REVIEW_REQUIRED", "WEBSITE_ACCEPTANCE_REQUIRED");
+    try { this.runtime.assertFormalSubmitAvailable(); }
+    catch { throw new PlatformAdapterError("API_REVIEW_REQUIRED", "WEBSITE_ACCEPTANCE_REQUIRED"); }
+  }
+  async prepareFinalSubmit(ctx: AccountContext, article: PublishArticleInput) { return this.requireRuntime().prepareFinalSubmit(ctx, article); }
+  async finalSubmit(ctx: AccountContext, article: PublishArticleInput, attempt: Parameters<OfficialApiDurableRuntime["finalSubmit"]>[2]): Promise<PublishResult> {
+    return this.requireRuntime().finalSubmit(ctx, article, attempt);
+  }
+  async collectPublishResult(ctx: AccountContext, article: PublishArticleInput, attempt: Parameters<OfficialApiDurableRuntime["collectPublishResult"]>[2]): Promise<PublishResult> {
+    return this.requireRuntime().collectPublishResult(ctx, article, attempt);
+  }
+  async verifyPublished(ctx: AccountContext, article: PublishArticleInput, result: Pick<PublishResult, "externalId" | "publishedUrl">): Promise<PublishStatusResult> {
+    return this.requireRuntime().verifyPublished(ctx, article, result);
+  }
+  async getPublishStatus(ctx: AccountContext, externalId: string): Promise<PublishStatusResult> {
+    return this.requireRuntime().getPublishStatus(ctx, externalId);
+  }
+  async recoverOriginalOperation(ctx: AccountContext, jobId: string) { return this.requireRuntime().recoverOriginalOperation(ctx, jobId); }
+  async maintainOwnContent(ctx: AccountContext, input: Parameters<OfficialApiDurableRuntime["maintainOwnContent"]>[1]) {
+    return this.requireRuntime().maintainOwnContent(ctx, input);
+  }
+  async publishArticle(_ctx: AccountContext, _input: PublishArticleInput): Promise<never> {
+    this.assertFormalSubmitAvailable();
+    throw new PlatformAdapterError("API_REVIEW_REQUIRED", "WEBSITE_DURABLE_FINAL_PATH_REQUIRED");
+  }
+  private requireRuntime(): OfficialApiDurableRuntime {
+    if (!this.runtime) throw new PlatformAdapterError("API_REVIEW_REQUIRED", "WEBSITE_ACCEPTANCE_REQUIRED");
+    return this.runtime;
+  }
+  private requireCredentials(): CredentialStore {
+    if (!this.credentials) throw new PlatformAdapterError("AUTH_REQUIRED", "WEBSITE_CREDENTIAL_MISSING");
+    return this.credentials;
+  }
 }

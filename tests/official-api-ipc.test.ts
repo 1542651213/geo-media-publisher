@@ -64,4 +64,13 @@ describe("OfficialAPI Renderer request-only IPC", () => {
     for (const channel of ["website:set-secret", "website:set-status", "website:grant", "website:publish", "website:purge"])
       expect(handlers.has(channel)).toBe(false);
   });
+  it("rejects arbitrary remote identities and purge grants on recovery and maintenance IPC", async () => {
+    const { invoke } = fixture();
+    for (const extra of [{ contentId: "foreign-content" }, { remoteJobId: "foreign-job" }, { acceptanceRunId: "renderer-grant" }, { explicitPermission: true }]) {
+      await expect(invoke("website:maintain", { jobId: "own-job", operation: "purge", ...extra })).rejects.toThrow();
+      await expect(invoke("website:recover", { jobId: "own-job", ...extra })).rejects.toThrow();
+    }
+    await expect(invoke("website:availability", {})).resolves.toEqual({ ordinaryEnabled: false, candidateSelections: [] });
+    await expect(invoke("website:maintain", { jobId: "own-job", operation: "purge" })).rejects.toThrow("CONTROLLER_UNAVAILABLE");
+  });
 });

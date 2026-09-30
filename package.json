@@ -41,6 +41,7 @@
   "dependencies": {
     "better-sqlite3": "^12.2.0",
     "drizzle-orm": "^0.44.4",
+    "image-size": "2.0.4",
     "playwright-core": "^1.62.1",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",

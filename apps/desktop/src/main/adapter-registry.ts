@@ -18,13 +18,14 @@ import { ZhihuBrowserAdapter } from "@publisher/adapters-zhihu/browser";
 import { QqPublicBrowserAdapter } from "@publisher/adapters-qq-public/browser";
 import { LiejuBrowserAdapter } from "@publisher/adapters-lieju";
 import { CnblogsOfficialApiAdapter } from "@publisher/adapters-cnblogs";
-import { OfficialApiAdapter } from "../../../../packages/adapters/official-api/src";
+import { OfficialApiAdapter, type OfficialApiAdapterOptions } from "../../../../packages/adapters/official-api/src";
 import type { CredentialStore } from "@publisher/security";
 import type { Logger } from "@publisher/logger";
 import type { BrowserConnectionDiagnostic } from "@publisher/adapters-browser";
 import type { XiaohongshuAuthStateDiagnostic, XiaohongshuCanonicalPageOperationEvidence, XiaohongshuEditorEntryDiagnostic, XiaohongshuLoginEvaluation } from "@publisher/adapters-xiaohongshu/browser";
 
 export function createRuntimeAdapterRegistry(credentials: CredentialStore, includeTestPlatform: boolean, logger?: Logger, browserProfileRootDir?: string, credentialFilePath?: string, options: { toutiaoArticleApiPublisherEnabled?: boolean; toutiaoBrowserNativeSubmitEnabled?: boolean; douyinImageTextNativeSubmitEnabled?: boolean;
+  officialApiOptions?: Omit<OfficialApiAdapterOptions, "credentials">;
   claimDouyinImageTextFileSelection?: NonNullable<ConstructorParameters<typeof DouyinImageTextBrowserAdapter>[0]>["claimFileSelection"] } = {}): AdapterRegistry {
   const registry = new AdapterRegistry();
   const onBrowserRuntimeEvent = (event: BrowserRuntimeEvent): void => {
@@ -109,7 +110,7 @@ export function createRuntimeAdapterRegistry(credentials: CredentialStore, inclu
   registry.register(new QqPublicBrowserAdapter({ credentialStore: credentials, sessionManager: browserSessionManager, onBrowserRuntimeEvent }));
   registry.register(new LiejuBrowserAdapter({ credentialStore: credentials, sessionManager: browserSessionManager, onBrowserRuntimeEvent }));
   registry.register(new CnblogsOfficialApiAdapter());
-  registry.register(new OfficialApiAdapter(credentials));
+  registry.register(new OfficialApiAdapter({ credentials, ...options.officialApiOptions }));
   registry.register(new WechatChannelsSemiAutoAdapter());
   registry.register(new XiaohongshuBrowserAdapter({
     credentialStore: credentials,
