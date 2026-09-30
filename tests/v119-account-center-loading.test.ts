@@ -5,17 +5,17 @@ import { loadAccountCenterData } from "../apps/desktop/src/renderer/v11-ui-model
 
 describe("account center loading", () => {
   it("keeps the platform catalog when the account overview request fails", async () => {
-    const platforms = [{ platformKey: "zhihu", displayName: "知乎" }] as Platform[];
+    const platforms = [{ platformKey: "douyin", displayName: "抖音" }] as Platform[];
 
     const result = await loadAccountCenterData({
       overview: async (): Promise<AccountManagementRow[]> => { throw new Error("overview unavailable"); },
       platforms: async (): Promise<Platform[]> => platforms,
-      settings: async (): Promise<Record<string, unknown>> => ({ favoritePlatformKeys: "zhihu" })
+      settings: async (): Promise<Record<string, unknown>> => ({ favoritePlatformKeys: "zhihu,douyin" })
     });
 
-    expect(result.platforms).toEqual(platforms);
+    expect(result.platforms.map((platform) => platform.platformKey)).toEqual(["douyin", "xiaohongshu", "website", "toutiao", "sohu_media", "netease_media", "baijiahao", "weibo", "lieju", "cnblogs"]);
     expect(result.overview).toEqual([]);
-    expect(result.favoritePlatformKeys).toEqual(["zhihu"]);
+    expect(result.favoritePlatformKeys).toEqual(["douyin"]);
     expect(result.errors).toEqual(["overview"]);
   });
 });

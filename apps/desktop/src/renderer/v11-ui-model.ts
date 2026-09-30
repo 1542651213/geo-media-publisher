@@ -1,5 +1,6 @@
 import { normalizeContentReviewMode, type Account, type Article, type ContentReviewMode, type ImageAsset, type Platform, type PublishJob } from "@publisher/domain";
 import type { AccountManagementRow } from "../shared/api";
+import { operatorFavoriteKeys, operatorPlatformCatalog, productPlatform } from "../shared/product-platform-policy";
 
 export interface AccountCenterDataLoaders {
   overview: () => Promise<AccountManagementRow[]>;
@@ -24,9 +25,9 @@ export async function loadAccountCenterData(loaders: AccountCenterDataLoaders): 
   const [overviewResult, platformsResult, settingsResult] = results;
   const settings = settingsResult.status === "fulfilled" ? settingsResult.value : {};
   return {
-    overview: overviewResult.status === "fulfilled" ? overviewResult.value : [],
-    platforms: platformsResult.status === "fulfilled" ? platformsResult.value.filter((platform) => platform.platformKey !== "test") : [],
-    favoritePlatformKeys: String(settings.favoritePlatformKeys ?? "").split(",").filter(Boolean),
+    overview: overviewResult.status === "fulfilled" ? overviewResult.value.filter((row) => productPlatform(row.account.platformKey)?.accountManagementVisible === true) : [],
+    platforms: operatorPlatformCatalog(platformsResult.status === "fulfilled" ? platformsResult.value : []),
+    favoritePlatformKeys: operatorFavoriteKeys(String(settings.favoritePlatformKeys ?? "").split(",").filter(Boolean)),
     errors: results.flatMap((result, index) => result.status === "rejected" ? [keys[index]] : [])
   };
 }
@@ -47,7 +48,7 @@ export const normalNavigation: Array<{ route: V11NavigationTarget; label: string
   { route: "statistics", label: "数据统计", icon: "▥" }
 ];
 
-export const platformLabel = (key: string): string => ({
+export const platformLabel = (key: string): string => productPlatform(key)?.displayName ?? ({
   zhihu: "知乎",
   weibo: "微博",
   toutiao: "头条",

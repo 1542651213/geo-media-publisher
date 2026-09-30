@@ -41,6 +41,7 @@ import { assertDouyinAcceptanceChannel } from "./douyin-acceptance-gate";
 import { selectDouyinBodyDiagnosticTarget } from "./douyin-body-diagnostic-gate";
 import { selectDouyinMusicDiagnosticTarget } from "./douyin-music-diagnostic-gate";
 import { assertDouyinR14ReadOnlyChannel } from "./douyin-r14-readonly-gate";
+import { assertOperatorBatchPlanAllowed, assertOperatorPublishIpcRequest } from "./operator-publish-gate";
 
 const idSchema = z.string().min(1);
 function safeErrorCode(error: unknown): string {
@@ -105,6 +106,11 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
   ipcMain.removeHandler(channel);
   ipcMain.handle(channel, async (event, payload) => {
     try {
+      if (acceptanceRepository) assertOperatorPublishIpcRequest(
+        channel, payload,
+        (platformKey) => acceptanceRepository?.listPlatforms().find((platform) => platform.platformKey === platformKey),
+        (jobId) => acceptanceRepository?.getJob(jobId)
+      );
       const douyinR14JobId = process.env.DOUYIN_R1_14_READONLY_JOB_ID?.trim();
       if (douyinR14JobId) assertDouyinR14ReadOnlyChannel(channel, payload, {
         jobId: douyinR14JobId,
@@ -1437,7 +1443,7 @@ export function registerIpc(deps: IpcDependencies): void {
 
   register("plans:list", () => repository.listPlans());
   register("plans:create", (_event, payload) => repository.createPlan(z.object({ id: z.string().optional(), name: z.string().min(1), brandId: idSchema, enabled: z.boolean(), strategy: z.enum(["same_article", "per_platform", "platform_variant", "topic_rewrite", "account_variant"]), articlesPerDay: z.number().int().min(1).max(100), accountIds: z.array(idSchema), publishTimes: z.array(z.string()), reusePolicy: z.enum(["once", "same_platform", "same_platform_different_account", "always", "rewrite"]), minIntervalSeconds: z.number().int().min(0), maxRetries: z.number().int().min(0).max(10), consecutiveFailureThreshold: z.number().int().min(1).max(20), startDate: z.string(), endDate: z.string().nullable() }).omit({ id: true }).parse(payload)));
-  register("plans:generate-jobs", (_event, payload) => { const input = z.object({ id: idSchema, scheduledAt: z.string() }).parse(payload); const blockers = repository.validatePlanContentQuality(input.id); if (blockers.length > 0) throw Object.assign(new Error(`Quality Gate blocked publishing: ${blockers.length} content item(s) are not Approved`), { code: "CONTENT_REJECTED", blockers }); return repository.createJobsForPlan(input.id, input.scheduledAt); });
+  register("plans:generate-jobs", (_event, payload) => { const input = z.object({ id: idSchema, scheduledAt: z.string() }).parse(payload); assertOperatorBatchPlanAllowed(repository.listPlans().find((plan) => plan.id === input.id), repository.listAccounts(), repository.listPlatforms()); const blockers = repository.validatePlanContentQuality(input.id); if (blockers.length > 0) throw Object.assign(new Error(`Quality Gate blocked publishing: ${blockers.length} content item(s) are not Approved`), { code: "CONTENT_REJECTED", blockers }); return repository.createJobsForPlan(input.id, input.scheduledAt); });
   register("jobs:create-video", async (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema, articleId: idSchema, videoAssetId: idSchema, scheduledAt: z.string().datetime().optional() }).parse(payload);
     const account = repository.listAccounts().find((item) => item.id === input.accountId);

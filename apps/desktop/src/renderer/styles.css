@@ -293,3 +293,22 @@
   .v11-publish-row > :nth-child(7),
   .v11-publish-row > :nth-child(8) { grid-column: span 2; }
 }
+.v11-platform-overview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+  padding: 16px;
+}
+
+.v11-platform-overview > div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid var(--border-color, #e3e5ea);
+  border-radius: 8px;
+}
+
+.v11-platform-overview small { color: #667085; }
+.v11-channel-list .check-row.disabled { opacity: 1; }
+.v11-channel-list .check-row.disabled em { color: #526780; font-size: 11px; }

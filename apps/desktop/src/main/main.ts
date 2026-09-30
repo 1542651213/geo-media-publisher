@@ -7,6 +7,7 @@ import { createFileLogger } from "@publisher/logger";
 import { PersistentScheduler, PublisherService } from "@publisher/publisher";
 import { registerIpc } from "./ipc";
 import { createRuntimeAdapterRegistry } from "./adapter-registry";
+import { operatorPublishBlockReason, productPlatform } from "../shared/product-platform-policy";
 import { runDeepSeekBenchmarkMode } from "./deepseek-benchmark-mode";
 import { createProcessDiagnostics } from "./process-diagnostics";
 import { recordAppStartup } from "./runtime-observability";
@@ -61,7 +62,10 @@ async function createWindow(): Promise<void> {
     return Object.fromEntries(keys.map((key) => [key, credentials.get(`account:${accountId}:${platformKey}:${key}`) ?? ""]));
   };
   const publisher = new PublisherService(database.repository, registry, logger, { resolveSecrets: resolveAccountSecrets });
-  scheduler = new PersistentScheduler(database.repository, publisher, logger);
+  scheduler = new PersistentScheduler(database.repository, publisher, logger, 5_000, {
+    allowScheduledJob: (job) => productPlatform(job.platformKey)?.batchPublishEnabled === true
+      && operatorPublishBlockReason(job.platformKey, database.repository.listPlatforms().find((platform) => platform.platformKey === job.platformKey)) === null
+  });
   registerIpc({ repository: database.repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir: join(dataDirectory, "covers"), logger, credentials, aiCredentials: credentials, appLogPath, databasePath, processDiagnostics, restoreDatabase: (backupPath) => { scheduler?.stop(); restoreDatabaseSafely(database.db, databasePath, backupPath); app.relaunch(); app.exit(0); } });
   // The one-shot diagnostic process owns the sole publish lane; existing queued jobs remain untouched.
   if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true" && process.env.TOUTIAO_READONLY_PREFLIGHT !== "true"

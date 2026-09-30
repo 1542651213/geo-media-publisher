@@ -26,7 +26,9 @@ better-sqlite3 是原生模块：普通 host Node 与 Electron 的 ABI 可能不
 
 ## 普通运营平台定位
 
-计划在普通运营 UI 保留：抖音、小红书、官网、今日头条、搜狐号、网易号、百家号、微博、列举网、博客园。
+CURRENT PRODUCT UI STATE（R1.15-A01）：普通运营首页、账号中心、发布抽屉、发布中心和统计统一展示抖音、小红书、官网、今日头条、搜狐号、网易号、百家号、微博、列举网、博客园，按此顺序排列。十个平台的普通正式提交与批量发布仍关闭；展示不代表 production-ready。Main IPC 和持久调度均执行产品门禁，隐藏平台的账号、Job、PublishRecord 与原有配置不迁移、不删除，历史详情仍可读取。
+
+最新 durable milestone：R1.15-A01 完成平台白名单与普通 UI 统一，并通过隔离数据 Electron UI smoke；下一步为 R1.15-B01 抖音普通 UI Product E2E，正式安装版验收尚未完成。
 
 暂时隐藏：视频号、公众号、腾讯新闻、闲鱼、58 同城、地方新媒体、权威媒体及其它当前没有业务需求的平台。隐藏是产品展示决定，不删除历史数据、账号、Job 或 Adapter；有新业务需求时重新评估能力与验收。
 
@@ -108,7 +110,7 @@ Canonical branch: main
 
 ## 下一阶段路线
 
-- Phase A：普通运营平台白名单和 UI 收口；隐藏不再需要的平台入口，同时保留历史数据。
+- Phase A：R1.15-A01 已完成普通运营平台白名单和 UI 收口；隐藏不再需要的平台入口，同时保留历史数据。
 - Phase B：正式安装版普通用户路径 Product E2E，优先 Douyin、Weibo、Toutiao、Sohu、Website。测试真实 UI/IPC/账户选择/Job/回查，不以独立 runner 成功代替产品验收。
 - Phase C：分别完成 Xiaohongshu、Baijiahao、Lieju、CNBlogs 的身份、编辑器、内容、唯一 final submit、回查及普通 UI E2E。
 - Phase D：新增 NetEase 独立 Adapter 和独立测试，复用既有 Job、Intent、Record、BrowserSession 与一次性边界；不另造发布框架。

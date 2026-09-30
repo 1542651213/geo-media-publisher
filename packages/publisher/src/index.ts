@@ -764,7 +764,7 @@ export class PersistentScheduler {
   private running = false;
   private lastLoginSweepAt = 0;
 
-  constructor(private readonly repository: AppRepository, private readonly publisher: PublisherService, private readonly logger: Logger, private readonly intervalMs = 5_000, private readonly options: { globalConcurrency?: number; platformConcurrency?: number; accountConcurrency?: number } = {}) {}
+  constructor(private readonly repository: AppRepository, private readonly publisher: PublisherService, private readonly logger: Logger, private readonly intervalMs = 5_000, private readonly options: { globalConcurrency?: number; platformConcurrency?: number; accountConcurrency?: number; allowScheduledJob?: (job: PublishJob) => boolean } = {}) {}
   start(): void {
     if (this.timer) return;
     const recoveredBrowserJobs = this.repository.listJobs().filter((job) => this.publisher.isPlatformRegistered(job.platformKey) && ["Running", "Preparing", "ReadyToSubmit"].includes(job.status) && this.publisher.isBrowserAutomationPlatform(job.platformKey, job.contentKind ?? "article"));
@@ -789,6 +789,7 @@ export class PersistentScheduler {
         await Promise.all([...accounts.values()].filter((account) => this.publisher.isPlatformRegistered(account.platformKey) && account.enabled && !this.publisher.isBrowserAutomationPlatform(account.platformKey) && account.connectionMode !== "BrowserAutomation").map((account) => this.publisher.checkAccountLogin(account.id)));
       }
       const due = this.repository.listDueJobs(now.toISOString(), 50).filter((job) => {
+        if (this.options.allowScheduledJob && !this.options.allowScheduledJob(job)) return false;
         const account = accounts.get(job.accountId);
         if (!this.publisher.isPlatformRegistered(job.platformKey)) return false;
         const safeDryRun = job.dryRun;
