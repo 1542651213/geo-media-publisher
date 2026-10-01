@@ -25,6 +25,14 @@ const platform = (platformKey: string, extra: Partial<Platform> = {}): Platform 
 } as Platform);
 
 describe("R1.15 ordinary platform policy", () => {
+  it("keeps unaccepted Toutiao video creation and execution closed even when ordinary articles and Candidate grants are enabled", () => {
+    const resolvePlatform = (key: string) => platform(key);
+    expect(() => assertOperatorPublishIpcRequest("jobs:create-video", { platformKey: "toutiao" }, resolvePlatform, () => null, () => true)).toThrow("TOUTIAO_ORDINARY_ARTICLE_ONLY");
+    for (const channel of ["jobs:confirm", "jobs:run", "jobs:retry"])
+      expect(() => assertOperatorPublishIpcRequest(channel, { id: "existing-video" }, resolvePlatform, () => ({ platformKey: "toutiao", contentKind: "video" }), () => true)).toThrow("TOUTIAO_ORDINARY_ARTICLE_ONLY");
+    expect(() => assertOperatorPublishIpcRequest("jobs:reconcile", { id: "existing-video" }, resolvePlatform, () => ({ platformKey: "toutiao", contentKind: "video" }))).not.toThrow();
+    expect(() => assertOperatorPublishIpcRequest("jobs:confirm", { id: "article" }, resolvePlatform, () => ({ platformKey: "toutiao", contentKind: "article" }))).not.toThrow();
+  });
   const catalog = [platform("zhihu"), platform("bilibili"), platform("douyin"), platform("netease_media"), platform("baijiahao")];
   it("opens accepted ordinary Douyin, Website and Toutiao while leaving every batch and blocked platform gate OFF", () => {
     expect(PRODUCT_PLATFORM_POLICY.filter((item) => item.ordinaryPublishEnabled).map((item) => item.platformKey)).toEqual(["douyin", "website", "toutiao"]);

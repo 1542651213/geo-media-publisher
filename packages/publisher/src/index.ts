@@ -428,9 +428,7 @@ export class PublisherService {
     if (login !== "logged_in") throw Object.assign(new Error(`${managementReconciliation ? "头条" : "知乎"}账号 Session 未通过登录检查，请先完成正常登录验证`), { code: login === "expired" || login === "logged_out" ? "LOGIN_EXPIRED" : "USER_ACTION_REQUIRED" });
     const variant = job.articleVariantId ? this.repository.getArticleVariant(job.articleVariantId) : null;
     const selectedImage = job.selectedImageAssetId ? this.repository.getImageAsset(job.selectedImageAssetId) : null;
-    const coverId = job.platformKey === "toutiao" && managementReconciliation ? variant?.coverAssetId ?? article.coverAssetId : null;
-    const cover = coverId ? this.repository.getMediaAsset(coverId) : null;
-    const input = { articleId: article.id, title: variant?.title ?? article.title, body: variant?.body ?? article.body, summary: variant?.summary ?? article.summary, tags: article.tags, ...(cover ? { coverPath: cover.filePath } : {}), ...(selectedImage ? { images: [selectedImage.filePath] } : {}) };
+    const input = { articleId: article.id, title: variant?.title ?? article.title, body: variant?.body ?? article.body, summary: variant?.summary ?? article.summary, tags: article.tags, ...(selectedImage ? { images: [selectedImage.filePath] } : {}) };
     const frozenDouyin = job.platformKey === "douyin" ? await (async () => {
       if (!selectedImage || job.imageSelectionMode !== "manual" || selectedImage.brandId !== article.brandId)
         throw Object.assign(new Error("Douyin image must be manually selected from the same Article brand"), { code: "CONTENT_REJECTED" });
@@ -581,7 +579,7 @@ export class PublisherService {
         });
       } else {
         const variant = job.articleVariantId ? this.repository.getArticleVariant(job.articleVariantId) : null;
-        const cover = job.platformKey !== "douyin" && (variant?.coverAssetId ?? article.coverAssetId)
+        const cover = job.platformKey !== "douyin" && !(job.platformKey === "toutiao" && managementReconciliation) && (variant?.coverAssetId ?? article.coverAssetId)
           ? this.repository.getMediaAsset((variant?.coverAssetId ?? article.coverAssetId) as string) : null;
         const selectedImage = job.selectedImageAssetId ? this.repository.getImageAsset(job.selectedImageAssetId) : null;
         if (job.selectedImageAssetId && !selectedImage) throw Object.assign(new Error("任务所选图片不存在，已停止发布"), { code: "UPLOAD_FAILED" });

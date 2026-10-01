@@ -197,18 +197,15 @@ export class SohuBrowserAdapter extends BrowserAutomationAdapter {
 
   constructor(options: BrowserAutomationAdapterOptions = {}) { super(definition, options); }
 
-  override async checkSession(ctx: AccountContext): Promise<LoginStatus> {
-    const status = await super.checkSession(ctx);
-    if (status !== "logged_in") return status;
-    const owned = this.sessionManager.getCanonicalPage({ platformKey: this.platformKey, accountId: ctx.accountId });
-    if (!owned || owned.page.isClosed() || owned.page.context() !== owned.session.context) return "unknown";
-    const page = owned.page as Page;
+  protected override async inspectSessionPage(_ctx: AccountContext, page: Page): Promise<LoginStatus> {
     await page.waitForFunction(() => {
       const text = document.body?.innerText ?? "";
       return /发布文章|内容管理|总内容量|我的内容|登录\/注册|扫码登录|手机号登录|验证码登录/u.test(text);
     }, undefined, { timeout: 5_000 }).catch(() => undefined);
     return classifySohuCreatorSession(page.url(), await page.locator("body").innerText().catch(() => ""));
   }
+
+  protected override async inspectConnectionPage(ctx: AccountContext, page: Page): Promise<LoginStatus> { return this.inspectSessionPage(ctx, page); }
 
   override async preparePublish(ctx: AccountContext, article: PublishArticleInput): Promise<AutomationPrepareResult> {
     const validation = await this.validateArticle(article);

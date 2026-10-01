@@ -1,7 +1,7 @@
 import type { Account, Platform } from "@publisher/domain";
 import { operatorPublishBlockReason, productPlatform } from "../shared/product-platform-policy";
 
-type JobPlatform = { platformKey: string };
+type JobPlatform = { platformKey: string; contentKind?: string | null };
 
 export function assertOperatorPublishIpcRequest(
   channel: string,
@@ -11,11 +11,13 @@ export function assertOperatorPublishIpcRequest(
   allowOneShot?: (channel: string, payload: unknown) => boolean
 ): void {
   const data = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+  if (channel === "jobs:create-video" && data.platformKey === "toutiao") throw new Error("TOUTIAO_ORDINARY_ARTICLE_ONLY");
   let platformKey: string | null = null;
   if (channel === "articles:prepare-publish") {
     platformKey = typeof data.platformKey === "string" ? data.platformKey : "";
   } else if (["jobs:run", "jobs:confirm", "jobs:retry"].includes(channel)) {
     const job = typeof data.id === "string" ? findJob(data.id) : null;
+    if (job?.platformKey === "toutiao" && (job.contentKind ?? "article") !== "article") throw new Error("TOUTIAO_ORDINARY_ARTICLE_ONLY");
     platformKey = job?.platformKey ?? "";
   }
   if (platformKey === null) return;

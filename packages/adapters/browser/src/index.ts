@@ -230,6 +230,8 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
       if (this.isLoginPage(currentUrl)) return hasStored ? "expired" : "needs_user_action";
       const dom = await this.readDomEvidence(page);
       if (!dom.bodyPresent) return "unknown";
+      const status = await this.inspectSessionPage(ctx, page);
+      if (status !== "logged_in") return status;
       if (!hasStored) await this.sessionManager.save(identity, session.context);
       return "logged_in";
     } catch (error) {
@@ -537,6 +539,9 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
   protected markConnectionComplete(identity: { platformKey: string; accountId: string }): void { this.finishConnection(identity); }
 
   protected deferConnectionPersistence(_ctx: AccountContext): boolean { return false; }
+
+  /** Platform-specific login evidence must be read before background cleanup. */
+  protected async inspectSessionPage(_ctx: AccountContext, _page: Awaited<ReturnType<BrowserSession["context"]["newPage"]>>): Promise<LoginStatus> { return "logged_in"; }
 
   protected keepConnectionPageForCompletion(_ctx: AccountContext): boolean { return false; }
 

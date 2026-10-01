@@ -24,7 +24,7 @@ class Fixture implements PlatformAdapter {
   matched = true;
   readonly publishArticle = vi.fn(async (): Promise<PublishResult> => { throw new Error("Legacy transport must never run"); });
   readonly checkLogin = vi.fn(async () => "logged_in" as const);
-  readonly preparePublish = vi.fn(async () => ({ prepared: true, requiresUserAction: true, message: "prepared", response: { titleReadback: true, bodyReadback: true } }));
+  readonly preparePublish = vi.fn(async (_ctx: AccountContext, _input: PublishArticleInput) => ({ prepared: true, requiresUserAction: true, message: "prepared", response: { titleReadback: true, bodyReadback: true, imageUploaded: true } }));
   readonly releaseOperationSession = vi.fn(async (_ctx: AccountContext) => undefined);
   readonly finalSubmit = vi.fn(async (_ctx: AccountContext, _input: PublishArticleInput, attempt: BrowserPublishAttemptContext): Promise<PublishResult> => {
     attempt.markSubmissionSideEffect?.();
@@ -68,6 +68,24 @@ async function prepared() {
 afterEach(() => { for (const db of databases.splice(0)) db.close(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe("Toutiao BrowserNative production publisher", () => {
+  it("uses the explicitly selected same-brand image through preparation and final submission when an Article also has an older cover", async () => {
+    const scope = setup();
+    const otherBrand = scope.repo.createBrand({ name: "other", companyName: "other" });
+    const legacy = scope.repo.createMediaAsset({ brandId: otherBrand.id, type: "legacy_cover", title: "older cover", filePath: "older-cover.png" });
+    scope.db.prepare("UPDATE articles SET cover_asset_id=? WHERE id=?").run(legacy, scope.article.id);
+    const image = scope.repo.createImageAsset({ brandId: scope.article.brandId, name: "selected", filePath: "selected-cover.png", originalFileName: "selected-cover.png", mimeType: "image/png", size: 100 });
+    scope.db.prepare("UPDATE publish_jobs SET selected_image_asset_id=?,image_selection_mode='manual' WHERE id=?").run(image.id, scope.job.id);
+    await scope.publisher.prepareArticle(scope.job.id);
+    const preparedInput = scope.adapter.preparePublish.mock.calls[0]?.[1] as PublishArticleInput | undefined;
+    expect(preparedInput).toMatchObject({ images: [image.filePath] });
+    expect(preparedInput?.coverPath).toBeUndefined();
+    scope.repo.confirmJob(scope.job.id, false);
+    await scope.publisher.executeJob(scope.job.id);
+    const finalInput = scope.adapter.finalSubmit.mock.calls[0]?.[1];
+    expect(finalInput).toMatchObject({ images: [image.filePath] });
+    expect(finalInput?.coverPath).toBeUndefined();
+    expect(scope.repo.getSubmissionIntentByJob(scope.job.id)?.finalSubmitCount).toBe(1);
+  });
   it("rechecks temporary authorization after asynchronous preflight and before the durable final claim", async () => {
     const scope = setup();
     await scope.publisher.prepareArticle(scope.job.id); scope.repo.confirmJob(scope.job.id, false);
