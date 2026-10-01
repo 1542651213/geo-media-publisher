@@ -6,3 +6,11 @@ export function sprintUiSelection(grants: readonly SprintAcceptanceSelection[], 
     && grant.contentHash === article.contentHash && (!accountId || grant.accountId === accountId)
     && Date.parse(grant.expiresAt) > Date.now()) ?? null;
 }
+export function confirmedProductActionAvailable(ordinaryEnabled: boolean, grants: readonly SprintAcceptanceSelection[],
+  job: { platformKey: string; accountId: string; articleId: string; selectedImageAssetId?: string | null; status: string; finalPublishMode?: string },
+  article: { id: string; contentHash: string } | null | undefined): boolean {
+  if (!["weibo", "toutiao", "sohu_media", "cnblogs"].includes(job.platformKey)
+    || !["AwaitingConfirmation", "DryRunPassed"].includes(job.status) || job.finalPublishMode !== "CONFIRM_BEFORE_PUBLISH") return false;
+  const selection = sprintUiSelection(grants, job.platformKey, article, job.accountId);
+  return ordinaryEnabled || Boolean(selection && selection.imageAssetId === (job.selectedImageAssetId ?? null));
+}
