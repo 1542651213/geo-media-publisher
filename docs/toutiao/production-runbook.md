@@ -1,4 +1,46 @@
-# Toutiao BrowserNative production MVP
+# Toutiao BrowserNative ordinary article runbook
+
+## Current R1.15-D department release
+
+Ordinary article publishing is ON following one normal installed Product E2E on
+2026-10-01. Batch is OFF. Main rejects Toutiao video creation and confirm/run/retry
+before any Candidate exception; read-only history reconciliation remains available.
+Use the current release identified in `docs/releases/R1.15-D-READY.md`, rather than
+the historical September package below. Do not launch with diagnostic flags.
+
+Normal workflow: account center current login/Creator identity -> approved article
+in the correct company's library -> Toutiao -> explicit account selection (even if
+only one account) -> manually selected enabled same-brand image -> prepare ->
+Publish Center "确认并继续发布" -> original-task read-only status query. Main validates
+title/body, physical image availability/brand and current Creator permission before
+Job creation. Supported scope is plain text and one cover. Preparation and final
+execution use the selected ImageAsset exclusively; an older Article/Variant cover
+cannot override it. Actual editor title/body/image readback is mandatory.
+
+The earned acceptance is Job `7a3d52b5-c0aa-41dd-8f93-2fd11e2d4a3a`, Record
+`8b1f833e-cfb5-4a72-97be-7569417ea301`, remote ID `7691493900585910827`, URL
+`https://www.toutiao.com/item/7691493900585910827/`. The durable boundary entered at
+`2026-10-01T00:45:17.438Z`. One uncertain browser result was reconciled read-only in
+the same Candidate and original Job. Unique current-account management Published,
+public title/body/reachability, and restart readback passed. Job Success / Record
+Published / remote status PUBLISHED_CONFIRMED; the existing Intent contract retains
+Submitted and final_submit_count=1. Never rerun this completed acceptance.
+
+Current completion has two independent layers: trusted exact target Published
+management evidence closes publish success; public title/body/reachability records
+Content Fidelity PASS/FAIL/LIMITED. Missing or mismatched public content is a warning
+and never authorizes another submit. Missing identity, ambiguous management rows,
+reviewing/rejected/draft states still cannot become Published.
+
+Before-boundary recovery may restore the same prepared Job/Record only with identical
+frozen content, transport and account, count=0 and no uncertain boundary. After the
+claim, every restart/recovery is read-only. Retain all old uncertain API experiments.
+
+## Historical September acceptance context
+
+The following retained material describes the earlier scoped MVP and diagnostic
+acceptance. Its package paths and explicit flags are historical; current ordinary
+enablement and completion rules above take precedence.
 
 ## Scope and readiness
 
@@ -13,15 +55,17 @@ The historical Browser success supported this choice. One fresh Owner-approved
 acceptance completed on 2026-09-26; its exact scope and runtime versions are below.
 
 Ordinary routing is `platform=toutiao + contentKind=article + ARTICLE_BROWSER`.
-Video and other platforms keep their routes. An old Job frozen to `ARTICLE_WEB_API`
+Other platforms keep their routes. Toutiao video remains blocked in ordinary Main.
+An old Job frozen to `ARTICLE_WEB_API`
 cannot be prepared/submitted through BrowserNative. Read-only reconciliation of
 an old uncertain Job is still allowed. The 7050 experiment remains uncertain with
 its count of one; it is never a source of reusable publish permission.
 
 ## Configuration
 
-- `TOUTIAO_BROWSER_NATIVE_SUBMIT_ENABLED` defaults to false. Enable it only for an
-  explicitly approved acceptance/production session.
+- Current ordinary ON enables the native article route without an environment flag.
+  `TOUTIAO_BROWSER_NATIVE_SUBMIT_ENABLED` was used by historical scoped diagnostics;
+  it is not required for the R1.15-D normal employee workflow.
 - `TOUTIAO_ARTICLE_API_PUBLISHER_ENABLED` cannot replace the normal article route.
 - `TOUTIAO_MVP5_ONE_SHOT_ENABLED`, protocol/capture diagnostics and experimental
   BrowserAssistedApi flags remain false for ordinary publishing.
@@ -82,13 +126,14 @@ after the boundary permits read-only reconciliation only.
 | Exact target scheduled | Submitted/Scheduled; read-only polling |
 | Exact target rejected | Failed with rejection evidence; no automatic retry |
 | Draft, missing, ambiguous, unreadable or unknown | NeedsReconciliation |
-| Published row and valid public URL, exact public title/body | Published/Verified; Job Success |
+| Unique matching current-account Published row, trusted ID and URL | PUBLISHED_CONFIRMED; Job Success; independent public fidelity |
 | Click timeout, crash or response lost after claim | NeedsReconciliation; retain count one |
 
 Remote ID is preferred. Without one, exact normalized title, verified account and
 the durable submission-time window must uniquely identify the row. Row status is
 read from that row. HTTP 200, page toast or a random public link is never enough.
-Public-page failure remains uncertain and is never a reason to publish again.
+Public-page failure records a fidelity warning after trusted management success.
+It never permits another publish. Incomplete management evidence remains uncertain.
 
 Use the ordinary read-only query action for Submitted/Publishing/NeedsReconciliation.
 Self-test continue/confirm on a run with an existing Job also only reconciles.
@@ -104,7 +149,7 @@ Only a successful one-shot closure can mark this transport production-ready. Eve
 then, formal publishing remains explicitly configured; this runbook does not start
 batch work. Keep the experimental route off and preserve all historical evidence.
 
-## Accepted package and next launch
+## Historical accepted package and next launch
 
 - Final runtime: `80b7281916a8444ead3257a9b0b213ce96de65a3`.
 - Package: `C:\Users\Administrator\.codex\artifacts\toutiao-native-80b7281\win-unpacked\Geo Media Publisher.exe`.

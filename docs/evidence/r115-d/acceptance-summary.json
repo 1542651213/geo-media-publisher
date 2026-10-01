@@ -1,0 +1,114 @@
+{
+  "task": "R1.15-D_MULTI_PLATFORM_FAST_SPRINT",
+  "date": "2026-10-01",
+  "sourceReview": "APPROVED",
+  "packageSourceCommit": "9b7232114ca33ad47a463c374472224d3699d79e",
+  "installerFile": "Geo Media Publisher Setup 1.1.9 - R1.15-D MULTI-PLATFORM RELEASE.exe",
+  "installerBytes": 101219536,
+  "installerSha256": "6584455e22ced2cab3e9554272ed63760ba56fe06a77cf8785f43e62cabf7d2c",
+  "appAsarSha256": "42ca1b6c75871afafa7b263674158803d0ba6fa77751ac9bad109e7792f1b1bb",
+  "packagedByteParity": "PASS",
+  "candidateGrantAbsent": true,
+  "sensitiveResourcesAbsent": true,
+  "installedSmoke": "PASS",
+  "installedRestart": "PASS",
+  "runtime": {
+    "electron": "37.10.3",
+    "node": "22.21.1",
+    "modules": "136"
+  },
+  "tests": {
+    "focusedFiles": 5,
+    "focusedCount": 48,
+    "fullFiles": 188,
+    "fullCount": 1348,
+    "typecheck": "PASS",
+    "lint": "PASS",
+    "build": "PASS",
+    "newFailures": 0,
+    "inheritedFailures": 0
+  },
+  "platforms": {
+    "weibo": {
+      "ordinary": "OFF",
+      "batch": "OFF",
+      "result": "OWNER_LOGIN_BLOCKED",
+      "publishCount": 0,
+      "finalCount": 0,
+      "newJobs": 0
+    },
+    "toutiao": {
+      "ordinary": "ON",
+      "batch": "OFF",
+      "result": "PUBLISHED_CONFIRMED",
+      "publishCount": 1,
+      "finalCount": 1,
+      "newJobs": 1,
+      "jobId": "7a3d52b5-c0aa-41dd-8f93-2fd11e2d4a3a",
+      "recordId": "8b1f833e-cfb5-4a72-97be-7569417ea301",
+      "remoteId": "7691493900585910827",
+      "publicUrl": "https://www.toutiao.com/item/7691493900585910827/",
+      "managementVerified": "PASS",
+      "publicContentVerified": "PASS",
+      "restart": "PASS"
+    },
+    "sohu": {
+      "ordinary": "OFF",
+      "batch": "OFF",
+      "result": "OWNER_LOGIN_BLOCKED",
+      "publishCount": 0,
+      "finalCount": 0,
+      "newJobs": 0,
+      "currentInstalledCheckLogin": "needs_user_action"
+    },
+    "cnblogs": {
+      "ordinary": "OFF",
+      "batch": "OFF",
+      "result": "OWNER_CREDENTIAL_BLOCKED",
+      "publishCount": 0,
+      "finalCount": 0,
+      "newJobs": 0,
+      "authCheckMethod": "GET",
+      "authCheckPath": "/openapi/v1/corp/info",
+      "authHttpStatus": 401
+    },
+    "douyin": {
+      "ordinary": "ON",
+      "batch": "OFF",
+      "baselinePreserved": true
+    },
+    "website": {
+      "ordinary": "ON",
+      "batch": "OFF",
+      "baselinePreserved": true
+    }
+  },
+  "protection": {
+    "tablesCompared": 65,
+    "integrity": true,
+    "foreignKeys": true,
+    "expectedMetadataChanges": 15,
+    "unexpectedChanges": 0,
+    "existingCredentialEntriesUnchanged": true,
+    "originalDouyinEnabledRestored": true,
+    "existingExpiredLoginTruthPreserved": true,
+    "newJobCount": 1,
+    "newArticleCount": 0,
+    "newImageCount": 0,
+    "serverChanges": 0
+  },
+  "secondSubmitCount": 0,
+  "nodeReplayCount": 0,
+  "apiBlindReplayCount": 0,
+  "ownerActionRequired": true,
+  "blockedPlatforms": [
+    "weibo",
+    "sohu_media",
+    "cnblogs"
+  ],
+  "privateGithubPush": "BLOCKED_NO_PRIVATE_REMOTE",
+  "secretScan": "PASS_GITLEAKS_STAGED_DOCS_TASK_RANGE_BUILT_RUNTIME",
+  "secretExposed": false,
+  "serverTempAccountCanBeRevoked": true,
+  "finalStatus": "R1_15_D_PARTIAL_MULTI_PLATFORM_READY"
+}

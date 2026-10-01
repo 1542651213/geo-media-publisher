@@ -1,15 +1,16 @@
 # Geo Media Publisher
 
-Geo Media Publisher 是 Windows 上的多平台内容运营工作台，用于管理文章、图片素材、平台账号、发布任务和发布后的作品回查，并为网站 Publishing API 与未来 AI 内容生成提供统一入口。当前应用版本是 1.1.9；最新部门交付为 R1.15-C Kangyi Website Release，已支持普通运营入口使用抖音图文和康一官网 OfficialAPI。两平台批量发布均关闭，其它平台沿用原门禁。R1.15 Douyin Release、R1.14 FINAL 和历史 Candidate 保留归档。
+Geo Media Publisher 是 Windows 上的多平台内容运营工作台，用于管理文章、图片素材、平台账号、发布任务和发布后的作品回查，并为网站 Publishing API 与未来 AI 内容生成提供统一入口。当前应用版本是 1.1.9；最新交付为 R1.15-D Multi-platform Release，普通运营入口支持抖音图文、康一官网 OfficialAPI 和今日头条纯文本文章配一张封面。所有平台批量发布均关闭。微博、搜狐号和博客园当前受 Owner 登录或凭据阻塞，普通发布 OFF。R1.15-C、R1.15 Douyin Release、R1.14 FINAL 和历史 Candidate 保留归档。
 
 本仓库的长期正式分支是 main。R1.14 的公开纯源码快照为 85707e7bec68c01f3959d8447e61ab0b359b133f；本文件随 main promotion commit 加入，因此当前 main HEAD 请运行 git rev-parse HEAD 查询，不在此写入自引用 SHA。原始经过真实验收的运行时代码提交为 31a7495bcb24ee5a85e992d3f8f0a1d28c4d7575。公开历史经过净化，移除了历史生成二进制和私有加密凭据备份；本地原始 all-refs Git Bundle 仅供受控灾难恢复，绝不可上传。
 
 ## 先读：能力与开关
 
 - Douyin 图文：普通 UI B01 已完成一次真实发布（Remote Work ID `7691247987888016655`），可信 ID 与唯一管理页 Published 确认后为 PUBLISHED_CONFIRMED；公开内容一致性独立为 FAIL（旧正文换行显示成字面 `*`）。Release 已改为逐段输入并保留严格正文回读，离线隔离编辑器测试通过；禁止为验证修复再发第二条。普通图文发布 ON，批量 OFF；支持每 Job 一个明确选择的账号、一张图片、标题最多 20 个 UTF-16 计数单位、公开、立即、无音乐。Smart Music deferred。
-- Toutiao 图文：一个限定范围的 BrowserNative 候选达到 PUBLISHED_CONFIRMED；普通发布入口仍 OFF。
-- Weibo：已有真实发布 PASS 的历史证据；普通 UI 需要产品级复验。
-- Sohu：历史单次发布经更正后的只读回查为 Published / Verified；普通 UI 仍需复验。
+- Toutiao 图文：R1.15-D 普通安装版文章库 → 明确账号 → 手选同品牌封面 → 准备 → 发布中心确认完成一次真实发布。远端 ID `7691493900585910827`，唯一管理页 Published 和公开标题/正文均 PASS，重启保留原 Job/count=1。普通文章 ON、批量 OFF、视频创建和执行 OFF；只读历史回查保留。
+- Weibo：历史真实发布证据保留；2026-10-01 当前应用自有浏览器停在 passport visitor 页面，无有效当前账号身份。Owner 登录阻塞，普通 OFF；本轮没有创建 Job 或提交。
+- Sohu：历史 Published 证据保留；2026-10-01 当前页面是带登录入口的公开推荐流，不能当 Creator 登录。已修复 SPA 早期登录误判及后台页面释放顺序；Owner 登录阻塞，普通 OFF，本轮没有创建 Job 或提交。
+- CNBlogs：Main 使用既有 SafeStorage 凭据执行官方 `/openapi/v1/corp/info` 返回 401。Owner 需安全更新 PAT；身份、额度及原帖更新/未知结果恢复合同仍需验证，普通 OFF，本轮没有远端草稿、Job 或提交。
 - Website：康一 OfficialAPI V2 已完成 staging ARTICLE / CASE、真实响应丢失恢复，以及唯一 production 测试对象的普通安装版 UI 发布和重启验收。普通发布 ON，批量 OFF；支持封面、正文图、CASE 图库。SSR/图片保真独立于原发布 Job 成功状态，告警不触发重发。
 - 其它平台按下表逐项开放。任何真实发布都需要精确账号、内容和一次提交范围的 Owner 授权。
 
@@ -24,7 +25,41 @@ Geo Media Publisher 是 Windows 上的多平台内容运营工作台，用于管
 
 better-sqlite3 是原生模块：普通 host Node 与 Electron 的 ABI 可能不同。生产 Repository 写入及验收任务应由项目认可的 Electron 兼容运行时执行，不要让临时 host Node 脚本直接写 production publisher.db。schema 改动必须以 migration 完成。
 
-## R1.15-C 康一官网继续开发入口
+## R1.15-D 当前交付与继续开发入口
+
+canonical checkout 是 `D:\GEO_MEDIA_PUBLISHER_FINAL\source\geo-media-publisher`。交付分支 `release/2026-10-01-r1.15-d-multiplatform-sprint` 从 R1.15-C 最终 tag/HEAD `9b8bf10eae6edd8746cd32e3dd9dc9cd9c7b51e0` 开始；本轮 fetch 后 `origin/main=d2aa3c3f2c173c186c567421bbc4657ae32eec45`，没有 reset 或覆盖后续抖音和官网开发。最后运行时代码与正式包 source commit 为 `9b7232114ca33ad47a463c374472224d3699d79e`；最终文档提交与 local tag 的 HEAD 用 `git rev-parse r1.15-d-multiplatform-ready-20261001` 查询，不冒充运行时代码 SHA。
+
+完整状态和阻塞项见 `docs/releases/R1.15-D-READY.md`。正式安装包为 `output/r115-d-department-release/Geo Media Publisher Setup 1.1.9 - R1.15-D MULTI-PLATFORM RELEASE.exe`，101219536 bytes，SHA256 `6584455e22ced2cab3e9554272ed63760ba56fe06a77cf8785f43e62cabf7d2c`；安装版 app.asar SHA256 `42ca1b6c75871afafa7b263674158803d0ba6fa77751ac9bad109e7792f1b1bb`。最终串行全量 188 文件 / 1348 测试 PASS，typecheck/lint/build PASS；正式包字节一致性、grant/敏感资源缺席、两次普通启动和重启 smoke PASS。当前为部分平台就绪：新增今日头条 ON，其余三个平台保持 OFF。本轮没有网站/server 部署，不触碰汇泉、树派、其它平台 Adapter 业务代码；公共 BrowserSession 默认行为不变。
+
+### 今日头条普通运营 SOP
+
+1. 使用本轮正式安装包，在普通 production-data 启动，不设置实验 submit、capture、readonly-preflight 或 Candidate 环境变量。账号中心通过正常登录检查，当前 Creator ID 必须与 Main 持久身份一致；数据库的旧 logged_in 不是充分证据。
+2. 在正确企业的文章库选择已经审核的纯文本文章。打开发布抽屉，选择今日头条，明确选择账号；即使只有一个账号也不自动代选。手动选择一张启用、文件存在、同品牌 ImageAsset。当前支持普通段落与一张封面，不推广 HTML、视频、tags、定时或批量能力。
+3. Main 在创建 Job 前校验标题/正文、图片归属和当前 Creator 页面/权限。Publisher 使用所选 ImageAsset 作为唯一图片来源，旧 Article/Variant coverAssetId 不覆盖手选图片。准备阶段实读编辑器标题、正文和上传完成证据，冻结 ARTICLE_BROWSER、preparedInputHash、expectedCreatorId。
+4. 发布中心对 AwaitingConfirmation 的原 Job 显示“确认并继续发布”。实际最后动作之前重新校验冻结绑定，通过既有原子 claim 记录 final_submit_count=1。发布期间不要切换进程、账号、素材或 transport。
+5. 如果返回未知结果，只在原任务使用只读查询。当前账号的唯一 Published 管理行、可信数字 ID、可信公开 URL 和目标匹配证据确认 PUBLISHED_CONFIRMED。公开标题、正文、可达性单独记录 PASS/FAIL/LIMITED；保真失败不能触发再次发布。
+6. 提交前重启可在相同原 Job/Record、相同冻结内容/账号/transport 和 count=0 下显式恢复准备；成功后返回 AwaitingConfirmation。提交后重启只能只读恢复。旧视频和 ARTICLE_WEB_API 任务不可借新文章开关执行。
+
+### 本轮唯一已完成作品
+
+Main Job `7a3d52b5-c0aa-41dd-8f93-2fd11e2d4a3a`；Record `8b1f833e-cfb5-4a72-97be-7569417ea301`；远端 `7691493900585910827`，`https://www.toutiao.com/item/7691493900585910827/`。Job Success、Record Published、remote_status=PUBLISHED_CONFIRMED；SubmissionIntent 沿现有合同保留 Submitted、final_submit_count=1。公开标题和正文 PASS，安装版重启 PASS。禁止再次执行、创建替代 Job 或借其重复验收。
+
+### 当前 Owner 阻塞与后续动作
+
+- 微博：在账号中心进行正常登录/验证，取得当前稳定身份；历史专属普通帖子实现须按当前页面最小恢复，再做新的独立一次验收任务。
+- 搜狐号：正常登录到 Creator 管理后台并完成必要验证，核对当前身份；公开推荐流不能当登录成功。之后按原 prepare/final/reconcile 合同进行新的独立验收。
+- 博客园：通过 Main 的安全 credential 输入更新 PAT，先验证官方 corp/info、blogUrl/额度和稳定身份；再确认单一原 post 更新/发布、未知 create 结果恢复的正式合同。现有 prepare=create draft、final=create post 路径不得直接推广为普通发布。
+- 私有 GitHub：本机只有 PUBLIC origin。源代码、tag 和 Release 在本地完成；未 push、未修改仓库可见性。Owner 配置明确私有 remote 后才可推送并按流程集成，不能向现有 public origin 自动上传。
+
+### 验收授权与数据保护
+
+R1.15-D Candidate 曾包含短期、精确 account/article/image/hash 的 package-owned 单次 grant，仅用于上述一个 Product E2E。正式包不含 grant 文件；它使用已验收的普通开关。Main 在最终异步边界再次检查临时授权过期，视频拒绝发生在任何 Candidate 例外之前。Scheduler 不获得批量权限。
+
+正常数据备份在仓库外 `%LOCALAPPDATA%\GEO-Private-Backup\R115D-20261001-075618`，访问仅限本机受控用户。该位置含私有 DB/加密 credential，不提交、不上传、不自动删除。最终保护报告比较 65 表，integrity/foreign keys PASS，15 个明确预期元数据变化，非预期变化/删除=0；旧 Job/Record/Intent 不变，文章和图片行数不变，唯一新 Job 是本轮头条作品，既有加密 credential entries 全部不变。正常账号检查、所选文章审核/发布和所选图片使用元数据属于明确预期变化。
+
+现有 Scheduler 的普通登录扫查会暂停旧 OAuth login_status=expired 的 Douyin 账号；本轮通过既有 Main IPC 恢复其原 enabled 开关，保持 expired 字段事实，不改 OAuth/Creator 登录状态、不写 DB 文件。该既有行为没有作为本轮无关优化修改。当前应用均正常关闭；以后真实发布仍需重新验证实际 Creator 会话。
+
+## R1.15-C 康一官网继续开发入口（保留的已验收基线）
 
 项目 canonical checkout 是 `D:\GEO_MEDIA_PUBLISHER_FINAL\source\geo-media-publisher`。当前交付分支 `release/2026-09-30-r1.15-c-kangyi-officialapi` 从已有连接实现 `30acabdd6ca13e371145dd55153698608c41bfff` 续做，其父提交/可信 main 基线是 `d2aa3c3f2c173c186c567421bbc4657ae32eec45`。没有 reset 旧 HEAD 或覆盖后续抖音工作。最终 local tag 为 `r1.15-c-kangyi-officialapi-ready-20261001`；运行 `git show --no-patch <tag>` 获取文档交付 HEAD。main 没有自动合并，PUBLIC origin 没有自动 push；配置 Owner 私有 remote 后再正常推送此分支/tag，并按项目流程集成。
 
@@ -116,7 +151,7 @@ R1.15-C 当前 durable milestone：康一 OfficialAPI V2 的真实部署合同�
 
 GEO 正常 production-data 新增两条 Website 账号、三条系统验收源文章及其原始 Job/journal；0030 migration 由安装版 Main 应用。对验收前受保护快照的64张既有业务表逐项比较，旧业务字段保留；一条 Douyin enabled 开关恢复到原值，普通 Main 更新留下两项真实时间戳变动。既有加密凭据条目完全相同；新官网凭据只存 SafeStorage 加密文件。没有重发 Douyin、改写其历史 Job/Intent/Record 或伪造登录状态。
 
-CURRENT PRODUCT UI STATE（R1.15-C Website Release）：首页、账号中心、发布抽屉、发布中心和统计统一使用十平台策略，顺序为抖音、小红书、官网、今日头条、搜狐号、网易号、百家号、微博、列举网、博客园。Douyin 和 Website ordinaryPublishEnabled=true；所有平台 batchPublishEnabled=false，其它八个平台 ordinary=false。显示不等于可发布。Release 不含官网 Candidate 授权 marker，隐藏 B01 验收创建/批准入口；员工从内容库选择已连接的指定账号和图片、准备后确认一次提交。Douyin Main 独立校验 Adapter capability、应用自有 Page/Context、Creator identity 与 AUTHENTICATED；Website Main 重新验证精确 site/environment/keyId、health/capabilities、内容与图片字节。DB logged_in 不能代替验证。历史 B01 任务仍保留原门禁。
+HISTORICAL PRODUCT UI STATE（R1.15-C Website Release）：当时 Douyin 和 Website ordinaryPublishEnabled=true，其它八个平台 ordinary=false。R1.15-D 当前新增 Toutiao 普通文章 ON，完整当前状态以本文件顶部和 R1.15-D READY 为准。首页、账号中心、发布抽屉、发布中心和统计继续使用相同十平台顺序；所有 batch=false。显示不等于可发布，正式包不含 Candidate grant。员工从内容库选择明确账号和图片，准备后确认一次提交；DB logged_in 不能代替当前远端身份。历史 B01 任务仍保留原门禁。
 
 保留的 R1.15 Douyin milestone（历史，不是本轮下一任务）：已将 Douyin Publish Success 与 Public Content Fidelity 分离。发布成功必须有持久 final_submit_count=1、可信 Remote Work ID、唯一且同一目标的 Published 管理证据；公开内容另记 PASS / FAIL / LIMITED。公开内容失败只告警，不触发 retry、第二次点击、替代 Job、Node/API replay 或 transport fallback。正文输入不再 bulk fill 多行，而通过编辑器 Enter 创建段落、逐段插入，再严格回读完整正文；不会把 `*` 忽略或归一化为换行。三段隔离 Slate 事件/DOM fixture 通过；本轮没有第二次真实发布，因此修复后的公开平台序列化未另行实发复验。
 
@@ -130,18 +165,18 @@ Release identity / validation：`Geo Media Publisher Setup 1.1.9 - R1.15 DOUYIN 
 
 暂时隐藏：视频号、公众号、腾讯新闻、闲鱼、58 同城、地方新媒体、权威媒体及其它当前没有业务需求的平台。隐藏是产品展示决定，不删除历史数据、账号、Job 或 Adapter；有新业务需求时重新评估能力与验收。
 
-| 平台 | 截至 R1.14 的证据状态 | 下一门禁 |
+| 平台 | 最新已验证的证据范围 | 下一门禁 |
 | --- | --- | --- |
 | Douyin image/text | PUBLISHED_CONFIRMED；一个账号、一图、普通标题/正文、公开、立即、无音乐 | 普通 UI 发布成功已接受；普通图文 ON、批量 OFF；Smart Music deferred |
-| Toutiao article | 限定 BrowserNative 路线 PUBLISHED_CONFIRMED | 普通 UI Product E2E；普通提交仍 OFF |
-| Weibo | 历史真实 PublishPassed=PASS | 普通 UI 产品复验 |
-| Sohu | 历史 Published / Verified | 普通 UI 产品复验 |
+| Toutiao article | R1.15-D 普通 UI Product E2E PUBLISHED_CONFIRMED；公开标题/正文 PASS | 普通文章 ON，视频和批量 OFF；单账号纯文本单封面 |
+| Weibo | 历史真实 PublishPassed=PASS；当前 visitor 页面 | Owner 登录和普通 UI 产品复验；OFF |
+| Sohu | 历史 Published / Verified；当前公开推荐页 | Owner Creator 登录和普通 UI 产品复验；OFF |
 | Website | R1.15-C 康一 staging ARTICLE/CASE、production 唯一对象与普通 UI Product E2E PASS | 普通 OfficialAPI ON，批量 OFF；汇泉/树派另行验收 |
 | Xiaohongshu | 部分实现和测试；普通生产全链路验收未完成 | 保持门禁 |
 | Baijiahao | CONTENT_EDITOR_NOT_VERIFIED | 编辑器与完整发布验收 |
 | Zhihu | 历史 NeedsReconciliation | 旧未知 Job 只读回查，禁止重试 |
 | Lieju | 风控/验证阶段，非最终 product-ready | Owner 验证与独立能力门禁 |
-| CNBlogs | 现有 API 基础 | 普通产品 E2E |
+| CNBlogs | 现有 API 基础；当前 corp/info HTTP401 | Owner 安全更新 PAT，身份/更新/未知结果合同和普通产品 E2E；OFF |
 | NetEase | 下一新增平台的计划 | 独立 Adapter 和独立测试 |
 
 这些是截至归档时的状态，不是当前登录态。平台是否已登录必须重新由应用自有会话验证。
