@@ -3,6 +3,8 @@ import type { OfficialApiAccountView, OfficialApiAvailability, OfficialApiConten
 import type { Account, AccountStatus, ActivityLog, AIProviderProfile, Article, ArticleVariant, AuthorizationStatus, Brand, BrandAsset, BrandKnowledgeCategory, BrandKnowledgeEntry, CityRegion, ContentStudioPlatformKey, ContentStudioTopicPlan, CredentialField, DashboardStats, ExcelImportPreview, ExcelImportResult, FinalPublishMode, ImageAsset, ImageSelectionMode, KeywordItem, KeywordTemplate, KnowledgeSnapshot, LoginSession, Notification, Platform, PlatformContentRules, PlatformProfile, PlatformSelfTestLevel, PlatformSelfTestRun, PublishJob, PublishPlan, PublishRecord, PublishVerificationStatus, VideoAsset } from "@publisher/domain";
 import type { AIConnectionResult } from "@publisher/ai";
 import type { AIProductCenter } from "../main/ai-product-center";
+import type { OperationsApi } from "./content-operations";
+import type { SafeAccountSessionSnapshot } from "@publisher/adapters-core";
 import type { ProductAccountHealth, ProductPreflightResult } from "./product-platform-policy";
 import type { ContentQualityAuditView, ContentQualityItemView, ContentQualityReviewView, ContentQualityStateView, HumanReviewDatasetItemView, HumanReviewDatasetView, HumanReviewSubmitInput, HumanReviewItemReviewView, QualityBenchmarkContentView, QualityBenchmarkMetrics, QualityBenchmarkRunView } from "@publisher/db";
 import type { BrowserSessionRuntimeSnapshot, PreSubmitGateResult } from "@publisher/adapters-core";
@@ -143,7 +145,7 @@ export interface AccountManagementRow {
   providerAccountName: string | null;
   publishVerification: PublishVerificationStatus;
   connectionStage: "NotConfigured" | "CredentialConfigured" | "ConnectionPassed" | "PublishReady" | "PublishPassed" | "NeedsAttention";
-  runtimeAuthState: "UNVERIFIED" | "CHECKING" | "AUTHENTICATED" | "NEEDS_USER_ACTION" | "DISCONNECTED" | null;
+  runtimeAuthState: "UNVERIFIED" | "CHECKING" | "AUTHENTICATED" | "NEEDS_USER_ACTION" | "DISCONNECTED" | "CONNECTED" | "NEEDS_LOGIN" | "CREDENTIAL_INVALID" | "IDENTITY_MISMATCH" | "NETWORK_UNAVAILABLE" | "DISABLED" | null;
 }
 
 export type AccountDisconnectOutcome = "DISCONNECTED" | "ALREADY_DISCONNECTED";
@@ -181,6 +183,9 @@ export interface ManagedVideoAsset extends VideoAsset {
 }
 
 export interface PublisherApi {
+  sessions: { snapshots(): Promise<SafeAccountSessionSnapshot[]>; refresh(accountId: string): Promise<SafeAccountSessionSnapshot | null> };
+  workspace: { companies(): Promise<Brand[]>; current(): Promise<string | null>; select(companyId: string): Promise<{ companyId: string }> };
+  operations: OperationsApi & { pickImportFile(): Promise<{ fileName: string; columns: string[]; rows: Array<Record<string, string>> } | null> };
   product: { health(): Promise<ProductAccountHealth[]>; preflight(input: { articleId: string; platformKey: string; platformAccountId: string; selectedImageAssetId?: string | null; websiteSettings?: OfficialApiContentSettings }): Promise<ProductPreflightResult>; diagnostics(): Promise<Record<string, unknown>>; exportDiagnostics(): Promise<string | null> };
   aiCenter: {
     definitions(): Promise<ReturnType<AIProductCenter["definitions"]>>;

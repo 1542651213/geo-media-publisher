@@ -1,0 +1,22 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+const folder = readdirSync("node_modules/.pnpm").find(name=>name.startsWith("@electron+asar@3.4.1")); assert.ok(folder);
+const asar=(await import(pathToFileURL(resolve("node_modules/.pnpm",folder,"node_modules/@electron/asar/lib/asar.js")).href)).default;
+const install=resolve(process.argv[2]??"output/r115-f-department-install"), source=process.argv[3]; assert.match(source??"",/^[a-f0-9]{40}$/u);
+execFileSync("git",["diff","--quiet",source,"--","apps/desktop/src","packages"]);
+const archive=join(install,"resources/app.asar"), installer=resolve("output/r115-f-department-release/Geo Media Publisher Setup 1.1.9 - R1.15-F OPERATIONS RELEASE.exe");
+const hash=bytes=>createHash("sha256").update(bytes).digest("hex"), paths=asar.listPackage(archive);
+for(const path of ["out/main/main.js","out/preload/preload.js"]) assert.ok(asar.extractFile(archive,path.replaceAll("/","\\")).equals(readFileSync(path)));
+for(const path of paths.filter(name=>/out[\\/]renderer[\\/]assets[\\/].+\.(js|css)$/u.test(name))) {const local=path.replace(/^[\\/]/u,""); assert.ok(asar.extractFile(archive,local).equals(readFileSync(local)));}
+const main=asar.extractFile(archive,"out\\main\\main.js").toString("utf8");
+for(const marker of ["operations_generation_items","COMPANY_BINDING_MISMATCH","CONTENT_VALIDATION_REQUIRED","内容尚未人工审核通过","SerialPerCompany"]) assert.ok(main.includes(marker),marker);
+for(const file of readdirSync("packages/db/migrations")) assert.ok(readFileSync(join(install,"resources/packages/db/migrations",file)).equals(readFileSync(join("packages/db/migrations",file))));
+assert.ok(readFileSync("PLATFORMS.csv").equals(readFileSync(join(install,"resources/PLATFORMS.csv"))));
+for(const file of ["r115-d-sprint-acceptance.json","r115-c-official-api-acceptance.json","b01-acceptance.json"]) assert.equal(existsSync(join(install,"resources",file)),false);
+assert.equal(paths.some(path=>/credentials\.enc|publisher\.db|storage[-_]state\.json$|[\\/]\.env$|http-auth\.secret/iu.test(path)),false);
+const result={status:"PASS",installerBytes:statSync(installer).size,installerSha256:hash(readFileSync(installer)),installedAppAsarSha256:hash(readFileSync(archive)),packageRuntimeSourceCommit:source,byteParityMainPreloadRenderer:true,migrationAndPlatformResourceParity:true,migrations:readdirSync("packages/db/migrations").filter(name=>name.endsWith(".sql")).length,candidateGrantsAbsent:true,sensitiveResourcesAbsent:true};
+writeFileSync("output/r115-f-execution-20261001/package-identity.json",JSON.stringify(result,null,2));console.log(JSON.stringify(result));

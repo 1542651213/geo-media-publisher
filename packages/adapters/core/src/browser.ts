@@ -337,6 +337,33 @@ export class PlaywrightSessionManager {
     }
   }
 
+  /**
+   * Restores only an already persisted, exact platform/account session. Startup
+   * may call this without a user gesture because it is always headless and can
+   * never create an unbound login session or display a browser window.
+   */
+  async restore(identity: BrowserSessionIdentity): Promise<BrowserSession | null> {
+    const existing = this.getActiveSession(identity);
+    if (existing) return existing;
+    if (!(await this.hasRestorableSession(identity))) return null;
+    const key = browserSessionCredentialKey(identity);
+    const pending = this.pendingOpenPromises.get(key);
+    if (pending) return pending;
+    const creation = this.openFresh(identity, "BACKGROUND", this.closeAllGeneration);
+    this.pendingOpenPromises.set(key, creation);
+    try {
+      return await creation;
+    } finally {
+      if (this.pendingOpenPromises.get(key) === creation) this.pendingOpenPromises.delete(key);
+    }
+  }
+
+  async hasRestorableSession(identity: BrowserSessionIdentity): Promise<boolean> {
+    if (this.credentials.has(browserSessionCredentialKey(identity))) return true;
+    const profilePath = this.persistentProfilePath(identity);
+    return Boolean(profilePath && await pathExists(join(profilePath, ".gmp-profile-initialized")));
+  }
+
   private async openFresh(identity: BrowserSessionIdentity, executionMode: BrowserExecutionMode, closeAllGeneration: number): Promise<BrowserSession> {
     const stored = this.credentials.get(browserSessionCredentialKey(identity));
     let storageState: StorageState | undefined;

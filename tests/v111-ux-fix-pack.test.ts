@@ -40,17 +40,17 @@ function saveQuality(repository: ReturnType<typeof openDatabase>["repository"], 
 }
 
 describe("V1.1.1 UX Fix Pack", () => {
-  it("defaults to WarningOnly and lets Off publish a Draft Production article", () => {
+  it("preserves the legacy repository mode while new Product UI requires approval", () => {
     const { repository, brand, account } = fixture("off");
     expect(repository.getContentReviewMode()).toBe("WarningOnly");
     repository.setSetting("contentReviewMode", "Off");
     const article = createArticle(repository, brand.id, "off-draft");
     const job = repository.createArticlePublishJob({ articleId: article.id, platformKey: "zhihu", platformAccountId: account.id });
     expect(job.status).toBe("AwaitingConfirmation");
-    expect(canPublishWithReviewMode("Draft", "Off")).toBe(true);
+    expect(canPublishWithReviewMode("Draft", "Off")).toBe(false);
   });
 
-  it("lets WarningOnly publish Needs_Review while retaining visible risk reminders", () => {
+  it("preserves legacy repository behavior without allowing unapproved Product UI publishing", () => {
     const { repository, brand, account } = fixture("warning");
     const article = createArticle(repository, brand.id, "warning-review");
     const issue: ContentQualityIssue = { code: "seo_quality", severity: "warning", message: "SEO关键词不足", suggestion: "补充关键词" };
@@ -58,8 +58,8 @@ describe("V1.1.1 UX Fix Pack", () => {
     const job = repository.createArticlePublishJob({ articleId: article.id, platformKey: "zhihu", platformAccountId: account.id });
     expect(job.status).toBe("AwaitingConfirmation");
     expect(repository.listContentQualityReviews("article", article.id)[0]?.issues).toContainEqual(issue);
-    expect(articleListStatusLabel(article, "Needs_Review", "WarningOnly")).toBe("有提醒");
-    expect(canPublishWithReviewMode("Needs_Review", "WarningOnly")).toBe(true);
+    expect(articleListStatusLabel(article, "Needs_Review", "WarningOnly")).toBe("需要处理");
+    expect(canPublishWithReviewMode("Needs_Review", "WarningOnly")).toBe(false);
   });
 
   it("keeps Strict fail-closed until the current article hash is Approved", () => {

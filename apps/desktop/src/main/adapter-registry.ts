@@ -24,10 +24,13 @@ import type { Logger } from "@publisher/logger";
 import type { BrowserConnectionDiagnostic } from "@publisher/adapters-browser";
 import type { XiaohongshuAuthStateDiagnostic, XiaohongshuCanonicalPageOperationEvidence, XiaohongshuEditorEntryDiagnostic, XiaohongshuLoginEvaluation } from "@publisher/adapters-xiaohongshu/browser";
 
+export class RuntimeAdapterRegistry extends AdapterRegistry {
+  constructor(readonly browserSessionManager: BrowserSessionManager) { super(); }
+}
+
 export function createRuntimeAdapterRegistry(credentials: CredentialStore, includeTestPlatform: boolean, logger?: Logger, browserProfileRootDir?: string, credentialFilePath?: string, options: { toutiaoArticleApiPublisherEnabled?: boolean; toutiaoBrowserNativeSubmitEnabled?: boolean; douyinImageTextNativeSubmitEnabled?: boolean;
   officialApiOptions?: Omit<OfficialApiAdapterOptions, "credentials">;
-  claimDouyinImageTextFileSelection?: NonNullable<ConstructorParameters<typeof DouyinImageTextBrowserAdapter>[0]>["claimFileSelection"] } = {}): AdapterRegistry {
-  const registry = new AdapterRegistry();
+  claimDouyinImageTextFileSelection?: NonNullable<ConstructorParameters<typeof DouyinImageTextBrowserAdapter>[0]>["claimFileSelection"] } = {}): RuntimeAdapterRegistry {
   const onBrowserRuntimeEvent = (event: BrowserRuntimeEvent): void => {
     if (event.code === "BROWSER_RUNTIME_SELECTED") logger?.info("BROWSER_RUNTIME", event.code, "已选择系统浏览器运行时", event);
     else logger?.warn("BROWSER_RUNTIME", event.code, "未检测到可用系统浏览器", event);
@@ -55,6 +58,7 @@ export function createRuntimeAdapterRegistry(credentials: CredentialStore, inclu
       }
     }
   });
+  const registry = new RuntimeAdapterRegistry(browserSessionManager);
   const beginDiagnostics = new Map<string, BrowserConnectionDiagnostic>();
   const connectionDiagnosticKey = (diagnostic: BrowserConnectionDiagnostic): string => `${diagnostic.platformKey}:${diagnostic.accountId}`;
   const onXiaohongshuConnectionDiagnostic = (diagnostic: BrowserConnectionDiagnostic): void => {

@@ -97,7 +97,12 @@ export function safeOperatorSelection(platformKey: string | null | undefined, pl
   return operatorPublishBlockReason(platformKey, platform) === null ? platformKey : null;
 }
 
-export type ProductHealthStatus = "可发布" | "需要登录" | "凭据失效" | "需要 Owner 操作" | "待验收" | "只读" | "暂未开发" | "连接异常";
+export type ProductHealthStatus = "可发布" | "需要登录" | "凭据失效" | "需要 Owner 操作" | "待验收" | "只读" | "暂未开发" | "连接异常" | "正在验证账号" | "已连接" | "登录已失效，请重新登录" | "凭据已失效，请更新凭据" | "暂时无法验证连接" | "当前登录账号与绑定账号不一致" | "尚未验证" | "已停用";
+export function sessionAccountHealth(platformKey: string, state: string): Pick<ProductAccountHealth, "status" | "ownerNextAction" | "identityEvidence"> {
+  const statuses: Record<string, ProductHealthStatus> = { CHECKING: "正在验证账号", AUTHENTICATED: "已连接", CONNECTED: "已连接", NEEDS_LOGIN: "登录已失效，请重新登录", CREDENTIAL_INVALID: "凭据已失效，请更新凭据", NETWORK_UNAVAILABLE: "暂时无法验证连接", IDENTITY_MISMATCH: "当前登录账号与绑定账号不一致", UNVERIFIED: "尚未验证", DISABLED: "已停用" };
+  const connected = ["AUTHENTICATED", "CONNECTED"].includes(state);
+  return { status: statuses[state] ?? "尚未验证", identityEvidence: connected ? "REMOTE_VERIFIED" : "UNVERIFIED", ownerNextAction: connected ? productPlatform(platformKey)?.ordinaryPublishEnabled ? "发布前会再次核验真实身份和审核内容" : "账号已连接；仍需单独授权真实验收后开放正式发布" : state === "NETWORK_UNAVAILABLE" ? "检查网络后重新验证；无需因此重复登录" : state === "CREDENTIAL_INVALID" ? "由 Owner 更新凭据并重新验证" : state === "IDENTITY_MISMATCH" ? "由 Owner 核对绑定身份和当前登录账号" : state === "CHECKING" ? "正在后台只读验证，请稍候" : "由 Owner 登录或确认账号企业归属后重新验证" };
+}
 export interface ProductAccountHealth {
   platformKey: string; accountId: string | null; accountName: string; companyName: string; connectionMode: string;
   status: ProductHealthStatus; lastVerifiedAt: string | null; ownerNextAction: string; identityEvidence: "REMOTE_VERIFIED" | "UNVERIFIED";
@@ -122,6 +127,7 @@ export interface ProductPreflightInput {
   account: Pick<Account, "id" | "platformKey" | "enabled" | "archivedAt"> | null;
   identityVerified: boolean; images: Array<{ brandId: string | null; available: boolean }>;
   contentType: string; publishMode: string;
+  reviewApproved?: boolean;
 }
 export interface ProductPreflightResult {
   authority: "Main"; allowed: boolean; blockers: string[];
@@ -130,6 +136,7 @@ export interface ProductPreflightResult {
 export function evaluateProductPreflight(input: ProductPreflightInput): ProductPreflightResult {
   const policy = platformContentPolicy(input.platformKey), definition = productPlatform(input.platformKey), blockers: string[] = [];
   const article = input.article, account = input.account;
+  if (input.reviewApproved !== true) blockers.push("内容尚未人工审核通过，请先进入内容审核");
   if (!definition?.ordinaryPublishEnabled) blockers.push(definition?.publishBlockReason || "平台暂未开放正式发布");
   if (!article || article.brandId !== input.companyId || !input.companyId) blockers.push("文章与企业不匹配");
   if (!article?.title.trim()) blockers.push("请填写标题");
@@ -142,6 +149,7 @@ export function evaluateProductPreflight(input: ProductPreflightInput): ProductP
   if (policy.supportedContentTypes && !policy.supportedContentTypes.includes(input.contentType)) blockers.push("内容类型尚未开放");
   if (["douyin", "toutiao", "website"].includes(input.platformKey) && !["CONFIRM_BEFORE_PUBLISH", "PREPARE_ONLY"].includes(input.publishMode)) blockers.push("当前平台需要发布前确认");
   const items = [
+    { label: "人工审核", value: input.reviewApproved === true ? "当前内容已审核" : "待审核", passed: input.reviewApproved === true },
     { label: "企业", value: input.companyName, passed: Boolean(article && article.brandId === input.companyId) },
     { label: "平台能力", value: definition?.displayName ?? "未知平台", passed: definition?.ordinaryPublishEnabled === true },
     { label: "账号健康", value: input.identityVerified ? "真实身份已核验" : "需要登录或核验", passed: input.identityVerified && Boolean(account?.enabled) },

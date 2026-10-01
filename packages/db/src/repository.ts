@@ -1698,7 +1698,8 @@ export class AppRepository {
     const current = this.getArticle(id);
     if (!current) throw new Error("文章不存在");
     const previousState = this.getContentQualityState("article", id);
-    const next = { ...current, ...input, contentHash: studioContentHash(input.title ?? current.title, input.body ?? current.body), updatedAt: now() };
+    const contentChanged = (input.title !== undefined && input.title !== current.title) || (input.body !== undefined && input.body !== current.body);
+    const next = { ...current, ...input, contentFingerprint: contentChanged ? excelContentHash(input.title ?? current.title, input.body ?? current.body) : current.contentFingerprint, contentHash: contentChanged ? createHash("sha256").update(`${current.brandId}\n${input.title ?? current.title}\n${input.body ?? current.body}`).digest("hex") : current.contentHash, updatedAt: now() };
     this.db.prepare("UPDATE articles SET title=?, body=?, summary=?, tags_json=?, seo_keywords_json=?, status=?, reuse_policy=?, content_hash=?, content_fingerprint=?, updated_at=? WHERE id=?").run(next.title, next.body, next.summary, json(next.tags), json(next.seoKeywords), next.status, next.reusePolicy, next.contentHash, next.contentFingerprint ?? next.contentHash, next.updatedAt, id);
     this.ensureQualityState("article", id, current.brandId, null, next.contentHash, "Draft");
     this.recordContentQualityAudit({ contentType: "article", contentId: id, operatorType: "human", previousStatus: previousState?.status ?? "Draft", newStatus: "Draft", reason: "人工编辑后需要重新检查", contentHash: next.contentHash });
@@ -2546,9 +2547,10 @@ export class AppRepository {
       if (raw.contentType.trim() && !allowedContentTypes.has(raw.contentType.trim())) addError("INVALID_CONTENT_TYPE");
       if (raw.promotionStrength.trim() && !allowedPromotion.has(raw.promotionStrength.trim())) addError("INVALID_PROMOTION_STRENGTH");
       const contentHash = excelContentHash(title, body);
-      const duplicate = title && body ? this.db.prepare("SELECT id FROM articles WHERE content_fingerprint=? OR content_hash=? ORDER BY created_at LIMIT 1").get(contentHash, contentHash) as Row | undefined : undefined;
-      const duplicateRowNumber = title && body ? seenContentHashes.get(contentHash) ?? null : null;
-      if (title && body && !seenContentHashes.has(contentHash)) seenContentHashes.set(contentHash, raw.rowNumber);
+      const duplicate = title && body && matchedBrand ? this.db.prepare("SELECT id FROM articles WHERE brand_id=? AND (content_fingerprint=? OR content_hash=?) ORDER BY created_at LIMIT 1").get(matchedBrand.id, contentHash, contentHash) as Row | undefined : undefined;
+      const scopedContentHash = `${matchedBrand?.id ?? "unknown"}:${contentHash}`;
+      const duplicateRowNumber = title && body ? seenContentHashes.get(scopedContentHash) ?? null : null;
+      if (title && body && !seenContentHashes.has(scopedContentHash)) seenContentHashes.set(scopedContentHash, raw.rowNumber);
       if (duplicate || duplicateRowNumber !== null) addError("DUPLICATE_CONTENT");
       const uniqueErrors = [...new Set(errorCodes)];
       const uniqueDiagnosticCodes = [...new Set(diagnosticCodes)];
@@ -2591,7 +2593,8 @@ export class AppRepository {
       const resolvedUnknownBrand = row.status === "UNKNOWN_BRAND" && Boolean(brand);
       if (row.status === "INVALID" || (!brand && !resolvedUnknownBrand)) { failed += 1; continue; }
       if (row.status === "DUPLICATE" && !duplicateOverrides.has(row.rowNumber)) { skippedDuplicates += 1; continue; }
-      const contentHash = row.status === "DUPLICATE" ? `${row.contentHash}:${randomUUID()}` : row.contentHash;
+      const scopedHash = createHash("sha256").update(`${brand?.id ?? row.matchedBrandId}:${row.contentHash}`).digest("hex");
+      const contentHash = row.status === "DUPLICATE" ? `${scopedHash}:${randomUUID()}` : scopedHash;
       const created = this.createArticle({ brandId: brand?.id ?? row.matchedBrandId ?? "", topic: row.business.trim(), keyword: splitSemicolon(row.keywords)[0] ?? "", city: row.city.trim(), title: row.title.trim(), body: row.body.trim(), summary: row.summary.trim(), tags: splitSemicolon(row.tags), seoKeywords: splitSemicolon(row.keywords), articleType: row.contentType.trim() || "科普", aiProvider: "excel_import", aiModel: row.templateVersion || "1.0", generatedAt: importedAt, reusePolicy: "once", contentHash, qualityStatus: "unchecked", qualityWarnings: [], source: "excel_import", company: row.company.trim() || brand?.companyName || "", business: row.business.trim(), targetPlatforms: row.normalizedTargetPlatforms, promotionStrength: ["Soft", "Balanced", "Strong"].includes(row.promotionStrength.trim()) ? row.promotionStrength.trim() as PromotionStrength : null, sourceNote: row.sourceNote.trim(), importBatchId, importedAt, sourceFilename: input.preview.fileName.replace(/[\\/]/gu, ""), contentFingerprint: row.contentHash });
       if (!created) { failed += 1; continue; }
       articleIds.push(created.id);

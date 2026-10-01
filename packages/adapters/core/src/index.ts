@@ -218,5 +218,6 @@ export const defaultCapabilities: PlatformCapabilities = {
 };
 
 export * from "./browser";
+export * from "./session-runtime";
 export * from "./automation";
 export * from "./oauth";

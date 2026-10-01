@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AdapterRegistry } from "@publisher/adapters-core";
 import { TestPlatformAdapter } from "@publisher/adapters-test";
 import { openDatabase } from "@publisher/db";
@@ -12,6 +12,28 @@ const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 describe("R1.15 scheduled publish product gate", () => {
+  it("does not run a persistent account login sweep before startup rehydration is ready", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "publisher-r115f-startup-health-")); dirs.push(dir);
+    const { db, repository } = openDatabase(join(dir, "publisher.db"), join(process.cwd(), "packages/db/migrations"));
+    try {
+      repository.seedDevelopment(join(process.cwd(), "PLATFORMS.csv"));
+      const account = repository.createAccount({ platformKey: "test", name: "启动隔离账号" });
+      repository.updateAccount(account.id, { enabled: true, loginStatus: "logged_in" });
+      const adapter = new TestPlatformAdapter("login_expired");
+      const checkLogin = vi.spyOn(adapter, "checkLogin");
+      const registry = new AdapterRegistry(); registry.register(adapter);
+      const logger = createConsoleLogger();
+      const scheduler = new PersistentScheduler(repository, new PublisherService(repository, registry, logger), logger, 1000, {
+        allowScheduledJob: () => false,
+        allowAccountLoginSweep: () => false
+      });
+
+      await scheduler.runDueJobs();
+
+      expect(checkLogin).not.toHaveBeenCalled();
+      expect(repository.getAccountById(account.id, "test")).toMatchObject({ enabled: true, loginStatus: "logged_in", pausedReason: null });
+    } finally { db.close(); }
+  });
   it("does not disable a Creator-bound article account because its unrelated legacy OAuth expired", async () => {
     const dir = mkdtempSync(join(tmpdir(), "publisher-r115e-health-")); dirs.push(dir);
     const { db, repository } = openDatabase(join(dir, "publisher.db"), join(process.cwd(), "packages/db/migrations"));

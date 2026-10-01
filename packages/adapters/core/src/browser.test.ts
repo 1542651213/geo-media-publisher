@@ -18,6 +18,25 @@ class MemoryCredentialStore implements CredentialStore {
 const userAction: UserInitiatedAction = { userActionId: "11111111-1111-4111-8111-111111111111", triggerSource: "CONNECT_ACCOUNT" };
 
 describe("BrowserSessionManager credential boundary", () => {
+  it("rehydrates only the exact stored platform/account session in a hidden browser", async () => {
+    const store = new MemoryCredentialStore();
+    const stored = { cookies: [{ name: "sid", value: "encrypted-store-fixture", domain: ".toutiao.com", path: "/", expires: -1, httpOnly: true, secure: true, sameSite: "Lax" as const }], origins: [] };
+    store.set("session:toutiao:account-a", JSON.stringify(stored));
+    const page = { isClosed: () => false, url: () => "about:blank", context: () => context };
+    const context = { setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => page), pages: vi.fn(() => [page]), close: vi.fn(async () => undefined) } as unknown as BrowserContext;
+    const browser = { newContext: vi.fn(async () => context), close: vi.fn(async () => undefined), isConnected: () => true } as unknown as Browser;
+    const launchBrowser = vi.fn(async () => browser);
+    const manager = new BrowserSessionManager(store, { launchBrowser });
+
+    await expect(manager.restore({ platformKey: "toutiao", accountId: "account-b" })).resolves.toBeNull();
+    await expect(manager.restore({ platformKey: "weibo", accountId: "account-a" })).resolves.toBeNull();
+    const restored = await manager.restore({ platformKey: "toutiao", accountId: "account-a" });
+
+    expect(restored).toMatchObject({ executionMode: "BACKGROUND", headless: true, hasStoredSession: true });
+    expect(launchBrowser).toHaveBeenCalledWith({ channel: "chrome", headless: true });
+    expect(browser.newContext).toHaveBeenCalledWith({ storageState: stored });
+  });
+
   it("blocks Service Workers only for an explicitly configured diagnostic platform", async () => {
     const context = { setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => page), pages: vi.fn(() => [page]), close: vi.fn(async () => undefined) } as unknown as BrowserContext;
     const page = { isClosed: () => false, url: () => "about:blank", context: () => context };

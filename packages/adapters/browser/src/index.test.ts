@@ -62,6 +62,14 @@ function fixture(staysOnLogin = false, hasStoredSession = false, saveFails = fal
 }
 
 describe("BrowserAutomationAdapter login lifecycle", () => {
+  it("preserves a transient navigation failure for runtime NETWORK_UNAVAILABLE classification", async () => {
+    const { adapter, page } = fixture(false, true);
+    page.goto.mockRejectedValueOnce(new Error("offline fixture"));
+    const ctx: AccountContext = { ...context(), settings: { triggerSource: "APP_STARTUP", browserExecutionMode: "BACKGROUND" } };
+
+    await expect(adapter.checkSession(ctx)).rejects.toMatchObject({ code: "NETWORK_ERROR" });
+  });
+
   it("does not reuse a stale adapter fallback after the manager reports browser disconnect", async () => {
     const { adapter, manager } = fixture(false, true);
     manager.getActiveSession = vi.fn(() => null);

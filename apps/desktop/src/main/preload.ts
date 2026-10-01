@@ -4,6 +4,21 @@ import type { PublisherApi } from "../shared/api";
 const invoke = <T>(channel: string, payload?: unknown): Promise<T> => ipcRenderer.invoke(channel, payload) as Promise<T>;
 
 const api: PublisherApi = {
+  sessions: { snapshots: () => invoke("sessions:snapshots"), refresh: accountId => invoke("sessions:refresh", { accountId }) },
+  workspace: { companies: () => invoke("workspace:companies"), current: () => invoke("workspace:current"), select: companyId => invoke("workspace:select", { companyId }) },
+  operations: {
+    preparePlanGeneration: input => invoke("operations:prepare-plan-generation", input), consumePlanGenerationSeed: companyId => invoke("operations:consume-plan-generation-seed", { companyId }),
+    getStudioDefaults: companyId => invoke("operations:get-studio-defaults", { companyId }), saveStudioDefaults: input => invoke("operations:save-studio-defaults", input),
+    snapshot: companyId => invoke("operations:snapshot", { companyId }), accountCompany: accountId => invoke("operations:account-company", { accountId }), listUnboundAccounts: () => invoke("operations:unbound-accounts"),
+    bindAccount: input => invoke("operations:bind-account", input), reviewArticle: input => invoke("operations:review-article", input),
+    generatePlan: input => invoke("operations:generate-plan", input), createPlanItem: input => invoke("operations:create-plan-item", input), createDraftFromPlan: input => invoke("operations:create-draft-from-plan", input),
+    saveFact: input => invoke("operations:save-fact", input), activeFacts: companyId => invoke("operations:active-facts", { companyId }), duplicateWarnings: input => invoke("operations:duplicate-warnings", input), usage: input => invoke("operations:usage", input),
+    createGenerationQueue: input => invoke("operations:create-generation-queue", input), generationQueue: input => invoke("operations:generation-queue", input), runGenerationQueue: input => invoke("operations:run-generation-queue", input),
+    pauseGenerationQueue: input => invoke("operations:pause-generation-queue", input), resumeGenerationQueue: input => invoke("operations:resume-generation-queue", input), cancelGenerationQueue: input => invoke("operations:cancel-generation-queue", input), retryFailedGeneration: input => invoke("operations:retry-failed-generation", input),
+    previewImport: input => invoke("operations:preview-import", input), commitImport: input => invoke("operations:commit-import", input), pickImportFile: () => invoke("operations:pick-import-file"),
+    reconcileGenerationQueue: input => invoke("operations:reconcile-generation-queue", input), resolveValidationGeneration: input => invoke("operations:resolve-validation-generation", input),
+    resolveRecoverableGeneration: input => invoke("operations:resolve-recoverable-generation", input)
+  },
   product: { health: () => invoke("product:health"), preflight: input => invoke("product:preflight", input), diagnostics: () => invoke("product:diagnostics"), exportDiagnostics: () => invoke("product:export-diagnostics") },
   aiCenter: {
     definitions: () => invoke("ai-center:definitions"), profiles: () => invoke("ai-center:profiles"), saveProfile: input => invoke("ai-center:save-profile", input),

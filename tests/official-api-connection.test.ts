@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { openDatabase } from "@publisher/db";
 import { CredentialDecryptError, type CredentialStore } from "@publisher/security";
 import { OfficialApiAdapter, parseOfficialApiCredential, assertOfficialApiCapabilities } from "../packages/adapters/official-api/src";
+import { ClientError } from "../packages/cms-v2-client/src";
 import { importOfficialApiCredential, officialApiAccountView, verifyOfficialApiConnection } from "../apps/desktop/src/main/official-api-account";
 
 const publicTestSecret = "0123456789abcdef0123456789abcdef"; // gitleaks:allow -- public fixture, never a service credential
@@ -30,6 +31,42 @@ function fixture() {
 }
 
 describe("OfficialAPI Main connection boundary", () => {
+  it("binds a newly imported account only after verified credential persistence", async () => {
+    const { repository, credentials } = fixture();
+    const bound: string[] = [];
+    const view = await importOfficialApiCredential({ repository, credentials, verify: async () => capabilities,
+      assertBeforePersist: () => { expect(credentials.values.size).toBe(0); },
+      bindAccount: id => { expect(credentials.has(`account:${id}:website:secret`)).toBe(true); bound.push(id); }
+    }, JSON.stringify(configuration), "staging");
+    expect(bound).toEqual([view.accountId]);
+  });
+  it("does not persist credentials or create an account when the workspace changes during verification", async () => {
+    const { repository, credentials } = fixture();
+    let current = "company-a";
+    await expect(importOfficialApiCredential({ repository, credentials, verify: async () => { current = "company-b"; return capabilities; },
+      assertBeforePersist: () => { if (current !== "company-a") throw new Error("COMPANY_CONTEXT_MISMATCH"); },
+      bindAccount: () => { throw new Error("must not bind"); }
+    }, JSON.stringify(configuration), "staging")).rejects.toThrow("COMPANY_CONTEXT_MISMATCH");
+    expect(repository.listAccounts()).toHaveLength(0);
+    expect(credentials.values.size).toBe(0);
+  });
+  it("reports missing startup credentials as logged out instead of an inconclusive remote state", async () => {
+    const adapter = new OfficialApiAdapter(new MemoryStore(), () => ({ health: async () => { throw new Error("must not call"); }, capabilities: async () => { throw new Error("must not call"); } }));
+    await expect(adapter.checkLogin({ accountId: "missing", accountName: "Missing", platformKey: "website", settings: {} })).resolves.toBe("logged_out");
+  });
+
+  it("preserves a Website transport outage for NETWORK_UNAVAILABLE classification", async () => {
+    const credentials = new MemoryStore();
+    for (const [field, value] of Object.entries(configuration)) credentials.set(`account:website-offline:website:${field}`, value);
+    const adapter = new OfficialApiAdapter(credentials, () => ({
+      health: async () => { throw new ClientError("TRANSPORT_ERROR", "HTTP request failed or timed out", 0); },
+      capabilities: async () => { throw new Error("must not call"); }
+    }));
+
+    await expect(adapter.checkLogin({ accountId: "website-offline", accountName: "Website", platformKey: "website", settings: {} }))
+      .rejects.toMatchObject({ code: "NETWORK_ERROR" });
+  });
+
   it("rolls back new account and authorization when encrypted storage fails", async () => {
     const { repository, credentials, db } = fixture();
     credentials.setMany = () => { throw Error("fixture secure storage unavailable"); };

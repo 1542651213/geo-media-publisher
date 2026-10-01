@@ -18,7 +18,8 @@ interface MainAdapter {
     mainAuthorization?: { acceptanceRunId: string; explicitPermission: true } }): Promise<OfficialApiRunResult>;
 }
 interface Dependencies { repository: AppRepository; credentials: CredentialStore; store: OfficialApiOperationStore;
-  adapter: MainAdapter; ordinaryEnabled: boolean; grants: OfficialApiAcceptanceSelection[] }
+  adapter: MainAdapter; ordinaryEnabled: boolean; grants: OfficialApiAcceptanceSelection[];
+  assertWorkspace?: (articleId: string, accountId: string) => void }
 interface PrepareInput { articleId: string; platformAccountId: string; websiteSettings: unknown }
 const code = (error: unknown): string => error instanceof Error && /^[A-Z0-9_]{1,100}$/u.test(error.message) ? error.message : "WEBSITE_OPERATION_FAILED";
 
@@ -70,19 +71,22 @@ export class OfficialApiController {
 
   async prepare(input: PrepareInput) {
     const selected = this.selection(input);
+    this.deps.assertWorkspace?.(input.articleId, selected.account.id);
     return this.exclusive(`prepare:${selected.account.id}:${input.articleId}`, async () => {
       const verified = await verifyOfficialApiConnection({ repository: this.deps.repository, credentials: this.deps.credentials,
         verify: config => this.deps.adapter.inspect(config) }, selected.account.id);
       if (!verified.writesEnabled) throw new Error("WEBSITE_WRITES_DISABLED");
       const { account, prepared } = this.selection(input);
+      this.deps.assertWorkspace?.(input.articleId, account.id);
+      const existing = this.deps.store.findBySource(account.id, input.articleId);
+      if (existing && existing.contentBindingId !== prepared.contentBindingId) throw new Error("WEBSITE_FROZEN_BINDING_CHANGED");
       if (!this.deps.ordinaryEnabled && !this.authorizedCandidate(prepared)) throw new Error("WEBSITE_CANDIDATE_BINDING_NOT_AUTHORIZED");
       if (this.deps.ordinaryEnabled) {
         const article = this.deps.repository.getArticle(input.articleId), brand = article && this.deps.repository.getBrand(article.brandId);
-        const preflight = evaluateProductPreflight({ platformKey: "website", companyId: article?.brandId ?? "", companyName: brand?.companyName ?? "", article, account, identityVerified: verified.status === "CONNECTED", images: [], contentType: prepared.settings.kind, publishMode: "CONFIRM_BEFORE_PUBLISH" });
+        const review = this.deps.repository.getContentQualityState("article", input.articleId);
+        const preflight = evaluateProductPreflight({ platformKey: "website", companyId: article?.brandId ?? "", companyName: brand?.companyName ?? "", article, account, identityVerified: verified.status === "CONNECTED", images: [], contentType: prepared.settings.kind, publishMode: "CONFIRM_BEFORE_PUBLISH", reviewApproved: Boolean(article && review?.status === "Approved" && review.contentHash === article.contentHash) });
         if (!preflight.allowed) throw new Error(preflight.blockers.join("；"));
       }
-      const existing = this.deps.store.findBySource(account.id, input.articleId);
-      if (existing && existing.contentBindingId !== prepared.contentBindingId) throw new Error("WEBSITE_FROZEN_BINDING_CHANGED");
       const job = existing ? this.deps.repository.getJob(existing.jobId) : this.deps.repository.createArticlePublishJob({
         articleId: input.articleId, platformKey: "website", platformAccountId: account.platformAccountId ?? account.id,
         finalPublishMode: "CONFIRM_BEFORE_PUBLISH", articleTransport: "api", imageSelectionMode: "none", selectedImageAssetId: null });

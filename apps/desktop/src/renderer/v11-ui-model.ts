@@ -1,4 +1,4 @@
-import { normalizeContentReviewMode, type Account, type Article, type ContentReviewMode, type ImageAsset, type Platform, type PublishJob } from "@publisher/domain";
+import { type Account, type Article, type ContentReviewMode, type ImageAsset, type Platform, type PublishJob } from "@publisher/domain";
 import type { AccountManagementRow } from "../shared/api";
 import { operatorFavoriteKeys, operatorPlatformCatalog, productPlatform } from "../shared/product-platform-policy";
 
@@ -36,11 +36,12 @@ export type V11NavigationTarget =
   | "dashboard" | "production" | "articles" | "images" | "accounts" | "publishing" | "statistics" | "advanced"
   | "studio" | "quality" | "quality-rules" | "batch" | "keywords" | "ai-tasks" | "assets" | "images-advanced"
   | "brand" | "knowledge" | "platforms" | "self-test" | "plans" | "queue" | "logs" | "backups" | "settings" | "placeholder"
-  | "preferences" | "ai-center";
+  | "preferences" | "ai-center" | "operations";
 
 export const normalNavigation: Array<{ route: V11NavigationTarget; label: string; icon: string }> = [
   { route: "dashboard", label: "首页", icon: "⌂" },
   { route: "production", label: "内容生产", icon: "✦" },
+  { route: "operations", label: "内容运营", icon: "▦" },
   { route: "ai-center", label: "AI 服务商", icon: "◇" },
   { route: "articles", label: "文章库", icon: "▤" },
   { route: "images", label: "图片库", icon: "▨" },
@@ -93,12 +94,10 @@ export const publishStatusTone = (status: PublishJob["status"]): string => {
 
 export type AccountRuntimeView = Pick<Account, "enabled" | "loginStatus" | "platformKey"> & { accountStatus?: string; runtimeAuthState?: string | null; imageTextCreatorReady?: boolean };
 
-export const accountStatusLabel = (account: Pick<Account, "loginStatus"> & { accountStatus?: string }): string => {
-  if (account.accountStatus === "Unverified") return "待验证";
-  if (account.loginStatus === "logged_in" || account.accountStatus === "Connected") return "登录信息已保存";
-  if (account.loginStatus === "needs_user_action" || account.accountStatus === "Connecting") return "需要完成验证";
-  if (account.loginStatus === "expired" || account.accountStatus === "Expired" || account.accountStatus === "NeedsLogin") return "需要重新登录";
-  return "未登录";
+export const accountStatusLabel = (account: Pick<Account, "loginStatus"> & { accountStatus?: string; runtimeAuthState?: string | null }): string => {
+  const runtime = account.runtimeAuthState;
+  if (runtime) return ({ CHECKING: "正在验证账号", AUTHENTICATED: "已连接", CONNECTED: "已连接", NEEDS_LOGIN: "登录已失效，请重新登录", CREDENTIAL_INVALID: "凭据已失效，请更新凭据", NETWORK_UNAVAILABLE: "暂时无法验证连接", IDENTITY_MISMATCH: "当前登录账号与绑定账号不一致", DISABLED: "已停用", UNVERIFIED: "尚未验证" } as Record<string, string>)[runtime] ?? "尚未验证";
+  return ({ Connected: "已连接", Connecting: "正在验证账号", Expired: "登录已失效，请重新登录", NeedsLogin: "登录已失效，请重新登录" } as Record<string, string>)[account.accountStatus ?? ""] ?? "尚未验证";
 };
 
 export const isOnlineAccount = (account: AccountRuntimeView): boolean =>
@@ -106,7 +105,7 @@ export const isOnlineAccount = (account: AccountRuntimeView): boolean =>
   && (account.platformKey !== "douyin" || account.imageTextCreatorReady === true)
   && (account.platformKey !== "xiaohongshu" || account.runtimeAuthState === "AUTHENTICATED")
   && (account.platformKey !== "toutiao" || account.accountStatus === "Connected")
-  && (account.loginStatus === "logged_in" || account.accountStatus === "Connected" || account.platformKey === "douyin" && account.imageTextCreatorReady === true);
+  && (account.runtimeAuthState ? ["AUTHENTICATED", "CONNECTED"].includes(account.runtimeAuthState) : account.accountStatus === "Connected");
 
 export function connectedAccountsForPlatform<T extends AccountRuntimeView>(accounts: T[], platformKey: string): T[] {
   return accounts.filter((account) => account.platformKey === platformKey && isOnlineAccount(account));
@@ -127,16 +126,12 @@ export function platformHasConnectedAccount(rows: AccountManagementRow[]): boole
 
 export const contentReviewModeLabel = (mode: ContentReviewMode): string => ({ Off: "关闭审核", WarningOnly: "仅提醒", Strict: "严格审核" })[mode];
 
-export const articleListStatusLabel = (article: Pick<Article, "status" | "publishCount">, qualityStatus: string | null | undefined, rawMode: unknown): "可发布" | "有提醒" | "已发布" | "需要处理" => {
+export const articleListStatusLabel = (article: Pick<Article, "status" | "publishCount">, qualityStatus: string | null | undefined, _rawMode: unknown): "可发布" | "有提醒" | "已发布" | "需要处理" => {
   if (article.status === "published" || article.publishCount > 0) return "已发布";
-  const mode = normalizeContentReviewMode(rawMode);
-  if (mode === "Strict") return qualityStatus === "Approved" ? "可发布" : "需要处理";
-  if (mode === "WarningOnly" && (qualityStatus === "Needs_Review" || qualityStatus === "Rejected")) return "有提醒";
-  return "可发布";
+  return qualityStatus === "Approved" ? "可发布" : "需要处理";
 };
 
-export const canPublishWithReviewMode = (qualityStatus: string | null | undefined, rawMode: unknown): boolean =>
-  normalizeContentReviewMode(rawMode) !== "Strict" || qualityStatus === "Approved";
+export const canPublishWithReviewMode = (qualityStatus: string | null | undefined, _rawMode: unknown): boolean => qualityStatus === "Approved";
 
 export const ACCOUNT_CENTER_PRIORITY = {
   CONNECTED: 1,

@@ -18,6 +18,8 @@ function fixture(companyName = "江苏康一环保科技有限公司", grantExpi
   const brand=repository.createBrand({name:"Fixture",companyName});const created=repository.createAccount({platformKey:"website",name:"Fixture"});
   const account=repository.syncOfficialApiAccount({accountId:created.id,platformKey:"website",externalAccountId:"kangyi:staging"});
   const article=repository.createArticle({brandId:brand.id,title:"受控验收",body:"原文",summary:"摘要",tags:["测试"],seoKeywords:["测试"],topic:"测试",keyword:"测试",city:"南京",articleType:"科普",aiProvider:"system",aiModel:"fixture",generatedAt:new Date().toISOString(),reusePolicy:"once",contentHash:randomUUID()});if(!article)throw Error("fixture required");
+  repository.saveContentQualityReview({contentType:"article",contentId:article.id,brandId:article.brandId,platformKey:null,contentHash:article.contentHash,trigger:"manual_recheck",provider:"test",model:"test",result:{status:"AI_Checked",score:100,checks:[],issues:[]},snapshot:{title:article.title}});
+  repository.decideContentQuality("article",article.id,"Approved","human-review","manual","fixture reviewed");
   const values=new Map(Object.entries({origin:"https://staging.kangyihb.com",siteId:"kangyi",environment:"staging",keyId:"fixture-key",secret:"0123456789abcdef0123456789abcdef"}).map(([key,value])=>[`account:${account.id}:website:${key}`,value])); // gitleaks:allow -- public fixture
   const credentials:CredentialStore={get:key=>values.get(key)??null,has:key=>values.has(key),set:(key,value)=>{values.set(key,value);},delete:key=>{values.delete(key);}};
   const store=new SqliteOfficialApiOperationStore(repository);
@@ -31,6 +33,11 @@ function fixture(companyName = "江苏康一环保科技有限公司", grantExpi
   return{controller,repository,store,adapter,input,account,article,db,credentials};
 }
 describe("Website Main preparation ownership",()=>{
+  it("rejects an unapproved current content hash even with legacy review Off",async()=>{
+    const f=fixture();f.repository.decideContentQuality("article",f.article.id,"Rejected","human-review","manual","needs review");
+    await expect(f.controller.prepare(f.input)).rejects.toThrow("人工审核");
+    expect(f.repository.listJobs()).toHaveLength(0);expect(f.adapter.prepare).not.toHaveBeenCalled();
+  });
   it("keeps the original maintenance needs-attention result recoverable",async()=>{
     const f=fixture();const prepared=await f.controller.prepare(f.input);const operation=f.store.getByJobId(prepared.job.id)!;
     f.store.compareAndSwap(operation.jobId,operation.revision,{...operation,phase:"NEEDS_RECONCILIATION",

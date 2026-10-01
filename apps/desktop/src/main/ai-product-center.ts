@@ -15,7 +15,8 @@ const templateSchema = z.strictObject({ templateId: z.string().regex(/^[a-z0-9_-
 export class AIProductCenter {
   readonly store;
   private readonly inFlight = new Set<string>();
-  constructor(private readonly repository: AppRepository, private readonly credentials: CredentialStore, private readonly fetchPort: typeof fetch = fetch) {
+  constructor(private readonly repository: AppRepository, private readonly credentials: CredentialStore, private readonly fetchPort: typeof fetch = fetch,
+    private readonly approvedFacts: (companyId: string) => string[] = () => []) {
     this.store = createAICenterStore(repository);
   }
   definitions() { return PROVIDER_DEFINITIONS; }
@@ -97,6 +98,10 @@ export class AIProductCenter {
     catch (error) { this.store.saveVerification(id, "Failed", error instanceof TextProviderError ? error.code : "CONNECTION_FAILED"); return { ok: false, message: error instanceof TextProviderError ? error.message : "连接验证失败，请检查配置和安全存储" }; }
   }
   context(companyId: string) { return this.store.context(companyId); }
+  private effectiveContext(companyId: string) {
+    const context = this.store.context(companyId);
+    return { ...context, approvedClaims: [...new Set([...context.approvedClaims, ...this.approvedFacts(companyId)])] };
+  }
   saveContext(payload: unknown): EnterpriseAIContext { const context = contextSchema.parse(payload); this.store.saveContext(context); return context; }
   templates() { return this.store.templates(); }
   saveTemplate(payload: unknown): PromptTemplate {
@@ -110,7 +115,7 @@ export class AIProductCenter {
   draft(id: string) { return this.store.draft(id); }
   private validation(companyId: string, platformKey: string, title: string, body: string, contentType: string, sourceFacts?: string): StudioValidation {
     const others = this.repository.listBrands().filter(brand => brand.id !== companyId);
-    return validateStudioDraft({ context: this.context(companyId), platformKey, title, body, contentType, sourceFacts, otherCompanies: others.map(brand => brand.companyName), otherBrands: others.map(brand => brand.name), recent: this.repository.listArticles({ brandId: companyId }).slice(0, 100) });
+    return validateStudioDraft({ context: this.effectiveContext(companyId), platformKey, title, body, contentType, sourceFacts, otherCompanies: others.map(brand => brand.companyName), otherBrands: others.map(brand => brand.name), recent: this.repository.listArticles({ brandId: companyId }).slice(0, 100) });
   }
   validateDraft(id: string, title: string, body: string): StudioValidation {
     const history = this.store.generation(id), draft = this.draft(id);
@@ -120,7 +125,7 @@ export class AIProductCenter {
   async generate(payload: unknown): Promise<StudioOutput[]> {
     const input = z.strictObject({ companyId: z.string().min(1), sourceArticleId: z.string().min(1).nullable(), sourceText: z.string().max(100000), purpose: z.enum(STUDIO_PURPOSES), targetPlatforms: z.array(z.enum(STUDIO_TARGETS)).min(1).max(6), profileId: z.string().min(1), model: z.string().trim().min(1).max(200), templateId: z.string().min(1), templateVersion: z.number().int().positive() }).parse(payload);
     if (this.inFlight.has(input.companyId)) throw new Error("该企业已有生成请求，请等待完成");
-    const context = this.context(input.companyId), contextVersion = this.store.contextVersion(input.companyId), source = input.sourceArticleId ? this.repository.getArticle(input.sourceArticleId) : null;
+    const context = this.effectiveContext(input.companyId), contextVersion = this.store.contextVersion(input.companyId), source = input.sourceArticleId ? this.repository.getArticle(input.sourceArticleId) : null;
     if (input.sourceArticleId && (!source || source.brandId !== input.companyId)) throw new Error("源文章与当前企业不匹配");
     const sourceText = source ? `${source.title}\n${source.body}` : input.sourceText;
     if (!sourceText.trim()) throw new Error("请提供源稿或资料");
@@ -179,7 +184,7 @@ export class AIProductCenter {
     const validation = this.validateDraft(id, title, body);
     if (validation.errors.length) throw new Error("内容校验未通过，请修正红项后保存");
     return this.repository.db.transaction(() => {
-      const hash = createHash("sha256").update(`${title}\n${body}\n${history.targetPlatform}`).digest("hex");
+      const hash = createHash("sha256").update(`${history.companyId}\n${title}\n${body}\n${history.targetPlatform}`).digest("hex");
       let variantId: string | null = null;
       if (history.sourceArticleId) {
         variantId = this.repository.createArticleVariant({ articleId: history.sourceArticleId, platformKey: history.targetPlatform, title, body, summary: "", coverAssetId: null, contentHash: hash }).id;

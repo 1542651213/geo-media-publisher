@@ -52,6 +52,10 @@ describe("R1.15 Main IPC operator gate", () => {
       body: `${marker} unique body`, summary: "", tags: [], seoKeywords: [], articleType: "科普", aiProvider: "fixture", aiModel: "fixture",
       generatedAt: new Date().toISOString(), reusePolicy: "once", contentHash: "b01-ipc-unique", source: "production" });
     if (!article) throw new Error("Fixture Article missing");
+    repository.setSetting("operationsWorkspaceCompanyId",brand.id);
+    repository.db.prepare("INSERT INTO operations_account_company_bindings(account_id,company_id,bound_at,updated_at) VALUES(?,?,?,?)").run(account.id,brand.id,new Date().toISOString(),new Date().toISOString());
+    repository.saveContentQualityReview({contentType:"article",contentId:article.id,brandId:brand.id,platformKey:null,contentHash:article.contentHash,trigger:"manual_recheck",provider:"test",model:"test",result:{status:"AI_Checked",score:100,checks:[],issues:[]},snapshot:{}});
+    repository.decideContentQuality("article",article.id,"Approved","human-review","manual","fixture reviewed");
     const bytes = Buffer.from("b01-ipc-image"); const imagePath = join(dir, "image.png"); writeFileSync(imagePath, bytes);
     const image = repository.createImageAsset({ brandId: brand.id, name: "B01", filePath: imagePath, originalFileName: "image.png", mimeType: "image/png", size: bytes.length });
     repository.createB01Authorization({ platformKey: "douyin", accountId: account.id, articleId: article.id, imageAssetId: image.id,
@@ -108,6 +112,8 @@ describe("R1.15 Main IPC operator gate", () => {
     repository.syncBrowserPlatformAccount({ accountId: account.id, platformKey: "zhihu", browserSessionId: "fixture-session", externalAccountId: "fixture-owner" });
     const article = repository.createArticle({ brandId: brand.id, topic: "旧任务", keyword: "审计", city: "苏州", title: "旧平台任务", body: "仅用于隔离测试", summary: "", tags: [], seoKeywords: [], articleType: "科普", aiProvider: "fixture", aiModel: "fixture", generatedAt: new Date().toISOString(), reusePolicy: "once", contentHash: "r115-hidden-history" });
     if (!article) throw new Error("Fixture article missing");
+    repository.setSetting("operationsWorkspaceCompanyId", brand.id);
+    repository.db.prepare("INSERT INTO operations_account_company_bindings(account_id,company_id,bound_at,updated_at) VALUES(?,?,?,?)").run(account.id,brand.id,new Date().toISOString(),new Date().toISOString());
     const job = repository.createArticlePublishJob({ articleId: article.id, platformKey: "zhihu", platformAccountId: account.id });
     const record = repository.insertPublishRecord({ jobId: job.id, accountId: account.id, platformAccountId: account.id, platformKey: "zhihu", articleId: article.id, publishedUrl: null, publishedExternalId: null, success: false, response: { fixture: true }, status: "Prepared", publishMode: "ASSISTED", automationType: "BrowserAutomation", verificationStatus: "WaitingUser" });
     const countBefore = repository.listJobs().length;

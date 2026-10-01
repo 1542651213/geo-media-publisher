@@ -4,7 +4,7 @@ import { accountCapabilityText, accountStatusLabel, articleReviewLabel, connecte
 
 describe("V1.1 operations workspace model", () => {
   it("keeps everyday navigation and exposes the product AI Provider Center", () => {
-    expect(normalNavigation.map((item) => item.label)).toEqual(["首页", "内容生产", "AI 服务商", "文章库", "图片库", "账号中心", "发布中心", "数据统计"]);
+    expect(normalNavigation.map((item) => item.label)).toEqual(["首页", "内容生产", "内容运营", "AI 服务商", "文章库", "图片库", "账号中心", "发布中心", "数据统计"]);
   });
 
   it("translates internal review and publishing states into business-facing labels", () => {
@@ -25,13 +25,13 @@ describe("V1.1 operations workspace model", () => {
 
   it("keeps automatic account selection limited to enabled, logged-in accounts", () => {
     const accounts = [
-      { id: "online", platformAccountId: "platform-online", platformKey: "zhihu", enabled: true, loginStatus: "logged_in" },
+      { id: "online", platformAccountId: "platform-online", platformKey: "zhihu", enabled: true, loginStatus: "logged_in", runtimeAuthState: "AUTHENTICATED" },
       { id: "offline", platformAccountId: "platform-offline", platformKey: "zhihu", enabled: true, loginStatus: "expired" },
       { id: "disabled", platformAccountId: "platform-disabled", platformKey: "zhihu", enabled: false, loginStatus: "logged_in" },
       { id: "other", platformAccountId: "platform-other", platformKey: "weibo", enabled: true, loginStatus: "logged_in" }
     ];
     expect(connectedAccountsForPlatform(accounts as unknown as Account[], "zhihu").map((account) => account.id)).toEqual(["online"]);
-    expect(accountStatusLabel({ loginStatus: "logged_in" })).toBe("登录信息已保存");
-    expect(accountStatusLabel({ loginStatus: "expired" })).toBe("需要重新登录");
+    expect(accountStatusLabel({ loginStatus: "logged_in" })).toBe("尚未验证");
+    expect(accountStatusLabel({ loginStatus: "expired", runtimeAuthState: "NEEDS_LOGIN" })).toBe("登录已失效，请重新登录");
   });
 });

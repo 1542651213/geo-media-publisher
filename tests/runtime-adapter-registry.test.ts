@@ -97,6 +97,12 @@ describe("runtime AdapterRegistry", () => {
     expect(sohuManager.requiresActiveContextForOperations({ platformKey: "sohu_media", accountId: "account-a" })).toBe(false);
   });
 
+  it("exposes the one shared BrowserSessionManager for startup rehydration", () => {
+    const registry = createRuntimeAdapterRegistry(new MemoryCredentialStore(), false);
+    const browserAdapter = registry.getForConnection("weibo") as unknown as { sessionManager: unknown };
+    expect(registry.browserSessionManager).toBe(browserAdapter.sessionManager);
+  });
+
   it("keeps ordinary Xiaohongshu separate from the historical merchant/private catalog rows", () => {
     const csvRows = readFileSync(join(process.cwd(), "PLATFORMS.csv"), "utf8").split(/\r?\n/u).slice(1).filter(Boolean).map((line) => line.split(","));
     const byKey = new Map(csvRows.map((row) => [row[0]?.replace(/^\uFEFF/u, ""), row]));

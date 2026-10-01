@@ -120,7 +120,15 @@ export class OfficialApiAdapter implements PlatformAdapter {
   }
   async checkLogin(ctx: AccountContext): Promise<LoginStatus> {
     try { await this.readRemoteCapabilities(ctx); return "logged_in"; }
-    catch (error) { return error instanceof ClientError && [401, 403].includes(error.status) ? "expired" : "unknown"; }
+    catch (error) {
+      if (error instanceof ClientError && [401, 403].includes(error.status)) return "expired";
+      if (error instanceof ClientError && (error.status === 0 || error.status === 429 || error.status >= 500))
+        throw new PlatformAdapterError(error.status === 429 ? "RATE_LIMITED" : "NETWORK_ERROR", "官网 API 暂时无法验证连接");
+      const errorName = error instanceof Error ? error.name : "";
+      const errorMessage = error instanceof Error ? error.message : "";
+      if (/CredentialDecryptError/iu.test(errorName) || /^WEBSITE_CREDENTIAL_/u.test(errorMessage)) return "logged_out";
+      return "unknown";
+    }
   }
   async beginLogin(ctx: AccountContext) {
     const status = await this.checkLogin(ctx);

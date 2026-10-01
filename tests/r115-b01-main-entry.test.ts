@@ -49,6 +49,10 @@ function fixture(capability = true) {
     seoKeywords: [], topic: "B01", keyword: "B01", city: "", articleType: "科普", aiProvider: "fixture", aiModel: "fixture",
     generatedAt: new Date().toISOString(), reusePolicy: "once", contentHash: createHash("sha256").update(marker).digest("hex"), source: "production" });
   if (!article) throw new Error("Fixture Article missing");
+  repo.setSetting("operationsWorkspaceCompanyId", brand.id);
+  repo.db.prepare("INSERT INTO operations_account_company_bindings(account_id,company_id,bound_at,updated_at) VALUES(?,?,?,?)").run(account.id,brand.id,new Date().toISOString(),new Date().toISOString());
+  repo.saveContentQualityReview({contentType:"article",contentId:article.id,brandId:brand.id,platformKey:null,contentHash:article.contentHash,trigger:"manual_recheck",provider:"test",model:"test",result:{status:"AI_Checked",score:100,checks:[],issues:[]},snapshot:{}});
+  repo.decideContentQuality("article",article.id,"Approved","human-review","manual","fixture reviewed");
   const path = join(root, "image.png"); writeFileSync(path, "B01 image bytes");
   const image = repo.createImageAsset({ brandId: brand.id, name: "B01 image", filePath: path, originalFileName: "image.png", mimeType: "image/png", size: 15 });
   const publisher = { prepareArticle: async () => { throw new Error("STOP_BEFORE_BROWSER"); }, executeJob: async () => { throw new Error("STOP_BEFORE_FINAL"); } };
@@ -102,11 +106,14 @@ describe("B01 Candidate R2 Main authorization request", () => {
   it("imports the selected company's image through Main and hashes managed bytes", async () => {
     const { repo, path, invoke } = fixture();
     const selected = repo.createBrand({ name: "Selected company", companyName: "Selected company" });
+    repo.setSetting("operationsWorkspaceCompanyId",selected.id);
+    const bytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6rZsAAAAASUVORK5CYII=","base64");
+    writeFileSync(path,bytes);
     const payload = { brandId: selected.id, sourcePaths: [path], name: "new image", tags: [], business: [], city: [], usage: [], platform: [], universal: false };
     const imported = await invoke("image-assets:import", payload) as Array<{ id: string; brandId: string; filePath: string; sha256: string }>;
     expect(imported).toHaveLength(1);
     expect(imported[0]?.brandId).toBe(selected.id);
-    expect(imported[0]?.sha256).toBe(createHash("sha256").update("B01 image bytes").digest("hex"));
+    expect(imported[0]?.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
     expect(repo.getImageAsset(imported[0]!.id)?.sha256).toBe(imported[0]?.sha256);
     repo.updateImageAsset(imported[0]!.id, { name: "renamed" });
     expect(repo.markImageAssetUsed(imported[0]!.id).sha256).toBe(imported[0]?.sha256);

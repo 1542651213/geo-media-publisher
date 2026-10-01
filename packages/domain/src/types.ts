@@ -542,6 +542,14 @@ export interface PublishRecord {
 }
 
 export interface ImageAsset {
+  width?: number | null;
+  height?: number | null;
+  orientation?: "portrait" | "landscape" | "square" | "unknown";
+  usedByArticleCount?: number;
+  usedByJobCount?: number;
+  lastUsedPlatform?: string | null;
+  platformSuitability?: Array<{ platformKey: string; status: "符合当前平台已知要求" | "可能不适合" | "未知" }>;
+  duplicate?: boolean;
   id: string;
   brandId: string | null;
   name: string;

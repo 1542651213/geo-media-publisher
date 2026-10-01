@@ -35,6 +35,10 @@ function fixture(capability = false) {
     seoKeywords: [], topic: "B01", keyword: "B01", city: "", articleType: "科普", aiProvider: "fixture", aiModel: "fixture",
     generatedAt: new Date().toISOString(), reusePolicy: "once", contentHash: createHash("sha256").update(marker).digest("hex"), source: "production" });
   if (!article) throw new Error("Fixture Article missing");
+  repo.setSetting("operationsWorkspaceCompanyId", brand.id);
+  repo.db.prepare("INSERT INTO operations_account_company_bindings(account_id,company_id,bound_at,updated_at) VALUES(?,?,?,?)").run(account.id,brand.id,new Date().toISOString(),new Date().toISOString());
+  repo.saveContentQualityReview({contentType:"article",contentId:article.id,brandId:brand.id,platformKey:null,contentHash:article.contentHash,trigger:"manual_recheck",provider:"test",model:"test",result:{status:"AI_Checked",score:100,checks:[],issues:[]},snapshot:{}});
+  repo.decideContentQuality("article",article.id,"Approved","human-review","manual","fixture reviewed");
   const path = join(root, "image.png"); writeFileSync(path, "B01 image bytes");
   const image = repo.createImageAsset({ brandId: brand.id, name: "B01 image", filePath: path, originalFileName: "image.png", mimeType: "image/png", size: 15 });
   const publisher = { prepareArticle: vi.fn(async (id: string) => ({ job: repo.getJob(id), record: null, message: "isolated prepared" })), executeJob: vi.fn(async () => { throw new Error("STOP_BEFORE_FINAL"); }) };
@@ -61,6 +65,9 @@ describe("Douyin ordinary Release Main product path", () => {
   it("prepares an ordinary Article without a B01 marker or authorization and never submits", async () => {
     const f = fixture();
     f.repo.updateArticle(f.article.id, { title: "室内空气管理", body: "正常正文\n第二段\n第三段" });
+    const edited = f.repo.getArticle(f.article.id)!;
+    f.repo.saveContentQualityReview({contentType:"article",contentId:edited.id,brandId:edited.brandId,platformKey:null,contentHash:edited.contentHash,trigger:"manual_recheck",provider:"test",model:"test",result:{status:"AI_Checked",score:100,checks:[],issues:[]},snapshot:{}});
+    f.repo.decideContentQuality("article",edited.id,"Approved","human-review","manual","edited content reviewed");
     await expect(f.invoke("b01:availability", {})).resolves.toMatchObject({ enabled: false });
     await expect(f.invoke("b01:request-authorization", { platformKey: "douyin", accountId: f.account.id, articleId: f.article.id, imageAssetId: f.image.id })).rejects.toThrow();
     await expect(f.invoke("articles:prepare-publish", request(f))).resolves.toMatchObject({ message: "isolated prepared" });

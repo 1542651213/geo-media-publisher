@@ -20,6 +20,7 @@ function fixture() {
   const root = mkdtempSync(join(tmpdir(), "official-api-ipc-")); roots.push(root);
   const { db, repository } = openDatabase(join(root, "publisher.db"), join(process.cwd(), "packages/db/migrations")); databases.push(db);
   repository.seedPlatformCatalog(join(process.cwd(), "PLATFORMS.csv"));
+  const brand = repository.createBrand({name:"Fixture",companyName:"Fixture"}); repository.setSetting("operationsWorkspaceCompanyId",brand.id);
   const values = new Map<string, string>();
   const credentials: CredentialStore = { get: key => values.get(key) ?? null, has: key => values.has(key),
     set: (key, value) => { values.set(key, value); }, delete: key => { values.delete(key); } };
@@ -56,6 +57,8 @@ describe("OfficialAPI Renderer request-only IPC", () => {
   it("prevents the generic credential API from bypassing the Main import contract", async () => {
     const { repository, invoke, values } = fixture();
     const account = repository.createAccount({ platformKey: "website", name: "fixture" });
+    const brand = repository.listBrands()[0]!;
+    repository.db.prepare("INSERT INTO operations_account_company_bindings(account_id,company_id,bound_at,updated_at) VALUES(?,?,?,?)").run(account.id,brand.id,new Date().toISOString(),new Date().toISOString());
     await expect(invoke("accounts:set-credentials", { accountId: account.id, platformKey: "website", values: { secret: "renderer-value" } })).rejects.toThrow("Main");
     expect(values.size).toBe(0);
     await expect(invoke("website:list-connections", {})).resolves.toEqual([expect.objectContaining({ accountId: account.id, configured: false, status: "MISSING" })]);

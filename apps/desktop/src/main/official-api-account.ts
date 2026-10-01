@@ -5,7 +5,8 @@ import { KANGYI_SITE_CONFIG, OfficialApiAdapter, assertOfficialApiCapabilities, 
 import type { OfficialApiAccountView } from "../shared/official-api";
 
 interface ConnectionDependencies { repository: AppRepository; credentials: CredentialStore; verify?: (config: OfficialApiCredential) => Promise<unknown>;
-  assertReconfiguration?: (accountId: string, config: OfficialApiCredential) => void }
+  assertReconfiguration?: (accountId: string, config: OfficialApiCredential) => void;
+  assertBeforePersist?: () => void; bindAccount?: (accountId: string) => void }
 
 export function officialApiAccountView(repository: AppRepository, credentials: CredentialStore, accountId: string): OfficialApiAccountView {
   const account = repository.getAccountById(accountId, "website");
@@ -47,6 +48,7 @@ export async function importOfficialApiCredential(deps: ConnectionDependencies, 
   assertUniqueScope();
   if (!credentials.setMany) throw new Error("WEBSITE_ATOMIC_CREDENTIAL_STORAGE_REQUIRED");
   const remote = assertOfficialApiCapabilities(config, await (deps.verify ?? (value => new OfficialApiAdapter(credentials).inspect(value)))(config));
+  deps.assertBeforePersist?.();
   assertSelectedAccountScope();
   // Verification yielded; re-check against accounts created by any other completed request.
   assertUniqueScope();
@@ -55,6 +57,7 @@ export async function importOfficialApiCredential(deps: ConnectionDependencies, 
     const bundle = Object.fromEntries(officialApiCredentialFields.map(field => [officialApiCredentialRef(id, field.key), config[field.key as keyof OfficialApiCredential]]));
     credentials.setMany!(bundle);
   });
+  deps.bindAccount?.(account.id);
   return { ...officialApiAccountView(repository, credentials, account.id), status: remote.writesEnabled ? "CONNECTED" : "READ_ONLY",
     writesEnabled: remote.writesEnabled, apiVersion: remote.protocolVersion, contentTypes: remote.contentKinds, lastVerifiedAt: account.lastVerifiedAt ?? null };
 }

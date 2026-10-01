@@ -236,6 +236,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
       return "logged_in";
     } catch (error) {
       if (this.isVerificationMessage(error instanceof Error ? error.message : "")) return "needs_user_action";
+      if (error instanceof PlatformAdapterError && (error.code === "NETWORK_ERROR" || error.code === "TIMEOUT" || error.code === "RATE_LIMITED")) throw error;
       return "unknown";
     } finally {
       if (!ownsActiveSession && executionMode === "BACKGROUND") {

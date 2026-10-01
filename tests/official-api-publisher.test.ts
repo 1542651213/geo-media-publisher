@@ -1,3 +1,4 @@
+import { assertCurrentContentApproved } from "../apps/desktop/src/main/content-review-authority";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,7 +11,7 @@ import { PublisherService } from "@publisher/publisher";
 
 const cleanup: Array<() => void> = [];
 afterEach(() => cleanup.splice(0).reverse().forEach(fn => fn()));
-function fixture(prepared = true) {
+function fixture(prepared = true, enforceReview = false) {
   const dir = mkdtempSync(join(tmpdir(), "website-publisher-")); cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
   const { db, repository: repo } = openDatabase(join(dir, "fixture.db"), join(process.cwd(), "packages/db/migrations")); cleanup.push(() => db.close());
   repo.seedPlatformCatalog(join(process.cwd(), "PLATFORMS.csv")); repo.setSetting("contentReviewMode", "Off");
@@ -32,9 +33,15 @@ function fixture(prepared = true) {
   const registry = new AdapterRegistry(); registry.register(adapter);
   if (prepared) repo.insertPublishRecord({ jobId: job.id, accountId: account.id, platformAccountId: account.platformAccountId, platformKey: "website", articleId: article.id, publishedUrl: null, publishedExternalId: null, status: "Prepared", success: false, response: {}, automationType: "API" });
   repo.confirmJob(job.id, false);
-  return { db, repo, article, job, input, adapter, finalSubmit, publisher: new PublisherService(repo, registry, { info: () => {}, warn: () => {}, error: () => {} }) };
+  return { db, repo, article, job, input, adapter, finalSubmit, publisher: new PublisherService(repo, registry, { info: () => {}, warn: () => {}, error: () => {} }, enforceReview ? { assertContentApproval: job => assertCurrentContentApproved(repo, job.articleId) } : {}) };
 }
 describe("Website generic Publisher boundary", () => {
+  it("blocks an E prepared unapproved Job with review Off before claiming or submitting", async () => {
+    const f = fixture(true, true); const before = f.repo.getJob(f.job.id);
+    await expect(f.publisher.executeJob(f.job.id)).rejects.toThrow("人工审核");
+    expect(f.repo.getJob(f.job.id)).toEqual(before); expect(f.finalSubmit).not.toHaveBeenCalled();
+    expect(f.repo.getSubmissionIntentByJob(f.job.id)).toBeNull();
+  });
   it("requires a persisted prepared record before reserving any final claim", async () => {
     const f = fixture(false); await f.publisher.executeJob(f.job.id);
     expect(f.finalSubmit).not.toHaveBeenCalled();

@@ -27,6 +27,7 @@ export function douyinPreBoundaryFailure(input: { platformKey: string; platformF
 }
 
 export interface PublisherOptions {
+  assertContentApproval?: (job: PublishJob) => void;
   assertFinalAuthorization?: (job: PublishJob) => void;
   enforceB01ForDouyin?: boolean;
   resolveSecrets?: (accountId: string, platformKey: string) => Record<string, string>;
@@ -518,6 +519,7 @@ export class PublisherService {
     if (existing.status === "NeedsReconciliation") return { job: existing, message: "Submission result is unknown; reconcile before retry" };
     if (existing.status === "Submitted") return this.repairSubmittedJob(existing);
     if (["Publishing", "Published", "Success"].includes(existing.status)) return { job: existing, message: "Publish job already completed or is being polled" };
+    if (!existing.dryRun) this.options.assertContentApproval?.(existing);
     if (this.requiresB01(existing)) this.repository.assertB01Job(existing.id, "final");
     const job = this.repository.claimJob(jobId);
     const account = this.repository.listAccounts().find((item) => item.id === job.accountId);
@@ -631,6 +633,7 @@ export class PublisherService {
             submissionAttemptId,
             attempt: intent.attempt,
             markSubmissionSideEffect: () => {
+              this.options.assertContentApproval?.(job);
               this.options.assertFinalAuthorization?.(job);
               const claimed = this.repository.claimFinalSubmitAttempt(intent.id, { payloadHash: publishInputHash(input), adapterId: `${adapter.platformKey}@${adapter.manifest.version}`, requireB01: this.requiresB01(job) });
               finalSubmitSideEffectTriggered = true;
@@ -665,6 +668,7 @@ export class PublisherService {
           if (isAutomationAdapter(adapter)) await adapter.releaseOperationSession?.(ctx).catch(() => undefined);
         } else {
           if (submissionIntentId) {
+          this.options.assertContentApproval?.(job);
           this.options.assertFinalAuthorization?.(job);
           const claimed = this.repository.claimFinalSubmitAttempt(submissionIntentId, { payloadHash: publishInputHash(input), adapterId: `${adapter.platformKey}@${adapter.manifest.version}`, requireB01: this.requiresB01(job) });
             this.logger.info("PUBLISHER", "FINAL_SUBMIT_BOUNDARY_ENTERED", "Durable formal submit boundary entered", { jobId: job.id, submissionAttemptId: claimed.submissionAttemptId, platformKey: job.platformKey });
@@ -823,7 +827,7 @@ export class PersistentScheduler {
   private running = false;
   private lastLoginSweepAt = 0;
 
-  constructor(private readonly repository: AppRepository, private readonly publisher: PublisherService, private readonly logger: Logger, private readonly intervalMs = 5_000, private readonly options: { globalConcurrency?: number; platformConcurrency?: number; accountConcurrency?: number; allowScheduledJob?: (job: PublishJob) => boolean } = {}) {}
+  constructor(private readonly repository: AppRepository, private readonly publisher: PublisherService, private readonly logger: Logger, private readonly intervalMs = 5_000, private readonly options: { globalConcurrency?: number; platformConcurrency?: number; accountConcurrency?: number; allowScheduledJob?: (job: PublishJob) => boolean; allowAccountLoginSweep?: () => boolean } = {}) {}
   start(): void {
     if (this.timer) return;
     const recoveredBrowserJobs = this.repository.listJobs().filter((job) => this.publisher.isPlatformRegistered(job.platformKey) && ["Running", "Preparing", "ReadyToSubmit"].includes(job.status) && this.publisher.isBrowserAutomationPlatform(job.platformKey, job.contentKind ?? "article"));
@@ -843,7 +847,7 @@ export class PersistentScheduler {
     try {
       const accounts = new Map(this.repository.listAccounts().map((account) => [account.id, account]));
       const platforms = new Map(this.repository.listPlatforms().map((platform) => [platform.platformKey, platform]));
-      if (now.getTime() - this.lastLoginSweepAt >= 6 * 60 * 60 * 1000) {
+      if ((this.options.allowAccountLoginSweep?.() ?? true) && now.getTime() - this.lastLoginSweepAt >= 6 * 60 * 60 * 1000) {
         this.lastLoginSweepAt = now.getTime();
         // Article Creator identity is verified by the owned browser route at preflight. Legacy video OAuth is independent.
         await Promise.all([...accounts.values()].filter((account) => this.publisher.isPlatformRegistered(account.platformKey) && account.enabled

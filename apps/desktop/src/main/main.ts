@@ -1,3 +1,4 @@
+import { assertCurrentContentApproved, assertJobCurrentCompany } from "./content-review-authority";
 import { app, BrowserWindow, safeStorage } from "electron";
 import { existsSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
@@ -93,6 +94,7 @@ async function createWindow(): Promise<void> {
     return Object.fromEntries(keys.map((key) => [key, credentials.get(`account:${accountId}:${platformKey}:${key}`) ?? ""]));
   };
   const publisher = new PublisherService(database.repository, registry, logger, { resolveSecrets: resolveAccountSecrets, enforceB01ForDouyin: !ordinaryDouyinEnabled,
+    assertContentApproval: job => { assertJobCurrentCompany(database.repository, job); assertCurrentContentApproved(database.repository, job.articleId); },
     assertFinalAuthorization: job => {
       if (["weibo", "toutiao", "sohu_media", "cnblogs"].includes(job.platformKey) && !productPlatform(job.platformKey)?.ordinaryPublishEnabled)
         sprintAcceptance.assertFinalJob(job);
@@ -100,12 +102,19 @@ async function createWindow(): Promise<void> {
   const officialApiAdapter = registry.get("website");
   if (!(officialApiAdapter instanceof OfficialApiAdapter)) throw new Error("WEBSITE_MAIN_ADAPTER_REQUIRED");
   const officialApi = new OfficialApiController({ repository: database.repository, credentials, store: officialApiStore,
-    adapter: officialApiAdapter, ordinaryEnabled: ordinaryWebsiteEnabled, grants: officialApiGrants });
+    adapter: officialApiAdapter, ordinaryEnabled: ordinaryWebsiteEnabled, grants: officialApiGrants,
+    assertWorkspace: (articleId, accountId) => {
+      const repository = database.repository;
+      const current = String(repository.getSettings().operationsWorkspaceCompanyId ?? repository.listBrands()[0]?.id ?? "");
+      const binding = repository.db.prepare("SELECT company_id FROM operations_account_company_bindings WHERE account_id=?").get(accountId) as { company_id: string } | undefined;
+      if (!current || repository.getArticle(articleId)?.brandId !== current || binding?.company_id !== current) throw new Error("企业工作区已切换，请重新选择当前企业的内容和账号");
+    } });
   scheduler = new PersistentScheduler(database.repository, publisher, logger, 5_000, {
+    allowAccountLoginSweep: () => false,
     allowScheduledJob: (job) => productPlatform(job.platformKey)?.batchPublishEnabled === true
       && operatorPublishBlockReason(job.platformKey, database.repository.listPlatforms().find((platform) => platform.platformKey === job.platformKey)) === null
   });
-  registerIpc({ repository: database.repository, publisher, scheduler, registry, b01AcceptanceEnabled, officialApi, sprintAcceptance, resolveAccountSecrets, dataDirectory, coverDir: join(dataDirectory, "covers"), logger, credentials, aiCredentials: credentials, appLogPath, databasePath, processDiagnostics, restoreDatabase: (backupPath) => { scheduler?.stop(); restoreDatabaseSafely(database.db, databasePath, backupPath); app.relaunch(); app.exit(0); } });
+  registerIpc({ repository: database.repository, publisher, scheduler, registry, browserSessions: registry.browserSessionManager, b01AcceptanceEnabled, officialApi, sprintAcceptance, resolveAccountSecrets, dataDirectory, coverDir: join(dataDirectory, "covers"), logger, credentials, aiCredentials: credentials, appLogPath, databasePath, processDiagnostics, restoreDatabase: (backupPath) => { scheduler?.stop(); restoreDatabaseSafely(database.db, databasePath, backupPath); app.relaunch(); app.exit(0); } });
   // The one-shot diagnostic process owns the sole publish lane; existing queued jobs remain untouched.
   if (process.env.TOUTIAO_MVP5_ONE_SHOT_ENABLED !== "true" && process.env.TOUTIAO_READONLY_PREFLIGHT !== "true"
     && !process.env.TOUTIAO_NATIVE_ACCEPTANCE_ACCOUNT_ID?.trim()

@@ -23,6 +23,7 @@ import { normalNavigation, type V11NavigationTarget } from "./v11-ui-model";
 import { ProductAICenter } from "./ProductAICenter";
 import { DeveloperModeContext, DEVELOPER_ROUTES } from "./developer-mode";
 import { ProductAccountHealth } from "./ProductAccountHealth";
+import { OperationsCenter } from "./OperationsCenter";
 
 type Route = V11NavigationTarget;
 
@@ -40,8 +41,12 @@ export function App(): JSX.Element {
   const toggleDeveloperMode = async (): Promise<void> => { await window.publisherAPI.settings.update("developerMode", !developerMode); setDeveloperMode(!developerMode); };
   const [refreshKey, setRefreshKey] = useState(0);
   const refresh = (): void => setRefreshKey((value) => value + 1);
-  return <DeveloperModeContext.Provider value={developerMode}><Layout route={route} onNavigate={navigate}>
-    {route === "dashboard" && <V11Dashboard refreshKey={refreshKey} onNavigate={setRoute} />}
+  const [companies, setCompanies] = useState<Brand[]>([]), [companyId, setCompanyId] = useState(""), [switching, setSwitching] = useState(false);
+  useEffect(() => { let active = true; void Promise.all([window.publisherAPI.workspace.companies(), window.publisherAPI.workspace.current()]).then(([next, current]) => { if (active) { setCompanies(next); setCompanyId(current ?? ""); } }); return () => { active = false; }; }, [refreshKey]);
+  const selectCompany = async (id: string): Promise<void> => { setSwitching(true); try { await window.publisherAPI.workspace.select(id); setCompanyId(id); refresh(); } finally { setSwitching(false); } };
+  return <DeveloperModeContext.Provider value={developerMode}><Layout route={route} onNavigate={navigate} companies={companies} companyId={companyId} switching={switching} onSelectCompany={selectCompany}><div key={companyId} className="company-workspace-content">
+    {route === "dashboard" && (companyId ? <OperationsCenter companyId={companyId} refresh={refresh} onNavigate={next => navigate(next as Route)} /> : <EmptyState title="今日工作台" description="请先在高级功能的企业资料中创建企业，然后选择工作区。" />)}
+    {route === "operations" && (companyId ? <OperationsCenter companyId={companyId} refresh={refresh} onNavigate={next => navigate(next as Route)} /> : <EmptyState title="内容运营" description="请先创建并选择企业工作区。" />)}
     {route === "production" && <ProductAICenter refresh={refresh} />}
     {route === "ai-center" && <ProductAICenter initialTab="providers" refresh={refresh} />}
     {route === "articles" && <V11ArticleLibrary refresh={refresh} refreshKey={refreshKey} onNavigate={setRoute} />}
@@ -68,15 +73,15 @@ export function App(): JSX.Element {
     {route === "backups" && <BackupsPage />}
     {route === "settings" && <DeepSeekSettingsPage />}
     {route === "placeholder" && <EmptyState title="模块准备中" description="该扩展入口已纳入工作台导航，后续版本会复用现有数据与任务基础继续完善。" />}
-  </Layout></DeveloperModeContext.Provider>;
+  </div></Layout></DeveloperModeContext.Provider>;
 }
 
-function Layout({ route, onNavigate, children }: { route: Route; onNavigate: (route: Route) => void; children: React.ReactNode }): JSX.Element {
+function Layout({ route, onNavigate, children, companies, companyId, switching, onSelectCompany }: { route: Route; onNavigate: (route: Route) => void; children: React.ReactNode; companies: Brand[]; companyId: string; switching: boolean; onSelectCompany: (id: string) => Promise<void> }): JSX.Element {
   const current = routeLabels.get(route) ?? "首页";
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand-lockup"><div className="brand-mark">矩</div><div><strong>矩阵发布</strong><span>内容运营工作台</span></div></div>
-      <div className="workspace-switch"><span className="workspace-dot" /> 内容运营 <span className="chevron">⌄</span></div>
+      <div className="workspace-switch"><label>当前企业工作区<select aria-label="当前企业工作区" value={companyId} disabled={switching} onChange={event => void onSelectCompany(event.target.value)}><option value="" disabled>请先创建企业</option>{companies.map(company => <option key={company.id} value={company.id}>{company.companyName || company.name}</option>)}</select></label></div>
       <nav>{navGroups.map((group) => <div className="nav-group" key={group.title}><div className="nav-caption">{group.title}</div>{group.items.map((item) => <button className={`nav-item ${item.route === route ? "active" : ""}`} key={item.route} onClick={() => onNavigate(item.route)}><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</div>)}</nav>
       <div className="sidebar-footer"><button className={`nav-item ${route === "preferences" ? "active" : ""}`} onClick={() => onNavigate("preferences")}><span className="nav-icon">⚙</span>设置</button><button className={`nav-item ${route === "advanced" ? "active" : ""}`} onClick={() => onNavigate("advanced")}><span className="nav-icon">⌘</span>高级功能</button></div>
     </aside>

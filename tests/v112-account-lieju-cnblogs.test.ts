@@ -42,7 +42,7 @@ describe("V1.1.2 account priority and 41-platform catalog", () => {
     const zhihu = repository.createAccount({ platformKey: "zhihu", name: "知乎主账号" });
     repository.syncBrowserPlatformAccount({ accountId: zhihu.id, platformKey: "zhihu", browserSessionId: "zhihu-session" });
     const platforms = repository.listPlatforms();
-    const accounts = repository.listAccounts();
+    const accounts = repository.listAccounts().map(account => ({ ...account, runtimeAuthState: account.id === zhihu.id ? "AUTHENTICATED" : "UNVERIFIED" }));
     const ordered = orderPlatformCatalog(platforms, ["weibo"], accounts);
     expect(ordered[0]?.platformKey).toBe("zhihu");
     expect(accountCenterPriority(ordered[0]!, accounts)).toBe("CONNECTED");

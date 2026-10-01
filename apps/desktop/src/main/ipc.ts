@@ -1,3 +1,4 @@
+import { assertCurrentContentApproved } from "./content-review-authority";
 import { app, dialog, ipcMain, shell } from "electron";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -50,6 +51,13 @@ import { assertProductDeveloperOperation, assertOperatorBatchPlanAllowed, assert
 import { assertB01OperatorIpcException, assertNoProductE2EDiagnosticSubmit } from "./b01-product-e2e-gate";
 import { productPlatform, PRODUCT_PLATFORM_POLICY, productAccountHealth, evaluateProductPreflight, buildProductDiagnosticBundle } from "../shared/product-platform-policy";
 import type { SprintAcceptanceController } from "./sprint-acceptance";
+import { ContentOperations } from "./content-operations";
+import { CompanyWorkspace } from "./company-workspace";
+import { OperationsAssets } from "./operations-assets";
+import * as XLSX from "xlsx";
+import { AccountSessionRehydrationCoordinator, type AccountSessionTarget } from "./account-session-rehydration";
+import type { BrowserSessionManager } from "@publisher/adapters-core";
+import { sessionAccountHealth } from "../shared/product-platform-policy";
 
 const idSchema = z.string().min(1);
 function safeErrorCode(error: unknown): string {
@@ -68,8 +76,6 @@ const contentStudioInputSchema = z.object({ brandId: idSchema, industry: z.strin
 const videoAssetMetadataSchema = z.object({ description: z.string().max(5000), tags: z.array(z.string().min(1).max(40)).max(20), coverSourcePath: z.string().max(8192).nullable().optional(), durationMs: z.number().int().min(0).max(86_400_000).optional(), width: z.number().int().min(1).max(16384).optional(), height: z.number().int().min(1).max(16384).optional(), platformFields: z.record(z.string(), z.record(z.string(), z.string().max(500))).default({}) });
 const videoExtensions = new Set([".mp4", ".mov", ".m4v"]);
 const mimeByExtension: Record<string, string> = { ".mp4": "video/mp4", ".mov": "video/quicktime", ".m4v": "video/x-m4v" };
-const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]);
-const imageMimeByExtension: Record<string, string> = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp" };
 const HUMAN_REVIEW_DATASET_ID = "V093_HUMAN_REVIEW_001";
 const HUMAN_REVIEW_BENCHMARK_RUN_ID = "deepseek_real-4a83e49e-cb58-4498-96e3-159d702e1512";
 const humanReviewContentSchema = z.object({ contentType: z.enum(["article", "article_variant"]), contentId: idSchema, platformKey: z.string().nullable(), title: z.string(), body: z.string(), summary: z.string(), contentHash: z.string().length(64) });
@@ -91,6 +97,7 @@ export interface IpcDependencies {
   publisher: PublisherService;
   scheduler: PersistentScheduler;
   registry: AdapterRegistry;
+  browserSessions?: BrowserSessionManager;
   resolveAccountSecrets: (accountId: string, platformKey: string) => Record<string, string>;
   dataDirectory: string;
   coverDir: string;
@@ -118,10 +125,14 @@ const mvp5PausedChannels = new Set(["articles:prepare-publish", "jobs:run", "job
   "platform-self-test:run-post-upload-discovery", "platform-self-test:continue", "platform-self-test:run-level",
   "platform-self-test:request-publish", "platform-self-test:confirm-publish"]);
 
+let workspaceController: CompanyWorkspace | null = null;
 function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent, payload: unknown) => unknown): void {
   ipcMain.removeHandler(channel);
   ipcMain.handle(channel, async (event, payload) => {
     try {
+      if (!workspaceController?.current() && ["articles:list", "image-assets:list"].includes(channel)) return [];
+      if (!workspaceController?.current() && channel === "articles:page") return { items: [], page: 1, pageSize: 50, total: 0, totalPages: 1 };
+      payload = workspaceController?.prepare(channel, payload) ?? payload;
       assertNoProductE2EDiagnosticSubmit(channel, payload);
       if (acceptanceRepository) assertOperatorPublishIpcRequest(
         channel, payload,
@@ -135,6 +146,7 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
       if (acceptanceRepository && ["jobs:confirm", "jobs:run", "jobs:retry"].includes(channel)) {
         const input = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
         const job = typeof input.id === "string" ? acceptanceRepository.getJob(input.id) : null;
+        if (job && !job.dryRun && !["Published", "Success", "Publishing", "Submitted", "NeedsReconciliation"].includes(job.status)) assertCurrentContentApproved(acceptanceRepository, job.articleId);
         if (job?.platformKey === "website") {
           if (channel === "jobs:retry") throw new Error("WEBSITE_ORIGINAL_OPERATION_RECOVERY_REQUIRED");
           if (channel === "jobs:confirm" && input.dryRun !== false) throw new Error("WEBSITE_CONFIRMED_FINAL_ONLY");
@@ -181,7 +193,10 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
       const diagnosticAccount = typeof diagnosticInput.platformAccountId === "string" ? acceptanceRepository?.listAccounts().find(account => account.platformAccountId === diagnosticInput.platformAccountId || account.id === diagnosticInput.platformAccountId) : null;
       const diagnosticRun = typeof diagnosticInput.testRunId === "string" ? acceptanceRepository?.getPlatformSelfTestRun(diagnosticInput.testRunId) : null;
       assertProductDeveloperOperation(channel, acceptanceRepository?.getSettings().developerMode === true, diagnosticAccount?.platformKey ?? diagnosticRun?.platformKey, diagnosticInput.level);
-      return await handler(event, payload);
+      const result = await handler(event, payload);
+      if (channel === "brands:list" && Array.isArray(result)) return result.filter(brand => brand.id === workspaceController?.current());
+      if (channel === "accounts:list" && Array.isArray(result)) return result.filter(account => workspaceController?.accountAllowed(account.id));
+      return result;
     } catch (error) {
       processDiagnostics?.recordIpcError(channel, error);
       throw error;
@@ -189,14 +204,73 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
   });
 }
 
-export function registerIpc(deps: IpcDependencies): void {
+export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoordinator | null {
   processDiagnostics = deps.processDiagnostics ?? null;
   acceptanceRepository = deps.repository;
   b01CandidateActive = deps.b01AcceptanceEnabled === true;
   officialApiController = deps.officialApi ?? null;
   sprintAcceptanceController = deps.sprintAcceptance ?? null;
   const { repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir, logger, credentials, aiCredentials } = deps;
-  const aiCenter = new AIProductCenter(repository, aiCredentials);
+  let sessionRuntime: AccountSessionRehydrationCoordinator | null = null;
+  const aiCenter: AIProductCenter = new AIProductCenter(repository, aiCredentials, fetch, companyId => operations?.activeFacts(companyId).map(fact => fact.statement) ?? []);
+  const operations: ContentOperations = new ContentOperations(repository, aiCenter, accountId => {
+    const account = repository.listAccounts().find(item => item.id === accountId);
+    return account && sessionRuntime ? safeRuntimeSnapshot(account.id, account.platformKey) : null;
+  });
+  const workspace = new CompanyWorkspace(repository, accountId => operations.accountCompany(accountId));
+  workspaceController = workspace;
+  const assets = new OperationsAssets(repository, join(dataDirectory, "media", "images"));
+  const sessionTarget = (accountId: string): AccountSessionTarget | null => {
+    const account = repository.listAccounts().find(item => item.id === accountId);
+    if (!account) return null;
+    const binding = account.platformKey === "douyin" ? repository.getDouyinImageTextConnection(account.id) : null;
+    const adapter = registry.tryGetForConnection(account.platformKey);
+    return { accountId: account.id, accountName: account.accountAlias || account.name, platformKey: account.platformKey,
+      companyId: operations.accountCompany(account.id) ?? "", enabled: account.enabled && !account.archivedAt,
+      connectionMode: binding?.active || adapter?.manifest.transport === "browser" ? "BrowserAutomation" : account.connectionMode === "OAuth" ? "OAuth" : "OfficialAPI",
+      expectedRemoteIdentity: binding?.active ? binding.creatorId : account.externalAccountId ?? repository.getAccountAuthorization(account.id, account.platformKey)?.providerAccountId ?? null,
+      loginGeneration: binding?.active ? binding.loginGeneration : null };
+  };
+  sessionRuntime = deps.browserSessions ? new AccountSessionRehydrationCoordinator({ registry, browserSessions: deps.browserSessions, resolveCompanyId: accountId => operations.accountCompany(accountId), resolveAdapter: target => target.platformKey === "douyin" && target.connectionMode === "BrowserAutomation" ? registry.getForContent("douyin", "article") : registry.tryGetForConnection(target.platformKey), resolveAuthoritativeTarget: (accountId, platformKey) => { const target = sessionTarget(accountId); return target?.platformKey === platformKey ? target : null; }, resolveSecrets: resolveAccountSecrets, concurrency: 2 }) : null;
+  function safeRuntimeSnapshot(accountId: string, platformKey: string) {
+    const snapshot = sessionRuntime?.getSnapshot(accountId, platformKey);
+    if (!snapshot) return null;
+    const target = sessionTarget(accountId);
+    if (!snapshot || !target) return null;
+    if (snapshot.companyId !== target.companyId || snapshot.loginGeneration !== target.loginGeneration || !target.enabled) return { ...snapshot, state: target.enabled ? "UNVERIFIED" as const : "DISABLED" as const, identityMatched: false };
+    return snapshot;
+  }
+  register("sessions:snapshots", () => sessionRuntime?.listSnapshots().filter(item => item.companyId === workspace.current()) ?? []);
+  register("sessions:refresh", (_event, payload) => {
+    const accountId = z.strictObject({ accountId: idSchema }).parse(payload).accountId;
+    workspace.assertAccount(accountId);
+    const target = sessionTarget(accountId);
+    return target && sessionRuntime ? sessionRuntime.refresh(target, "MANUAL") : null;
+  });
+  if (sessionRuntime) void sessionRuntime.rehydrate(repository.listAccounts().map(account => sessionTarget(account.id)).filter((target): target is AccountSessionTarget => target !== null && Boolean(target.companyId)));
+  register("workspace:companies", () => repository.listBrands());
+  register("workspace:current", () => workspace.current());
+  register("workspace:select", (_event, payload) => workspace.select(z.strictObject({ companyId: idSchema }).parse(payload).companyId));
+  const operationsMethods = ["bindAccount", "saveStudioDefaults", "reviewArticle", "generatePlan", "createPlanItem", "createDraftFromPlan", "saveFact", "duplicateWarnings", "usage", "createGenerationQueue", "generationQueue", "runGenerationQueue", "pauseGenerationQueue", "resumeGenerationQueue", "cancelGenerationQueue", "retryFailedGeneration", "previewImport", "commitImport", "resolveRecoverableGeneration", "reconcileGenerationQueue", "resolveValidationGeneration", "preparePlanGeneration"] as const;
+  for (const method of operationsMethods) register(`operations:${method.replace(/[A-Z]/gu, letter => `-${letter.toLowerCase()}`)}`, (_event, payload) => operations[method](payload as never));
+  register("operations:snapshot", (_event, payload) => operations.snapshot(z.strictObject({ companyId: idSchema }).parse(payload).companyId));
+  register("operations:consume-plan-generation-seed", (_event, payload) => operations.consumePlanGenerationSeed(z.strictObject({ companyId: idSchema }).parse(payload).companyId));
+  register("operations:get-studio-defaults", (_event, payload) => operations.getStudioDefaults(z.strictObject({ companyId: idSchema }).parse(payload).companyId));
+  register("operations:active-facts", (_event, payload) => operations.activeFacts(z.strictObject({ companyId: idSchema }).parse(payload).companyId));
+  register("operations:account-company", (_event, payload) => operations.accountCompany(z.strictObject({ accountId: idSchema }).parse(payload).accountId));
+  register("operations:unbound-accounts", () => operations.listUnboundAccounts());
+  register("operations:pick-import-file", async () => {
+    const selection = await dialog.showOpenDialog({ properties: ["openFile"], filters: [{ name: "文章数据", extensions: ["xlsx", "csv"] }] });
+    if (selection.canceled || !selection.filePaths[0]) return null;
+    const path = selection.filePaths[0];
+    if (statSync(path).size > 8 * 1024 * 1024) throw new Error("导入文件超过 8MB，请拆分后再导入");
+    const book = XLSX.read(readFileSync(path), { type: "buffer", cellFormula: false, cellHTML: false, sheetRows: 1002 });
+    const sheet = book.Sheets[book.SheetNames[0] ?? ""];
+    if (!sheet) throw new Error("文件中没有可读取的工作表");
+    const rows = XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: "", raw: false });
+    if (rows.length > 1000) throw new Error("一次最多导入 1000 行，请拆分文件");
+    return { fileName: basename(path), columns: Object.keys(rows[0] ?? {}), rows };
+  });
   const productDiagnostics = () => buildProductDiagnosticBundle({ version: app.getVersion(), migrationCount: Number((repository.db.prepare("SELECT COUNT(*) AS count FROM migrations").get() as { count: number }).count), providers: aiCenter.profiles(), generationStatuses: aiCenter.history().map(item => item.status), jobs: repository.listJobs().length });
   const exportProductDiagnostics = async (): Promise<string | null> => { const destination = await dialog.showSaveDialog({ defaultPath: join(app.getPath("downloads"), `publisher-diagnostics-${Date.now()}.json`), filters: [{ name: "脱敏诊断包", extensions: ["json"] }] }); if (destination.canceled || !destination.filePath) return null; writeFileSync(destination.filePath, JSON.stringify(productDiagnostics(), null, 2), "utf8"); return destination.filePath; };
   register("product:diagnostics", () => productDiagnostics());
@@ -241,6 +315,7 @@ export function registerIpc(deps: IpcDependencies): void {
   const accountContext = (accountId: string, platformKey: string, action?: UserInitiatedAction, includeArchived = false): AccountContext => {
     const account = includeArchived ? repository.getAccountById(accountId, platformKey) : repository.listAccounts().find((item) => item.id === accountId && item.platformKey === platformKey);
     if (!account || account.platformKey !== platformKey) throw new Error("账号与平台不匹配");
+    workspace.assertAccount(account.id);
     return {
       accountId,
       accountName: account.name,
@@ -260,9 +335,12 @@ export function registerIpc(deps: IpcDependencies): void {
   const collectProductPreflight = (input: z.infer<typeof productPreflightSchema>, identityVerified: boolean, publishMode = "CONFIRM_BEFORE_PUBLISH") => {
     const article = repository.getArticle(input.articleId), brand = article && repository.getBrand(article.brandId);
     const account = repository.listAccounts().find(item => item.platformKey === input.platformKey && (item.platformAccountId === input.platformAccountId || item.id === input.platformAccountId)) ?? null;
+    workspace.assertCompany(article?.brandId);
+    workspace.assertAccount(account?.id ?? "");
     const ids = input.platformKey === "website" && input.websiteSettings ? [input.websiteSettings.coverAssetId, ...input.websiteSettings.bodyImageAssetIds, ...input.websiteSettings.galleryAssetIds].filter((id): id is string => Boolean(id)) : input.selectedImageAssetId ? [input.selectedImageAssetId] : [];
     const images = [...new Set(ids)].map(id => { const image = repository.getImageAsset(id); return { brandId: image?.brandId ?? null, available: Boolean(image?.enabled && existsSync(image.filePath)) }; });
-    return evaluateProductPreflight({ platformKey: input.platformKey, companyId: article?.brandId ?? "", companyName: brand?.companyName || brand?.name || "未选择", article, account, identityVerified, images, contentType: input.websiteSettings?.kind ?? "article", publishMode });
+    const reviewApproved = article ? operations.approvedForPublish(article.brandId, article.id) : false;
+    return evaluateProductPreflight({ platformKey: input.platformKey, companyId: article?.brandId ?? "", companyName: brand?.companyName || brand?.name || "未选择", article, account, identityVerified, images, contentType: input.websiteSettings?.kind ?? "article", publishMode, reviewApproved });
   };
   const inspectProductIdentity = async (account: Account | undefined): Promise<boolean> => {
     let verified = false;
@@ -285,8 +363,12 @@ export function registerIpc(deps: IpcDependencies): void {
     return verified;
   };
   register("product:health", async () => {
-    const accounts = repository.listAccounts().filter(account => !account.archivedAt);
+    const accounts = repository.listAccounts().filter(account => !account.archivedAt && workspace.accountAllowed(account.id));
     const health = await Promise.all(accounts.map(async account => {
+      if (sessionRuntime) {
+        const snapshot = safeRuntimeSnapshot(account.id, account.platformKey);
+        return { ...productAccountHealth(account.platformKey, account), ...sessionAccountHealth(account.platformKey, snapshot?.state ?? "CHECKING"), companyName: repository.getBrand(workspace.current() ?? "")?.companyName ?? "", lastVerifiedAt: snapshot?.checkedAt ?? null };
+      }
       const verified = await inspectProductIdentity(account);
       return productAccountHealth(account.platformKey, verified ? { ...account, loginStatus: "logged_in", lastVerifiedAt: new Date().toISOString() } : account, verified);
     }));
@@ -351,7 +433,20 @@ export function registerIpc(deps: IpcDependencies): void {
     const validation = await adapter.validateVideo({ title: asset.title, description: asset.description, tags: asset.tags, videoPath: asset.localPath, ...(asset.coverPath ? { coverPath: asset.coverPath } : {}) });
     return { asset, validation };
   };
-  register("dashboard:get", () => { recordRuntimeHeartbeat(logger, "dashboard:get"); return repository.dashboardStats(); });
+  register("dashboard:get", () => {
+    recordRuntimeHeartbeat(logger, "dashboard:get");
+    const companyId = workspace.current(), articles = companyId ? repository.listArticles({ brandId: companyId }) : [];
+    const ids = new Set(articles.map(article => article.id)), jobs = repository.listJobs().filter(job => ids.has(job.articleId));
+    const accounts = repository.listAccounts().filter(account => !account.archivedAt && workspace.accountAllowed(account.id));
+    const today = new Date().toISOString().slice(0, 10), usage = companyId ? operations.usage({ companyId, days: 1 }) : [];
+    const publishedToday = companyId ? Number((repository.db.prepare("SELECT COUNT(*) n FROM publish_records r JOIN publish_jobs j ON j.id=r.job_id JOIN articles a ON a.id=j.article_id WHERE a.brand_id=? AND r.success=1 AND r.dry_run=0 AND r.published_at>=?").get(companyId, today) as { n: number }).n) : 0;
+    const availableArticles = articles.filter(article => ["available", "partially_published"].includes(article.status)).length;
+    return { publishedToday, pendingJobs: jobs.filter(job => ["Pending", "Scheduled", "Retry"].includes(job.status)).length, failedJobs: jobs.filter(job => ["Failed", "NeedsReconciliation", "NeedsUserAction"].includes(job.status)).length, runningJobs: jobs.filter(job => ["Running", "Preparing", "Submitting", "Publishing"].includes(job.status)).length, totalAccounts: accounts.length,
+      onlineAccounts: accounts.filter(account => ["AUTHENTICATED", "CONNECTED"].includes(safeRuntimeSnapshot(account.id, account.platformKey)?.state ?? "UNVERIFIED")).length,
+      expiredAccounts: accounts.filter(account => ["NEEDS_LOGIN", "CREDENTIAL_INVALID"].includes(safeRuntimeSnapshot(account.id, account.platformKey)?.state ?? "UNVERIFIED")).length,
+      availableArticles, generatedToday: articles.filter(article => article.generatedAt >= today).length, estimatedStockDays: Math.ceil(availableArticles / Math.max(1, accounts.length)), activeAiTasks: companyId ? operations.snapshot(companyId).dashboard.generating : 0,
+      aiGeneratedToday: usage.reduce((sum, row) => sum + row.successCount, 0), aiInputTokensToday: usage.reduce((sum, row) => sum + row.inputTokens, 0), aiOutputTokensToday: usage.reduce((sum, row) => sum + row.outputTokens, 0), aiEstimatedCostToday: null };
+  });
   register("sprint:availability", () => deps.sprintAcceptance?.availability() ?? []);
   register("video-assets:list", (_event, payload) => repository.listVideoAssets(z.object({ brandId: z.string().optional() }).optional().parse(payload)?.brandId));
   register("video-assets:pick-video", async () => {
@@ -613,6 +708,8 @@ export function registerIpc(deps: IpcDependencies): void {
   });
   register("articles:prepare-publish", async (_event, payload) => {
     const input = z.object({ articleId: idSchema, platformKey: idSchema, platformAccountId: idSchema, publishMode: z.enum(["ASSISTED", "MANUAL"]).optional(), finalPublishMode: z.enum(["PREPARE_ONLY", "CONFIRM_BEFORE_PUBLISH", "AUTO_PUBLISH"]).optional(), selectedImageAssetId: idSchema.nullable().optional(), imageSelectionMode: z.enum(["random", "manual", "none"]).optional(), websiteSettings: officialApiContentSettingsSchema.optional(), douyinImageTextSettings: z.strictObject({ version: z.literal(1), visibility: z.literal("public"), timing: z.literal("immediate"), musicMode: z.literal("NONE").optional() }).optional(), toutiaoArticleSettings: z.object({ version: z.literal(1), coverMode: z.enum(["auto", "none", "single", "multiple"]), coverImages: z.array(idSchema), articleAdType: z.enum(["none", "platform_default"]), remoteScheduledAt: z.string().nullable() }).optional() }).parse(payload);
+    const currentArticle = repository.getArticle(input.articleId);
+    if (!currentArticle || !operations.approvedForPublish(currentArticle.brandId, currentArticle.id)) throw new Error("内容尚未人工审核通过，请先进入内容审核");
     if (input.platformKey === "website") {
       if (!deps.officialApi || input.finalPublishMode === "AUTO_PUBLISH") throw new Error("WEBSITE_MAIN_CONFIRMED_PATH_REQUIRED");
       return deps.officialApi.prepare({ articleId: input.articleId, platformAccountId: input.platformAccountId, websiteSettings: input.websiteSettings });
@@ -795,27 +892,12 @@ export function registerIpc(deps: IpcDependencies): void {
     return imageAssetView(image);
   });
   const imageInputSchema = z.strictObject({ brandId: idSchema, sourcePaths: z.array(z.string().min(1).max(8192)).min(1).max(100), name: z.string().trim().max(200).optional(), tags: z.array(z.string().trim().min(1).max(80)).max(30), business: z.array(z.string().trim().min(1).max(80)).max(20), city: z.array(z.string().trim().min(1).max(80)).max(20), usage: z.array(z.string().trim().min(1).max(80)).max(30), platform: z.array(z.string().trim().min(1).max(80)).max(20), universal: z.boolean() });
-  register("image-assets:list", (_event, payload) => { const input = z.object({ brandId: idSchema.optional(), enabledOnly: z.boolean().optional() }).optional().parse(payload); return repository.listImageAssets(input?.brandId, input?.enabledOnly ?? false).map(imageAssetView); });
+  register("image-assets:list", (_event, payload) => { const input = z.object({ brandId: idSchema.optional(), enabledOnly: z.boolean().optional() }).optional().parse(payload); return repository.listImageAssets(input?.brandId, input?.enabledOnly ?? false).map(asset => imageAssetView(assets.view(asset))); });
   register("image-assets:pick-files", async () => { const result = await dialog.showOpenDialog({ properties: ["openFile", "multiSelections"], filters: [{ name: "图片", extensions: ["jpg", "jpeg", "png", "webp", "gif", "bmp"] }] }); return result.canceled ? [] : result.filePaths; });
   register("image-assets:import", (_event, payload) => {
     const input = imageInputSchema.parse(payload);
     if (!repository.getBrand(input.brandId)) throw new Error("品牌不存在");
-    const imageDirectory = join(dataDirectory, "media", "images");
-    mkdirSync(imageDirectory, { recursive: true });
-    const imported: ImageAsset[] = [];
-    input.sourcePaths.forEach((sourcePath, index) => {
-      const extension = extname(sourcePath).toLowerCase();
-      if (!imageExtensions.has(extension)) throw new Error(`图片格式不支持：${basename(sourcePath)}`);
-      const sourceStat = statSync(sourcePath);
-      if (!sourceStat.isFile() || sourceStat.size <= 0 || sourceStat.size > 20 * 1024 * 1024) throw new Error(`图片不存在、为空或超过 20MB：${basename(sourcePath)}`);
-      const id = randomUUID();
-      const managedPath = join(imageDirectory, `${id}${extension}`);
-      copyFileSync(sourcePath, managedPath);
-      const managedBytes = readFileSync(managedPath);
-      const sha256 = createHash("sha256").update(managedBytes).digest("hex");
-      const name = input.name?.trim() ? (input.sourcePaths.length === 1 ? input.name.trim() : `${input.name.trim()} ${index + 1}`) : basename(sourcePath, extension);
-      imported.push(repository.createImageAsset({ id, brandId: input.brandId, name, filePath: managedPath, originalFileName: basename(sourcePath), mimeType: imageMimeByExtension[extension] ?? "application/octet-stream", size: managedBytes.length, sha256, tags: input.tags, business: input.business, city: input.city, usage: input.usage, platform: input.platform, universal: input.universal }));
-    });
+    const imported = assets.import(input.brandId, input.sourcePaths, { name: input.name, tags: input.tags, business: input.business, city: input.city, usage: input.usage, platform: input.platform, universal: input.universal });
     logger.info("IMAGE_LIBRARY", "IMAGE_IMPORT_COMPLETED", "图片已导入图片库", { brandId: input.brandId, count: imported.length });
     return imported.map(imageAssetView);
   });
@@ -1435,12 +1517,12 @@ export function registerIpc(deps: IpcDependencies): void {
       const key = `${record.accountId}:${record.platformKey}`;
       if (!lastDryRunAt.has(key)) lastDryRunAt.set(key, record.publishedAt);
     }
-    return Promise.all(repository.listAccounts().map(async (account) => {
+    return Promise.all(repository.listAccounts().filter(account => workspace.accountAllowed(account.id)).map(async (account) => {
       const registeredAdapter = registry.tryGetForConnection(account.platformKey);
       const douyinImageTextAdapter = account.platformKey === "douyin" ? registry.getForContent("douyin", "article") : null;
       const douyinImageTextConnection = account.platformKey === "douyin" ? repository.getDouyinImageTextConnection(account.id) : null;
       let douyinCreatorVerified = false;
-      if (douyinImageTextConnection?.active && douyinImageTextAdapter instanceof DouyinImageTextBrowserAdapter) {
+      if (!sessionRuntime && douyinImageTextConnection?.active && douyinImageTextAdapter instanceof DouyinImageTextBrowserAdapter) {
         try {
           const readiness = await douyinImageTextAdapter.inspectOwnedCreatorReadiness(accountContext(account.id, "douyin"));
           douyinCreatorVerified = readiness.identityVerified && readiness.contextOwnership && readiness.sessionExists
@@ -1455,10 +1537,11 @@ export function registerIpc(deps: IpcDependencies): void {
         ? douyinImageTextAdapter.getBrowserRuntimeState?.(accountContext(account.id, "douyin"))?.state : null;
       const toutiaoRuntime = account.platformKey === "toutiao" ? toutiaoSessionActivation.status(account.id) : null;
       const browserConnecting = registeredAdapter ? isAutomationAdapter(registeredAdapter) && registeredAdapter.isConnectionPending(accountContext(account.id, account.platformKey)) : false;
-      const runtimeAuthState = account.platformKey === "xiaohongshu" && registeredAdapter && isAutomationAdapter(registeredAdapter)
+      const sessionSnapshot = safeRuntimeSnapshot(account.id, account.platformKey);
+      const runtimeAuthState = sessionRuntime ? sessionSnapshot?.state ?? "CHECKING" : account.platformKey === "xiaohongshu" && registeredAdapter && isAutomationAdapter(registeredAdapter)
         ? registeredAdapter.getBrowserRuntimeState?.(accountContext(account.id, account.platformKey))?.state ?? null
         : null;
-      const accountStatus: AccountStatus = account.platformKey === "douyin"
+      const accountStatus: AccountStatus = sessionRuntime ? ["AUTHENTICATED", "CONNECTED"].includes(runtimeAuthState ?? "") ? "Connected" : runtimeAuthState === "CHECKING" ? "Connecting" : runtimeAuthState === "NEEDS_LOGIN" ? "NeedsLogin" : runtimeAuthState === "CREDENTIAL_INVALID" ? "Expired" : ["NETWORK_UNAVAILABLE", "IDENTITY_MISMATCH"].includes(runtimeAuthState ?? "") ? "Error" : "Unverified" : account.platformKey === "douyin"
         ? douyinCreatorVerified ? "Connected" : "Unverified"
         : account.platformKey === "toutiao" && account.loginStatus === "logged_in"
         ? toutiaoRuntime?.runtimeState === "ACTIVE" ? "Connected" : "Unverified"
@@ -1473,7 +1556,7 @@ export function registerIpc(deps: IpcDependencies): void {
         : account.loginStatus === "logged_in" ? "Connected" : account.loginStatus === "expired" ? "Expired" : account.loginStatus === "needs_user_action" ? (browserConnecting || oauthSessions.isPending(account.id, account.platformKey)) ? "Connecting" : "NeedsLogin" : account.loginStatus === "unknown" ? "Error" : "NotConnected";
       return {
       account,
-      imageTextCreatorReady: Boolean(douyinImageTextConnection?.active && douyinCreatorVerified && douyinImageTextRuntime === "AUTHENTICATED"),
+      imageTextCreatorReady: Boolean(douyinImageTextConnection?.active && (sessionRuntime ? runtimeAuthState === "AUTHENTICATED" && sessionSnapshot?.loginGeneration === douyinImageTextConnection.loginGeneration : douyinCreatorVerified && douyinImageTextRuntime === "AUTHENTICATED")),
       platform: platforms.find((item) => item.platformKey === account.platformKey) ?? null,
       credentialStatus: readCredentialStatus(account.id, account.platformKey),
       lastDryRunAt: lastDryRunAt.get(`${account.id}:${account.platformKey}`) ?? null,
@@ -1501,7 +1584,7 @@ export function registerIpc(deps: IpcDependencies): void {
       };
     }));
   });
-  register("accounts:create", (_event, payload) => repository.createAccount(z.object({ platformKey: idSchema, name: z.string().min(1), accountAlias: z.string().trim().min(1).max(100).optional(), allowAutoPublish: z.boolean().optional(), publishMode: z.enum(["inherit", "manual", "auto", "assisted"]).optional() }).parse(payload)));
+  register("accounts:create", (_event, payload) => { const companyId = workspace.current(); if (!companyId) throw new Error("请先选择企业工作区"); const account = repository.createAccount(z.object({ platformKey: idSchema, name: z.string().min(1), accountAlias: z.string().trim().min(1).max(100).optional(), allowAutoPublish: z.boolean().optional(), publishMode: z.enum(["inherit", "manual", "auto", "assisted"]).optional() }).parse(payload)); operations.bindAccount({ companyId, accountId: account.id }); return account; });
   register("accounts:update", (_event, payload) => { const input = z.object({ id: idSchema, data: z.object({ accountAlias: z.string().trim().min(1).max(100).optional(), enabled: z.boolean().optional(), loginStatus: z.enum(["logged_in", "logged_out", "expired", "needs_user_action", "unknown"]).optional(), pausedReason: z.string().nullable().optional(), allowAutoPublish: z.boolean().optional(), publishMode: z.enum(["inherit", "manual", "auto", "assisted"]).optional(), minimumIntervalSeconds: z.number().int().min(0).max(86400).optional() }) }).parse(payload); return repository.updateAccount(input.id, input.data); });
   register("accounts:set-credentials", (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema, values: z.record(z.string(), z.string().max(8192)) }).parse(payload);
@@ -1520,8 +1603,14 @@ export function registerIpc(deps: IpcDependencies): void {
     const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);
     return readCredentialStatus(input.accountId, input.platformKey);
   });
-  register("website:list-connections", () => repository.listAccounts().filter(account => account.platformKey === "website" && !account.archivedAt)
-    .map(account => officialApiAccountView(repository, credentials, account.id)));
+  register("website:list-connections", () => repository.listAccounts().filter(account => account.platformKey === "website" && !account.archivedAt && workspace.accountAllowed(account.id))
+    .map(account => {
+      const view = officialApiAccountView(repository, credentials, account.id);
+      const runtime = safeRuntimeSnapshot(account.id, "website");
+      return view.configured && runtime?.state === "CONNECTED" && runtime.identityMatched
+        ? { ...view, status: "CONNECTED" as const, writesEnabled: true, lastVerifiedAt: runtime.checkedAt }
+        : view;
+    }));
   register("website:availability", () => deps.officialApi?.availability() ?? { ordinaryEnabled: false, candidateSelections: [] });
   register("website:image-choices", (_event, payload) => {
     const { articleId } = z.strictObject({ articleId: idSchema }).parse(payload);
@@ -1546,6 +1635,8 @@ export function registerIpc(deps: IpcDependencies): void {
   });
   register("website:import-credentials", async (_event, payload) => {
     const input = z.strictObject({ environment: z.enum(["staging", "production"]), accountId: idSchema.optional() }).parse(payload);
+    const selectedCompany = workspace.current();
+    if (!selectedCompany) throw new Error("请先选择企业工作区");
     const picked = await dialog.showOpenDialog({ title: `安全导入康一官网 ${input.environment} 凭据`, properties: ["openFile"],
       filters: [{ name: "本机受控凭据配置", extensions: ["json"] }] });
     if (picked.canceled || picked.filePaths.length !== 1) throw new Error("WEBSITE_CREDENTIAL_IMPORT_CANCELLED");
@@ -1560,6 +1651,7 @@ export function registerIpc(deps: IpcDependencies): void {
     } catch { throw new Error("WEBSITE_CREDENTIAL_FILE_INVALID"); }
     // File bytes and the secret never pass through Renderer or IPC payloads.
     const result = await importOfficialApiCredential({ repository, credentials,
+      assertBeforePersist: () => workspace.assertCompany(selectedCompany), bindAccount: accountId => operations.bindAccount({ companyId: selectedCompany, accountId }),
       assertReconfiguration: (accountId, config) => deps.officialApi?.assertCredentialReconfiguration(accountId, config) }, raw, input.environment, input.accountId);
     logger.info("ACCOUNT", "WEBSITE_CREDENTIAL_IMPORTED", "官网签名凭据已安全导入", {
       accountId: result.accountId, siteId: result.siteId, environment: result.environment, configured: result.configured });
@@ -1734,6 +1826,12 @@ export function registerIpc(deps: IpcDependencies): void {
   });
   register("accounts:check-login", async (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);
+    if (sessionRuntime) {
+      const target = sessionTarget(input.accountId);
+      if (!target || target.platformKey !== input.platformKey) throw new Error("账号与平台不匹配");
+      const snapshot = await sessionRuntime.refresh(target, "MANUAL");
+      return { loginStatus: ["AUTHENTICATED", "CONNECTED"].includes(snapshot.state) ? "logged_in" as const : snapshot.state === "CREDENTIAL_INVALID" || snapshot.state === "NEEDS_LOGIN" ? "expired" as const : "unknown" as const };
+    }
     const action = createUserAction("CHECK_LOGIN");
     const adapter = registry.getForConnection(input.platformKey);
     const consumeCheckLoginOperationId = (): string | null => {
@@ -1777,7 +1875,7 @@ export function registerIpc(deps: IpcDependencies): void {
   register("platform-self-test:cancel-publish", (_event, payload) => platformSelfTests.cancelPublish(z.object({ testRunId: idSchema }).parse(payload).testRunId));
   register("platform-self-test:confirm-delete", async (_event, payload) => platformSelfTests.confirmDelete(z.object({ testRunId: idSchema }).parse(payload).testRunId));
 
-  register("plans:list", () => repository.listPlans());
+  register("plans:list", () => repository.listPlans().filter(plan => plan.brandId === workspace.current()));
   register("plans:create", (_event, payload) => repository.createPlan(z.object({ id: z.string().optional(), name: z.string().min(1), brandId: idSchema, enabled: z.boolean(), strategy: z.enum(["same_article", "per_platform", "platform_variant", "topic_rewrite", "account_variant"]), articlesPerDay: z.number().int().min(1).max(100), accountIds: z.array(idSchema), publishTimes: z.array(z.string()), reusePolicy: z.enum(["once", "same_platform", "same_platform_different_account", "always", "rewrite"]), minIntervalSeconds: z.number().int().min(0), maxRetries: z.number().int().min(0).max(10), consecutiveFailureThreshold: z.number().int().min(1).max(20), startDate: z.string(), endDate: z.string().nullable() }).omit({ id: true }).parse(payload)));
   register("plans:generate-jobs", (_event, payload) => { const input = z.object({ id: idSchema, scheduledAt: z.string() }).parse(payload); assertOperatorBatchPlanAllowed(repository.listPlans().find((plan) => plan.id === input.id), repository.listAccounts(), repository.listPlatforms()); const blockers = repository.validatePlanContentQuality(input.id); if (blockers.length > 0) throw Object.assign(new Error(`Quality Gate blocked publishing: ${blockers.length} content item(s) are not Approved`), { code: "CONTENT_REJECTED", blockers }); return repository.createJobsForPlan(input.id, input.scheduledAt); });
   register("jobs:create-video", async (_event, payload) => {
@@ -1795,7 +1893,7 @@ export function registerIpc(deps: IpcDependencies): void {
     if (!result.validation.valid) throw Object.assign(new Error(result.validation.errors.join("；")), { code: "CONTENT_REJECTED" });
     return repository.createVideoPublishJob({ accountId: input.accountId, platformKey: input.platformKey, articleId: input.articleId, videoAssetId: input.videoAssetId, title: asset.title, description: asset.description, tags: asset.tags, coverPath: asset.coverPath ?? undefined, platformFields: asset.platformFields, scheduledAt: input.scheduledAt ?? new Date().toISOString(), dryRun: true, manualConfirmationRequired: true });
   });
-  register("jobs:list", (_event, payload) => repository.listJobs(z.object({ status: z.string().optional() }).optional().parse(payload)));
+  register("jobs:list", (_event, payload) => repository.listJobs(z.object({ status: z.string().optional() }).optional().parse(payload)).filter(job => repository.getArticle(job.articleId)?.brandId === workspace.current()));
   register("jobs:prepare-existing-douyin", async (_event, payload) => {
     const id = z.object({ id: idSchema }).parse(payload).id;
     if (process.env.DOUYIN_BODY_DIAGNOSTIC_ENABLED !== "true"
@@ -1880,6 +1978,7 @@ export function registerIpc(deps: IpcDependencies): void {
   void resumeRunningBatches(repository, logger, coverDir, aiCredentials);
   void resumeContentStudioTasks(repository, logger, { createAiProvider: () => createAiProvider(repository, aiCredentials, logger) });
   void scheduler;
+  return sessionRuntime;
 }
 
 function settingString(repository: AppRepository, key: string, fallback: string): string { const value = repository.getSettings()[key]; return typeof value === "string" ? value : fallback; }

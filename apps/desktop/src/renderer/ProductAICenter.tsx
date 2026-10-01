@@ -29,6 +29,11 @@ export function ProductAICenter({ initialTab = "studio", refresh }: { initialTab
   useEffect(() => {
     let current = true;
     setSourceId(""); setSourceText(""); setOutputs([]); setContext(null);
+    if (companyId) void Promise.all([window.publisherAPI.operations.getStudioDefaults(companyId), window.publisherAPI.operations.consumePlanGenerationSeed(companyId)]).then(([value, seed]) => {
+      if (!current) return;
+      setProfileId(value.profileId ?? ""); setModel(value.model ?? ""); setTemplateKey(value.templateId ? `${value.templateId}@${value.templateVersion ?? 1}` : "industry@1"); setPurpose(value.purpose); setTargets(value.targetPlatforms);
+      if (seed) { setSourceId(seed.articleId); setTargets(seed.targetPlatforms); setMessage(`已载入内容计划：${seed.topic}，生成结果保存为关联草稿版本。`); }
+    }).catch(() => { if (current) setMessage("企业生成默认值或内容计划草稿暂时无法载入"); });
     if (companyId) void window.publisherAPI.aiCenter.context(companyId).then(value => { if (current) setContext(value); }).catch(() => { if (current) setMessage("企业资料暂时无法读取"); });
     return () => { current = false; };
   }, [companyId]);
@@ -59,6 +64,7 @@ export function ProductAICenter({ initialTab = "studio", refresh }: { initialTab
       <p>缺少 Key 时显示未配置；Ollama 只读取本机已有模型，不自动下载。模型列表不代表所有模型均支持文本生成。</p>
       {profiles.map(item => <div className="table-row" key={item.id}><strong>{item.displayName}</strong><span>{item.defaultModel}</span><span>{!item.configured ? "未配置" : item.verificationStatus === "Failed" ? "连接失败，请检查配置" : item.verificationStatus === "Unavailable" ? "本机服务或模型不可用" : item.lastVerifiedAt ? "已验证" : "已配置，待验证"}</span><span>{item.lastVerifiedAt ? new Date(item.lastVerifiedAt).toLocaleString("zh-CN") : "尚未验证"}</span><button className="mini-button" disabled={busy} onClick={() => editProfile(item)}>编辑配置</button></div>)}
     </section>}
+    {tab === "studio" && <button className="secondary-button" disabled={busy || !companyId || !profileId || !model || !targets.length} onClick={() => void act(async () => { const [templateId, version] = templateKey.split("@"); await window.publisherAPI.operations.saveStudioDefaults({ companyId, profileId, model, templateId: templateId ?? null, templateVersion: Number(version) || null, purpose: purpose as typeof STUDIO_PURPOSES[number], targetPlatforms: targets as typeof STUDIO_TARGETS[number][] }); setMessage("当前企业的提示词默认值已保存"); })}>保存企业生成默认值</button>}
     {tab === "studio" && <><section className="panel form-grid"><label>企业<select aria-label="AI 企业" value={companyId} disabled={busy} onChange={event => setCompanyId(event.target.value)}><option value="">选择企业</option>{brands.map(item => <option key={item.id} value={item.id}>{item.companyName || item.name}</option>)}</select></label>
       <label>源文章<select aria-label="AI 源文章" value={sourceId} disabled={busy} onChange={event => setSourceId(event.target.value)}><option value="">粘贴源稿或资料</option>{articles.filter(item => item.brandId === companyId).map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
       {!sourceId && <label>源稿或资料<textarea aria-label="AI 源稿" rows={8} value={sourceText} disabled={busy} onChange={event => setSourceText(event.target.value)} /></label>}
