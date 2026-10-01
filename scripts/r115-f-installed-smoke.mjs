@@ -130,7 +130,7 @@ try {
       const path = join(root,`drafts.${extension}`); const rows = [{标题:`本机导入${extension}`,正文:`示例甲有限公司${extension}流程资料`,企业:"示例甲有限公司"},{标题:"",正文:"缺标题测试",企业:"示例甲有限公司"},{标题:"错误企业",正文:"隔离测试",企业:"示例乙有限公司"}];
       if (extension === "csv") writeFileSync(path,"\uFEFF"+XLSX.utils.sheet_to_csv(XLSX.utils.json_to_sheet(rows))); else {const book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,XLSX.utils.json_to_sheet(rows),"草稿");XLSX.writeFile(book,path);}
       await app.evaluate(pickFile,path); await page.getByRole("button",{name:"选择 CSV / XLSX",exact:true}).click(); await page.getByRole("heading",{name:"逐行错误",exact:true}).waitFor();
-      await page.getByRole("button",{name:"Import as Draft",exact:true}).click(); await page.getByText("已导入 1 条草稿；跳过重复 0 条；失败 0 条。",{exact:true}).waitFor();
+      await page.getByRole("button",{name:"Import as Draft",exact:true}).click(); await page.getByText("已导入 1 条草稿；跳过重复 0 条；失败 2 条。",{exact:true}).waitFor();
     }
     await page.getByLabel("当前企业工作区").selectOption(companyB); await page.waitForFunction(id=>window.publisherAPI.workspace.current().then(value=>value===id),companyB);
     assert.deepEqual(await page.evaluate(()=>window.publisherAPI.articles.list()),[]); assert.deepEqual(await page.evaluate(()=>window.publisherAPI.imageAssets.list()),[]); assert.deepEqual(await page.evaluate(()=>window.publisherAPI.accounts.list()),[]);

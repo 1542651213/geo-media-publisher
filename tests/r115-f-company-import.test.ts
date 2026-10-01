@@ -17,12 +17,16 @@ it("imports identical copy independently in two companies and deduplicates only 
     expect(unmapped.validRows).toBe(0); expect(unmapped.rows[0]!.errors.length).toBeGreaterThan(0);
     const mapped = operations.previewImport({ companyId: a.id, fileName: "unknown-headers.csv", mapping: { title: "ArticleTitle", body: "Text" }, rows: [{ ArticleTitle: "可映射标题", Text: "可映射正文" }] });
     expect(mapped.validRows).toBe(1);
+    const mixed = operations.previewImport({ companyId: a.id, fileName: "mixed.csv", mapping: { title: "title", body: "body", company: "company" }, rows: [{ title: "甲行", body: "甲资料", company: a.companyName }, { title: "乙行", body: "乙资料", company: b.companyName }, { title: "", body: "缺标题", company: a.companyName }] });
+    expect(mixed.validRows).toBe(1); expect(mixed.rows[1]!.errors.some(error => error.reason.includes("工作区"))).toBe(true);
+    expect(operations.commitImport({ companyId: a.id, previewId: mixed.previewId })).toMatchObject({ imported: 1, failed: 2 });
+    expect(repository.listArticles({ brandId: b.id })).toHaveLength(0);
     const first = preview(a.id); expect(first.validRows).toBe(1);
     expect(operations.commitImport({ companyId: a.id, previewId: first.previewId }).imported).toBe(1);
     const second = preview(b.id); expect(second.duplicateRows).toBe(0);
     expect(operations.commitImport({ companyId: b.id, previewId: second.previewId }).imported).toBe(1);
     expect(preview(a.id).duplicateRows).toBe(1); expect(preview(b.id).duplicateRows).toBe(1);
-    expect(repository.listArticles({ brandId: a.id })).toHaveLength(1); expect(repository.listArticles({ brandId: b.id })).toHaveLength(1);
+    expect(repository.listArticles({ brandId: a.id })).toHaveLength(2); expect(repository.listArticles({ brandId: b.id })).toHaveLength(1);
     expect(repository.listJobs()).toHaveLength(0);
   } finally { db.close(); rmSync(root, { recursive: true, force: true }); }
 });

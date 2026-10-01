@@ -755,10 +755,22 @@ export class ContentOperations {
     this.ensureCompany(input.companyId);
     const brand = this.repository.getBrand(input.companyId)!;
     const value = (row: Record<string, string>, column?: string): string => column ? row[column] ?? "" : "";
-    const mapped: ExcelArticleRowInput[] = input.rows.map((row, index) => ({ rowNumber: index + 2, templateVersion: value(row, input.mapping.templateVersion) || "1.0", title: value(row, input.mapping.title), body: value(row, input.mapping.body), summary: value(row, input.mapping.summary), company: brand.companyName, business: value(row, input.mapping.business), city: value(row, input.mapping.city), keywords: value(row, input.mapping.keywords), tags: value(row, input.mapping.tags), targetPlatforms: value(row, input.mapping.targetPlatforms), contentType: value(row, input.mapping.contentType), promotionStrength: value(row, input.mapping.promotionStrength), sourceNote: value(row, input.mapping.sourceNote) }));
+    const mapped: ExcelArticleRowInput[] = input.rows.map((row, index) => ({ rowNumber: index + 2, templateVersion: value(row, input.mapping.templateVersion) || "1.0", title: value(row, input.mapping.title), body: value(row, input.mapping.body), summary: value(row, input.mapping.summary), company: value(row, input.mapping.company).trim() || brand.companyName, business: value(row, input.mapping.business), city: value(row, input.mapping.city), keywords: value(row, input.mapping.keywords), tags: value(row, input.mapping.tags), targetPlatforms: value(row, input.mapping.targetPlatforms), contentType: value(row, input.mapping.contentType), promotionStrength: value(row, input.mapping.promotionStrength), sourceNote: value(row, input.mapping.sourceNote) }));
     const preview = this.repository.previewExcelArticleImport({ fileName: input.fileName, rows: mapped, defaultBrandId: input.companyId });
+    for (const row of preview.rows) {
+      if (row.matchedBrandId === input.companyId) continue;
+      row.status = "INVALID";
+      row.matchedBrandId = null;
+      row.diagnosticCodes = [...new Set([...row.diagnosticCodes, "UNKNOWN_BRAND" as const])];
+      row.errorCodes = [...new Set([...row.errorCodes, "COMPANY_WORKSPACE_MISMATCH"])];
+      row.errorReason = [row.errorReason, "企业与当前工作区不一致"].filter(Boolean).join("；");
+      preview.diagnostics.push({ sheetName: preview.selectedSheetName, rowNumber: row.rowNumber, title: row.title, severity: "ERROR", code: "UNKNOWN_BRAND", message: "企业与当前工作区不一致" });
+    }
+    preview.validRows = preview.rows.filter(row => row.status === "VALID" || row.status === "WARNING").length;
+    preview.errorRows = new Set([...preview.rows.filter(row => row.status === "INVALID" || row.status === "UNKNOWN_BRAND").map(row => row.rowNumber), ...preview.diagnostics.filter(item => item.severity === "ERROR").map(item => item.rowNumber ?? 1)]).size;
+    preview.duplicateRows = preview.rows.filter(row => row.status === "DUPLICATE").length;
     const previewId = randomUUID(); this.importPreviews.set(previewId, { companyId: input.companyId, preview });
-    return { previewId, companyId: input.companyId, fileName: preview.fileName, mapping: input.mapping, totalRows: preview.totalRows, validRows: preview.validRows, duplicateRows: preview.duplicateRows, rows: preview.rows.map((row) => ({ rowNumber: row.rowNumber, title: row.title, body: row.body, status: row.status, duplicate: row.status === "DUPLICATE", errors: row.diagnosticCodes.map((code) => ({ row: row.rowNumber, column: code.includes("TITLE") ? input.mapping.title : code.includes("CONTENT") ? input.mapping.body : "", reason: row.errorReason })) })) };
+    return { previewId, companyId: input.companyId, fileName: preview.fileName, mapping: input.mapping, totalRows: preview.totalRows, validRows: preview.validRows, duplicateRows: preview.duplicateRows, rows: preview.rows.map((row) => ({ rowNumber: row.rowNumber, title: row.title, body: row.body, status: row.status, duplicate: row.status === "DUPLICATE", errors: row.diagnosticCodes.map((code) => ({ row: row.rowNumber, column: code.includes("TITLE") ? input.mapping.title : code.includes("CONTENT") ? input.mapping.body : code === "UNKNOWN_BRAND" ? input.mapping.company ?? "企业" : "", reason: row.errorReason })) })) };
   }
 
   commitImport(payload: unknown): OperationsImportResult {
@@ -767,6 +779,7 @@ export class ContentOperations {
     const cached = this.importPreviews.get(input.previewId);
     if (!cached) throw operationsError("IMPORT_PREVIEW_INVALID", "导入预览不存在或应用已重启，请重新预览");
     if (cached.companyId !== input.companyId) throw operationsError("COMPANY_CONTEXT_MISMATCH", "导入预览与当前企业不匹配");
+    if (cached.preview.rows.some(row => row.status !== "INVALID" && row.status !== "UNKNOWN_BRAND" && row.matchedBrandId !== input.companyId)) throw operationsError("COMPANY_CONTEXT_MISMATCH", "导入行与当前企业不匹配，请重新预览");
     const result = this.repository.confirmExcelArticleImport({ preview: cached.preview, duplicateRowNumbers: input.duplicateRowNumbers });
     for (const articleId of result.articleIds) {
       const article = this.assertArticleCompany(input.companyId, articleId);
