@@ -1,0 +1,273 @@
+{
+  "schemaVersion": 1,
+  "task": "R1.15-F",
+  "package": {
+    "status": "PASS",
+    "installerBytes": 101270018,
+    "installerSha256": "503bb5b7f208b087c41a23161efb2d24bb473cabf69902cc4d78b724d0bc5afb",
+    "installedAppAsarSha256": "f98018a24fc2f6825ed3690a922eb15ff606a21eaefae6ee24547e7c34b9a87d",
+    "packageRuntimeSourceCommit": "1649aff2b9f3066fd313ad64e0ce3a6244724a1b",
+    "byteParityMainPreloadRenderer": true,
+    "migrationAndPlatformResourceParity": true,
+    "migrations": 33,
+    "candidateGrantsAbsent": true,
+    "sensitiveResourcesAbsent": true
+  },
+  "installed": {
+    "status": "PASS",
+    "packaged": true,
+    "electron": "37.10.3",
+    "node": "22.21.1",
+    "abi": "136",
+    "companies": 2,
+    "operationsTabs": 9,
+    "providerChoices": 5,
+    "modelRequests": 1,
+    "loopbackGenerations": 6,
+    "approvedFactRequests": 6,
+    "queueSources": 2,
+    "queueVariants": 4,
+    "queueRecoveryNoReplay": true,
+    "planItems": 37,
+    "planStudioHandoff": true,
+    "reviewEditInvalidation": true,
+    "staleApprovalBlocked": true,
+    "csvAndXlsxDraftImport": true,
+    "importRowErrors": true,
+    "sha256ImageDedup": true,
+    "workspaceIsolationAndSelectionReset": true,
+    "dbLoggedInNotAuthentication": true,
+    "encryptedCredential": true,
+    "plaintextAbsent": true,
+    "diagnosticAllowlist": true,
+    "integrity": "ok",
+    "foreignKeys": 0,
+    "migrations": 33,
+    "protectedOriginalBytesUnchanged": true,
+    "externalAIRequests": 0,
+    "realPlatformPublishCount": 0,
+    "newFinalSubmitCount": 0,
+    "jobIntentRecordCount": 0,
+    "livePlatformProbe": "NOT_RUN"
+  },
+  "migration": {
+    "status": "PASS",
+    "eBaselineMigrationCount": 39,
+    "fMigrationCount": 40,
+    "preservedExistingTables": 70,
+    "exactExistingRowParity": true,
+    "legacyAccountBindings": 7,
+    "ambiguousAccountsUnassigned": 13,
+    "integrity": "PASS",
+    "foreignKeys": "PASS",
+    "reopenIdempotent": true,
+    "originalDatabaseAndCredentialBytesUnchanged": true,
+    "realPlatformPublishCount": 0,
+    "newFinalSubmitCount": 0
+  },
+  "localBrowser": {
+    "status": "PASS",
+    "realBrowserContexts": 2,
+    "restartedManagers": 2,
+    "hiddenRestore": true,
+    "exactIdentity": true,
+    "accountAndCompanyIsolation": true,
+    "wrongIdentity": "IDENTITY_MISMATCH",
+    "missingSession": "NEEDS_LOGIN",
+    "encryptedFixtureSnapshot": true,
+    "livePlatformProbe": "NOT_RUN",
+    "realPlatformPublishCount": 0,
+    "newFinalSubmitCount": 0
+  },
+  "privateReadOnlyRestart": {
+    "status": "PASS",
+    "scope": "PRIVATE_COPY_READ_ONLY_IDENTITY",
+    "restartRuns": 2,
+    "runs": [
+      {
+        "run": 1,
+        "states": [
+          {
+            "platform": "lieju",
+            "state": "AUTHENTICATED",
+            "identityMatched": true,
+            "reasonCode": null
+          },
+          {
+            "platform": "sohu_media",
+            "state": "NEEDS_LOGIN",
+            "identityMatched": false,
+            "reasonCode": "USER_ACTION_REQUIRED"
+          },
+          {
+            "platform": "weibo",
+            "state": "NEEDS_LOGIN",
+            "identityMatched": false,
+            "reasonCode": "BROWSER_SESSION_MISSING"
+          },
+          {
+            "platform": "zhihu",
+            "state": "UNVERIFIED",
+            "identityMatched": false,
+            "reasonCode": "EXPECTED_REMOTE_IDENTITY_MISSING"
+          },
+          {
+            "platform": "kangyi_website",
+            "state": "UNVERIFIED",
+            "identityMatched": false,
+            "reasonCode": "ADAPTER_UNAVAILABLE"
+          },
+          {
+            "platform": "website",
+            "state": "CONNECTED",
+            "identityMatched": true,
+            "reasonCode": null
+          },
+          {
+            "platform": "website",
+            "state": "CONNECTED",
+            "identityMatched": true,
+            "reasonCode": null
+          }
+        ],
+        "unassigned": [
+          {
+            "platform": "baijiahao",
+            "state": "UNASSIGNED_COMPANY_NO_PROBE"
+          },
+          {
+            "platform": "bilibili",
+            "state": "UNASSIGNED_COMPANY_NO_PROBE"
+          },
+          {
+            "platform": "cnblogs",
+            "state": "UNASSIGNED_COMPANY_NO_PROBE"
+          },
+          {
+            "platform": "douyin",
+            "state": "UNASSIGNED_COMPANY_NO_PROBE"
+          },
+          {
+            "platform": "facebook",
+            "state": "UNASSIGNED_COMPANY_NO_PROBE"
+          },
+          {
+            "platform": "qq_public",
+            "state": "UNASSIGNED_COMPANY_NO_PROBE"
+          },
+          {
+            "platform": "test",
+            "state": "UNASSIGNED_COMPANY_NO_PROBE"
+          },
+          {
+            "platform": "test",
+            "state": "UNASSIGNED_COMPANY_NO_PROBE"
+          },
+          {
+            "platform": "test",
+            "state": "UNASSIGNED_COMPANY_NO_PROBE"
+          },
+          {
+            "platform": "tiktok",
+            "state": "UNASSIGNED_COMPANY_NO_PROBE"
+          },
+          {
+            "platform": "toutiao",
+            "state": "UNASSIGNED_COMPANY_NO_PROBE"
+          },
+          {
+            "platform": "xiaohongshu",
+            "state": "UNASSIGNED_COMPANY_NO_PROBE"
+          },
+          {
+            "platform": "youtube",
+            "state": "UNASSIGNED_COMPANY_NO_PROBE"
+          }
+        ],
+        "connected": 3,
+        "checking": 0
+      },
+      {
+        "run": 2,
+        "states": [
+          {
+            "platform": "lieju",
+            "state": "AUTHENTICATED",
+            "identityMatched": true,
+            "reasonCode": null
+          },
+          {
+            "platform": "sohu_media",
+            "state": "NEEDS_LOGIN",
+            "identityMatched": false,
+            "reasonCode": "USER_ACTION_REQUIRED"
+          },
+          {
+            "platform": "weibo",
+            "state": "NEEDS_LOGIN",
+            "identityMatched": false,
+            "reasonCode": "BROWSER_SESSION_MISSING"
+          },
+          {
+            "platform": "zhihu",
+            "state": "UNVERIFIED",
+            "identityMatched": false,
+            "reasonCode": "EXPECTED_REMOTE_IDENTITY_MISSING"
+          },
+          {
+            "platform": "kangyi_website",
+            "state": "UNVERIFIED",
+            "identityMatched": false,
+            "reasonCode": "ADAPTER_UNAVAILABLE"
+          },
+          {
+            "platform": "website",
+            "state": "CONNECTED",
+            "identityMatched": true,
+            "reasonCode": null
+          },
+          {
+            "platform": "website",
+            "state": "CONNECTED",
+            "identityMatched": true,
+            "reasonCode": null
+          }
+        ],
+        "unassigned": [],
+        "connected": 3,
+        "checking": 0
+      }
+    ],
+    "encryptionContextCopied": true,
+    "schedulerDisabled": true,
+    "jobIntentRecordArticleCountsUnchanged": true,
+    "protectedOriginalBytesUnchanged": true,
+    "secretsExposed": false,
+    "realPlatformPublishCount": 0,
+    "newFinalSubmitCount": 0
+  },
+  "tests": {
+    "files": 207,
+    "tests": 1462,
+    "newFailures": 0,
+    "inheritedFailures": 0
+  },
+  "ordinaryOn": [
+    "douyin",
+    "website",
+    "toutiao"
+  ],
+  "batchEnabled": false,
+  "realPlatformPublishCount": 0,
+  "newFinalSubmitCount": 0,
+  "privateGithubPush": "BLOCKED_BY_OWNER_CONFIGURATION",
+  "excluded": [
+    "Secrets",
+    "Business data",
+    "Private paths",
+    "Prompts",
+    "Raw responses",
+    "Cookies",
+    "Storage state"
+  ]
+}
