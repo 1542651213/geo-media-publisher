@@ -8,6 +8,7 @@ import type { OfficialApiJobView, OfficialApiMaintenanceOperation } from "../sha
 import { candidateBindingAllowed, candidateGrantActive, type OfficialApiAcceptanceSelection } from "./official-api-candidate";
 import { freezeOfficialApiSelection } from "./official-api-selection";
 import { verifyOfficialApiConnection } from "./official-api-account";
+import { evaluateProductPreflight } from "../shared/product-platform-policy";
 
 interface MainAdapter {
   inspect(config: OfficialApiCredential): Promise<unknown>;
@@ -75,6 +76,11 @@ export class OfficialApiController {
       if (!verified.writesEnabled) throw new Error("WEBSITE_WRITES_DISABLED");
       const { account, prepared } = this.selection(input);
       if (!this.deps.ordinaryEnabled && !this.authorizedCandidate(prepared)) throw new Error("WEBSITE_CANDIDATE_BINDING_NOT_AUTHORIZED");
+      if (this.deps.ordinaryEnabled) {
+        const article = this.deps.repository.getArticle(input.articleId), brand = article && this.deps.repository.getBrand(article.brandId);
+        const preflight = evaluateProductPreflight({ platformKey: "website", companyId: article?.brandId ?? "", companyName: brand?.companyName ?? "", article, account, identityVerified: verified.status === "CONNECTED", images: [], contentType: prepared.settings.kind, publishMode: "CONFIRM_BEFORE_PUBLISH" });
+        if (!preflight.allowed) throw new Error(preflight.blockers.join("；"));
+      }
       const existing = this.deps.store.findBySource(account.id, input.articleId);
       if (existing && existing.contentBindingId !== prepared.contentBindingId) throw new Error("WEBSITE_FROZEN_BINDING_CHANGED");
       const job = existing ? this.deps.repository.getJob(existing.jobId) : this.deps.repository.createArticlePublishJob({

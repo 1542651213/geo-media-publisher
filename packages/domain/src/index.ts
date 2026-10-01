@@ -1,4 +1,6 @@
 export * from "./types";
+export * from "./product-content-policy";
+export * from "./product-ai";
 export * from "./douyin-title";
 export * from "./toutiao-article";
 export * from "./secret-redaction";

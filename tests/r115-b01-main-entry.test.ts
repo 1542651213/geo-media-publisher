@@ -26,6 +26,7 @@ vi.mock("../apps/desktop/src/shared/product-platform-policy", async (importOrigi
 });
 
 import { registerIpc } from "../apps/desktop/src/main/ipc";
+import { PlatformSelfTestService } from "../apps/desktop/src/main/platform-self-test";
 
 const roots: string[] = [];
 const databases: Array<{ close(): void }> = [];
@@ -38,6 +39,8 @@ function fixture(capability = true) {
   const repo = opened.repository;
   repo.seedDevelopment(join(process.cwd(), "PLATFORMS.csv"));
   repo.setSetting("contentReviewMode", "Off");
+  // Historical write acceptance is now explicitly confined to Developer Mode.
+  repo.setSetting("developerMode", true);
   const brand = repo.createBrand({ name: "B01", companyName: "B01" });
   const account = repo.createAccount({ platformKey: "douyin", name: "Owner test" });
   repo.saveDouyinImageTextConnection({ accountId: account.id, creatorId: "fixture-creator", browserSessionIdHash: "fixture" });
@@ -66,6 +69,21 @@ function fixture(capability = true) {
 }
 
 describe("B01 Candidate R2 Main authorization request", () => {
+  it("lets Developer safe levels reach their handler while L5 remains blocked before any job", async () => {
+    const { repo, account, invoke } = fixture();
+    const runLevel = vi.spyOn(PlatformSelfTestService.prototype, "runLevel").mockRejectedValue(new Error("SAFE_HANDLER_REACHED"));
+    try {
+      for (const level of ["L1_LOGIN", "L2_EDITOR", "L3_CONTENT_FILL", "L4_DRAFT"]) {
+        await expect(invoke("platform-self-test:run-level", { platformAccountId: account.id, level })).rejects.toThrow("SAFE_HANDLER_REACHED");
+      }
+      await expect(invoke("platform-self-test:run-level", { platformAccountId: account.id, level: "L5_PUBLISH" })).rejects.toThrow("DISABLED");
+      expect(runLevel).toHaveBeenCalledTimes(4);
+      repo.setSetting("developerMode", false);
+      await expect(invoke("platform-self-test:run-level", { platformAccountId: account.id, level: "L1_LOGIN" })).rejects.toThrow("Developer");
+      expect(runLevel).toHaveBeenCalledTimes(4);
+      expect(repo.listJobs()).toEqual([]);
+    } finally { runLevel.mockRestore(); }
+  });
   it("retires only an exact safe failed pre-boundary Job through Main and blocks its final route", async () => {
     const { repo, account, article, image, invoke } = fixture();
     await invoke("b01:request-authorization", { platformKey: "douyin", accountId: account.id, articleId: article.id, imageAssetId: image.id });

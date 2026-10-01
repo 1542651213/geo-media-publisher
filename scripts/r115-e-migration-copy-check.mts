@@ -1,0 +1,45 @@
+import assert from "node:assert/strict";
+import { createHash, randomUUID } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import Database from "better-sqlite3";
+import { AICenterStore, openDatabase } from "@publisher/db";
+
+// The input is a local, access-controlled closed-app backup, never a credential value.
+const backupDirectory = resolve(process.argv[2] ?? "");
+assert.ok(process.argv[2] && existsSync(join(backupDirectory, "publisher.db")), "Closed-app backup is required");
+const root = join(backupDirectory, "r115-e-migration-copy"); mkdirSync(root, { recursive: true });
+const beforePath = join(root, "before.db"), migratedPath = join(root, "migrated.db");
+assert.equal(existsSync(migratedPath), false, "Use a fresh verification directory");
+copyFileSync(join(backupDirectory, "publisher.db"), beforePath);
+copyFileSync(beforePath, migratedPath);
+const hash = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
+const protectedDirectory = join(process.env.APPDATA ?? "", "codex-media-publisher", "production-data");
+const protectedHashes = Object.fromEntries(["publisher.db", "publisher.db-wal", "publisher.db-shm", "credentials.enc"].map(name => [name, existsSync(join(protectedDirectory, name)) ? hash(readFileSync(join(protectedDirectory, name))) : null]));
+const baseline = new Database(beforePath, { readonly: true });
+const tables = (db: Database.Database) => (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as Array<{ name: string }>).map(row => row.name);
+const snapshot = (db: Database.Database) => Object.fromEntries(tables(db).filter(name => name !== "migrations").map(name => {
+  assert.match(name, /^[a-z0-9_]+$/u);
+  const rows = db.prepare(`SELECT * FROM "${name}"`).all().map(row => JSON.stringify(row)).sort();
+  return [name, { count: rows.length, digest: hash(rows.join("\n")) }];
+}));
+const before = snapshot(baseline), beforeMigrations = baseline.prepare("SELECT COUNT(*) n FROM migrations").get() as { n: number };
+assert.equal(baseline.pragma("integrity_check", { simple: true }), "ok"); assert.deepEqual(baseline.pragma("foreign_key_check"), []); baseline.close();
+const opened = openDatabase(migratedPath, join(process.cwd(), "packages/db/migrations"));
+const store = new AICenterStore(opened.repository);
+const brand = opened.repository.listBrands()[0]; assert.ok(brand);
+const generationId = randomUUID();
+store.start({ generationId, companyId: brand.id, sourceArticleId: null, provider: "custom", model: "offline-fixture", templateId: "industry", templateVersion: 1, targetPlatform: "weibo", createdAt: new Date().toISOString(), status: "Running", errorCode: null, outputArticleId: null, variantId: null });
+opened.db.close();
+const reopened = openDatabase(migratedPath, join(process.cwd(), "packages/db/migrations")); const recovered = new AICenterStore(reopened.repository);
+assert.equal(recovered.recoverInterrupted(), 1); assert.equal(recovered.generation(generationId)?.status, "Unknown"); assert.equal(recovered.recoverInterrupted(), 0);
+const after = snapshot(reopened.db);
+for (const [name, value] of Object.entries(before)) assert.deepEqual(after[name], value, `Existing table changed: ${name}`);
+const migrationCount = (reopened.db.prepare("SELECT COUNT(*) n FROM migrations").get() as { n: number }).n;
+assert.equal(migrationCount, beforeMigrations.n + 1); assert.equal(tables(reopened.db).length, Object.keys(before).length + 7);
+assert.equal(reopened.db.pragma("integrity_check", { simple: true }), "ok"); assert.deepEqual(reopened.db.pragma("foreign_key_check"), []);
+const migrationRows = reopened.db.prepare("SELECT id FROM migrations ORDER BY id").all(); reopened.db.close();
+const again = openDatabase(migratedPath, join(process.cwd(), "packages/db/migrations")); assert.deepEqual(again.db.prepare("SELECT id FROM migrations ORDER BY id").all(), migrationRows); again.db.close();
+for (const [name, expected] of Object.entries(protectedHashes)) assert.equal(existsSync(join(protectedDirectory, name)) ? hash(readFileSync(join(protectedDirectory, name))) : null, expected, "Protected original bytes changed");
+const result = { status: "PASS", baselineTableCount: Object.keys(before).length + 1, addedTables: 6, baselineMigrationCount: beforeMigrations.n, migrationCount, unchangedExistingTables: Object.keys(before).length, existingRowParity: true, integrity: "PASS", foreignKeys: "PASS", interruptedGeneration: "Unknown", repeatedRecoveryChanges: 0, reopenIdempotent: true, originalDatabaseAndCredentialBytesUnchanged: true, realPlatformPublishCount: 0, newFinalSubmitCount: 0 };
+writeFileSync(join(process.cwd(), "output/r115-e-execution-20261001/migration-copy-check.json"), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result));

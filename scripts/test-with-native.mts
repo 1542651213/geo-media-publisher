@@ -10,6 +10,6 @@ function run(args: string[]): number {
 const hostRebuild = run(["rebuild", "better-sqlite3"]);
 if (hostRebuild !== 0) process.exit(hostRebuild);
 
-const testStatus = run(["exec", "vitest", "run"]);
+const testStatus = run(["exec", "vitest", "run", ...process.argv.slice(2)]);
 const electronRebuild = run(["run", "rebuild:native"]);
 process.exit(testStatus !== 0 ? testStatus : electronRebuild);

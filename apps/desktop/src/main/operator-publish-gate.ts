@@ -2,6 +2,13 @@ import type { Account, Platform } from "@publisher/domain";
 import { operatorPublishBlockReason, productPlatform } from "../shared/product-platform-policy";
 
 type JobPlatform = { platformKey: string; contentKind?: string | null };
+export function assertProductDeveloperOperation(channel: string, enabled: boolean, platformKey?: string, level?: unknown): void {
+  const diagnosticWrite = channel.startsWith("toutiao:") || ["jobs:prepare-existing-douyin", "b01:request-authorization", "b01:request-final-approval", "b01:retire-preboundary", "platform-self-test:run-safe", "platform-self-test:run-post-upload-discovery", "platform-self-test:run-level", "platform-self-test:continue", "platform-self-test:request-publish", "platform-self-test:confirm-publish", "platform-self-test:confirm-delete"].includes(channel);
+  if (diagnosticWrite && !enabled) throw new Error("此诊断操作需要 Developer Mode；普通发布仍受 Main 门禁约束");
+  const maySubmit = ["platform-self-test:request-publish", "platform-self-test:confirm-publish", "platform-self-test:continue"].includes(channel)
+    || channel === "platform-self-test:run-level" && !["L1_LOGIN", "L2_EDITOR", "L3_CONTENT_FILL", "L4_DRAFT"].includes(String(level));
+  if (maySubmit && (!platformKey || !productPlatform(platformKey)?.ordinaryPublishEnabled)) throw new Error("平台尚未开放普通发布，Developer Mode 不能绕过门禁");
+}
 
 export function assertOperatorPublishIpcRequest(
   channel: string,

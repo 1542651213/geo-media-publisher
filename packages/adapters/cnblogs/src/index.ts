@@ -16,7 +16,7 @@ const credentials: CredentialField[] = [
   { key: "pat", label: "Personal Access Token", type: "secret", required: true, helpText: "仅在主进程中使用 safeStorage 加密保存，保存后不再回显" }
 ];
 
-const capabilities: PlatformCapabilities = { article: true, imagePost: false, video: false, coverImage: false, tags: true, categories: true, scheduledPublish: false, draft: true, markdown: true, richText: true, maxTitleLength: 200, maxImageCount: 0, maxTagCount: 20, supportsVideoCover: false, supportsVideoTags: false, videoPublishAsync: true };
+const capabilities: PlatformCapabilities = { article: true, imagePost: false, video: false, coverImage: false, tags: true, categories: true, scheduledPublish: false, draft: false, markdown: true, richText: true, maxTitleLength: 200, maxImageCount: 0, maxTagCount: 20, supportsVideoCover: false, supportsVideoTags: false, videoPublishAsync: true };
 
 export function mapCnblogsError(status: number, message: string): ErrorCode {
   if (status === 401) return "LOGIN_EXPIRED";
@@ -34,6 +34,15 @@ function normalizePlainTextForMarkdown(body: string): string {
 function readJsonObject(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
+function remoteBlogIdentity(json: Record<string, unknown>): string | null {
+  if (json.success !== true) return null;
+  const value = readJsonObject(json.value);
+  try {
+    const url = new URL(String(value.blogUrl ?? ""));
+    const parts = url.pathname.split("/").filter(Boolean);
+    return url.protocol === "https:" && url.hostname === "www.cnblogs.com" && parts.length === 1 ? parts[0]! : null;
+  } catch { return null; }
+}
 
 export class CnblogsOfficialApiAdapter implements PlatformAdapter {
   readonly platformKey = "cnblogs";
@@ -42,7 +51,7 @@ export class CnblogsOfficialApiAdapter implements PlatformAdapter {
     authStrategy: "AppCredential", callbackStrategy: "ManualCodeCallback", status: "WaitingForUser", researchStatus: "verified",
     transport: "official_api", integrationMode: "API", supportsArticle: true, supportsVideo: false,
     officialWebsite: "https://www.cnblogs.com/", developerPortal: CNBLOGS_OFFICIAL_DOCUMENTATION, lastVerifiedAt: "2026-08-22",
-    blockingReason: "需要用户配置 Personal Access Token；连接通过不等于真实发布通过，默认先创建未发布草稿。",
+    blockingReason: "需要 Owner 更新 PAT 并核验远端博客身份；确认前只做本地准备，正式发布仍未开放。",
     credentialSchema: credentials, officialSources: [CNBLOGS_OFFICIAL_DOCUMENTATION]
   };
   private readonly http: CnblogsHttpClient;
@@ -60,11 +69,8 @@ export class CnblogsOfficialApiAdapter implements PlatformAdapter {
     const info = await this.request(CNBLOGS_CORP_INFO_ENDPOINT, token, { method: "GET" });
     if (info.status === 401 || info.status === 403) return "expired";
     if (info.status === 429) return "needs_user_action";
-    if (info.ok) return "logged_in";
-    const probe = await this.request(CNBLOGS_REVIEW_STATUS_ENDPOINT, token, { method: "POST", body: JSON.stringify({ PostId: 0 }) });
-    if (probe.status === 401 || probe.status === 403) return "expired";
-    if (probe.status === 429) return "needs_user_action";
-    return probe.ok ? "logged_in" : "unknown";
+    const json = readJsonObject(await info.json().catch(() => ({})));
+    return info.ok && remoteBlogIdentity(json) ? "logged_in" : "unknown";
   }
 
   async beginLogin(ctx: AccountContext): Promise<LoginSession> {
@@ -73,7 +79,12 @@ export class CnblogsOfficialApiAdapter implements PlatformAdapter {
   }
 
   async getAccountProfile(ctx: AccountContext): Promise<AccountProfile> {
-    return { ...(ctx.secrets?.blogApp ? { accountId: ctx.secrets.blogApp, accountName: ctx.secrets.blogApp } : {}), authorizationStatus: "Authorized" };
+    const token = ctx.secrets?.pat?.trim();
+    if (!token) throw new PlatformAdapterError("AUTH_REQUIRED", "博客园 PAT 尚未配置");
+    const info = await this.request(CNBLOGS_CORP_INFO_ENDPOINT, token, { method: "GET" });
+    const json = readJsonObject(await info.json().catch(() => ({}))), identity = remoteBlogIdentity(json);
+    if (!info.ok || !identity) throw new PlatformAdapterError(mapCnblogsError(info.status, "认证身份无法确认"), "博客园远端身份无法确认，请更新 PAT 后重试");
+    return { accountId: identity, accountName: identity, authorizationStatus: "Authorized" };
   }
 
   async validateArticle(article: PublishArticleInput): Promise<ValidationResult> {
@@ -89,9 +100,10 @@ export class CnblogsOfficialApiAdapter implements PlatformAdapter {
   async publishArticle(ctx: AccountContext, article: PublishArticleInput): Promise<PublishResult> {
     const validation = await this.validateArticle(article);
     if (!validation.valid) throw new PlatformAdapterError("CONTENT_REJECTED", validation.errors.join("；"));
+    const isDraft = ctx.settings.dryRun === true;
+    if (isDraft) return { success: true, status: "publishing", dryRun: true, prepared: true, response: { adapter: this.platformKey, transport: "local", localPreparationOnly: true, postFormat: "Markdown" } };
     const token = ctx.secrets?.pat?.trim();
     if (!token) throw new PlatformAdapterError("AUTH_REQUIRED", "博客园 PAT 尚未配置");
-    const isDraft = ctx.settings.dryRun === true;
     if (!isDraft && ctx.settings.manualConfirmationRequired !== false) throw new PlatformAdapterError("USER_ACTION_REQUIRED", "博客园直接发布前必须由用户明确确认");
     const payload = { Title: article.title.trim(), Body: normalizePlainTextForMarkdown(article.body), PostType: 1, Description: article.summary.trim(), PostFormat: "Markdown", IsPublished: !isDraft, IsAllowComments: true, IsAigc: true, Categories: article.category ? [article.category] : [], Tags: article.tags };
     const response = await this.request(CNBLOGS_CREATE_POST_ENDPOINT, token, { method: "POST", body: JSON.stringify(payload) });
@@ -101,11 +113,7 @@ export class CnblogsOfficialApiAdapter implements PlatformAdapter {
     const externalId = String(value.postId ?? value.PostId ?? "").trim();
     const publishedUrl = String(value.postUrl ?? value.PostUrl ?? "").trim();
     if (!externalId) throw new PlatformAdapterError("API_REVIEW_REQUIRED", "博客园响应缺少 postId，未声明发布成功");
-    return { success: true, status: isDraft ? "publishing" : "published", dryRun: isDraft, prepared: isDraft, externalId, ...(publishedUrl ? { publishedUrl } : {}), response: { adapter: this.platformKey, transport: "official_api", endpoint: CNBLOGS_CREATE_POST_ENDPOINT, postId: externalId, isDraft, postFormat: "Markdown" } };
-  }
-
-  async createDraft(ctx: AccountContext, article: PublishArticleInput): Promise<PublishResult> {
-    return this.publishArticle({ ...ctx, settings: { ...ctx.settings, dryRun: true, manualConfirmationRequired: true } }, article);
+    return { success: true, status: "publishing", dryRun: false, prepared: false, externalId, ...(publishedUrl ? { publishedUrl } : {}), response: { adapter: this.platformKey, transport: "official_api", endpoint: CNBLOGS_CREATE_POST_ENDPOINT, postId: externalId, isDraft: false, postFormat: "Markdown", remoteState: "REVIEW_PENDING" } };
   }
 
   async getPublishStatus(ctx: AccountContext, externalId: string): Promise<PublishStatusResult> {

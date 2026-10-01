@@ -1,4 +1,4 @@
-import { CONTENT_STUDIO_PLATFORMS, type Account, type Platform, type PublishJob } from "@publisher/domain";
+import { CONTENT_STUDIO_PLATFORMS, platformContentPolicy, type Account, type Platform, type PublishJob } from "@publisher/domain";
 
 export interface ProductPlatformDefinition {
   platformKey: string;
@@ -95,6 +95,83 @@ export function safeOperatorSelection(platformKey: string | null | undefined, pl
   if (!platformKey) return null;
   const platform = platforms.find((item) => item.platformKey === platformKey);
   return operatorPublishBlockReason(platformKey, platform) === null ? platformKey : null;
+}
+
+export type ProductHealthStatus = "可发布" | "需要登录" | "凭据失效" | "需要 Owner 操作" | "待验收" | "只读" | "暂未开发" | "连接异常";
+export interface ProductAccountHealth {
+  platformKey: string; accountId: string | null; accountName: string; companyName: string; connectionMode: string;
+  status: ProductHealthStatus; lastVerifiedAt: string | null; ownerNextAction: string; identityEvidence: "REMOTE_VERIFIED" | "UNVERIFIED";
+}
+export function productAccountHealth(platformKey: string, account?: Account | null, identityVerified = false): ProductAccountHealth {
+  const definition = productPlatform(platformKey);
+  let status: ProductHealthStatus = "待验收", ownerNextAction = "完成普通产品链路验收后再开放发布";
+  if (platformKey === "netease_media") { status = "暂未开发"; ownerNextAction = "等待平台独立接入"; }
+  else if (platformKey === "cnblogs" && (!account || account.loginStatus === "expired")) { status = "凭据失效"; ownerNextAction = "更新博客园访问令牌 PAT，并重新验证身份"; }
+  else if (platformKey === "weibo" && !identityVerified) { status = "需要登录"; ownerNextAction = "由 Owner 登录微博官方后台"; }
+  else if (platformKey === "sohu_media" && !identityVerified) { status = "需要登录"; ownerNextAction = "由 Owner 登录搜狐 Creator 后台"; }
+  else if (platformKey === "lieju") { status = "需要 Owner 操作"; ownerNextAction = "由 Owner 完成平台正常验证"; }
+  else if (account?.loginStatus === "expired") { status = "凭据失效"; ownerNextAction = "重新登录或更新授权"; }
+  else if (account?.loginStatus === "unknown") { status = "连接异常"; ownerNextAction = "检查连接后重新验证真实账号身份"; }
+  else if (definition?.ordinaryPublishEnabled && !identityVerified) { status = "需要登录"; ownerNextAction = "核验平台真实身份；本地登录标记不能代替远端确认"; }
+  else if (definition?.ordinaryPublishEnabled && identityVerified) { status = account?.enabled ? "可发布" : "只读"; ownerNextAction = account?.enabled ? "发布前系统会再次核验身份和内容" : "账号当前未启用"; }
+  return { platformKey, accountId: account?.id ?? null, accountName: account?.accountName || account?.accountAlias || account?.name || "尚未连接账号", companyName: "发布时由文章所属企业确定", connectionMode: account?.connectionMode ?? "尚未连接", status, lastVerifiedAt: account?.lastVerifiedAt ?? null, ownerNextAction, identityEvidence: identityVerified ? "REMOTE_VERIFIED" : "UNVERIFIED" };
+}
+export interface ProductPreflightInput {
+  platformKey: string; companyId: string; companyName: string;
+  article: { id: string; brandId: string; title: string; body: string } | null;
+  account: Pick<Account, "id" | "platformKey" | "enabled" | "archivedAt"> | null;
+  identityVerified: boolean; images: Array<{ brandId: string | null; available: boolean }>;
+  contentType: string; publishMode: string;
+}
+export interface ProductPreflightResult {
+  authority: "Main"; allowed: boolean; blockers: string[];
+  items: Array<{ label: string; value: string; passed: boolean }>;
+}
+export function evaluateProductPreflight(input: ProductPreflightInput): ProductPreflightResult {
+  const policy = platformContentPolicy(input.platformKey), definition = productPlatform(input.platformKey), blockers: string[] = [];
+  const article = input.article, account = input.account;
+  if (!definition?.ordinaryPublishEnabled) blockers.push(definition?.publishBlockReason || "平台暂未开放正式发布");
+  if (!article || article.brandId !== input.companyId || !input.companyId) blockers.push("文章与企业不匹配");
+  if (!article?.title.trim()) blockers.push("请填写标题");
+  if (!article?.body.trim()) blockers.push("请填写正文");
+  if (article && policy.maxTitleLength !== null && article.title.length > policy.maxTitleLength) blockers.push(`标题最多 ${policy.maxTitleLength} 个 UTF-16 字符，请先修改标题`);
+  if (!account || account.platformKey !== input.platformKey || !account.enabled || account.archivedAt) blockers.push("账号不可用或与平台不匹配");
+  if (!input.identityVerified) blockers.push("远端身份尚未确认，请先登录或验证连接");
+  if (input.images.some(image => !image.available || image.brandId !== input.companyId)) blockers.push("图片不可用或与文章企业不匹配");
+  if (policy.minImageCount !== null && input.images.length < policy.minImageCount || policy.maxImageCount !== null && input.images.length > policy.maxImageCount) blockers.push("图片数量不符合当前平台发布范围");
+  if (policy.supportedContentTypes && !policy.supportedContentTypes.includes(input.contentType)) blockers.push("内容类型尚未开放");
+  if (["douyin", "toutiao", "website"].includes(input.platformKey) && !["CONFIRM_BEFORE_PUBLISH", "PREPARE_ONLY"].includes(input.publishMode)) blockers.push("当前平台需要发布前确认");
+  const items = [
+    { label: "企业", value: input.companyName, passed: Boolean(article && article.brandId === input.companyId) },
+    { label: "平台能力", value: definition?.displayName ?? "未知平台", passed: definition?.ordinaryPublishEnabled === true },
+    { label: "账号健康", value: input.identityVerified ? "真实身份已核验" : "需要登录或核验", passed: input.identityVerified && Boolean(account?.enabled) },
+    { label: "Article", value: article?.id ?? "未选择", passed: Boolean(article) },
+    { label: "标题", value: article?.title ?? "", passed: Boolean(article?.title.trim()) && !(article && policy.maxTitleLength !== null && article.title.length > policy.maxTitleLength) },
+    { label: "正文", value: `${article?.body.length ?? 0} 字符`, passed: Boolean(article?.body.trim()) },
+    { label: "图片", value: `${input.images.length} 张`, passed: !blockers.some(reason => reason.startsWith("图片")) },
+    { label: "内容类型", value: input.contentType, passed: !policy.supportedContentTypes || policy.supportedContentTypes.includes(input.contentType) },
+    { label: "发布方式", value: input.publishMode === "PREPARE_ONLY" ? "只准备" : "发布前确认", passed: !blockers.some(reason => reason.includes("发布前确认")) }
+  ];
+  return { authority: "Main", allowed: blockers.length === 0, blockers, items };
+}
+export function productErrorMessage(value: unknown): string {
+  const raw = value instanceof Error ? value.message : String(value);
+  const message = raw.replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/u, "");
+  if (/DOUYIN_BODY_SLATE_STRUCTURE_UNVERIFIED/u.test(message)) return "正文编辑器状态暂时无法确认，请不要重复发布。";
+  if (/NeedsReconciliation|RESULT_UNKNOWN|TRANSPORT_UNKNOWN|SUBMISSION_UNKNOWN/iu.test(message)) return "远端结果暂时无法确认，请勿再次发布。";
+  if (/cnblogs.*401|401.*cnblogs/iu.test(message)) return "博客园授权已失效，请更新访问令牌。";
+  if (/DOUYIN_.*(?:IDENTITY|CREATOR|SESSION)/u.test(message)) return "抖音账号身份暂时无法确认，请先连接 Creator 会话。";
+  if (/TOUTIAO_.*(?:IDENTITY|SESSION|ACCOUNT|LOGIN)/u.test(message)) return "头条账号连接需要核验，请先在账号中心恢复会话。";
+  if (/^[A-Z][A-Z0-9_]{5,}/u.test(message)) return "当前操作条件尚未满足，请查看详情；发布结果不确定时请勿重复提交。";
+  return message;
+}
+export function buildProductDiagnosticBundle(input: { version: string; migrationCount: number; providers: Array<{ provider: string; configured: boolean; verificationStatus: string }>; generationStatuses: string[]; jobs: number }) {
+  const statuses: Record<string, number> = {};
+  for (const status of input.generationStatuses) statuses[status] = (statuses[status] ?? 0) + 1;
+  return { schemaVersion: 1, createdAt: new Date().toISOString(), applicationVersion: input.version, migrationCount: input.migrationCount,
+    platforms: PRODUCT_PLATFORM_POLICY.map(item => ({ platform: item.platformKey, ordinaryPublishEnabled: item.ordinaryPublishEnabled, batchPublishEnabled: item.batchPublishEnabled })),
+    providers: input.providers.map(item => ({ provider: item.provider, configured: item.configured, verificationStatus: item.verificationStatus })), generationStatuses: statuses, jobCount: input.jobs,
+    exclusions: ["credentials", "prompts", "responses", "article bodies", "company/account identity", "private paths", "raw logs"] };
 }
 
 export interface OperatorStatisticsRow {

@@ -30,6 +30,8 @@ const unsafeDiagnosticChannels = new Set([
 ]);
 
 /** Candidate and ordinary builds do not expose alternate real-submit paths. */
-export function assertNoProductE2EDiagnosticSubmit(channel: string): void {
+export function assertNoProductE2EDiagnosticSubmit(channel: string, payload?: unknown): void {
+  const data = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+  if (channel === "platform-self-test:run-level" && ["L1_LOGIN", "L2_EDITOR", "L3_CONTENT_FILL", "L4_DRAFT"].includes(String(data.level))) return;
   if (unsafeDiagnosticChannels.has(channel)) throw new Error("B01_DIAGNOSTIC_SUBMIT_DISABLED");
 }

@@ -10,6 +10,12 @@ export { GlobalPublishExecutionGate } from "./global-publish-execution-gate";
 export interface PublishExecutionResult { job: PublishJob; message: string; }
 export interface AssistedPrepareResult { job: PublishJob; record: ReturnType<AppRepository["getPublishRecordByJob"]>; message: string; }
 
+/** An ID is only a lookup hint; the adapter must still prove its exact author-owned URL. */
+export function isBrowserReconciliationId(platformKey: string, value: unknown): value is string {
+  return typeof value === "string" && (platformKey === "weibo"
+    ? /^[A-Za-z0-9]{5,30}$/u.test(value) : /^[1-9]\d*$/u.test(value));
+}
+
 /** Only the Douyin image-post route can prove a failed preflight never reserved a final attempt. */
 export function douyinPreBoundaryFailure(input: { platformKey: string; platformFinalSubmitPath: boolean;
   sideEffectTriggered: boolean; intent: { state: string; finalSubmitCount: number;
@@ -241,7 +247,7 @@ export class PublisherService {
     const windowStart = Number.isFinite(createdAt) ? new Date(createdAt - (managementReconciliation ? 15 : 5) * 60_000).toISOString() : job.createdAt;
     const windowEnd = managementReconciliation && Number.isFinite(createdAt) ? new Date(createdAt + 15 * 60_000).toISOString() : new Date().toISOString();
     const expectedExternalId = managementReconciliation
-      ? [existingRecord?.publishedExternalId, intent?.externalId].find((value) => typeof value === "string" && /^[1-9]\d*$/u.test(value)) ?? null
+      ? [existingRecord?.publishedExternalId, intent?.externalId].find((value) => isBrowserReconciliationId(job.platformKey, value)) ?? null
       : existingRecord?.publishedExternalId ?? intent?.externalId ?? null;
     const submittedAt = Date.parse(intent?.updatedAt ?? job.finishedAt ?? job.startedAt ?? job.createdAt);
     const waitWindowSatisfied = intent?.state === "Unknown"
@@ -839,7 +845,10 @@ export class PersistentScheduler {
       const platforms = new Map(this.repository.listPlatforms().map((platform) => [platform.platformKey, platform]));
       if (now.getTime() - this.lastLoginSweepAt >= 6 * 60 * 60 * 1000) {
         this.lastLoginSweepAt = now.getTime();
-        await Promise.all([...accounts.values()].filter((account) => this.publisher.isPlatformRegistered(account.platformKey) && account.enabled && !this.publisher.isBrowserAutomationPlatform(account.platformKey) && account.connectionMode !== "BrowserAutomation").map((account) => this.publisher.checkAccountLogin(account.id)));
+        // Article Creator identity is verified by the owned browser route at preflight. Legacy video OAuth is independent.
+        await Promise.all([...accounts.values()].filter((account) => this.publisher.isPlatformRegistered(account.platformKey) && account.enabled
+          && !(account.platformKey === "douyin" && this.repository.getDouyinImageTextConnection(account.id)?.active)
+          && !this.publisher.isBrowserAutomationPlatform(account.platformKey) && account.connectionMode !== "BrowserAutomation").map((account) => this.publisher.checkAccountLogin(account.id)));
       }
       const due = this.repository.listDueJobs(now.toISOString(), 50).filter((job) => {
         if (this.options.allowScheduledJob && !this.options.allowScheduledJob(job)) return false;

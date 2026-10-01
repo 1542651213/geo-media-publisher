@@ -36,11 +36,12 @@ export type V11NavigationTarget =
   | "dashboard" | "production" | "articles" | "images" | "accounts" | "publishing" | "statistics" | "advanced"
   | "studio" | "quality" | "quality-rules" | "batch" | "keywords" | "ai-tasks" | "assets" | "images-advanced"
   | "brand" | "knowledge" | "platforms" | "self-test" | "plans" | "queue" | "logs" | "backups" | "settings" | "placeholder"
-  | "preferences";
+  | "preferences" | "ai-center";
 
 export const normalNavigation: Array<{ route: V11NavigationTarget; label: string; icon: string }> = [
   { route: "dashboard", label: "首页", icon: "⌂" },
   { route: "production", label: "内容生产", icon: "✦" },
+  { route: "ai-center", label: "AI 服务商", icon: "◇" },
   { route: "articles", label: "文章库", icon: "▤" },
   { route: "images", label: "图片库", icon: "▨" },
   { route: "accounts", label: "账号中心", icon: "◎" },
@@ -94,7 +95,7 @@ export type AccountRuntimeView = Pick<Account, "enabled" | "loginStatus" | "plat
 
 export const accountStatusLabel = (account: Pick<Account, "loginStatus"> & { accountStatus?: string }): string => {
   if (account.accountStatus === "Unverified") return "待验证";
-  if (account.loginStatus === "logged_in" || account.accountStatus === "Connected") return "已登录";
+  if (account.loginStatus === "logged_in" || account.accountStatus === "Connected") return "登录信息已保存";
   if (account.loginStatus === "needs_user_action" || account.accountStatus === "Connecting") return "需要完成验证";
   if (account.loginStatus === "expired" || account.accountStatus === "Expired" || account.accountStatus === "NeedsLogin") return "需要重新登录";
   return "未登录";

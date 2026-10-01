@@ -3,6 +3,7 @@ export type PlatformContentRuleVerificationStatus = (typeof PLATFORM_CONTENT_RUL
 
 export type PlatformContentType = "article" | "video_script" | "mixed";
 
+import { platformContentPolicy } from "./product-content-policy";
 export interface PlatformContentRules {
   platformKey: string;
   titleMinLength: number;
@@ -34,7 +35,7 @@ export function conservativePlatformContentRules(platformKey: string, contentTyp
   return {
     platformKey,
     titleMinLength: 1,
-    titleMaxLength: 40,
+    titleMaxLength: platformContentPolicy(platformKey).maxTitleLength ?? 40,
     bodyMinLength: 80,
     bodyMaxLength: 2000,
     summaryMaxLength: 120,

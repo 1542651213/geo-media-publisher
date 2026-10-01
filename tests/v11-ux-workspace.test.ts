@@ -3,8 +3,8 @@ import type { Account, Platform } from "@publisher/domain";
 import { accountCapabilityText, accountStatusLabel, articleReviewLabel, connectedAccountsForPlatform, normalNavigation, publishStatusLabel } from "../apps/desktop/src/renderer/v11-ui-model";
 
 describe("V1.1 operations workspace model", () => {
-  it("keeps the normal navigation focused on seven everyday operating areas", () => {
-    expect(normalNavigation.map((item) => item.label)).toEqual(["首页", "内容生产", "文章库", "图片库", "账号中心", "发布中心", "数据统计"]);
+  it("keeps everyday navigation and exposes the product AI Provider Center", () => {
+    expect(normalNavigation.map((item) => item.label)).toEqual(["首页", "内容生产", "AI 服务商", "文章库", "图片库", "账号中心", "发布中心", "数据统计"]);
   });
 
   it("translates internal review and publishing states into business-facing labels", () => {
@@ -31,7 +31,7 @@ describe("V1.1 operations workspace model", () => {
       { id: "other", platformAccountId: "platform-other", platformKey: "weibo", enabled: true, loginStatus: "logged_in" }
     ];
     expect(connectedAccountsForPlatform(accounts as unknown as Account[], "zhihu").map((account) => account.id)).toEqual(["online"]);
-    expect(accountStatusLabel({ loginStatus: "logged_in" })).toBe("已登录");
+    expect(accountStatusLabel({ loginStatus: "logged_in" })).toBe("登录信息已保存");
     expect(accountStatusLabel({ loginStatus: "expired" })).toBe("需要重新登录");
   });
 });

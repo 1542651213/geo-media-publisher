@@ -15,16 +15,16 @@ import { freezeDouyinImageText } from "@publisher/domain/douyin-image-text";
 import { assertDouyinImageTextTitle, b01ArticleMarker } from "@publisher/domain";
 import { backupDatabase, validateDatabaseBackup, type AIBatchTarget, type AppRepository, type ContentStudioTaskPayload, type HumanReviewSubmitInput } from "@publisher/db";
 import type { AccountDisconnectResult, BatchGenerationInput, ContentStudioGenerationInput } from "../shared/api";
-import { AIProviderError, DeepSeekErrorMapper, DeepSeekProvider, FallbackAIProvider, MockAIProvider, OpenAICompatibleProvider, contentHash, type AIConnectionDiagnostic, type AIConnectionResult, type AIProvider } from "@publisher/ai";
+import { AIProviderError, DeepSeekErrorMapper, DeepSeekProvider, FallbackAIProvider, MockAIProvider, OpenAICompatibleProvider, contentHash, validateProviderConfig, type AIConnectionDiagnostic, type AIConnectionResult, type AIProvider } from "@publisher/ai";
 import { MockImageProvider, OpenAICompatibleImageProvider, persistGeneratedImage, type ImageProvider } from "@publisher/image";
-import { exportLogBundle } from "@publisher/logger";
 import { CredentialDecryptError, SafeStorageCredentialStore, type CredentialStatus, type CredentialStore } from "@publisher/security";
-import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STUDIO_PLATFORM_KEYS, EXCEL_ADVANCED_ARTICLE_HEADERS, EXCEL_SIMPLE_ARTICLE_HEADERS, PROMOTION_STRENGTHS, SEARCH_INTENTS, checkGeneratedArticleQuality, selectRelevantBrandFacts, type AccountContext, type AccountProfile, type AccountStatus, type AIUsage, type CredentialField, type ContentStudioPlatformKey, type ExcelImportPreview, type ImageAsset, type Platform } from "@publisher/domain";
+import { BRAND_KNOWLEDGE_CATEGORIES, CONTENT_GOALS, CONTENT_INTENTS, CONTENT_STUDIO_PLATFORM_KEYS, EXCEL_ADVANCED_ARTICLE_HEADERS, EXCEL_SIMPLE_ARTICLE_HEADERS, PROMOTION_STRENGTHS, SEARCH_INTENTS, checkGeneratedArticleQuality, selectRelevantBrandFacts, type Account, type AccountContext, type AccountProfile, type AccountStatus, type AIUsage, type CredentialField, type ContentStudioPlatformKey, type ExcelImportPreview, type ImageAsset, type Platform } from "@publisher/domain";
 import { BrowserRuntimeError, assertExternalLaunchAllowed, browserSessionCredentialKey, browserSessionIdHash, isAutomationAdapter, type AdapterRegistry, type AutomationAdapter, type ExternalLaunchTriggerSource, type UserInitiatedAction } from "@publisher/adapters-core";
 import type { Logger } from "@publisher/logger";
 import type { PublisherService, PersistentScheduler } from "@publisher/publisher";
 import { resumePersistentBatches, runPersistentBatchTask } from "./ai-batch";
 import { CONTENT_STUDIO_PROMPT_VERSION, resumeContentStudioTasks, runContentStudioTask } from "./content-studio";
+import { AIProductCenter } from "./ai-product-center";
 import { runQualityGate, runQualityGateForArticle, runQualityGateForVariant } from "./quality-gate";
 import { runQualityBenchmark } from "./quality-benchmark";
 import { OAuthSessionManager } from "./oauth-session-manager";
@@ -46,9 +46,9 @@ import { assertDouyinAcceptanceChannel } from "./douyin-acceptance-gate";
 import { selectDouyinBodyDiagnosticTarget } from "./douyin-body-diagnostic-gate";
 import { selectDouyinMusicDiagnosticTarget } from "./douyin-music-diagnostic-gate";
 import { assertDouyinR14ReadOnlyChannel } from "./douyin-r14-readonly-gate";
-import { assertOperatorBatchPlanAllowed, assertOperatorPublishIpcRequest } from "./operator-publish-gate";
+import { assertProductDeveloperOperation, assertOperatorBatchPlanAllowed, assertOperatorPublishIpcRequest } from "./operator-publish-gate";
 import { assertB01OperatorIpcException, assertNoProductE2EDiagnosticSubmit } from "./b01-product-e2e-gate";
-import { productPlatform } from "../shared/product-platform-policy";
+import { productPlatform, PRODUCT_PLATFORM_POLICY, productAccountHealth, evaluateProductPreflight, buildProductDiagnosticBundle } from "../shared/product-platform-policy";
 import type { SprintAcceptanceController } from "./sprint-acceptance";
 
 const idSchema = z.string().min(1);
@@ -122,7 +122,7 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
   ipcMain.removeHandler(channel);
   ipcMain.handle(channel, async (event, payload) => {
     try {
-      assertNoProductE2EDiagnosticSubmit(channel);
+      assertNoProductE2EDiagnosticSubmit(channel, payload);
       if (acceptanceRepository) assertOperatorPublishIpcRequest(
         channel, payload,
         (platformKey) => operatorPlatformFinder?.(platformKey),
@@ -177,6 +177,10 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
               platformKey: job.platformKey, contentKind: job.contentKind ?? null } : null;
           });
       }
+      const diagnosticInput = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+      const diagnosticAccount = typeof diagnosticInput.platformAccountId === "string" ? acceptanceRepository?.listAccounts().find(account => account.platformAccountId === diagnosticInput.platformAccountId || account.id === diagnosticInput.platformAccountId) : null;
+      const diagnosticRun = typeof diagnosticInput.testRunId === "string" ? acceptanceRepository?.getPlatformSelfTestRun(diagnosticInput.testRunId) : null;
+      assertProductDeveloperOperation(channel, acceptanceRepository?.getSettings().developerMode === true, diagnosticAccount?.platformKey ?? diagnosticRun?.platformKey, diagnosticInput.level);
       return await handler(event, payload);
     } catch (error) {
       processDiagnostics?.recordIpcError(channel, error);
@@ -192,6 +196,28 @@ export function registerIpc(deps: IpcDependencies): void {
   officialApiController = deps.officialApi ?? null;
   sprintAcceptanceController = deps.sprintAcceptance ?? null;
   const { repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir, logger, credentials, aiCredentials } = deps;
+  const aiCenter = new AIProductCenter(repository, aiCredentials);
+  const productDiagnostics = () => buildProductDiagnosticBundle({ version: app.getVersion(), migrationCount: Number((repository.db.prepare("SELECT COUNT(*) AS count FROM migrations").get() as { count: number }).count), providers: aiCenter.profiles(), generationStatuses: aiCenter.history().map(item => item.status), jobs: repository.listJobs().length });
+  const exportProductDiagnostics = async (): Promise<string | null> => { const destination = await dialog.showSaveDialog({ defaultPath: join(app.getPath("downloads"), `publisher-diagnostics-${Date.now()}.json`), filters: [{ name: "脱敏诊断包", extensions: ["json"] }] }); if (destination.canceled || !destination.filePath) return null; writeFileSync(destination.filePath, JSON.stringify(productDiagnostics(), null, 2), "utf8"); return destination.filePath; };
+  register("product:diagnostics", () => productDiagnostics());
+  register("product:export-diagnostics", () => exportProductDiagnostics());
+  aiCenter.store.recoverInterrupted();
+  register("ai-center:definitions", () => aiCenter.definitions());
+  register("ai-center:profiles", () => aiCenter.profiles());
+  register("ai-center:save-profile", (_event, payload) => aiCenter.saveProfile(payload));
+  register("ai-center:set-credential", (_event, payload) => { const input = z.strictObject({ id: idSchema, value: z.string().min(1).max(8192) }).parse(payload); aiCenter.setCredential(input.id, input.value); return { configured: true }; });
+  register("ai-center:list-models", (_event, payload) => aiCenter.listModels(z.object({ id: idSchema }).parse(payload).id));
+  register("ai-center:test-connection", (_event, payload) => aiCenter.testConnection(z.object({ id: idSchema }).parse(payload).id));
+  register("ai-center:context", (_event, payload) => aiCenter.context(z.object({ companyId: idSchema }).parse(payload).companyId));
+  register("ai-center:save-context", (_event, payload) => aiCenter.saveContext(payload));
+  register("ai-center:templates", () => aiCenter.templates());
+  register("ai-center:save-template", (_event, payload) => aiCenter.saveTemplate(payload));
+  register("ai-center:history", (_event, payload) => aiCenter.history(z.object({ companyId: idSchema.optional() }).parse(payload).companyId));
+  register("ai-center:draft", (_event, payload) => aiCenter.draft(z.object({ id: idSchema }).parse(payload).id));
+  register("ai-center:generate", (_event, payload) => aiCenter.generate(payload));
+  const aiDraftInput = z.strictObject({ id: idSchema, title: z.string().max(2000), body: z.string().max(100000) });
+  register("ai-center:validate-draft", (_event, payload) => { const input = aiDraftInput.parse(payload); return aiCenter.validateDraft(input.id, input.title, input.body); });
+  register("ai-center:save-draft", (_event, payload) => { const input = aiDraftInput.parse(payload); return aiCenter.saveDraft(input.id, input.title, input.body); });
   operatorPlatformFinder = key => {
     const platform = repository.listPlatforms().find(item => item.platformKey === key);
     if (platform && key === "toutiao") return toutiaoArticlePlatformView(platform, registry.getForContent("toutiao", "article").getCapabilities());
@@ -230,6 +256,51 @@ export function registerIpc(deps: IpcDependencies): void {
       secrets: resolveAccountSecrets(accountId, platformKey)
     };
   };
+  const productPreflightSchema = z.strictObject({ articleId: idSchema, platformKey: idSchema, platformAccountId: idSchema, selectedImageAssetId: idSchema.nullable().optional(), websiteSettings: officialApiContentSettingsSchema.optional() });
+  const collectProductPreflight = (input: z.infer<typeof productPreflightSchema>, identityVerified: boolean, publishMode = "CONFIRM_BEFORE_PUBLISH") => {
+    const article = repository.getArticle(input.articleId), brand = article && repository.getBrand(article.brandId);
+    const account = repository.listAccounts().find(item => item.platformKey === input.platformKey && (item.platformAccountId === input.platformAccountId || item.id === input.platformAccountId)) ?? null;
+    const ids = input.platformKey === "website" && input.websiteSettings ? [input.websiteSettings.coverAssetId, ...input.websiteSettings.bodyImageAssetIds, ...input.websiteSettings.galleryAssetIds].filter((id): id is string => Boolean(id)) : input.selectedImageAssetId ? [input.selectedImageAssetId] : [];
+    const images = [...new Set(ids)].map(id => { const image = repository.getImageAsset(id); return { brandId: image?.brandId ?? null, available: Boolean(image?.enabled && existsSync(image.filePath)) }; });
+    return evaluateProductPreflight({ platformKey: input.platformKey, companyId: article?.brandId ?? "", companyName: brand?.companyName || brand?.name || "未选择", article, account, identityVerified, images, contentType: input.websiteSettings?.kind ?? "article", publishMode });
+  };
+  const inspectProductIdentity = async (account: Account | undefined): Promise<boolean> => {
+    let verified = false;
+    if (account && productPlatform(account.platformKey)?.ordinaryPublishEnabled) {
+      try {
+        if (account.platformKey === "website") verified = (await verifyOfficialApiConnection({ repository, credentials }, account.id)).status === "CONNECTED";
+        else {
+          const adapter = registry.getForContent(account.platformKey, "article");
+          if (adapter instanceof DouyinImageTextBrowserAdapter) {
+            const binding = repository.getDouyinImageTextConnection(account.id), state = await adapter.inspectOwnedCreatorReadiness(accountContext(account.id, "douyin"));
+            verified = Boolean(binding?.active && state.identityVerified && state.contextOwnership && state.creatorId === binding.creatorId && state.runtimeAuthState === "AUTHENTICATED"
+              && state.sessionExists && state.browserConnected && state.canonicalPageExists && !state.canonicalPageClosed && state.canonicalPageContextMatchesSession);
+          } else if (adapter instanceof ToutiaoArticleBrowserAdapter) {
+            const state = await adapter.inspectAccountPreflight(accountContext(account.id, "toutiao", createUserAction("CHECK_LOGIN")));
+            verified = state.allowed && state.creatorCenterAccessible && state.articlePublishPermission && state.identity.externalAccountId === account.externalAccountId;
+          }
+        }
+      } catch { verified = false; }
+    }
+    return verified;
+  };
+  register("product:health", async () => {
+    const accounts = repository.listAccounts().filter(account => !account.archivedAt);
+    const health = await Promise.all(accounts.map(async account => {
+      const verified = await inspectProductIdentity(account);
+      return productAccountHealth(account.platformKey, verified ? { ...account, loginStatus: "logged_in", lastVerifiedAt: new Date().toISOString() } : account, verified);
+    }));
+    return PRODUCT_PLATFORM_POLICY.flatMap(definition => {
+      const rows = health.filter(row => row.platformKey === definition.platformKey);
+      return rows.length ? rows : [productAccountHealth(definition.platformKey)];
+    });
+  });
+  register("product:preflight", async (_event, payload) => {
+    const input = productPreflightSchema.parse(payload);
+    const account = repository.listAccounts().find(item => item.platformKey === input.platformKey && (item.platformAccountId === input.platformAccountId || item.id === input.platformAccountId));
+    const verified = await inspectProductIdentity(account);
+    return collectProductPreflight(input, verified);
+  });
   const syncBrowserAccount = async (adapter: AutomationAdapter, accountId: string, platformKey: string, action: UserInitiatedAction, profileOverride?: AccountProfile) => {
     const profile = profileOverride ?? (adapter.getAccountProfile ? await adapter.getAccountProfile(accountContext(accountId, platformKey, action)) : undefined);
     const localAccount = repository.listAccounts().find((item) => item.id === accountId);
@@ -547,9 +618,10 @@ export function registerIpc(deps: IpcDependencies): void {
       return deps.officialApi.prepare({ articleId: input.articleId, platformAccountId: input.platformAccountId, websiteSettings: input.websiteSettings });
     }
     const configuredMode = repository.getSettings().finalPublishMode;
-    const finalPublishMode = input.platformKey === "douyin" ? input.finalPublishMode === "PREPARE_ONLY" ? "PREPARE_ONLY" : "CONFIRM_BEFORE_PUBLISH" : input.finalPublishMode ?? (configuredMode === "prepare_only" ? "PREPARE_ONLY" : configuredMode === "auto_publish" ? "AUTO_PUBLISH" : "CONFIRM_BEFORE_PUBLISH");
+    const finalPublishMode = ["douyin", "cnblogs"].includes(input.platformKey) ? input.finalPublishMode === "PREPARE_ONLY" ? "PREPARE_ONLY" : "CONFIRM_BEFORE_PUBLISH" : input.finalPublishMode ?? (configuredMode === "prepare_only" ? "PREPARE_ONLY" : configuredMode === "auto_publish" ? "AUTO_PUBLISH" : "CONFIRM_BEFORE_PUBLISH");
     const articleAdapter = registry.getForContent(input.platformKey, "article");
     const b01 = input.platformKey === "douyin" && deps.b01AcceptanceEnabled === true;
+    let productIdentityVerified = false;
     if (input.platformKey === "douyin" && !b01) {
       const account = repository.listAccounts().find(item => item.platformKey === "douyin" && item.platformAccountId === input.platformAccountId);
       const binding = account && repository.getDouyinImageTextConnection(account.id);
@@ -559,6 +631,7 @@ export function registerIpc(deps: IpcDependencies): void {
       if (!readiness.identityVerified || !readiness.contextOwnership || !readiness.sessionExists || !readiness.contextExists
         || !readiness.canonicalPageExists || readiness.creatorId !== binding.creatorId || readiness.runtimeAuthState !== "AUTHENTICATED")
         throw new Error("DOUYIN_CREATOR_IDENTITY_UNVERIFIED");
+      productIdentityVerified = true;
     }
     const isApiPlatform = articleAdapter.manifest.transport === "official_api" || articleAdapter.manifest.transport === "web_api";
     const isToutiaoArticleApi = input.platformKey === "toutiao" && articleAdapter.manifest.transport === "web_api";
@@ -572,6 +645,11 @@ export function registerIpc(deps: IpcDependencies): void {
           ...(image ? { images: [image.filePath] } : {}) },
         imageAvailable: Boolean(image?.enabled && existsSync(image.filePath)), imageBrandMatch: image?.brandId === article.brandId,
         validate: value => articleAdapter.validateArticle(value), inspect: () => articleAdapter.inspectAccountPreflight(accountContext(account.id, "toutiao", createUserAction("START_PUBLISH"))) });
+      productIdentityVerified = true;
+    }
+    if (!b01 && productPlatform(input.platformKey)?.ordinaryPublishEnabled) {
+      const preflight = collectProductPreflight(input, productIdentityVerified, finalPublishMode);
+      if (!preflight.allowed) throw new Error(preflight.blockers.join("；"));
     }
     const candidateAccount = !productPlatform(input.platformKey)?.ordinaryPublishEnabled
       ? repository.listAccounts().find(account => account.platformAccountId === input.platformAccountId && account.platformKey === input.platformKey) : null;
@@ -596,9 +674,7 @@ export function registerIpc(deps: IpcDependencies): void {
       return { ...result, record: repository.getPublishRecordByJob(result.job.id) };
     }
     if (input.platformKey === "cnblogs") {
-      repository.confirmJob(job.id, true);
-      const result = await publisher.executeJob(job.id, action);
-      return { ...result, record: repository.getPublishRecordByJob(result.job.id) };
+      return { job, record: null, message: "内容已在本地准备，等待单独确认后单次创建并进入审核。" };
     }
     const prepared = await publisher.prepareArticle(job.id, action);
     if (b01) {
@@ -1759,15 +1835,16 @@ export function registerIpc(deps: IpcDependencies): void {
   register("jobs:retry", (_event, payload) => { const id = z.object({ id: idSchema }).parse(payload).id; return repository.updateJobFailure(id, "Retry", "UNKNOWN", "用户手动重试", new Date().toISOString()); });
   register("jobs:recover", () => repository.recoverRunningJobs());
   register("logs:list", (_event, payload) => { const input = z.object({ limit: z.number().int().min(1).max(500).optional(), level: z.string().optional(), module: z.string().optional(), search: z.string().optional() }).optional().parse(payload); return repository.listLogs(input?.limit, input); });
-  register("logs:export", async () => { const destination = await dialog.showSaveDialog({ defaultPath: join(dataDirectory, "logs", `publisher-diagnostics-${Date.now()}.zip`), filters: [{ name: "ZIP", extensions: ["zip"] }] }); if (destination.canceled || !destination.filePath) return null; return exportLogBundle({ outputPath: destination.filePath, applicationLogPath: deps.appLogPath, errorLogPath: deps.errorLogPath, diagnostics: { settings: repository.getSettings(), stats: repository.dashboardStats(), logs: repository.listLogs(500) } }); });
+  register("logs:export", () => exportProductDiagnostics());
   register("notifications:list", (_event, payload) => repository.listNotifications(z.object({ limit: z.number().int().min(1).max(200).optional() }).optional().parse(payload)?.limit));
   register("notifications:read", (_event, payload) => { repository.markNotificationRead(z.object({ id: idSchema }).parse(payload).id); });
   register("notifications:read-all", () => repository.markAllNotificationsRead());
   register("platforms:profiles", () => repository.getPlatformProfiles());
   register("platforms:content-rules", () => repository.getPlatformContentRules());
-  register("ai:profiles", () => { const profiles = repository.listAiProviderProfiles(); if (profiles.some((profile) => profile.provider === "deepseek")) return profiles; const profile = repository.upsertAiProviderProfile({ name: "DeepSeek 经济模式", provider: "deepseek", baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash", credentialRef: "ai:apiKey", temperature: 0.7, maxOutputTokens: 3000, timeoutMs: 30000, retryCount: 3, concurrency: 5, enabled: true, isDefault: profiles.length === 0, isFallback: false }); return [...profiles, profile]; });
-  register("ai:profile-upsert", (_event, payload) => repository.upsertAiProviderProfile(z.object({ id: z.string().optional(), name: z.string().min(1), provider: z.string().min(1), baseUrl: z.string().url(), model: z.string().min(1), credentialRef: z.string().min(1), temperature: z.number().min(0).max(2), maxOutputTokens: z.number().int().min(128).max(32000), timeoutMs: z.number().int().min(1000).max(300000), retryCount: z.number().int().min(0).max(5), concurrency: z.number().int().min(1).max(20), enabled: z.boolean(), isDefault: z.boolean(), isFallback: z.boolean() }).parse(payload)));
-  register("ai:profile-delete", (_event, payload) => repository.deleteAiProviderProfile(z.object({ id: idSchema }).parse(payload).id));
+  register("ai:profiles", () => { const profiles = repository.listAiProviderProfiles().filter(profile => !aiCenter.store.isProductProfile(profile.id)); if (profiles.some((profile) => profile.provider === "deepseek")) return profiles; const profile = repository.upsertAiProviderProfile({ name: "DeepSeek 经济模式", provider: "deepseek", baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash", credentialRef: "ai:apiKey", temperature: 0.7, maxOutputTokens: 3000, timeoutMs: 30000, retryCount: 3, concurrency: 5, enabled: true, isDefault: profiles.length === 0, isFallback: false }); return [...profiles, profile]; });
+  register("ai:profile-upsert", (_event, payload) => aiCenter.saveLegacyProfile(payload));
+  register("ai:profile-delete", (_event, payload) => aiCenter.deleteLegacyProfile(z.object({ id: idSchema }).parse(payload).id));
+  register("ai:set-profile-secret", (_event, payload) => { const input = z.strictObject({ id: idSchema, value: z.string() }).parse(payload); aiCenter.setLegacyCredential(input.id, input.value); });
   register("settings:get", () => {
     const settings = repository.getSettings();
     const storedStatus = settings.deepseekCredentialStatus;
@@ -1776,7 +1853,7 @@ export function registerIpc(deps: IpcDependencies): void {
     return { ...settings, apiKeyConfigured: currentStatus !== "NotConfigured" && currentStatus !== "DecryptFailed", deepseekCredentialStatus, imageApiKeyConfigured: aiCredentials.has("image:apiKey") };
   });
   register("settings:update", (_event, payload) => {
-    const input = z.object({ key: z.enum(["provider", "baseUrl", "model", "temperature", "maxOutputTokens", "timeout", "concurrency", "retry", "imageProvider", "imageBaseUrl", "imageModel", "imageSize", "defaultAiProfileId", "fallbackAiProfileId", "autoFallback", "deepseekEnabled", "deepseekBaseUrl", "deepseekModel", "deepseekGenerationMode", "deepseekInputCostPer1k", "deepseekOutputCostPer1k", "defaultPublishMode", "contentReviewMode", "favoritePlatformKeys", "browserPublishMode", "finalPublishMode", "allowImageLessPublish"]), value: z.union([z.string(), z.number(), z.boolean()]) }).parse(payload);
+    const input = z.object({ key: z.enum(["provider", "baseUrl", "model", "temperature", "maxOutputTokens", "timeout", "concurrency", "retry", "imageProvider", "imageBaseUrl", "imageModel", "imageSize", "defaultAiProfileId", "fallbackAiProfileId", "autoFallback", "deepseekEnabled", "deepseekBaseUrl", "deepseekModel", "deepseekGenerationMode", "deepseekInputCostPer1k", "deepseekOutputCostPer1k", "defaultPublishMode", "contentReviewMode", "favoritePlatformKeys", "browserPublishMode", "finalPublishMode", "allowImageLessPublish", "developerMode"]), value: z.union([z.string(), z.number(), z.boolean()]) }).parse(payload);
     repository.setSetting(input.key, input.value);
   });
   register("settings:set-secret", async (_event, payload) => {
@@ -1820,6 +1897,7 @@ function createAiProvider(repository: AppRepository, credentials: CredentialStor
   }
   const provider = settingString(repository, "provider", "mock");
   if (provider === "mock") return new MockAIProvider();
+  validateProviderConfig({ provider: provider === "deepseek" ? "deepseek" : "openai", baseUrl: settingString(repository, provider === "deepseek" ? "deepseekBaseUrl" : "baseUrl", provider === "deepseek" ? "https://api.deepseek.com" : "https://api.openai.com/v1"), defaultModel: settingString(repository, "model", "manual-model") });
   const apiKey = credentials.get("ai:apiKey");
   if (provider === "deepseek" && !apiKey) throw new AIProviderError("AI_AUTH", "DeepSeek API Key 未配置", { provider: "deepseek" });
   if (!apiKey) throw new Error("真实 AI Provider 已选择，但 API Key 尚未配置");
@@ -1905,6 +1983,8 @@ function safeDiagnosticBaseUrl(value: string): string {
 
 function createProfileProvider(profile: NonNullable<ReturnType<AppRepository["getAiProviderProfile"]>>, credentials: CredentialStore, logger?: Logger): AIProvider {
   if (profile.provider === "mock") return new MockAIProvider();
+  if (profile.credentialRef.startsWith("ai:provider:") || profile.credentialRef !== `ai:legacy:${profile.id}` && profile.credentialRef !== "ai:apiKey") throw new Error("此服务商须在 Provider Center 生成，或配置独立凭据");
+  if (profile.credentialRef === "ai:apiKey") validateProviderConfig({ provider: profile.provider === "deepseek" ? "deepseek" : "openai", baseUrl: profile.baseUrl, defaultModel: profile.model });
   const apiKey = credentials.get(profile.credentialRef);
   if (!apiKey) throw new Error(`AI Profile「${profile.name}」的凭据尚未配置`);
   if (profile.provider === "deepseek") return new DeepSeekProvider({ apiKey, baseUrl: profile.baseUrl || "https://api.deepseek.com", model: profile.model || "deepseek-v4-flash", thinking: "disabled", temperature: profile.temperature, maxOutputTokens: profile.maxOutputTokens, timeoutMs: profile.timeoutMs, retryCount: profile.retryCount, logger });

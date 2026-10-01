@@ -1,5 +1,6 @@
 /** Creator image/text editor observed title counter: 20/20. Count conservatively in UTF-16 units. */
-export const DOUYIN_IMAGE_TEXT_TITLE_LIMIT = 20;
+import { DOUYIN_IMAGE_TEXT_TITLE_LIMIT } from "./product-content-policy";
+export { DOUYIN_IMAGE_TEXT_TITLE_LIMIT } from "./product-content-policy";
 export function douyinImageTextTitleError(title: string): string | null {
   if (!title.trim()) return "请填写抖音图文标题";
   return title.length > DOUYIN_IMAGE_TEXT_TITLE_LIMIT ? `抖音图文标题最多 20 个字符，当前 ${title.length} 个；请先缩短标题再准备发布。` : null;

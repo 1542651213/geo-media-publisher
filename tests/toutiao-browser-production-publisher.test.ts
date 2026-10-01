@@ -15,7 +15,8 @@ const creatorId = "123456789";
 type RemoteState = "PUBLISHED" | "REVIEWING" | "REJECTED" | "DRAFT" | "SCHEDULED" | "NOT_FOUND" | "UNKNOWN" | "AMBIGUOUS";
 
 class Fixture implements PlatformAdapter {
-  readonly platformKey = "toutiao";
+  readonly platformKey: "toutiao" | "weibo";
+  constructor(platformKey: "toutiao" | "weibo" = "toutiao") { this.platformKey = platformKey; this.manifest.platformKey = platformKey; }
   readonly automationType = "BrowserAutomation" as const;
   readonly manifest: AdapterManifest = { platformKey: "toutiao", displayName: "Toutiao fixture", category: "article", version: "fixture", adapterStatus: "ready", authStrategy: "ManualSession", callbackStrategy: "ManualCodeCallback", status: "WaitingForUser", researchStatus: "partial", transport: "browser", integrationMode: "BrowserAutomation", supportsArticle: true, supportsVideo: false, officialWebsite: "https://mp.toutiao.com/", credentialSchema: [], officialSources: ["https://mp.toutiao.com/"] };
   remoteState: RemoteState = "REVIEWING";
@@ -43,17 +44,17 @@ class Fixture implements PlatformAdapter {
   async validateArticle() { return { valid: true, errors: [], warnings: [] }; }
 }
 
-function setup() {
+function setup(platformKey: "toutiao" | "weibo" = "toutiao") {
   const directory = mkdtempSync(join(tmpdir(), "toutiao-production-publisher-")); roots.push(directory);
   const opened = openDatabase(join(directory, "fixture.db"), join(process.cwd(), "packages/db/migrations")); databases.push(opened.db);
   const repo = opened.repository; repo.seedDevelopment(join(process.cwd(), "PLATFORMS.csv")); repo.setSetting("contentReviewMode", "Off");
   const brand = repo.createBrand({ name: "Fixture", companyName: "Fixture" });
-  const created = repo.createAccount({ platformKey: "toutiao", name: "Fixture Owner" });
-  const account = repo.syncBrowserPlatformAccount({ accountId: created.id, platformKey: "toutiao", browserSessionId: "fixture-session", externalAccountId: creatorId });
+  const created = repo.createAccount({ platformKey, name: "Fixture Owner" });
+  const account = repo.syncBrowserPlatformAccount({ accountId: created.id, platformKey, browserSessionId: "fixture-session", externalAccountId: creatorId });
   const article = repo.createArticle({ brandId: brand.id, title: "唯一测试文章", body: "无敏感信息的离线测试正文。", summary: "", tags: [], seoKeywords: [], topic: "fixture", keyword: "fixture", city: "", articleType: "科普", aiProvider: "system", aiModel: "fixture", generatedAt: new Date().toISOString(), reusePolicy: "once", contentHash: randomUUID(), qualityStatus: "passed", qualityWarnings: [], source: "production" });
   if (!article) throw new Error("Fixture article unavailable");
-  const job = repo.createArticlePublishJob({ articleId: article.id, platformKey: "toutiao", platformAccountId: account.id });
-  const adapter = new Fixture(); const registry = new AdapterRegistry(); registry.register(adapter);
+  const job = repo.createArticlePublishJob({ articleId: article.id, platformKey, platformAccountId: account.id });
+  const adapter = new Fixture(platformKey); const registry = new AdapterRegistry(); registry.register(adapter);
   const publisher = new PublisherService(repo, registry, createConsoleLogger());
   return { ...opened, repo, account, article, job, adapter, publisher, registry };
 }
@@ -68,6 +69,26 @@ async function prepared() {
 afterEach(() => { for (const db of databases.splice(0)) db.close(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe("Toutiao BrowserNative production publisher", () => {
+  it("reconciles a persisted alphanumeric Weibo mid through the durable publisher without another submit", async () => {
+    const scope = setup("weibo");
+    const externalId = "Rf17LuR6n", publishedUrl = `https://weibo.com/${creatorId}/${externalId}`;
+    await scope.publisher.prepareArticle(scope.job.id); scope.repo.confirmJob(scope.job.id, false);
+    scope.adapter.finalSubmit.mockImplementationOnce(async (_ctx, _input, attempt) => {
+      attempt.markSubmissionSideEffect?.();
+      return { success: true, status: "publishing", externalId, publishedUrl, response: { submissionAccepted: true } };
+    });
+    await scope.publisher.executeJob(scope.job.id);
+    scope.adapter.reconcile.mockImplementationOnce(async (...args: unknown[]) => {
+      expect(args[1]).toMatchObject({ expectedExternalId: externalId, expectedPublishedUrl: publishedUrl, expectedCreatorId: creatorId, finalSubmitCount: 1 });
+      return { status: "FOUND_PUBLISHED", remoteState: "PUBLISHED", externalId, publishedUrl, titleMatch: true, accountMatch: true, timeWindowMatch: false, response: { readOnly: true, matchedBy: "REMOTE_ID" }, message: "exact author-owned fixture URL" };
+    });
+    const result = await scope.publisher.reconcileBrowserJob(scope.job.id);
+    expect(result.job.status).toBe("Success");
+    expect(scope.repo.getPublishRecordByJob(scope.job.id)).toMatchObject({ success: true, publishedExternalId: externalId, publishedUrl });
+    expect(scope.repo.getSubmissionIntentByJob(scope.job.id)?.finalSubmitCount).toBe(1);
+    expect(scope.adapter.finalSubmit).toHaveBeenCalledTimes(1);
+    expect(scope.adapter.verifyPublished).toHaveBeenCalledTimes(1);
+  });
   it("uses the explicitly selected same-brand image through preparation and final submission when an Article also has an older cover", async () => {
     const scope = setup();
     const otherBrand = scope.repo.createBrand({ name: "other", companyName: "other" });

@@ -12,6 +12,25 @@ const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 describe("R1.15 scheduled publish product gate", () => {
+  it("does not disable a Creator-bound article account because its unrelated legacy OAuth expired", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "publisher-r115e-health-")); dirs.push(dir);
+    const { db, repository } = openDatabase(join(dir, "publisher.db"), join(process.cwd(), "packages/db/migrations"));
+    try {
+      repository.seedDevelopment(join(process.cwd(), "PLATFORMS.csv"));
+      const account = repository.createAccount({ platformKey: "douyin", name: "隔离 Creator 账号" });
+      repository.updateAccount(account.id, { enabled: true, loginStatus: "expired" });
+      repository.saveDouyinImageTextConnection({ accountId: account.id, creatorId: "123456789", browserSessionIdHash: "fixture-hash" });
+      const legacy = new TestPlatformAdapter("login_expired");
+      Object.defineProperty(legacy, "platformKey", { value: "douyin" });
+      Object.defineProperty(legacy, "manifest", { value: { ...legacy.manifest, platformKey: "douyin" } });
+      const registry = new AdapterRegistry(); registry.register(legacy);
+      const logger = createConsoleLogger();
+      const scheduler = new PersistentScheduler(repository, new PublisherService(repository, registry, logger), logger, 1000, { allowScheduledJob: () => false });
+      await scheduler.runDueJobs();
+      expect(repository.getAccountById(account.id, "douyin")).toMatchObject({ enabled: true, loginStatus: "expired", pausedReason: null });
+      expect(repository.getDouyinImageTextConnection(account.id)?.active).toBe(true);
+    } finally { db.close(); }
+  });
   it("leaves an existing scheduled formal Job untouched when ordinary batch publishing is closed", async () => {
     const dir = mkdtempSync(join(tmpdir(), "publisher-r115-scheduler-")); dirs.push(dir);
     const { db, repository } = openDatabase(join(dir, "publisher.db"), join(process.cwd(), "packages", "db", "migrations"));
