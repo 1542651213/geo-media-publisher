@@ -1,10 +1,312 @@
 # Geo Media Publisher
 
-Geo Media Publisher 是 Windows 上的多平台内容运营工作台，用于管理文章、图片素材、平台账号、发布任务和发布后的作品回查，并为网站 Publishing API 与未来 AI 内容生成提供统一入口。当前应用版本是 1.1.9；最新交付为 R1.15-D Multi-platform Release，普通运营入口支持抖音图文、康一官网 OfficialAPI 和今日头条纯文本文章配一张封面。所有平台批量发布均关闭。微博、搜狐号和博客园当前受 Owner 登录或凭据阻塞，普通发布 OFF。R1.15-C、R1.15 Douyin Release、R1.14 FINAL 和历史 Candidate 保留归档。
+Geo Media Publisher 是 Windows 上的多平台内容运营工作台，用于管理文章、图片素材、平台账号、发布任务和发布后的作品回查，并为网站 Publishing API 和 AI 本地草稿生成提供统一入口。当前应用版本是 1.1.9；最新交付为 R1.15-E Productization / AI Provider / Content Studio Release，普通运营入口支持抖音图文、康一官网 OfficialAPI 和今日头条纯文本文章配一张封面。所有平台批量发布均关闭。微博、搜狐号和博客园当前受 Owner 登录或凭据阻塞，普通发布 OFF。R1.15-C、R1.15 Douyin Release、R1.14 FINAL 和历史 Candidate 保留归档。
 
 本仓库的长期正式分支是 main。R1.14 的公开纯源码快照为 85707e7bec68c01f3959d8447e61ab0b359b133f；本文件随 main promotion commit 加入，因此当前 main HEAD 请运行 git rev-parse HEAD 查询，不在此写入自引用 SHA。原始经过真实验收的运行时代码提交为 31a7495bcb24ee5a85e992d3f8f0a1d28c4d7575。公开历史经过净化，移除了历史生成二进制和私有加密凭据备份；本地原始 all-refs Git Bundle 仅供受控灾难恢复，绝不可上传。
 
-## 先读：能力与开关
+## R1.15-E 当前交付和继续开发入口
+
+
+Final state: **R1_15_E_PRODUCTIZATION_AI_CENTER_READY**.
+Product framework, local Draft workflow, full regression, copied-data migration,
+installed UI and restart, package parity and secret scans passed. Missing cloud keys
+and Owner-only platform authentication remain explicit; no real E publication was
+performed and no additional platform ordinary switch was opened.
+
+### Identity and scope
+
+Canonical source: `D:\GEO_MEDIA_PUBLISHER_FINAL\source\geo-media-publisher`.
+Branch: `release/2026-10-01-r1.15-e-productization-ai-center`.
+Trusted R1.15-D start HEAD and tag: `4de6c2796d8efe04ab12f81aad07ddadc9d0f89d` /
+`r1.15-d-multiplatform-ready-20261001`. `origin/main` was older
+(`d2aa3c3f2c173c186c567421bbc4657ae32eec45`); no reset, force push, main merge,
+tag deletion, or overwrite of C/D/Douyin was performed. Current delivery is local;
+the configured GitHub origin is public and this task does not authorize a public push.
+
+App version remains 1.1.9. Department identity is the R1.15-E filename, source
+commit, artifact hashes and local tag, rather than a fabricated application version.
+Runtime source commit and package hashes are recorded in the final identity below.
+
+Only GEO productization and the named AI/platform readiness work were performed.
+No Kangyi website source, staging/production service, Huiquan, Shupai or server
+business object was changed. No SSH credential was used. No live platform submission
+or paid cloud generation was performed. Existing D evidence is historical, not new E
+live acceptance.
+
+### Product switches
+
+| Platform | Ordinary | Batch | E state / next action |
+| --- | --- | --- | --- |
+| Douyin | ON | OFF | Existing accepted single-image article route; <=20 UTF-16 title units; fresh owned Creator identity required |
+| Kangyi Website | ON | OFF | Existing accepted OfficialAPI ARTICLE/CASE route; signed current environment/revision/media preflight |
+| Toutiao | ON | OFF | Existing accepted plain-text article / one-cover route; fresh owned identity and single final claim |
+| Weibo | OFF | OFF | Owner login required; dedicated ordinary-post adapter restored offline; current live editor still unverified |
+| Sohu | OFF | OFF | Owner must log in to the Creator backend; later ordinary product acceptance required |
+| CNBlogs | OFF | OFF | Owner must update PAT securely; later identity/review/public readback acceptance required |
+| Xiaohongshu | OFF | OFF | Pending ordinary acceptance |
+| Baijiahao | OFF | OFF | Pending editor/ordinary acceptance |
+| Lieju | OFF | OFF | Owner normal platform verification / acceptance pending |
+| NetEase | OFF | OFF | Independent adapter not implemented |
+
+`REAL_PLATFORM_PUBLISH_COUNT=0`, `NEW_FINAL_SUBMIT_COUNT=0`. Browser final actions
+inside offline fixture tests are not real platform submissions. Developer Mode
+cannot enable ordinary/batch gates or waive the durable submit claim.
+
+### Ordinary product UI
+
+Normal navigation is home, content production, AI providers, articles, images,
+accounts, publish center and statistics. Content production opens the new local
+AI Studio. Candidate/B01/self-test/controlled-discovery controls are hidden while
+Developer Mode is OFF, including the account-center header entry caught by installed
+acceptance. Advanced settings offers a safe diagnostic export, AI providers, local
+backups and image tag management. Developer Mode is persisted as a setting, defaults
+to false, and only shows advanced tools. Main still rejects alternate final-submit
+paths and L5 for an unopened platform; known L1–L4 are developer-only safe handlers.
+
+Account health is a Main result with platform, account label, connection method,
+status, last verification and Owner action. ON platforms re-read signed/owned
+identity; cached DB `logged_in` does not make an account publishable. A saved login
+on a legacy card is labeled “登录信息已保存”; it is not remote identity proof. Account
+company applicability is derived from the article, not fabricated as a global
+account-to-company restriction. No account on the isolated fixture is treated as
+connected to a real service.
+
+Main Product Preflight checks enterprise/article ownership, exact platform/account,
+enabled/not archived state, actual identity, title/body, physical enabled same-brand
+images, content type, known platform limits and confirmation mode. Renderer displays
+the resulting items/blockers and disables Job creation when any red item remains.
+Main recomputes the decision before creating a Job or beginning website preparation.
+Normal errors use Chinese messages; technical codes remain in details/metadata.
+
+### Provider Center and credentials
+
+The shared abstraction supports ProviderDefinition/ProviderConfig/CredentialRef,
+ModelDescriptor/GenerationRequest/GenerationResult, connection test, model discovery
+where supported and text generation. Models may always be entered manually; listing
+a model is not evidence that the model supports every request. Text only: no image,
+speech, embedding system, autonomous agent or automatic publication.
+
+| Provider | Reviewed request contract | Discovery / connection test |
+| --- | --- | --- |
+| Xiaomi MiMo | `https://api.xiaomimimo.com/v1/chat/completions`, `api-key`, messages, `max_completion_tokens`, nonstream choices.message.content | Model listing not established; verified preset `mimo-v2.6-pro` plus manual ID. Connection test sends one minimal completion and may incur cost |
+| OpenAI | `https://api.openai.com/v1/chat/completions`, Bearer, `max_completion_tokens` | `/v1/models`; no sole hardcoded model |
+| DeepSeek | `https://api.deepseek.com/chat/completions`, Bearer, `max_tokens` | `/models`; reviewed presets plus manual ID |
+| Ollama | Loopback `http://127.0.0.1:11434/api/chat`, stream=false, options.num_predict, message.content, done=true | `/api/tags`, existing models only; no key, no downloads |
+| Custom compatible | Operator-entered HTTPS base or loopback HTTP base; Bearer and compatible `/chat/completions` | `/models`; manual IDs remain available when listing fails |
+
+Official sources:
+[MiMo](https://mimo.mi.com/docs/zh-CN/quick-start/summary/first-api-call),
+[OpenAI completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create),
+[OpenAI models](https://developers.openai.com/api/reference/resources/models/methods/list),
+[DeepSeek](https://api-docs.deepseek.com/),
+[DeepSeek models](https://api-docs.deepseek.com/api/list-models/),
+[Ollama tags](https://docs.ollama.com/api/tags),
+[Ollama chat](https://docs.ollama.com/api/chat).
+Contract verification is distinct from authenticated live model verification.
+Cloud keys were not supplied/tested in this task. Current local Ollama tags request
+was unavailable; the UI can show unavailable and no models were downloaded.
+Custom compatibility describes the expected contract, not certification of any
+arbitrary third-party host.
+
+Keys enter a transient password field and a write-only Preload IPC, then Main
+SafeStorage/Windows encryption. Provider metadata DTOs omit credential references;
+SQLite stores metadata/ref, never key values. Product membership and defaults are
+separate from historical AI profiles. Main owns exact `ai:provider:<id>` / legacy
+per-profile references and ignores renderer-supplied refs. Endpoint changes delete
+that profile's credential and require deliberate re-entry. A legacy Custom endpoint
+cannot reuse the historical global official-provider key. Product defaults cannot
+silently become the legacy batch default. Full key readback IPC does not exist.
+
+Response redirects are rejected; official providers enforce reviewed hosts; custom
+URLs cannot embed user/password/query/hash. Timeout is bounded, response reading
+stops above 2 MB, model list is bounded at 1000 entries / ID length 200. Errors omit
+raw bodies, prompts and keys. Cloud output needs explicit stop/eos finish_reason;
+missing/null/empty/length/filtered outputs fail closed. Ollama needs done=true.
+No transport retry is performed. Unknown outcomes become Unknown rather than an
+automatic request replay.
+
+### Studio operating procedure
+
+1. Configure a Provider/model in AI Provider Center, enter its key only in the
+   password field, save, optionally discover models and test connection. Without a
+   key the provider is unconfigured and generation is disabled; other work continues.
+2. Select the enterprise, same-company source Article or paste source materials,
+   purpose, six target-platform choices, Provider/model and enabled template version.
+3. Generate local drafts. Nine purposes include article/title generation, rewriting,
+   shortening/expansion, tone, SEO/GEO, adaptation and multiple draft variants. Title
+   generation retains the original source body. OFF publishing platforms can produce
+   drafts; the UI says publishing is not yet open.
+4. Each platform has an independent history outcome. The same Provider/model client,
+   context/source snapshots and template version remain bound across the request.
+   No job is created by generation. Concurrent generation for the same company is
+   rejected; UI in-flight actions use a synchronous mutex and disabled controls.
+5. A title above the shared platform limit receives at most one same-Provider/model
+   title-only repair. The body is retained. Failed repair retains the original draft
+   with NeedsUserAction and allows manual correction. Never silently truncate.
+6. Edit the result, click Validate, fix red items, then Save Draft. Save revalidates in
+   Main against the current enterprise context and immutable source evidence. Exact
+   same-company title/body duplicate warnings do not mutate text. Unknown platform
+   limits remain unknown.
+7. Every saved target becomes its own local `content_studio` Article visible to the
+   ordinary article/publish drawer. If a source Article was selected, a Variant linked
+   to that source is also stored as provenance; the source text remains unchanged.
+   Saving again returns the original output ID. Job/Intent/Record remain untouched.
+8. Generation history survives restart. Generated text is retained locally, including
+   repair-failed drafts; Running rows found at restart become Unknown with an error
+   code, never restart a network request automatically. Save manual edits before
+   navigating away; current UI does not autosave every keystroke.
+9. Publication is a separate reviewed ordinary workflow with images, actual account,
+   Main Preflight and one explicit final confirmation. AI cannot publish directly.
+
+Enterprise Context reuses Brand and is editable per company: company/name/brands,
+areas/services/contact/selling points/approved and forbidden claims/SEO and GEO
+keywords/tone/website. Main injects the factual context and policy even when a prompt
+template has been edited. Switching company clears source/result selections. The
+12 distinct versioned templates cover industry, actual field case, company, FAQ,
+GEO/SEO, Douyin, Weibo, Toutiao, Sohu, website ARTICLE/CASE and CNBlogs. New versions
+retain old rows; history records the exact version used.
+
+Deterministic checks cover blank title/body, known length/type limits, other known
+enterprise/brand names, mobile/landline/400/email/explicit official website mismatch,
+forbidden claims, common unsupported certification/ranking/CMA/customer/case/test/
+numeric-result statements and recent same-company exact duplicates. Provided source
+evidence or approved claims can support a recognized fact; a forbidden claim remains
+blocked even if present in source. This is a bounded rule check, not semantic truth
+verification of every possible paraphrase or unknown company. Operators must still
+fact-check output and source. Latest 100 same-company Articles are the duplicate
+window because the received task text did not specify a completed window.
+
+### Storage, recovery and diagnostics
+
+Migration `0031_ai_product_center.sql` adds six tables without altering the existing
+business schema: contexts, immutable templates, metadata history, local drafts,
+provider verification/default ownership and immutable generation input snapshots.
+The current package contains 32 SQL migration files. A fresh database applies 32;
+the protected historical D database preserves 38 applied IDs and upgrades to 39
+by adding 0031. Historical migration ledger IDs are not rewritten or forged.
+Input snapshots contain local
+source text/context and hashes, never credentials; they are content data and are
+excluded from diagnostics and ordinary logs. Complete raw transport responses and
+complete compiled prompt strings are not logged.
+
+Diagnostics exports a JSON allowlist: application version, migration count, ordinary/
+batch switches, provider configured/verification status, recent generation status
+counts and job count. It excludes credentials, prompts/responses, article bodies,
+company/account identity, private paths and raw logs. The existing log-export action
+uses the same safe bundle. It is not a full database/history export.
+
+Copied-D-database validation proved all 64 previous nonmigration tables have identical
+rows, 65→71 total tables and 38→39 migrations, integrity/FK PASS, reopen idempotence
+and interrupted-generation Unknown recovery. Original normal publisher.db and
+credentials.enc bytes remained unchanged. Normal Owner data has deliberately not
+been opened in E. Only private copies and synthetic isolated installed data were used.
+
+Before upgrading normal data, close the app and privately back up DB/WAL/SHM and
+encrypted credential files together. SafeStorage remains tied to the Windows user.
+Do not copy private content or credentials into source, Git, evidence or releases.
+Rollback uses the prior installer/release with a coherent pre-upgrade data backup;
+never overwrite a newly changed business database with an old backup without deciding
+how to preserve newer records. Do not hand-edit/drop migrations or delete old releases.
+
+### Platform readiness limitations
+
+Weibo now has dedicated preparation, exact owned UID/compose/button uniqueness,
+body readback, frozen image bytes/preview fingerprints, durable before-click callback,
+single attempt, strict author-owned HTTPS mid/URL and independent public body read.
+Alphanumeric mids reconcile through Publisher. Offline tests cover the binding and
+durable result chain; no current real editor/final/public flow was exercised. Its
+conservative post timestamp/DOM requirements may require minimal adjustment after
+Owner normal login. Login is the next Owner action, not proof that every live selector
+is already accepted. Ordinary stays OFF until a separately authorized one-shot E2E.
+
+Sohu's D Creator login classifier and prepared/final/reconcile implementation are
+retained. A public recommendation feed is not Creator authentication. Owner normal
+login is required before a later one-shot ordinary E2E. No E Sohu business adapter
+change or remote publication was performed.
+
+CNBlogs preparation no longer creates a remote post/draft. Its documented formal
+API creates one `IsPublished:true` post and reports review pending; approval is checked
+on `/posts/reviewStatus:check`. `HTTP 200` or accepted post is not published proof.
+Identity comes from `/corp/info` success and a trusted blogUrl, not a locally entered
+blog name. Main forces confirmation and cannot auto-confirm this route. The official
+contract has no proven draft-update or unknown-create/idempotency lookup; no blind
+second create is permitted. Owner PAT is the next action, then contract/identity/
+review/public readback acceptance. See [official contract](https://www.cnblogs.com/cmt/articles/19246558).
+
+### Verification and package identity
+
+- Baseline: 188 files / 1348 tests PASS.
+- Final full regression: 198 files / 1390 tests PASS, no skipped/deleted tests.
+- Initial E failures: Developer fixtures, migration/nav assertions and a concurrent
+  existing browser timeout. Corrected expected product fixtures; bounded workers,
+  without increasing timeout, resolved the browser concurrency failure.
+- Typecheck/lint/build: PASS at the final runtime tree.
+- Independent static review: no Critical/Important findings remain. This is not live
+  provider or platform acceptance.
+- Installed ordinary UI and restart: PASS. Five provider choices; local compatible
+  `/models` discovery/connection test; context version 1 and template version 2 bound
+  to all seven generations; seven saved Articles and six source-linked Variants;
+  one title repair; foreign-company output blocked; SafeStorage encrypted; no plaintext
+  credential in SQLite; Developer OFF by default and unable to final-submit; allowlisted
+  diagnostic verified. Zero Job/Intent/Record and zero external generation/final actions.
+- Installed Main/Preload/Renderer JS+CSS byte parity, 32 migration resources and platform
+  resource parity: PASS. Candidate grants/private data absent. Final Provider/Studio/
+  History screenshots were visually inspected after layout correction.
+
+Commands from canonical source, with the configured Node runtime on PATH:
+
+```powershell
+pnpm install --frozen-lockfile
+pnpm test --maxWorkers=2
+pnpm typecheck
+pnpm lint
+pnpm build
+pnpm rebuild:native
+pnpm exec electron-builder --win nsis --x64 --config.directories.output=output/r115-e-department-release '--config.artifactName=Geo Media Publisher Setup 1.1.9 - R1.15-E AI CONTENT STUDIO RELEASE.exe' --config.nsis.createDesktopShortcut=false --config.nsis.createStartMenuShortcut=false --config.nsis.runAfterFinish=false
+node scripts/r115-e-package-verify.mjs
+node scripts/r115-e-installed-smoke.mjs
+```
+
+| Final identity | Value |
+| --- | --- |
+| Runtime source commit | `0b25e887e04aa56a130596882236ce600ac6b187` |
+| Installer | `output/r115-e-department-release/Geo Media Publisher Setup 1.1.9 - R1.15-E AI CONTENT STUDIO RELEASE.exe` |
+| Installer bytes | 101236741 |
+| Installer SHA256 | `bc6a59e60a395f3ad68a95e46d456b1c29e905f31118a30b1cff474f920245b9` |
+| Installed EXE | `output/r115-e-department-install/Geo Media Publisher.exe` |
+| Installed app.asar SHA256 | `01641398ca62d99ad0f7f6ff728ba5c03d1ff0b0bf08f1dcea5154ff46144701` |
+| Installed runtime | Electron 37.10.3 / Node 22.21.1 / native ABI 136 |
+| Build/test runtime | Node 24.19.0 / pnpm 11.19.0 |
+| Sanitized verification summary | `docs/evidence/r115-e-verification.json` |
+| Local raw logs and synthetic screenshots | Ignored `output/r115-e-execution-20261001/` |
+| Private closed-app data backup location | Local-only `output/r115-e-execution-20261001/backup-location.txt`; actual files outside repository |
+| Remote policy | Current configured origin PUBLIC; push NOT_RUN, main NOT_MERGED |
+
+Tag: `r1.15-e-productization-ai-center-ready-20261001`, created only after acceptance.
+Source scripts/documentation can have a later handoff commit than packaged runtime;
+the runtime commit is recorded separately. Do not rebuild an accepted installer and
+reuse its old hash. Prior D/C installers, local tags and known-good releases remain.
+
+### Owner actions and deferred work
+
+Configure desired Provider API keys through the UI; local fixture success is not a
+claim of paid cloud model success. Start an existing Ollama service if desired; the
+release does not download models. Log into Weibo/Creator and Sohu Creator normally,
+and update CNBlogs PAT through the secure input. Their switches remain OFF until
+separately authorized current ordinary UI acceptance. No CAPTCHA/QR/real-name bypass.
+
+Prompt variants are local text drafts. No autonomous publishing, batch publishing,
+video/speech/image generation, large AI review agent, semantic factual guarantee,
+remote automatic deletion or new website deployment was added. Current script
+smokes intentionally use isolated data and local HTTP; production data and real
+platforms remain outside the unattended test. No scheduled continuation exists.
+
+No task-end dependency on the temporary Kangyi server account remains.
+`SERVER_TEMP_ACCOUNT_CAN_BE_REVOKED=YES`. No server credential was used or reproduced
+in E artifacts. Owner can revoke/rotate the earlier temporary access independently.
+
+
+## 历史已验收发布能力与开关（本轮 E 不重复真实发布）
 
 - Douyin 图文：普通 UI B01 已完成一次真实发布（Remote Work ID `7691247987888016655`），可信 ID 与唯一管理页 Published 确认后为 PUBLISHED_CONFIRMED；公开内容一致性独立为 FAIL（旧正文换行显示成字面 `*`）。Release 已改为逐段输入并保留严格正文回读，离线隔离编辑器测试通过；禁止为验证修复再发第二条。普通图文发布 ON，批量 OFF；支持每 Job 一个明确选择的账号、一张图片、标题最多 20 个 UTF-16 计数单位、公开、立即、无音乐。Smart Music deferred。
 - Toutiao 图文：R1.15-D 普通安装版文章库 → 明确账号 → 手选同品牌封面 → 准备 → 发布中心确认完成一次真实发布。远端 ID `7691493900585910827`，唯一管理页 Published 和公开标题/正文均 PASS，重启保留原 Job/count=1。普通文章 ON、批量 OFF、视频创建和执行 OFF；只读历史回查保留。
