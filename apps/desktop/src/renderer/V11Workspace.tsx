@@ -291,6 +291,7 @@ export function V11ImageLibrary({ refresh, refreshKey }: { refresh: () => void; 
 }
 
 export function V11AccountsCenter({ refresh, refreshKey, onNavigate }: { refresh: () => void; refreshKey: number; onNavigate: (route: V11NavigationTarget) => void }): JSX.Element {
+  const developerMode = useContext(DeveloperModeContext);
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState<AccountManagementRow[]>([]); const [platforms, setPlatforms] = useState<Platform[]>([]); const [tab, setTab] = useState<"connected" | "available" | "all">("all"); const [search, setSearch] = useState(""); const [favorites, setFavorites] = useState<string[]>([]); const [message, setMessage] = useState(""); const [loadError, setLoadError] = useState(""); const [busy, setBusy] = useState(""); const [controlledResults, setControlledResults] = useState<Record<string, ControlledPostUploadDiscoveryResult>>({}); const controlledEntryGuard = useRef(new ControlledSelfTestEntryGuard()).current; const [detailsKey, setDetailsKey] = useState<string | null>(null); const [pendingLogin, setPendingLogin] = useState<{ accountId: string; platformKey: string; contentKind?: "article" } | null>(null); const [loginSucceeded, setLoginSucceeded] = useState(false); const [loginHint, setLoginHint] = useState("");
   const load = useCallback((): void => {
@@ -410,7 +411,7 @@ export function V11AccountsCenter({ refresh, refreshKey, onNavigate }: { refresh
   const ordered = platforms;
   const catalog = searchOrderedPlatforms(ordered.filter((platform) => { const priority = accountCenterPriority(platform, accounts); if (tab === "connected") return priority === "CONNECTED"; if (tab === "available") return priority === "CONNECTABLE"; return true; }), search);
   return <>
-    <WorkspaceTitle eyebrow="账号中心" title="管理运营平台" description={loading ? "正在读取平台目录…" : `按产品顺序展示 ${platforms.length} 个运营平台；连接状态与发布能力分别显示。`} action={<button className="secondary-button" onClick={() => onNavigate("self-test")}>平台自测</button>} />
+    <WorkspaceTitle eyebrow="账号中心" title="管理运营平台" description={loading ? "正在读取平台目录…" : `按产品顺序展示 ${platforms.length} 个运营平台；连接状态与发布能力分别显示。`} action={developerMode ? <button className="secondary-button" onClick={() => onNavigate("self-test")}>平台自测</button> : undefined} />
     {message && <div className="notice">{message}</div>}
     {loadError && <div className="notice warning"><span>{loadError}</span><button className="mini-button" onClick={load}>重试</button></div>}
     <div className="panel v111-account-toolbar"><div className="v11-category-tabs"><button className={tab === "connected" ? "active" : ""} onClick={() => setTab("connected")}>已连接</button><button className={tab === "available" ? "active" : ""} onClick={() => setTab("available")}>可连接</button><button className={tab === "all" ? "active" : ""} onClick={() => setTab("all")}>全部平台</button></div><div className="search-box">⌕<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索平台" /></div><strong>{loading ? "加载中…" : `${catalog.length} / ${platforms.length}`}</strong></div>

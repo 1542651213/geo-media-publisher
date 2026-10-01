@@ -61,7 +61,7 @@ try {
     assert.equal(await page.evaluate(() => window.publisherAPI.settings.get().then(value => value.developerMode === true)), false);
     const brands = await page.evaluate(async () => [await window.publisherAPI.brands.create({ name: "示例甲品牌", companyName: "示例甲有限公司" }), await window.publisherAPI.brands.create({ name: "示例乙品牌", companyName: "示例乙有限公司" })]); brandId = brands[0].id;
     await page.reload(); await page.getByRole("heading", { name: "今天的内容运营" }).waitFor();
-    for (const name of ["文章库", "图片库", "账号中心", "发布中心", "数据统计"]) { await nav(page, name); assert.equal(await page.getByRole("button", { name: /Candidate|B01|首次上传后发现|自测|真实发布验收/u }).count(), 0); }
+    for (const name of ["文章库", "图片库", "账号中心", "发布中心", "数据统计"]) { await nav(page, name); assert.deepEqual(await page.getByRole("button", { name: /Candidate|B01|首次上传后发现|自测|真实发布验收/u }).allTextContents(), [], `Ordinary route: ${name}`); }
     await nav(page, "AI 服务商"); await page.getByRole("heading", { name: "AI Provider Center" }).waitFor();
     assert.equal(await page.getByLabel("AI 服务商").locator("option").count(), 5);
     await page.getByLabel("AI 服务商").selectOption("custom");
