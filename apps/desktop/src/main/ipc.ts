@@ -40,7 +40,7 @@ import { writeAdvancedExcelTemplate, writeSimpleExcelTemplate } from "./excel-te
 import { buildExcelImportErrorReportCsv, readExcelArticleFile } from "./excel-import";
 import { PlatformSelfTestService } from "./platform-self-test";
 import type { ProcessDiagnostics } from "./process-diagnostics";
-import { addAccountConnectionModes, browserAccountConnectionResult, browserAccountDisconnectResult } from "./account-connection";
+import { addAccountConnectionModes, browserAccountConnectionResult, browserAccountDisconnectResult, toutiaoArticlePlatformView } from "./account-connection";
 import { recordRuntimeHeartbeat } from "./runtime-observability";
 import { assertDouyinAcceptanceChannel } from "./douyin-acceptance-gate";
 import { selectDouyinBodyDiagnosticTarget } from "./douyin-body-diagnostic-gate";
@@ -194,6 +194,7 @@ export function registerIpc(deps: IpcDependencies): void {
   const { repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir, logger, credentials, aiCredentials } = deps;
   operatorPlatformFinder = key => {
     const platform = repository.listPlatforms().find(item => item.platformKey === key);
+    if (platform && key === "toutiao") return toutiaoArticlePlatformView(platform, registry.getForContent("toutiao", "article").getCapabilities());
     if (!platform || key !== "douyin") return platform;
     try { return { ...platform, capabilities: { ...platform.capabilities, ...registry.getForContent("douyin", "article").getCapabilities() } }; }
     catch { return platform; }
@@ -203,7 +204,8 @@ export function registerIpc(deps: IpcDependencies): void {
   const listPlatformViews = (): ReturnType<AppRepository["listPlatforms"]> => addAccountConnectionModes(repository.listPlatforms(), registry).map((platform) =>
     platform.platformKey === "douyin" ? { ...platform,
       capabilities: { ...platform.capabilities, ...registry.getForContent("douyin", "article").getCapabilities(), maxTitleLength: 20, maxImageCount: 1,
-        scheduledPublish: false, draft: false, tags: false } } : platform);
+        scheduledPublish: false, draft: false, tags: false } } : platform.platformKey === "toutiao"
+          ? toutiaoArticlePlatformView(platform, registry.getForContent("toutiao", "article").getCapabilities()) : platform);
   const createUserAction = (triggerSource: Exclude<ExternalLaunchTriggerSource, "APP_STARTUP">): UserInitiatedAction => {
     const action = { userActionId: randomUUID(), triggerSource } satisfies UserInitiatedAction;
     assertExternalLaunchAllowed(action);

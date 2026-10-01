@@ -1,5 +1,5 @@
 import type { AdapterRegistry } from "@publisher/adapters-core";
-import type { Account, Platform } from "@publisher/domain";
+import type { Account, Platform, PlatformCapabilities } from "@publisher/domain";
 import type { AccountDisconnectResult } from "../shared/api";
 
 export interface BrowserAccountConnectionResult {
@@ -40,4 +40,8 @@ export function addAccountConnectionMode(platform: Platform, registry: AdapterRe
 
 export function addAccountConnectionModes(platforms: Platform[], registry: AdapterRegistry): Platform[] {
   return platforms.map((platform) => addAccountConnectionMode(platform, registry));
+}
+export function toutiaoArticlePlatformView(platform: Platform, article: PlatformCapabilities): Platform {
+  return platform.platformKey === "toutiao" ? { ...platform, capabilities: { ...platform.capabilities, ...article,
+    video: platform.capabilities.video } } : platform;
 }
