@@ -13,7 +13,7 @@ it("uses the official MiMo api-key contract and preserves model IDs and output",
     expect(new Headers(init?.headers).get("api-key")).toBe("fixture-only-secret");
     expect(new Headers(init?.headers).has("authorization")).toBe(false);
     expect(JSON.parse(String(init?.body))).toMatchObject({ model: "manual-model", stream: false, max_completion_tokens: 3000 });
-    return new Response(JSON.stringify({ choices: [{ message: { content: "原文" } }], usage: { prompt_tokens: 1, completion_tokens: 2 } }));
+    return new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "原文" } }], usage: { prompt_tokens: 1, completion_tokens: 2 } }));
   };
   expect((await client("mimo", transport).generateText({ model: "manual-model", systemPrompt: "事实", userPrompt: "源稿" })).text).toBe("原文");
 });
@@ -37,6 +37,10 @@ it("never leaks a provider error body or blindly retries an uncertain generation
 it("rejects incomplete cloud output even if it contains valid JSON", async () => {
   const provider = client("mimo", async () => new Response(JSON.stringify({ choices: [{ finish_reason: "length", message: { content: '{"title":"标题","body":"截断正文"}' } }] })));
   await expect(provider.generateText({ model: "manual-model", systemPrompt: "", userPrompt: "源稿" })).rejects.toThrow("未完成");
+});
+it.each([undefined, null, ""])("does not trust cloud output without an explicit terminal finish reason: %s", async (finish_reason) => {
+  const provider = client("mimo", async () => new Response(JSON.stringify({ choices: [{ finish_reason, message: { content: '{"title":"标题","body":"正文"}' } }] })));
+  await expect(provider.generateText({ model: "manual", systemPrompt: "", userPrompt: "" })).rejects.toThrow("未完成");
 });
 it.each([
   ["openai", "https://api.openai.com/v1", "max_completion_tokens"],

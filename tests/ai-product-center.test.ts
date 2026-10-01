@@ -14,7 +14,7 @@ it("keeps secrets out of metadata, repairs only title once, and saves drafts wit
   try {
     const brand = repository.createBrand({ name: "甲品牌", companyName: "甲企业" });
     let calls = 0;
-    const transport: typeof fetch = async () => { calls++; return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(calls === 1 ? { title: "甲".repeat(21), body: "甲企业的流程说明" } : { title: "流程说明", body: "不得覆盖原正文" }) } }] })); };
+    const transport: typeof fetch = async () => { calls++; return new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(calls === 1 ? { title: "甲".repeat(21), body: "甲企业的流程说明" } : { title: "流程说明", body: "不得覆盖原正文" }) } }] })); };
     const Service = AIProductCenter as unknown as new (repo: typeof repository, store: CredentialStore, port: typeof fetch) => {
       saveProfile(input: unknown): { id: string }; setCredential(id: string, secret: string): void; profiles(): unknown;
       generate(input: unknown): Promise<Array<{ generationId: string; title: string; body: string }>>;

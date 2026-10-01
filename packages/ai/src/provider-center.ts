@@ -100,7 +100,7 @@ export class TextProviderClient {
     if (typeof text !== "string" || !text.trim()) throw new TextProviderError("EMPTY_OUTPUT", "AI 返回空内容，请检查模型和输入");
     if (native && data.done !== true) throw new TextProviderError("OUTPUT_INCOMPLETE", "本机模型输出未完成");
     const finishReason = native ? data.done_reason : (data.choices as Array<{ finish_reason?: string }> | undefined)?.[0]?.finish_reason;
-    if (finishReason && !["stop", "eos"].includes(String(finishReason))) throw new TextProviderError("OUTPUT_INCOMPLETE", "模型输出未完成或被过滤，请检查模型和输出长度设置");
+    if ((!native || finishReason !== undefined) && !["stop", "eos"].includes(String(finishReason))) throw new TextProviderError("OUTPUT_INCOMPLETE", "模型输出未完成或被过滤，请检查模型和输出长度设置");
     const usage = data.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
     return { text, model: input.model, durationMs: Date.now() - started, tokenUsage: usage ? { input: usage.prompt_tokens ?? 0, output: usage.completion_tokens ?? 0 } : native ? { input: Number(data.prompt_eval_count ?? 0), output: Number(data.eval_count ?? 0) } : undefined };
   }
