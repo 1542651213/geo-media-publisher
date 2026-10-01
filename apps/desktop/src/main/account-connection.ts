@@ -43,5 +43,6 @@ export function addAccountConnectionModes(platforms: Platform[], registry: Adapt
 }
 export function toutiaoArticlePlatformView(platform: Platform, article: PlatformCapabilities): Platform {
   return platform.platformKey === "toutiao" ? { ...platform, capabilities: { ...platform.capabilities, ...article,
-    video: platform.capabilities.video } } : platform;
+    video: platform.capabilities.video, supportsVideoCover: platform.capabilities.supportsVideoCover,
+    supportsVideoTags: platform.capabilities.supportsVideoTags, videoPublishAsync: platform.capabilities.videoPublishAsync } } : platform;
 }

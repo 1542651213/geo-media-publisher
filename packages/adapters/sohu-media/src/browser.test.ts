@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BrowserSessionManager } from "@publisher/adapters-core";
 import type { BrowserSession } from "@publisher/adapters-core";
-import { classifySohuControlCandidate, classifySohuDiscovery, diffSohuDomSnapshots, shouldAllowSohuDirectSubmitPreflight, SohuBrowserAdapter, type SohuDeepDomCandidate, type SohuDeepDomSnapshot } from "./browser";
+import { classifySohuControlCandidate, classifySohuDiscovery, diffSohuDomSnapshots, shouldAllowSohuDirectSubmitPreflight, classifySohuCreatorSession, SohuBrowserAdapter, type SohuDeepDomCandidate, type SohuDeepDomSnapshot } from "./browser";
+
+describe("current Sohu login redirect", () => {
+  it("never treats the public recommendation feed as authenticated Creator identity", () => {
+    expect(classifySohuCreatorSession("https://mp.sohu.com/", "精选 我的订阅 平台公告 登录 登录/注册")).toBe("needs_user_action");
+    expect(classifySohuCreatorSession("https://mp.sohu.com/mpfe/v4/", "加载中")).toBe("unknown");
+    expect(classifySohuCreatorSession("https://mp.sohu.com/mpfe/v4/", "发布文章 内容管理 我的内容")).toBe("logged_in");
+    expect(classifySohuCreatorSession("https://mp.sohu.com/mpfe/v4/", "内容管理 扫码登录")).toBe("needs_user_action");
+  });
+});
 
 const sessionManager = {
   hasStoredSession: vi.fn(() => true),

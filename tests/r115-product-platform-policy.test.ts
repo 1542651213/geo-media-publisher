@@ -26,8 +26,8 @@ const platform = (platformKey: string, extra: Partial<Platform> = {}): Platform 
 
 describe("R1.15 ordinary platform policy", () => {
   const catalog = [platform("zhihu"), platform("bilibili"), platform("douyin"), platform("netease_media"), platform("baijiahao")];
-  it("opens accepted ordinary Douyin and Website while leaving every batch and other platform gate OFF", () => {
-    expect(PRODUCT_PLATFORM_POLICY.filter((item) => item.ordinaryPublishEnabled).map((item) => item.platformKey)).toEqual(["douyin", "website"]);
+  it("opens accepted ordinary Douyin, Website and Toutiao while leaving every batch and blocked platform gate OFF", () => {
+    expect(PRODUCT_PLATFORM_POLICY.filter((item) => item.ordinaryPublishEnabled).map((item) => item.platformKey)).toEqual(["douyin", "website", "toutiao"]);
     expect(PRODUCT_PLATFORM_POLICY.every((item) => !item.batchPublishEnabled)).toBe(true);
     expect(operatorPublishBlockReason("douyin", platform("douyin"))).toBeNull();
     expect(operatorPublishBlockReason("douyin", platform("douyin", { enabled: false }))).toBeTruthy();

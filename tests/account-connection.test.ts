@@ -35,9 +35,9 @@ function platform(overrides: Partial<Platform> = {}): Platform {
 
 describe("account connection platform views", () => {
   it("shows Toutiao article capability separately from its existing default video adapter", () => {
-    const original = platform({ capabilities: { ...platform().capabilities, article: false, coverImage: false, maxTitleLength: 0 } });
+    const original = platform({ capabilities: { ...platform().capabilities, article: false, coverImage: false, maxTitleLength: 0, videoPublishAsync: true } });
     const article = { ...platform().capabilities, article: true, video: false, maxTitleLength: 100, maxImageCount: 1 };
-    expect(toutiaoArticlePlatformView(original, article)).toMatchObject({ capabilities: { article: true, video: true, coverImage: true, maxTitleLength: 100, maxImageCount: 1 }, transport: "official_api" });
+    expect(toutiaoArticlePlatformView(original, article)).toMatchObject({ capabilities: { article: true, video: true, videoPublishAsync: true, coverImage: true, maxTitleLength: 100, maxImageCount: 1 }, transport: "official_api" });
     const other = { ...original, platformKey: "douyin" }; expect(toutiaoArticlePlatformView(other, article)).toBe(other);
   });
   it("overlays the browser connection capability without changing Toutiao publish transport", () => {
