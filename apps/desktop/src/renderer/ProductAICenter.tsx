@@ -5,6 +5,7 @@ import type { ProviderDefinition, ProviderKey, ModelDescriptor } from "@publishe
 import type { GenerationHistory } from "@publisher/db";
 import type { ProductProviderProfile, StudioOutput } from "../main/ai-product-center";
 import { productErrorMessage, productPlatform } from "../shared/product-platform-policy";
+import "./product-ai-center.css";
 
 type Tab = "studio" | "providers" | "context" | "templates" | "history";
 const labels: Record<Tab, string> = { studio: "AI Content Studio", providers: "AI Provider Center", context: "企业 AI 资料", templates: "提示词模板", history: "生成历史" };
@@ -39,7 +40,7 @@ export function ProductAICenter({ initialTab = "studio", refresh }: { initialTab
   const updateOutput = (id: string, changes: Partial<StudioOutput>): void => setOutputs(current => current.map(item => item.generationId === id ? { ...item, ...changes } : item));
   const latestTemplates = templates.filter(item => !templates.some(other => other.templateId === item.templateId && other.version > item.version));
   const selectedProfile = profiles.find(item => item.id === profileId);
-  return <>
+  return <div className="product-ai-center">
     <div className="page-title"><div><h2>{labels[tab]}</h2><p>从企业已确认资料生成本地草稿，人工编辑和审核后再走正式发布流程。</p></div></div>
     <div className="row-actions">{(Object.keys(labels) as Tab[]).map(item => <button key={item} className={tab === item ? "primary-button" : "secondary-button"} disabled={busy} onClick={() => setTab(item)}>{labels[item]}</button>)}</div>
     {message && <div role="status" className="notice">{message}</div>}
@@ -86,5 +87,5 @@ export function ProductAICenter({ initialTab = "studio", refresh }: { initialTab
       <button className="primary-button" disabled={busy} onClick={() => void act(async () => { setTemplateEdit(await window.publisherAPI.aiCenter.saveTemplate({ ...templateEdit, version: templateEdit.version + 1 })); await reload(); setMessage("新模板版本已保存，历史生成记录仍指向原版本。"); })}>保存新版本</button></>}</section>}
     {tab === "history" && <section className="panel"><h3>最近 200 次生成记录</h3>{history.length === 0 && <p>尚无生成记录。</p>}{history.map(item => <div className="table-row" key={item.generationId}><span>{brands.find(brand => brand.id === item.companyId)?.companyName || "企业"}</span><span>{productPlatform(item.targetPlatform)?.displayName}</span><span>{item.provider} / {item.model}</span><span>{item.templateId} v{item.templateVersion}</span><span>{new Date(item.createdAt).toLocaleString("zh-CN")}</span><span>{({ Running: "生成中", Generated: "已生成", NeedsUserAction: "需要修改", Failed: "失败", Unknown: "结果无法确认", Saved: "已保存" })[item.status]}</span><button className="mini-button" disabled={busy || ["Failed", "Unknown", "Running"].includes(item.status)} onClick={() => void act(async () => { const draft = await window.publisherAPI.aiCenter.draft(item.generationId); if (draft) { setOutputs([{ ...draft, platformKey: item.targetPlatform, status: item.status }]); setTab("studio"); } else setMessage("该记录没有可编辑草稿"); })}>查看草稿</button></div>)}</section>}
     </fieldset>
-  </>;
+  </div>;
 }

@@ -7,6 +7,10 @@ import { pathToFileURL } from "node:url";
 const folder = readdirSync("node_modules/.pnpm").find(name => name.startsWith("@electron+asar@3.4.1")); assert.ok(folder);
 const asar = (await import(pathToFileURL(resolve("node_modules/.pnpm", folder, "node_modules/@electron/asar/lib/asar.js")).href)).default;
 const install = resolve(process.argv[2] ?? "output/r115-e-department-install");
+const evidencePath = "docs/evidence/r115-e-verification.json";
+const packageRuntimeSourceCommit = process.argv[3] ?? (existsSync(evidencePath) ? JSON.parse(readFileSync(evidencePath, "utf8")).package.packageRuntimeSourceCommit : execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim());
+assert.match(packageRuntimeSourceCommit, /^[a-f0-9]{40}$/u);
+execFileSync("git", ["diff", "--quiet", packageRuntimeSourceCommit, "--", "apps/desktop/src", "packages"]);
 const archive = join(install, "resources/app.asar"), installer = resolve("output/r115-e-department-release/Geo Media Publisher Setup 1.1.9 - R1.15-E AI CONTENT STUDIO RELEASE.exe");
 const hash = data => createHash("sha256").update(data).digest("hex");
 const paths = asar.listPackage(archive);
@@ -18,5 +22,5 @@ for (const name of readdirSync("packages/db/migrations")) assert.ok(readFileSync
 assert.ok(readFileSync("PLATFORMS.csv").equals(readFileSync(join(install, "resources/PLATFORMS.csv"))));
 for (const name of ["r115-d-sprint-acceptance.json", "r115-c-official-api-acceptance.json", "b01-acceptance.json"]) assert.equal(existsSync(join(install, "resources", name)), false);
 assert.equal(paths.some(path => /credentials\.enc|publisher\.db|storage[-_]state\.json$|[\\/]\.env$|http-auth\.secret|r2-admin\.json/iu.test(path)), false);
-const result = { status: "PASS", installerBytes: statSync(installer).size, installerSha256: hash(readFileSync(installer)), installedAppAsarSha256: hash(readFileSync(archive)), packageRuntimeSourceCommit: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(), appVersion: JSON.parse(asar.extractFile(archive, "package.json").toString("utf8")).version, byteParityMainPreloadRenderer: true, migrationAndPlatformResourceParity: true, migrations: readdirSync("packages/db/migrations").filter(name => name.endsWith(".sql")).length, candidateGrantsAbsent: true, sensitiveResourcesAbsent: true };
+const result = { status: "PASS", installerBytes: statSync(installer).size, installerSha256: hash(readFileSync(installer)), installedAppAsarSha256: hash(readFileSync(archive)), packageRuntimeSourceCommit, appVersion: JSON.parse(asar.extractFile(archive, "package.json").toString("utf8")).version, byteParityMainPreloadRenderer: true, migrationAndPlatformResourceParity: true, migrations: readdirSync("packages/db/migrations").filter(name => name.endsWith(".sql")).length, candidateGrantsAbsent: true, sensitiveResourcesAbsent: true };
 writeFileSync("output/r115-e-execution-20261001/package-identity.json", JSON.stringify(result, null, 2)); console.log(JSON.stringify(result));
