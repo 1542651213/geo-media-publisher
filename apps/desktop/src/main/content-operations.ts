@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
-import type { AppRepository, GenerationHistory } from "@publisher/db";
+import { createAICenterStore, type AppRepository, type GenerationHistory } from "@publisher/db";
 import type { ExcelArticleRowInput, ExcelImportPreview } from "@publisher/domain";
-import { STUDIO_PURPOSES, STUDIO_TARGETS } from "@publisher/domain";
+import { STUDIO_PURPOSES, STUDIO_TARGETS, validateStudioDraft } from "@publisher/domain";
 import type { ProductProviderProfile, StudioOutput } from "./ai-product-center";
 import {
   OPERATIONS_REVIEW_ACTIONS,
@@ -198,6 +198,21 @@ export class ContentOperations {
     if (input.action === "approve") {
       const state = this.repository.getContentQualityState("article", article.id);
       if (!state || state.contentHash !== article.contentHash) throw operationsError("QUALITY_STATE_REQUIRED", "当前内容缺少有效质量检查");
+      if (state.status === "Draft") {
+        const saved = createAICenterStore(this.repository).context(input.companyId);
+        const context = { ...saved, approvedClaims: [...new Set([...saved.approvedClaims, ...this.activeFacts(input.companyId).map(fact => fact.statement)])] };
+        const otherBrands = this.repository.listBrands().filter(brand => brand.id !== input.companyId);
+        const validations = (article.targetPlatforms?.length ? article.targetPlatforms : ["website"]).map(platformKey => validateStudioDraft({
+          context, platformKey, title: article.title, body: article.body, contentType: article.articleType === "case" ? "case" : "article",
+          otherCompanies: otherBrands.map(brand => brand.companyName).filter(Boolean), otherBrands: otherBrands.map(brand => brand.name),
+          recent: this.repository.listArticles({ brandId: input.companyId }).filter(row => row.id !== article.id).map(({ title, body }) => ({ title, body }))
+        }));
+        if (validations.some(result => result.errors.length)) throw operationsError("CONTENT_VALIDATION_REQUIRED", "内容未通过确定性校验，请编辑后重新审核");
+        this.repository.saveContentQualityReview({ contentType: "article", contentId: article.id, brandId: input.companyId, platformKey: null,
+          contentHash: article.contentHash, trigger: "manual_review", provider: "deterministic", model: "operations-policy",
+          result: { status: "Needs_Review", score: 100, checks: [], issues: [] }, snapshot: { validator: "deterministic", validations },
+          operatorType: "human", previousStatus: "Draft", reason: "人工审核前的本机确定性校验；未调用 AI Provider" });
+      }
       this.repository.decideContentQuality("article", article.id, "Approved", "human-review", "manual", input.reason ?? "运营审核通过");
     } else if (input.action === "return_to_draft") {
       this.repository.updateArticle(article.id, { title: article.title, body: article.body });

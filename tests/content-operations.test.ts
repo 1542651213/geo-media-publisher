@@ -85,6 +85,26 @@ afterEach(() => {
 });
 
 describe("company-scoped operations", () => {
+  it("checks a saved Draft locally before its explicit human approval, without a Provider request", () => {
+    const ai = new FakeAI();
+    const { repository, operations } = fixture(ai);
+    const company = createBrand(repository, "本地审核");
+    const article = createArticle(repository, company.id, "服务流程", "本地审核有限公司的服务流程资料。", "content_studio");
+    expect(repository.getContentQualityState("article", article.id)?.status).toBe("Draft");
+    expect(operations.reviewArticle({ companyId: company.id, articleId: article.id, action: "approve", expectedContentHash: article.contentHash }).reviewStatus).toBe("Approved");
+    expect(ai.calls).toBe(0);
+    expect(operations.approvedForPublish(company.id, article.id)).toBe(true);
+    repository.updateArticle(article.id, { body: "修改后的服务流程。" });
+    expect(operations.approvedForPublish(company.id, article.id)).toBe(false);
+  });
+  it("rejects a forbidden claim before promoting a Draft for human approval", () => {
+    const { repository, operations } = fixture();
+    const company = createBrand(repository, "约束审核");
+    const article = createArticle(repository, company.id, "未经确认的事实", "约束审核有限公司是全国排名第一。", "content_studio");
+    expect(() => operations.reviewArticle({ companyId: company.id, articleId: article.id, action: "approve", expectedContentHash: article.contentHash })).toThrow("校验");
+    expect(operations.approvedForPublish(company.id, article.id)).toBe(false);
+    expect(repository.getContentQualityState("article", article.id)?.status).toBe("Draft");
+  });
   it("initializes legacy bindings only from a sole company and leaves later ambiguous accounts unassigned", () => {
     const ai = new FakeAI();
     const { repository, operations } = fixture(ai);

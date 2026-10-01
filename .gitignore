@@ -9,4 +9,12 @@ out/
 coverage/
 .env
 .env.*
-! .env.example
+!.env.example
+/release/
+credentials.enc
+*.secret
+*.key
+*.pem
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

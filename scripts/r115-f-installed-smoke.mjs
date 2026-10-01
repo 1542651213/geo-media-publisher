@@ -1,4 +1,4 @@
-/* global window */
+/* global window, document */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -53,8 +53,8 @@ const inspectMain = new Function("electron", "input", `
 `);
 async function launch(run) {
   const app = await electron.launch({ executablePath, timeout: 30000, env: { ...process.env, GMP_B01_ISOLATED_USER_DATA_DIR: userData, TOUTIAO_READONLY_PREFLIGHT: "true", PUBLISHER_DATA_MODE: "production", ELECTRON_RENDERER_URL: "", REAL_PUBLISH_TEST_BATCH_CONFIRMED: "false" } });
-  try { const page = await app.firstWindow(); await page.getByRole("heading", {name:"今日工作台",exact:true}).waitFor();
-    try { await run(page, app); } catch (error) { await page.screenshot({path:join(root,"failure.png"),fullPage:true}); throw error; }
+  try { const page = await app.firstWindow();
+    try { await page.getByLabel("当前企业工作区").waitFor(); await run(page, app); } catch (error) { await page.screenshot({path:join(root,"failure.png"),fullPage:true}); throw error; }
   } finally { await app.close(); }
 }
 let companyA, companyB, profileId, queueId, initialInspection, finalInspection, sourceId, accountId;
@@ -68,7 +68,7 @@ try {
     for (const name of ["文章库","图片库","账号中心","发布中心","数据统计"]) {
       await nav(page,name); assert.deepEqual(await page.getByRole("button",{name:/Candidate|B01|真实发布验收|自测发布/u}).allTextContents(),[]);
     }
-    await nav(page,"AI 服务商"); await page.getByRole("heading",{name:"AI Provider Center",exact:true}).waitFor();
+    await nav(page,"AI 服务商"); await page.getByRole("heading",{name:"AI Provider Center",exact:true,level:2}).waitFor();
     assert.equal(await page.getByLabel("AI 服务商").locator("option").count(),5);
     await page.getByLabel("AI 服务商").selectOption("custom"); await page.getByLabel("AI API 地址").fill(baseUrl);
     await page.getByLabel("AI 默认模型").fill("offline-fixture"); await page.getByLabel("AI API Key").fill(fixtureKey);
@@ -109,8 +109,9 @@ try {
     const plans = await page.evaluate(async id => [...await window.publisherAPI.operations.generatePlan({companyId:id,days:7,startDate:"2026-10-01",targetPlatforms:["weibo"]}),...await window.publisherAPI.operations.generatePlan({companyId:id,days:30,startDate:"2026-11-01",targetPlatforms:["weibo"]})],companyA);
     assert.equal(plans.length,37);
     await nav(page,"首页"); await tab(page,"内容计划"); await page.getByRole("button",{name:"使用 AI 生成",exact:true}).first().click();
-    await page.getByRole("heading",{name:"AI Content Studio",exact:true}).waitFor();
+    await page.getByRole("heading",{name:"AI Content Studio",exact:true,level:2}).waitFor();
     await page.waitForFunction(() => window.publisherAPI.articles.list().then(rows => rows.length === 7));
+    await page.waitForFunction(() => Boolean(document.querySelector('[aria-label="AI 源文章"]')?.value));
     assert.notEqual(await page.getByLabel("AI 源文章").inputValue(),"");
     assert.equal(await page.getByRole("checkbox",{name:/^微博/u}).isChecked(),true);
     assert.equal(await page.getByRole("checkbox",{name:/^今日头条/u}).isChecked(),false);
@@ -131,7 +132,7 @@ try {
     assert.deepEqual(await page.evaluate(()=>window.publisherAPI.articles.list()),[]); assert.deepEqual(await page.evaluate(()=>window.publisherAPI.imageAssets.list()),[]); assert.deepEqual(await page.evaluate(()=>window.publisherAPI.accounts.list()),[]);
     assert.equal((await page.evaluate(id=>window.publisherAPI.operations.snapshot(id),companyB)).facts.length,0);
     const rejected = await page.evaluate(async id => {try {await window.publisherAPI.articles.get(id);return false;} catch {return true;}},sourceId); assert.equal(rejected,true);
-    await nav(page,"内容生产"); await page.getByRole("heading",{name:"AI Content Studio",exact:true}).waitFor(); assert.equal(await page.getByLabel("AI 源文章").inputValue(),""); assert.equal(await page.getByLabel("AI 源稿").inputValue(),"");
+    await nav(page,"内容生产"); await page.getByRole("heading",{name:"AI Content Studio",exact:true,level:2}).waitFor(); assert.equal(await page.getByLabel("AI 源文章").inputValue(),""); assert.equal(await page.getByLabel("AI 源稿").inputValue(),"");
     await page.getByLabel("当前企业工作区").selectOption(companyA); await nav(page,"首页"); await page.screenshot({path:join(root,"today-workspace.png"),fullPage:true});
     const bundle = await page.evaluate(()=>window.publisherAPI.product.diagnostics()); const text=JSON.stringify(bundle);
     for(const value of [fixtureKey,"示例甲",baseUrl,root,"userPrompt","systemPrompt"]) assert.equal(text.includes(value),false);

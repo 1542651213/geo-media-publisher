@@ -34,7 +34,7 @@ for(let run=0;run<2;run++) {
       const limit=Date.now()+45000;
       let state=[];
       do {state=await page.evaluate(()=>window.publisherAPI.sessions.snapshots());if(state.length>=expected&&state.every(row=>row.state!=="CHECKING"))break;await new Promise(done=>setTimeout(done,500));} while(Date.now()<limit);
-      snapshots.push(...state.map(({platformKey,state,identityMatched,errorCode})=>({platform:platformKey,state,identityMatched,errorCode})));
+      snapshots.push(...state.map(({platformKey,state,identityMatched,reasonCode})=>({platform:platformKey,state,identityMatched,reasonCode})));
       if(!run&&!unassigned.length)unassigned=await page.evaluate(()=>window.publisherAPI.operations.listUnboundAccounts().then(rows=>rows.map(({platformKey})=>({platform:platformKey,state:"UNASSIGNED_COMPANY_NO_PROBE"}))));
     }
     assert.ok(snapshots.every(row=>!["AUTHENTICATED","CONNECTED"].includes(row.state)||row.identityMatched));
