@@ -13,7 +13,8 @@ it("hashes actual bytes, detects MIME, returns same-company duplicate, and deriv
     const source = join(dir, "中文 (图片).jpg");
     writeFileSync(source, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6rZsAAAAASUVORK5CYII=", "base64"));
     const service = new OperationsAssets(repository, join(dir, "images"));
-    const first = service.import(a.id, [source])[0]!;
+    const first = service.import(a.id, [source], { name: undefined })[0]!;
+    expect(first.name).toBe("中文 (图片)");
     expect(first).toMatchObject({ mimeType: "image/png", width: 1, height: 1, duplicate: false, orientation: "square" });
     expect(service.import(a.id, [source])[0]).toMatchObject({ id: first.id, duplicate: true });
     expect(repository.listImageAssets(a.id)).toHaveLength(1);
@@ -24,6 +25,9 @@ it("hashes actual bytes, detects MIME, returns same-company duplicate, and deriv
     writeFileSync(source, "corrupt");
     expect(() => service.import(a.id, [source])).toThrow();
     expect(service.list(a.id)[0]).toMatchObject({ usedByArticleCount: 0, usedByJobCount: 0 });
+    const article = repository.createArticle({ brandId: a.id, topic: "素材", keyword: "", city: "", title: "已绑定图片", body: "素材使用记录", summary: "", tags: [], seoKeywords: [], articleType: "article", aiProvider: "manual", aiModel: "manual", generatedAt: new Date().toISOString(), reusePolicy: "once", contentHash: "asset-usage-fixture" });
+    repository.attachCover(article!.id, first.id);
+    expect(service.list(a.id)[0]).toMatchObject({ usedByArticleCount: 1, usedByJobCount: 0, lastUsedPlatform: null });
     expect(repository.listJobs()).toEqual([]);
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 });

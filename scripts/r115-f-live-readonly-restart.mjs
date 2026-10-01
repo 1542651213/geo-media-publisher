@@ -11,6 +11,10 @@ const executablePath=resolve(process.argv[2]??"output/r115-f-department-install/
 const backup=resolve(process.argv[3]??""); assert.ok(process.argv[3]&&existsSync(join(backup,"publisher.db")));
 const root=join(backup,`f-live-readonly-${Date.now()}`),userData=join(root,"b01-isolated-user-data"),data=join(userData,"production-data");mkdirSync(data,{recursive:true});
 for(const name of ["publisher.db","credentials.enc"]) copyFileSync(join(backup,name),join(data,name));
+// Windows OSCrypt binds SafeStorage ciphertext to an OS-protected key in Local State.
+// Retain that encrypted context on a same-user private restore; never export its contents.
+const encryptionContextCopied=existsSync(join(backup,"Local State"));
+if(encryptionContextCopied) copyFileSync(join(backup,"Local State"),join(userData,"Local State"));
 const protectedRoot=join(process.env.APPDATA??"","codex-media-publisher/production-data"),hash=bytes=>createHash("sha256").update(bytes).digest("hex");
 const protectedBytes=()=>Object.fromEntries(["publisher.db","publisher.db-wal","publisher.db-shm","credentials.enc"].map(name=>[name,existsSync(join(protectedRoot,name))?hash(readFileSync(join(protectedRoot,name))):null]));
 const before=protectedBytes();
@@ -43,5 +47,5 @@ for(let run=0;run<2;run++) {
   } finally {await app.close();}
 }
 assert.deepEqual(protectedBytes(),before);
-const result={status:"PASS",scope:"PRIVATE_COPY_READ_ONLY_IDENTITY",restartRuns:2,runs,schedulerDisabled:true,jobIntentRecordArticleCountsUnchanged:true,protectedOriginalBytesUnchanged:true,secretsExposed:false,realPlatformPublishCount:0,newFinalSubmitCount:0};
+const result={status:"PASS",scope:"PRIVATE_COPY_READ_ONLY_IDENTITY",restartRuns:2,runs,encryptionContextCopied,schedulerDisabled:true,jobIntentRecordArticleCountsUnchanged:true,protectedOriginalBytesUnchanged:true,secretsExposed:false,realPlatformPublishCount:0,newFinalSubmitCount:0};
 writeFileSync("output/r115-f-execution-20261001/live-readonly-restart.json",JSON.stringify(result,null,2));console.log(JSON.stringify(result));

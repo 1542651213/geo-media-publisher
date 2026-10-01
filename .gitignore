@@ -12,6 +12,7 @@ coverage/
 !.env.example
 /release/
 credentials.enc
+Local State
 *.secret
 *.key
 *.pem

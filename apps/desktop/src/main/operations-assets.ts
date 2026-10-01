@@ -40,7 +40,7 @@ export class OperationsAssets {
       if (duplicate) return { ...this.view(duplicate), duplicate: true };
       const id = randomUUID(), filePath = join(this.directory, `${id}${format.extension}`);
       writeFileSync(filePath, bytes, { flag: "wx" });
-      const asset = this.repository.createImageAsset({ id, brandId: companyId, name: metadata.name || basename(path, extname(path)), filePath, originalFileName: basename(path), mimeType: format.mime, size: bytes.length, sha256, ...metadata });
+      const asset = this.repository.createImageAsset({ ...metadata, id, brandId: companyId, name: metadata.name?.trim() || basename(path, extname(path)), filePath, originalFileName: basename(path), mimeType: format.mime, size: bytes.length, sha256 });
       return { ...this.view(asset), duplicate: false };
     });
   }

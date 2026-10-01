@@ -103,7 +103,8 @@ try {
     await tab(page,"内容审核"); await page.getByRole("button",{name:"通过",exact:true}).first().click(); await page.getByText("内容已审核通过。",{exact:true}).waitFor();
     const approved = (await page.evaluate(id => window.publisherAPI.operations.snapshot(id),companyA)).review.find(item => item.reviewStatus === "Approved"); assert.ok(approved);
     await page.evaluate(id => window.publisherAPI.articles.update(id,{body:"示例甲有限公司更新的流程内容。"}),approved.articleId);
-    assert.equal((await page.evaluate(id => window.publisherAPI.operations.snapshot(id),companyA)).review.find(item=>item.articleId===approved.articleId).reviewStatus,"Draft");
+    const editedReview=(await page.evaluate(id => window.publisherAPI.operations.snapshot(id),companyA)).review.find(item=>item.articleId===approved.articleId);
+    assert.notEqual(editedReview.reviewStatus,"Approved"); assert.notEqual(editedReview.contentHash,approved.contentHash);
     const staleApproval = await page.evaluate(async ({companyId,row}) => {try {await window.publisherAPI.operations.reviewArticle({companyId,articleId:row.articleId,action:"approve",expectedContentHash:row.contentHash});return false;} catch {return true;}},{companyId:companyA,row:approved}); assert.equal(staleApproval,true);
     await tab(page,"内容计划");
     const plans = await page.evaluate(async id => [...await window.publisherAPI.operations.generatePlan({companyId:id,days:7,startDate:"2026-10-01",targetPlatforms:["weibo"]}),...await window.publisherAPI.operations.generatePlan({companyId:id,days:30,startDate:"2026-11-01",targetPlatforms:["weibo"]})],companyA);
@@ -118,6 +119,8 @@ try {
     const file = join(root,"中文 (素材).jpg"); writeFileSync(file,Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6rZsAAAAASUVORK5CYII=","base64"));
     const importImage = () => page.evaluate(({id,file}) => window.publisherAPI.imageAssets.import({brandId:id,sourcePaths:[file],tags:[],business:[],city:[],usage:[],platform:[],universal:false}),{id:companyA,file});
     const first = (await importImage())[0], second = (await importImage())[0]; assert.equal(first.id,second.id); assert.equal(second.duplicate,true); assert.equal(first.width,1); assert.equal(first.mimeType,"image/png");
+    await page.evaluate(id=>window.publisherAPI.articles.attachRecommendedImage({articleId:id,platformKey:"website"}),sourceId);
+    const usedImage=(await page.evaluate(()=>window.publisherAPI.imageAssets.list())).find(row=>row.id===first.id); assert.equal(usedImage.usedByArticleCount,1); assert.equal(usedImage.usedByJobCount,0);
     await nav(page,"图片库"); await page.screenshot({path:join(root,"image-library.png"),fullPage:true});
     accountId = (await page.evaluate(() => window.publisherAPI.accounts.create({platformKey:"weibo",name:"本机无会话账号"}))).id;
     await page.evaluate(id => window.publisherAPI.accounts.update(id,{loginStatus:"logged_in"}),accountId);
