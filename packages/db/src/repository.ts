@@ -2981,6 +2981,16 @@ export class AppRepository {
     return (rows as Row[]).map(row => this.withDouyinPublishOutcome(toRecord(row)));
   }
 
+  restoreToutiaoPreparedJob(id: string, recordId: string): PublishJob {
+    const changed = this.db.prepare(`UPDATE publish_jobs SET status='AwaitingConfirmation',last_error_code=NULL,last_error_message=NULL,finished_at=NULL,next_retry_at=NULL
+      WHERE id=? AND platform_key='toutiao' AND status='NeedsUserAction'
+      AND EXISTS (SELECT 1 FROM publish_records r WHERE r.id=? AND r.job_id=publish_jobs.id AND r.status='Prepared')
+      AND NOT EXISTS (SELECT 1 FROM submission_intents i WHERE i.job_id=publish_jobs.id AND
+        (i.final_submit_count>=1 OR i.submit_boundary_entered_at IS NOT NULL OR i.state='Unknown' OR i.remote_status='UNCERTAIN'))`).run(id, recordId).changes;
+    if (changed !== 1) throw Object.assign(new Error("Toutiao preparation recovery cannot reopen a claimed or changed job"), { code: "FINAL_SUBMIT_ALREADY_USED" });
+    return this.getJob(id) as PublishJob;
+  }
+
   private withDouyinPublishOutcome(record: PublishRecord): PublishRecord {
     if (record.platformKey !== "douyin") return record;
     const outcome = this.db.prepare("SELECT * FROM douyin_publish_outcomes WHERE job_id=? AND record_id=?").get(record.jobId, record.id) as Row | undefined;

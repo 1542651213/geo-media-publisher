@@ -137,6 +137,7 @@ describe("Toutiao BrowserNative production publisher", () => {
     const scope = await prepared(); const record = scope.repo.getPublishRecordByJob(scope.job.id)!;
     scope.repo.updateJobFailure(scope.job.id, "NeedsUserAction", "USER_ACTION_REQUIRED", "Browser runtime restarted", null);
     const restored = await scope.publisher.prepareArticle(scope.job.id);
+    expect(restored.job.status).toBe("AwaitingConfirmation");
     expect(scope.adapter.preparePublish).toHaveBeenCalledTimes(2);
     expect(restored.record?.id).toBe(record.id);
     expect(scope.repo.getPublishRecords(scope.article.id)).toHaveLength(1);
@@ -151,6 +152,14 @@ describe("Toutiao BrowserNative production publisher", () => {
     scope.repo.updateArticle(scope.article.id, { body: "Changed content" });
     await expect(scope.publisher.prepareArticle(scope.job.id)).rejects.toMatchObject({ code: "CONTENT_REJECTED" });
     expect(scope.adapter.preparePublish).toHaveBeenCalledTimes(1);
+  });
+  it("cannot restore a confirmed action after the durable final boundary", async () => {
+    const scope = await prepared(); await scope.publisher.executeJob(scope.job.id);
+    const record = scope.repo.getPublishRecordByJob(scope.job.id)!;
+    scope.repo.updateJobFailure(scope.job.id, "NeedsUserAction", "USER_ACTION_REQUIRED", "stale caller", null);
+    expect(() => scope.repo.restoreToutiaoPreparedJob(scope.job.id, record.id)).toThrow();
+    expect(scope.repo.getSubmissionIntentByJob(scope.job.id)?.finalSubmitCount).toBe(1);
+    expect(scope.adapter.finalSubmit).toHaveBeenCalledOnce();
   });
 
   it("never reopens or refills an editor after a claimed final boundary", async () => {
