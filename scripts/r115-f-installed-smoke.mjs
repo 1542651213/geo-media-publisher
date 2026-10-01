@@ -119,6 +119,7 @@ try {
     const file = join(root,"中文 (素材).jpg"); writeFileSync(file,Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6rZsAAAAASUVORK5CYII=","base64"));
     const importImage = () => page.evaluate(({id,file}) => window.publisherAPI.imageAssets.import({brandId:id,sourcePaths:[file],tags:[],business:[],city:[],usage:[],platform:[],universal:false}),{id:companyA,file});
     const first = (await importImage())[0], second = (await importImage())[0]; assert.equal(first.id,second.id); assert.equal(second.duplicate,true); assert.equal(first.width,1); assert.equal(first.mimeType,"image/png");
+    await page.evaluate(id=>window.publisherAPI.imageAssets.update(id,{universal:true}),first.id);
     await page.evaluate(id=>window.publisherAPI.articles.attachRecommendedImage({articleId:id,platformKey:"website"}),sourceId);
     const usedImage=(await page.evaluate(()=>window.publisherAPI.imageAssets.list())).find(row=>row.id===first.id); assert.equal(usedImage.usedByArticleCount,1); assert.equal(usedImage.usedByJobCount,0);
     await nav(page,"图片库"); await page.screenshot({path:join(root,"image-library.png"),fullPage:true});

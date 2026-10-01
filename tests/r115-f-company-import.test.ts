@@ -12,7 +12,11 @@ it("imports identical copy independently in two companies and deduplicates only 
     repository.seedPlatformCatalog(join(process.cwd(), "PLATFORMS.csv"));
     const a = repository.createBrand({ name: "甲企业", companyName: "甲企业" }), b = repository.createBrand({ name: "乙企业", companyName: "乙企业" });
     const operations = new ContentOperations(repository, { profiles: () => [], history: () => [], generate: async () => [], saveDraft: () => { throw Error("UNUSED"); } });
-    const preview = (companyId: string) => operations.previewImport({ companyId, fileName: "copy.csv", mapping: { title: "title", body: "body" }, rows: [{ title: "同一流程资料", body: "两个企业分别管理的通用流程" }] });
+    const preview = (companyId: string) => operations.previewImport({ companyId, fileName: "copy.csv", mapping: { title: "title", body: "body", summary: "", business: "", city: "", keywords: "", tags: "", targetPlatforms: "", contentType: "", promotionStrength: "", sourceNote: "", templateVersion: "" }, rows: [{ title: "同一流程资料", body: "两个企业分别管理的通用流程" }] });
+    const unmapped = operations.previewImport({ companyId: a.id, fileName: "unknown-headers.csv", mapping: { title: "", body: "" }, rows: [{ ArticleTitle: "可映射标题", Text: "可映射正文" }] });
+    expect(unmapped.validRows).toBe(0); expect(unmapped.rows[0]!.errors.length).toBeGreaterThan(0);
+    const mapped = operations.previewImport({ companyId: a.id, fileName: "unknown-headers.csv", mapping: { title: "ArticleTitle", body: "Text" }, rows: [{ ArticleTitle: "可映射标题", Text: "可映射正文" }] });
+    expect(mapped.validRows).toBe(1);
     const first = preview(a.id); expect(first.validRows).toBe(1);
     expect(operations.commitImport({ companyId: a.id, previewId: first.previewId }).imported).toBe(1);
     const second = preview(b.id); expect(second.duplicateRows).toBe(0);

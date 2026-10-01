@@ -53,7 +53,10 @@ const studioDefaultsSchema = z.strictObject({ companyId: idSchema, profileId: id
 const duplicateSchema = z.strictObject({ companyId: idSchema, title: z.string().max(2000), body: z.string().max(100000) });
 const queueCreateSchema = z.strictObject({ companyId: idSchema, topic: z.string().trim().min(1).max(10000), requestedCount: z.number().int().min(1).max(20), targetPlatforms: z.array(z.enum(STUDIO_TARGETS)).min(1).max(6), profileId: idSchema, model: z.string().trim().min(1).max(200), templateId: idSchema, templateVersion: z.number().int().positive(), concurrency: z.number().int().min(1).max(4).optional() });
 const usageSchema = z.strictObject({ companyId: idSchema, days: z.union([z.literal(1), z.literal(7), z.literal(30)]) });
-const importMappingSchema = z.strictObject({ title: idSchema, body: idSchema, summary: idSchema.optional(), company: idSchema.optional(), business: idSchema.optional(), city: idSchema.optional(), keywords: idSchema.optional(), tags: idSchema.optional(), targetPlatforms: idSchema.optional(), contentType: idSchema.optional(), promotionStrength: idSchema.optional(), sourceNote: idSchema.optional(), templateVersion: idSchema.optional() });
+const optionalImportColumn = z.preprocess(value => typeof value === "string" && !value.trim() ? undefined : value, idSchema.optional());
+// A blank required mapping still produces a preview with row errors so unknown headers can be mapped in UI.
+const requiredImportColumn = z.string().trim().max(2000);
+const importMappingSchema = z.strictObject({ title: requiredImportColumn, body: requiredImportColumn, summary: optionalImportColumn, company: optionalImportColumn, business: optionalImportColumn, city: optionalImportColumn, keywords: optionalImportColumn, tags: optionalImportColumn, targetPlatforms: optionalImportColumn, contentType: optionalImportColumn, promotionStrength: optionalImportColumn, sourceNote: optionalImportColumn, templateVersion: optionalImportColumn });
 const importPreviewSchema = z.strictObject({ companyId: idSchema, fileName: z.string().trim().min(1).max(255), rows: z.array(z.record(z.string(), z.string().max(200000))).max(5000), mapping: importMappingSchema });
 
 const now = (): string => new Date().toISOString();
