@@ -4,6 +4,7 @@ import type { PublisherApi } from "../shared/api";
 const invoke = <T>(channel: string, payload?: unknown): Promise<T> => ipcRenderer.invoke(channel, payload) as Promise<T>;
 
 const api: PublisherApi = {
+  sprint: { availability: () => invoke("sprint:availability") },
   website: { listConnections: () => invoke("website:list-connections"),
     imageChoices: articleId => invoke("website:image-choices", { articleId }),
     importCredentials: input => invoke("website:import-credentials", input),

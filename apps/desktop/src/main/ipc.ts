@@ -30,6 +30,7 @@ import { runQualityBenchmark } from "./quality-benchmark";
 import { OAuthSessionManager } from "./oauth-session-manager";
 import { ToutiaoSessionActivation } from "./toutiao-session-activation";
 import { runToutiaoProductionPreflight } from "./toutiao-production-preflight";
+import { assertToutiaoProductReadiness } from "./toutiao-product-readiness";
 import { auditMvp5OneShotCapture, claimControlledArticleNewCapture, claimControlledPublishRequestCapture,
   claimMvp53OwnerRecapture, readMvp5LockedClaimEvidence } from "./toutiao-article-new-once";
 import { evaluateMvp5CaptureReadiness } from "./toutiao-capture-binding-readiness";
@@ -48,6 +49,7 @@ import { assertDouyinR14ReadOnlyChannel } from "./douyin-r14-readonly-gate";
 import { assertOperatorBatchPlanAllowed, assertOperatorPublishIpcRequest } from "./operator-publish-gate";
 import { assertB01OperatorIpcException, assertNoProductE2EDiagnosticSubmit } from "./b01-product-e2e-gate";
 import { productPlatform } from "../shared/product-platform-policy";
+import type { SprintAcceptanceController } from "./sprint-acceptance";
 
 const idSchema = z.string().min(1);
 function safeErrorCode(error: unknown): string {
@@ -103,12 +105,14 @@ export interface IpcDependencies {
   /** True only for an explicitly marked B01 Candidate package. */
   b01AcceptanceEnabled?: boolean;
   officialApi?: OfficialApiController;
+  sprintAcceptance?: SprintAcceptanceController;
 }
 
 let processDiagnostics: ProcessDiagnostics | null = null;
 let acceptanceRepository: AppRepository | null = null;
 let b01CandidateActive = false;
 let officialApiController: OfficialApiController | null = null;
+let sprintAcceptanceController: SprintAcceptanceController | null = null;
 let operatorPlatformFinder: ((key: string) => Platform | undefined) | null = null;
 const mvp5PausedChannels = new Set(["articles:prepare-publish", "jobs:run", "jobs:confirm", "jobs:retry", "jobs:prepare-existing-douyin",
   "platform-self-test:run-post-upload-discovery", "platform-self-test:continue", "platform-self-test:run-level",
@@ -126,6 +130,7 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
         (requestChannel, requestPayload) => (b01CandidateActive
           && assertB01OperatorIpcException(requestChannel, requestPayload, acceptanceRepository!))
           || officialApiController?.allowsCandidateRequest(requestChannel, requestPayload) === true
+          || sprintAcceptanceController?.allowsRequest(requestChannel, requestPayload) === true
       );
       if (acceptanceRepository && ["jobs:confirm", "jobs:run", "jobs:retry"].includes(channel)) {
         const input = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
@@ -185,6 +190,7 @@ export function registerIpc(deps: IpcDependencies): void {
   acceptanceRepository = deps.repository;
   b01CandidateActive = deps.b01AcceptanceEnabled === true;
   officialApiController = deps.officialApi ?? null;
+  sprintAcceptanceController = deps.sprintAcceptance ?? null;
   const { repository, publisher, scheduler, registry, resolveAccountSecrets, dataDirectory, coverDir, logger, credentials, aiCredentials } = deps;
   operatorPlatformFinder = key => {
     const platform = repository.listPlatforms().find(item => item.platformKey === key);
@@ -273,6 +279,7 @@ export function registerIpc(deps: IpcDependencies): void {
     return { asset, validation };
   };
   register("dashboard:get", () => { recordRuntimeHeartbeat(logger, "dashboard:get"); return repository.dashboardStats(); });
+  register("sprint:availability", () => deps.sprintAcceptance?.availability() ?? []);
   register("video-assets:list", (_event, payload) => repository.listVideoAssets(z.object({ brandId: z.string().optional() }).optional().parse(payload)?.brandId));
   register("video-assets:pick-video", async () => {
     const result = await dialog.showOpenDialog({ properties: ["openFile"], filters: [{ name: "视频文件", extensions: ["mp4", "mov", "m4v"] }] });
@@ -553,7 +560,22 @@ export function registerIpc(deps: IpcDependencies): void {
     }
     const isApiPlatform = articleAdapter.manifest.transport === "official_api" || articleAdapter.manifest.transport === "web_api";
     const isToutiaoArticleApi = input.platformKey === "toutiao" && articleAdapter.manifest.transport === "web_api";
-    const job = isToutiaoArticleApi
+    if (input.platformKey === "toutiao" && articleAdapter instanceof ToutiaoArticleBrowserAdapter) {
+      const account = repository.listAccounts().find(item => item.platformKey === "toutiao" && item.platformAccountId === input.platformAccountId && item.enabled && !item.archivedAt);
+      const article = repository.getArticle(input.articleId);
+      const image = input.selectedImageAssetId ? repository.getImageAsset(input.selectedImageAssetId) : null;
+      if (!account || !article) throw new Error("TOUTIAO_ACCOUNT_CONTENT_UNAVAILABLE");
+      await assertToutiaoProductReadiness({ expectedCreatorId: account.externalAccountId,
+        input: { articleId: article.id, title: article.title, body: article.body, summary: article.summary, tags: article.tags,
+          ...(image ? { images: [image.filePath] } : {}) },
+        imageAvailable: Boolean(image?.enabled && existsSync(image.filePath)), imageBrandMatch: image?.brandId === article.brandId,
+        validate: value => articleAdapter.validateArticle(value), inspect: () => articleAdapter.inspectAccountPreflight(accountContext(account.id, "toutiao", createUserAction("START_PUBLISH"))) });
+    }
+    const candidateAccount = !productPlatform(input.platformKey)?.ordinaryPublishEnabled
+      ? repository.listAccounts().find(account => account.platformAccountId === input.platformAccountId && account.platformKey === input.platformKey) : null;
+    const originalSprintJob = candidateAccount && deps.sprintAcceptance
+      ? deps.sprintAcceptance.originalJob(input.platformKey, input.articleId, candidateAccount.id) : null;
+    const job = originalSprintJob ? repository.getJob(originalSprintJob.id)! : isToutiaoArticleApi
       ? repository.createToutiaoArticlePublishJob({ ...input, finalPublishMode, settings: input.toutiaoArticleSettings })
       : b01
         ? repository.createB01Job({ ...input, finalPublishMode, articleTransport: "browser" })

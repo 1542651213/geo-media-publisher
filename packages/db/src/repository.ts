@@ -3028,7 +3028,12 @@ export class AppRepository {
     if (!job || !["NeedsReconciliation", "Submitted", "Publishing"].includes(job.status)) throw new Error("Only a claimed submission can be closed by read-only publish reconciliation");
     const intent = this.getSubmissionIntentByJob(jobId);
     if (!intent || intent.finalSubmitCount < 1) throw new Error("Read-only publication confirmation requires a durable final submit claim");
-    const managementConfirmed = job.platformKey === "douyin" && verifiedDouyinManagement(input.response);
+    const toutiaoEvidence = input.response.reconciliation && typeof input.response.reconciliation === "object"
+      ? input.response.reconciliation as Record<string, unknown> : null;
+    const managementConfirmed = job.platformKey === "douyin" && verifiedDouyinManagement(input.response)
+      || job.platformKey === "toutiao" && intent.finalSubmitCount === 1 && /^[1-9]\d*$/u.test(input.externalId)
+        && toutiaoEvidence?.remoteState === "PUBLISHED" && toutiaoEvidence?.accountMatch === true
+        && toutiaoEvidence?.matchedRowCount === 1 && toutiaoEvidence?.readOnly === true;
     if (job.platformKey === "douyin" && (!managementConfirmed || intent.finalSubmitCount !== 1
       || intent.externalId !== input.externalId || !/^\d{10,30}$/u.test(input.externalId)))
       throw new Error("DOUYIN_PUBLISHED_MANAGEMENT_EVIDENCE_REQUIRED");
@@ -3044,7 +3049,7 @@ export class AppRepository {
       this.markArticlePublished(job.articleId);
       this.markAccountPublished(job.accountId);
     }
-    if (managementConfirmed) {
+    if (managementConfirmed && job.platformKey === "douyin") {
       const fidelity = input.response.publicContentVerified === "PASS" ? "PASS" : input.response.publicContentVerified === "FAIL" ? "FAIL" : "LIMITED";
       this.recordDouyinPublishOutcome(record, fidelity, typeof input.response.contentFidelityWarning === "string" ? input.response.contentFidelityWarning : null);
     }

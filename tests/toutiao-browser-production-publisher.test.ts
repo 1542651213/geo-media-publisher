@@ -33,7 +33,7 @@ class Fixture implements PlatformAdapter {
   });
   readonly reconcile = vi.fn(async (): Promise<BrowserPublishReconciliationResult> => ({ status: this.remoteState === "PUBLISHED" ? "FOUND_PUBLISHED" : "STILL_UNCERTAIN", remoteState: this.remoteState,
     ...(this.remoteState === "PUBLISHED" ? { externalId: "9001", publishedUrl: "https://www.toutiao.com/article/9001/" } : {}),
-    titleMatch: this.matched, accountMatch: this.matched, timeWindowMatch: this.matched, response: { readOnly: true, matchedTargetRow: this.matched }, message: "sanitized target row state" }));
+    titleMatch: this.matched, accountMatch: this.matched, timeWindowMatch: this.matched, response: { readOnly: true, matchedTargetRow: this.matched, matchedRowCount: this.matched ? 1 : 0 }, message: "sanitized target row state" }));
   readonly verifyPublished = vi.fn(async (_ctx: AccountContext, _input: PublishArticleInput, result: Pick<PublishResult, "externalId" | "publishedUrl">): Promise<PublishStatusResult> => ({ status: this.verified ? "published" : "failed", ...result, response: { urlReachable: this.verified, titleMatch: this.verified, bodyMatch: this.verified } }));
   getCapabilities(): PlatformCapabilities { return { ...defaultCapabilities, contentTransport: "ARTICLE_BROWSER", browserManagementReconciliation: true }; }
   getCredentialSchema() { return []; }
@@ -55,7 +55,7 @@ function setup() {
   const job = repo.createArticlePublishJob({ articleId: article.id, platformKey: "toutiao", platformAccountId: account.id });
   const adapter = new Fixture(); const registry = new AdapterRegistry(); registry.register(adapter);
   const publisher = new PublisherService(repo, registry, createConsoleLogger());
-  return { ...opened, repo, account, article, job, adapter, publisher };
+  return { ...opened, repo, account, article, job, adapter, publisher, registry };
 }
 
 async function prepared() {
@@ -68,6 +68,16 @@ async function prepared() {
 afterEach(() => { for (const db of databases.splice(0)) db.close(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe("Toutiao BrowserNative production publisher", () => {
+  it("rechecks temporary authorization after asynchronous preflight and before the durable final claim", async () => {
+    const scope = setup();
+    await scope.publisher.prepareArticle(scope.job.id); scope.repo.confirmJob(scope.job.id, false);
+    const publisher = new PublisherService(scope.repo, scope.registry, createConsoleLogger(), {
+      assertFinalAuthorization: () => { throw Object.assign(new Error("Temporary authorization expired"), { code: "USER_ACTION_REQUIRED" }); }
+    });
+    await publisher.executeJob(scope.job.id);
+    expect(scope.repo.getSubmissionIntentByJob(scope.job.id)?.finalSubmitCount ?? 0).toBe(0);
+    expect(scope.repo.getJob(scope.job.id)?.status).toBe("NeedsUserAction");
+  });
   it("retains the visible prepared session even when background automation previously passed", async () => {
     const scope = setup();
     scope.repo.setSetting("browserPublishMode", "background");
@@ -225,51 +235,48 @@ describe("Toutiao BrowserNative production publisher", () => {
     await scope.publisher.executeJob(scope.job.id); expect(scope.adapter.finalSubmit).toHaveBeenCalledTimes(1);
   });
 
-  it("confirms publication only after target-row and public-page verification", async () => {
+  it("confirms unique management publication even when the public page cannot be read", async () => {
     const scope = await prepared(); await scope.publisher.executeJob(scope.job.id); scope.adapter.remoteState = "PUBLISHED";
     scope.adapter.verified = false;
-    expect((await scope.publisher.pollPublishingJob(scope.job.id)).job.status).toBe("NeedsReconciliation");
-    expect(scope.repo.getPublishRecordByJob(scope.job.id)?.success).toBe(false);
-    scope.adapter.verified = true;
-    expect((await scope.publisher.reconcileBrowserJob(scope.job.id)).job.status).toBe("Success");
-    expect(scope.repo.getPublishRecordByJob(scope.job.id)).toMatchObject({ success: true, status: "Published", publishedExternalId: "9001" });
+    expect((await scope.publisher.pollPublishingJob(scope.job.id)).job.status).toBe("Success");
+    expect(scope.repo.getPublishRecordByJob(scope.job.id)).toMatchObject({ success: true, status: "Published", publishedExternalId: "9001", response: { publicContentVerified: "LIMITED" } });
+    expect(scope.repo.getSubmissionIntentByJob(scope.job.id)?.remoteStatus).toBe("PUBLISHED_CONFIRMED");
     expect(scope.adapter.finalSubmit).toHaveBeenCalledTimes(1);
   });
 
-  it("retains the matched published candidate and safe failed public-verification evidence without success", async () => {
+  it("keeps unique management Published success independent from failed content fidelity, with sanitized evidence", async () => {
     const scope = await prepared(); await scope.publisher.executeJob(scope.job.id); scope.adapter.remoteState = "PUBLISHED";
     scope.adapter.verifyPublished.mockResolvedValue({ status: "publishing", externalId: "9001", publishedUrl: "https://www.toutiao.com/article/9001/",
       response: { verified: false, urlReachable: true, titleMatch: true, bodyMatch: false, verificationStatus: "reconciliation_uncertain",
         cookie: "fixture-private-cookie", token: "fixture-private-token", diagnosticText: "unreviewed arbitrary content" },
       errorCode: "RECONCILIATION_UNCERTAIN" });
-    expect((await scope.publisher.pollPublishingJob(scope.job.id)).job.status).toBe("NeedsReconciliation");
+    expect((await scope.publisher.pollPublishingJob(scope.job.id)).job.status).toBe("Success");
     const record = scope.repo.getPublishRecordByJob(scope.job.id)!;
-    expect(record).toMatchObject({ status: "Submitted", success: false, verificationStatus: "WaitingUser",
+    expect(record).toMatchObject({ status: "Published", success: true,
       publishedExternalId: "9001", publishedUrl: "https://www.toutiao.com/article/9001/" });
-    expect(record.response).toMatchObject({ managementState: "PUBLISHED", publishedCandidateObserved: true,
+    expect(record.response).toMatchObject({ managementState: "PUBLISHED", publicContentVerified: "FAIL",
       verification: { status: "publishing", verified: false, urlReachable: true, titleMatch: true, bodyMatch: false,
         errorCode: "RECONCILIATION_UNCERTAIN" } });
     expect(JSON.stringify(record.response)).not.toContain("fixture-private");
     expect(JSON.stringify(record.response)).not.toContain("unreviewed arbitrary content");
-    expect(scope.repo.getSubmissionIntentByJob(scope.job.id)).toMatchObject({ finalSubmitCount: 1, remoteStatus: "UNCERTAIN" });
+    expect(scope.repo.getSubmissionIntentByJob(scope.job.id)).toMatchObject({ finalSubmitCount: 1, remoteStatus: "PUBLISHED_CONFIRMED" });
     expect(scope.adapter.finalSubmit).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the observed candidate ID on later reads but still requires matching public title and body", async () => {
+  it("confirms a unique trusted-ID management match and records fidelity mismatch without another submit", async () => {
     const scope = await prepared(); await scope.publisher.executeJob(scope.job.id); scope.adapter.remoteState = "PUBLISHED";
-    scope.adapter.verified = false; await scope.publisher.pollPublishingJob(scope.job.id);
+    const record = scope.repo.getPublishRecordByJob(scope.job.id)!;
+    scope.repo.updatePublishRecord(record.id, { status: "Publishing", success: false, response: record.response,
+      publishedExternalId: "9001", publishedUrl: "https://www.toutiao.com/article/9001/" });
     scope.adapter.reconcile.mockResolvedValue({ status: "FOUND_PUBLISHED", remoteState: "PUBLISHED", externalId: "9001",
       publishedUrl: "https://www.toutiao.com/article/9001/", titleMatch: false, accountMatch: true, timeWindowMatch: false,
-      response: { matchedBy: "REMOTE_ID", readOnly: true }, message: "trusted observed id" });
+      response: { matchedBy: "REMOTE_ID", readOnly: true, matchedRowCount: 1 }, message: "trusted observed id" });
     scope.adapter.verifyPublished.mockResolvedValue({ status: "published", externalId: "9001", publishedUrl: "https://www.toutiao.com/article/9001/",
       response: { urlReachable: true, titleMatch: true, bodyMatch: false } });
-    expect((await scope.publisher.reconcileBrowserJob(scope.job.id)).job.status).toBe("NeedsReconciliation");
+    expect((await scope.publisher.reconcileBrowserJob(scope.job.id)).job.status).toBe("Success");
     expect(scope.adapter.reconcile).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ expectedExternalId: "9001",
       expectedPublishedUrl: "https://www.toutiao.com/article/9001/" }));
-    expect(scope.repo.getPublishRecordByJob(scope.job.id)?.success).toBe(false);
-    scope.adapter.verifyPublished.mockResolvedValue({ status: "published", externalId: "9001", publishedUrl: "https://www.toutiao.com/article/9001/",
-      response: { urlReachable: true, titleMatch: true, bodyMatch: true } });
-    expect((await scope.publisher.reconcileBrowserJob(scope.job.id)).job.status).toBe("Success");
+    expect(scope.repo.getPublishRecordByJob(scope.job.id)).toMatchObject({ success: true, response: { publicContentVerified: "FAIL" } });
     expect(scope.repo.getSubmissionIntentByJob(scope.job.id)?.finalSubmitCount).toBe(1);
     expect(scope.adapter.finalSubmit).toHaveBeenCalledTimes(1);
   });

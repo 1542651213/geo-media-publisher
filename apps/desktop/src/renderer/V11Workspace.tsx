@@ -4,6 +4,8 @@ import type { ControlledPostUploadDiscoveryResult } from "@publisher/adapters-co
 import { defaultAccountSelection, normalizeContentReviewMode, selectRelevantBrandFacts, type Account, type Article, type Brand, type ContentQualityIssue, type ContentReviewMode, type ContentStudioPlatformKey, type ExcelImportPreview, type ImageAsset, type Platform, type PublishJob } from "@publisher/domain";
 import { douyinImageTextTitleError } from "@publisher/domain";
 import type { AccountManagementRow, ContentStudioTaskView } from "../shared/api";
+import type { SprintAcceptanceSelection } from "../main/sprint-acceptance";
+import { sprintUiSelection } from "./sprint-publish-ui";
 import type { OfficialApiAccountView, OfficialApiAvailability, OfficialApiContentSettings, OfficialApiImageChoice, OfficialApiJobView, OfficialApiMaintenanceOperation } from "../shared/official-api";
 import { accountCapabilityText, accountCenterPriority, accountConnectionTarget, accountStatusLabel, articleListStatusLabel, articleReviewLabel, articleReviewTone, canPublishWithReviewMode, connectedAccountsForPlatform, contentReviewModeLabel, imageMatchReason, isOnlineAccount, loadAccountCenterData, platformAvailability, platformCapabilityText, platformConnectionModeLabel, platformLabel, publishStatusLabel, publishStatusTone, searchOrderedPlatforms, type V11NavigationTarget } from "./v11-ui-model";
 import { disconnectFeedbackMessage } from "./platform-connection-ui";
@@ -501,13 +503,15 @@ export function V11PublishCenter({ refresh, refreshKey, onNavigate }: { refresh:
   const [publishOutcomes, setPublishOutcomes] = useState<Record<string, { publishResult: string; fidelity: string; warning: string | null }>>({});
   const [b01JobStatuses, setB01JobStatuses] = useState<Record<string, { eligible: boolean; status: string; reason: string }>>({});
   const [websiteJobViews, setWebsiteJobViews] = useState<Record<string, OfficialApiJobView>>({});
+  const [sprintSelections, setSprintSelections] = useState<SprintAcceptanceSelection[]>([]);
+  useEffect(() => { void window.publisherAPI.sprint?.availability().then(setSprintSelections).catch(() => setSprintSelections([])); }, []);
   const load = useCallback((): void => { void Promise.all([window.publisherAPI.jobs.list(), window.publisherAPI.articles.list(), window.publisherAPI.accounts.list(), window.publisherAPI.imageAssets.list()]).then(async ([nextJobs, nextArticles, nextAccounts, nextImages]) => {
     const operatingArticles = nextArticles.filter(isProductionArticle); const operatingIds = new Set(operatingArticles.map((article) => article.id));
     setJobs(nextJobs.filter((job) => operatingIds.has(job.articleId))); setArticles(operatingArticles); setAccounts(nextAccounts); setImages(nextImages);
     const statuses = await Promise.all(nextJobs.filter((job) => job.platformKey === "douyin").map(async (job) =>
       [job.id, await window.publisherAPI.b01.jobStatus(job.id)] as const));
     setB01JobStatuses(Object.fromEntries(statuses));
-    const records = await Promise.all(nextJobs.filter((job) => job.platformKey === "douyin" && job.status === "Success")
+    const records = await Promise.all(nextJobs.filter((job) => ["douyin", "toutiao"].includes(job.platformKey) && job.status === "Success")
       .map((job) => window.publisherAPI.articles.history(job.articleId)));
     setPublishOutcomes(Object.fromEntries(records.flat().filter((record) => record.response.publishResult === "PUBLISHED_CONFIRMED")
       .map((record) => [record.jobId, { publishResult: "已发布", fidelity: String(record.response.publicContentVerified ?? "LIMITED"),
@@ -532,7 +536,7 @@ export function V11PublishCenter({ refresh, refreshKey, onNavigate }: { refresh:
           const status = await window.publisherAPI.b01.jobStatus(job.id);
           if (status.status !== "Missing" && !status.eligible) throw new Error(status.reason);
           if (!productPlatform("douyin")?.ordinaryPublishEnabled && !status.eligible) throw new Error(status.reason);
-        } else if (job.platformKey !== "website" && reason) throw new Error(reason);
+        } else if (job.platformKey !== "website" && reason && !sprintUiSelection(sprintSelections, job.platformKey, articleById.get(job.articleId), job.accountId)) throw new Error(reason);
       }
       if (job.finalPublishMode === "PREPARE_ONLY" && ["AwaitingConfirmation", "DryRunPassed"].includes(job.status)) { setMessage("这条任务只准备内容，不会执行最终发布；如需发布请重新选择“发布前确认”。"); return; }
       if (!readOnly && ["AwaitingConfirmation", "DryRunPassed"].includes(job.status)) await window.publisherAPI.jobs.confirm(job.id, false);
@@ -596,7 +600,14 @@ export function V11PublishModal({ initialArticle, onClose, onDone, onNavigate }:
   const [websiteConnections, setWebsiteConnections] = useState<OfficialApiAccountView[]>([]);
   const [websiteImages, setWebsiteImages] = useState<OfficialApiImageChoice[]>([]);
   const [websiteSettings, setWebsiteSettings] = useState<OfficialApiContentSettings | null>(null);
+  const [sprintSelections, setSprintSelections] = useState<SprintAcceptanceSelection[]>([]);
+  useEffect(() => { void window.publisherAPI.sprint?.availability().then(setSprintSelections).catch(() => setSprintSelections([])); }, []);
   const article = articles.find((item) => item.id === articleId) ?? initialArticle;
+  const sprintReason = (key: string): string | null => {
+    const platform = platforms.find(item => item.platformKey === key);
+    return sprintUiSelection(sprintSelections, key, article) && platform?.enabled && platform.capabilities.article
+      ? null : operatorPublishBlockReason(key, platform);
+  };
   const douyinTitleError = article ? douyinImageTextTitleError(article.title) : null;
   useEffect(() => { void window.publisherAPI.b01.availability().then((result) => setB01Available(!douyinOrdinaryEnabled && result.enabled)).catch(() => setB01Available(false)); }, [douyinOrdinaryEnabled]);
   useEffect(() => { void Promise.all([window.publisherAPI.website.listConnections(), window.publisherAPI.website.availability()])
@@ -608,12 +619,12 @@ export function V11PublishModal({ initialArticle, onClose, onDone, onNavigate }:
   useEffect(() => { void Promise.all([initialArticle ? Promise.resolve([initialArticle]) : window.publisherAPI.articles.list(), window.publisherAPI.accounts.overview(), window.publisherAPI.platforms.list(), window.publisherAPI.settings.get()]).then(([nextArticles, nextAccountRows, nextPlatforms, settings]) => { const nextAccounts = nextAccountRows.map((row) => ({ ...row.account, accountStatus: row.accountStatus, runtimeAuthState: row.runtimeAuthState, imageTextCreatorReady: row.imageTextCreatorReady })); setArticles(nextArticles.filter(isProductionArticle)); setAccounts(operatorAccounts(nextAccounts)); setPlatforms(operatorPlatformCatalog(nextPlatforms)); setReviewMode(normalizeContentReviewMode(settings.contentReviewMode)); setFinalPublishMode(settings.finalPublishMode === "prepare_only" || settings.finalPublishMode === "auto_publish" ? settings.finalPublishMode : "confirm_before_publish"); setSelectedPlatforms([]); }); }, [initialArticle]);
   useEffect(() => { if (!article?.id) return; void (async () => { try { let state = await window.publisherAPI.quality.status("article", article.id); if (reviewMode === "WarningOnly" && (!state || state.status === "Draft")) { await window.publisherAPI.quality.recheck("article", article.id); state = await window.publisherAPI.quality.status("article", article.id); } setQualityStatus(state?.status ?? "Draft"); const history = await window.publisherAPI.quality.history("article", article.id); setQualityIssues(history.reviews[0]?.issues ?? []); } catch (error) { setMessage(error instanceof Error ? error.message : "内容检查暂时无法完成；仅提醒模式仍允许你本人决定。"); } })(); }, [article?.id, reviewMode]);
   useEffect(() => { const next: Record<string, string> = {}; selectedPlatforms.forEach((key) => {
-    if (key === "douyin" || key === "website") return;
+    if (key === "douyin" || key === "website" || sprintUiSelection(sprintSelections, key, article)) return;
     const candidates = connectedAccountsForPlatform(accounts, key).filter((account) => key !== "douyin" || account.imageTextCreatorReady && (douyinOrdinaryEnabled || account.id === b01EligibleAccountId));
     const selected = defaultAccountSelection(candidates);
     if (selected.selectedAccountId) next[key] = selected.selectedAccountId;
     if (key === "lieju" && liejuAccountChoices.length === 0 && candidates[0]) setLiejuAccountChoices([candidates[0].platformAccountId ?? candidates[0].id]);
-  }); setAccountChoices((current) => ({ ...current, ...next })); }, [accounts, selectedPlatforms, liejuAccountChoices.length, b01EligibleAccountId, douyinOrdinaryEnabled]);
+  }); setAccountChoices((current) => ({ ...current, ...next })); }, [accounts, selectedPlatforms, liejuAccountChoices.length, b01EligibleAccountId, douyinOrdinaryEnabled, sprintSelections, article]);
   useEffect(() => {
     if (!article || !websiteSettings) return;
     const preferred = preferredWebsiteCandidate(article.id, websiteAvailability, websiteConnections, websiteSettings.kind);
@@ -642,7 +653,8 @@ export function V11PublishModal({ initialArticle, onClose, onDone, onNavigate }:
       setSelectedPlatforms((current) => current.includes(key) ? current.filter((item) => item !== key) : [key]);
       return;
     }
-    if (operatorPublishBlockReason(key, platforms.find((platform) => platform.platformKey === key))) return;
+    if (sprintReason(key)) return;
+    if (sprintUiSelection(sprintSelections, key, article)) { setSelectedPlatforms(current => current.includes(key) ? [] : [key]); return; }
     setSelectedPlatforms((current) => current.includes(key) ? current.filter((item) => item !== key) : current.includes("website") ? [key] : [...current, key]);
   };
   const channels = platforms.filter((platform) => productPlatform(platform.platformKey)?.publishSelectorVisible);
@@ -681,11 +693,11 @@ export function V11PublishModal({ initialArticle, onClose, onDone, onNavigate }:
       const done: string[] = [];
       let jobCount = 0;
       const b01 = selectedPlatforms.includes("douyin") && !douyinOrdinaryEnabled;
-      const persistedFinalMode = selectedPlatforms.some(key => key === "douyin" || key === "website") ? "CONFIRM_BEFORE_PUBLISH" : finalPublishMode === "prepare_only" ? "PREPARE_ONLY" : finalPublishMode === "auto_publish" ? "AUTO_PUBLISH" : "CONFIRM_BEFORE_PUBLISH";
+      const persistedFinalMode = selectedPlatforms.some(key => key === "douyin" || key === "website" || sprintUiSelection(sprintSelections, key, article)) ? "CONFIRM_BEFORE_PUBLISH" : finalPublishMode === "prepare_only" ? "PREPARE_ONLY" : finalPublishMode === "auto_publish" ? "AUTO_PUBLISH" : "CONFIRM_BEFORE_PUBLISH";
       for (const platformKey of selectedPlatforms) {
         const blockReason = platformKey === "website" && websiteEligibility.eligible ? websiteSettingsError
           : platformKey === "douyin" && b01EligibleAccountId ? null
-          : operatorPublishBlockReason(platformKey, platforms.find((platform) => platform.platformKey === platformKey));
+          : sprintReason(platformKey);
         if (blockReason) throw new Error(blockReason);
         if (platformKey === "douyin" && (imageMode !== "manual" || !selectedImage)) throw new Error("抖音图文需要手动选择当前文章的图片");
         if (platformKey === "douyin" && douyinVisibility !== "public") throw new Error("请为抖音图文明确选择可见范围");
@@ -749,13 +761,16 @@ export function V11PublishModal({ initialArticle, onClose, onDone, onNavigate }:
               {selected && <div className={selected.environment === "staging" ? "notice warning" : "notice"}><strong>{selected.environment === "production" ? "正式环境 production" : selected.environment === "staging" ? "测试环境 staging" : "环境未验证"}</strong><span>站点 {selected.siteId ?? "未验证"} · API {selected.apiVersion ?? "未验证"} · {selected.writesEnabled ? "可写" : "只读"} · {selected.status}</span></div>}</> : <div className="notice warning">当前文章没有 Main 授权的官网账号候选。</div>}
           </div>;
         }
-        const candidates = connectedAccountsForPlatform(accounts, platform.platformKey).filter((account) => platform.platformKey !== "douyin" || account.imageTextCreatorReady && (douyinOrdinaryEnabled || account.id === b01EligibleAccountId));
+        const sprintSelection = sprintUiSelection(sprintSelections, platform.platformKey, article);
+        const candidates = connectedAccountsForPlatform(accounts, platform.platformKey)
+          .filter(account => !sprintSelection || account.id === sprintSelection.accountId)
+          .filter((account) => platform.platformKey !== "douyin" || account.imageTextCreatorReady && (douyinOrdinaryEnabled || account.id === b01EligibleAccountId));
         const connected = candidates.length > 0;
-        const blockReason = platform.platformKey === "douyin" && douyinTitleError ? douyinTitleError : platform.platformKey === "douyin" && b01EligibleAccountId ? null : platform.platformKey === "douyin" && !douyinOrdinaryEnabled ? b01Reason : operatorPublishBlockReason(platform.platformKey, platform);
+        const blockReason = platform.platformKey === "douyin" && douyinTitleError ? douyinTitleError : platform.platformKey === "douyin" && b01EligibleAccountId ? null : platform.platformKey === "douyin" && !douyinOrdinaryEnabled ? b01Reason : sprintReason(platform.platformKey);
         return <div key={platform.platformKey}>
           <label className={`check-row ${connected && !blockReason ? "" : "disabled"}`}><input type="checkbox" disabled={Boolean(blockReason) || !connected} checked={selectedPlatforms.includes(platform.platformKey)} onChange={() => togglePlatform(platform.platformKey)} /><span>{platform.displayName}</span><em>{platform.platformKey === "douyin" && connected && !blockReason ? douyinOrdinaryEnabled ? "图文可发布 · 请明确选择账号" : "B01 单次产品验收" : blockReason ?? (connected ? candidates.length === 1 ? "已自动选择账号" : `${candidates.length} 个账号` : <button type="button" className="text-button" onClick={() => { onClose(); onNavigate?.("accounts"); }}>连接</button>)}</em></label>
           {selectedPlatforms.includes(platform.platformKey) && platform.platformKey === "lieju" && candidates.length > 1 && <div className="v112-account-multiselect"><strong>默认单选；多选会创建 {liejuAccountChoices.length} 个独立任务</strong>{candidates.map((account) => { const id = account.platformAccountId ?? account.id; return <label className="check-row" key={id}><input type="checkbox" checked={liejuAccountChoices.includes(id)} onChange={() => setLiejuAccountChoices((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id])} /><span>{account.accountAlias || account.name}</span><em>独立 Session</em></label>; })}</div>}
-          {selectedPlatforms.includes(platform.platformKey) && platform.platformKey !== "lieju" && (candidates.length > 1 || platform.platformKey === "douyin") && <select value={accountChoices[platform.platformKey] ?? ""} onChange={(event) => setAccountChoices((current) => ({ ...current, [platform.platformKey]: event.target.value }))}><option value="">请选择账号</option>{candidates.map((account) => <option value={account.platformAccountId ?? account.id} key={account.id}>{account.accountAlias || account.name}</option>)}</select>}
+          {selectedPlatforms.includes(platform.platformKey) && platform.platformKey !== "lieju" && (candidates.length > 1 || platform.platformKey === "douyin" || sprintSelection) && <select aria-label={`${platform.displayName}发布账号`} value={accountChoices[platform.platformKey] ?? ""} onChange={(event) => setAccountChoices((current) => ({ ...current, [platform.platformKey]: event.target.value }))}><option value="">请选择账号</option>{candidates.map((account) => <option value={account.platformAccountId ?? account.id} key={account.id}>{account.accountAlias || account.name}</option>)}</select>}
         </div>;
       })}</div>
       {selectedPlatforms.includes("douyin") && <div className="notice"><strong>{douyinOrdinaryEnabled ? "抖音图文" : "B01 单次产品验收 · 抖音图文"}</strong><label>可见范围 <select value={douyinVisibility} onChange={(event) => setDouyinVisibility(event.target.value === "public" ? "public" : "")}><option value="">请选择</option><option value="public">公开可见</option></select></label><span>{douyinOrdinaryEnabled ? "仅发布到明确选择的一个账号，使用一张图片；公开、立即发布、无音乐。准备后确认一次最终提交。" : "仅当前测试账号、文章、图片和一次最终提交；本次操作只准备内容，最终提交需 Owner 另行批准。"}</span></div>}

@@ -21,6 +21,7 @@ export function douyinPreBoundaryFailure(input: { platformKey: string; platformF
 }
 
 export interface PublisherOptions {
+  assertFinalAuthorization?: (job: PublishJob) => void;
   enforceB01ForDouyin?: boolean;
   resolveSecrets?: (accountId: string, platformKey: string) => Record<string, string>;
   accountFailurePauseThreshold?: number;
@@ -315,6 +316,33 @@ export class PublisherService {
         return { job: reconciled.job, message: `PUBLISHED_CONFIRMED: Douyin management verified; public content ${publicContentVerified} (PublishRecord ${reconciled.record.id})` };
       }
       if (job.platformKey === "douyin") return preserveUncertain("STILL_UNCERTAIN: Douyin unique Published management evidence or trusted remote ID missing; no resubmission");
+      if (job.platformKey === "toutiao" && managementReconciliation && result.remoteState === "PUBLISHED"
+        && result.externalId && /^[1-9]\d*$/u.test(result.externalId) && result.publishedUrl
+        && result.response.matchedRowCount === 1 && result.response.readOnly === true
+        && (matchedByTrustedId || result.titleMatch && result.accountMatch && result.timeWindowMatch)) {
+        let trustedUrl: URL;
+        try { trustedUrl = new URL(result.publishedUrl); }
+        catch { return preserveUncertain("STILL_UNCERTAIN: malformed Toutiao public URL"); }
+        if (trustedUrl.protocol !== "https:" || trustedUrl.username || trustedUrl.password
+          || !["www.toutiao.com", "toutiao.com"].includes(trustedUrl.hostname)
+          || !new RegExp(`^/(?:article|item)/${result.externalId}/?$`, "u").test(trustedUrl.pathname))
+          return preserveUncertain("STILL_UNCERTAIN: untrusted Toutiao public URL");
+        const verification: PublishStatusResult = adapter.verifyPublished
+          ? await withTimeout(adapter.verifyPublished(ctx, input, { externalId: result.externalId, publishedUrl: result.publishedUrl }),
+            this.options.operationTimeoutMs ?? 120_000, "Toutiao public content verification").catch((error: unknown) => ({
+              status: "publishing" as const, response: { errorCode: errorCode(error) } }))
+          : { status: "publishing", response: { errorCode: "PUBLIC_VERIFIER_UNAVAILABLE" } };
+        const publicVerified = verification.status === "published" && verification.externalId === result.externalId
+          && verification.response.urlReachable === true && verification.response.titleMatch === true && verification.response.bodyMatch === true;
+        const fidelity = publicVerified ? "PASS" : verification.response.urlReachable === true
+          && (verification.response.titleMatch === false || verification.response.bodyMatch === false) ? "FAIL" : "LIMITED";
+        const reconciled = this.repository.reconcileJobAsPublished(job.id, { externalId: result.externalId,
+          publishedUrl: `${trustedUrl.origin}${trustedUrl.pathname}`, publicVerified,
+          response: { ...existingRecord?.response, publishResult: "PUBLISHED_CONFIRMED", reconciliation: { ...result.response, remoteState: "PUBLISHED", accountMatch: result.accountMatch }, managementState: "PUBLISHED",
+            verification: publicVerificationEvidence(verification), publicContentVerified: fidelity,
+            contentFidelityWarning: publicVerified ? null : "PUBLIC_CONTENT_VERIFICATION_" + fidelity } });
+        return { job: reconciled.job, message: `PUBLISHED_CONFIRMED: Toutiao management verified; public content ${fidelity}` };
+      }
       if (!result.externalId || !result.publishedUrl || !(matchedByTrustedId || result.titleMatch && result.accountMatch && result.timeWindowMatch) || !adapter.verifyPublished) return preserveUncertain("STILL_UNCERTAIN: 回查未同时取得真实 External ID、URL、目标身份和匹配证据，未写入成功");
       const verification = await withTimeout(adapter.verifyPublished(ctx, input, { externalId: result.externalId, publishedUrl: result.publishedUrl }), this.options.operationTimeoutMs ?? 120_000, "Browser publish result verification").catch((error: unknown) => {
         if (!managementReconciliation) throw error;
@@ -598,6 +626,7 @@ export class PublisherService {
             submissionAttemptId,
             attempt: intent.attempt,
             markSubmissionSideEffect: () => {
+              this.options.assertFinalAuthorization?.(job);
               const claimed = this.repository.claimFinalSubmitAttempt(intent.id, { payloadHash: publishInputHash(input), adapterId: `${adapter.platformKey}@${adapter.manifest.version}`, requireB01: this.requiresB01(job) });
               finalSubmitSideEffectTriggered = true;
               this.logger.info("PUBLISHER", "FINAL_SUBMIT_BOUNDARY_ENTERED", "Durable formal submit boundary entered", { jobId: job.id, submissionAttemptId: claimed.submissionAttemptId, platformKey: job.platformKey });
@@ -631,7 +660,8 @@ export class PublisherService {
           if (isAutomationAdapter(adapter)) await adapter.releaseOperationSession?.(ctx).catch(() => undefined);
         } else {
           if (submissionIntentId) {
-            const claimed = this.repository.claimFinalSubmitAttempt(submissionIntentId, { payloadHash: publishInputHash(input), adapterId: `${adapter.platformKey}@${adapter.manifest.version}`, requireB01: this.requiresB01(job) });
+          this.options.assertFinalAuthorization?.(job);
+          const claimed = this.repository.claimFinalSubmitAttempt(submissionIntentId, { payloadHash: publishInputHash(input), adapterId: `${adapter.platformKey}@${adapter.manifest.version}`, requireB01: this.requiresB01(job) });
             this.logger.info("PUBLISHER", "FINAL_SUBMIT_BOUNDARY_ENTERED", "Durable formal submit boundary entered", { jobId: job.id, submissionAttemptId: claimed.submissionAttemptId, platformKey: job.platformKey });
           }
           result = await withTimeout(adapter.publishArticle(ctx, input), this.options.operationTimeoutMs ?? 120_000, "Platform article publish").finally(async () => {

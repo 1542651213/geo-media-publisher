@@ -5,6 +5,7 @@ import type { AIConnectionResult } from "@publisher/ai";
 import type { ContentQualityAuditView, ContentQualityItemView, ContentQualityReviewView, ContentQualityStateView, HumanReviewDatasetItemView, HumanReviewDatasetView, HumanReviewSubmitInput, HumanReviewItemReviewView, QualityBenchmarkContentView, QualityBenchmarkMetrics, QualityBenchmarkRunView } from "@publisher/db";
 import type { BrowserSessionRuntimeSnapshot, PreSubmitGateResult } from "@publisher/adapters-core";
 import type { ToutiaoActivationResult, ToutiaoSessionStatus } from "../main/toutiao-session-activation";
+import type { SprintAcceptanceSelection } from "../main/sprint-acceptance";
 import type { ToutiaoLiveShadowResult, ControlledPublishCaptureResult } from "@publisher/adapters-toutiao/article-api";
 import type { CapturedOneShotResult } from "../main/toutiao-captured-request-one-shot";
 import type { ToutiaoDeepScanResult } from "@publisher/adapters-toutiao/browser";
@@ -178,6 +179,7 @@ export interface ManagedVideoAsset extends VideoAsset {
 }
 
 export interface PublisherApi {
+  sprint: { availability(): Promise<SprintAcceptanceSelection[]> };
   website: { listConnections(): Promise<OfficialApiAccountView[]>;
     imageChoices(articleId: string): Promise<OfficialApiImageChoice[]>;
     importCredentials(input: { environment: "staging" | "production"; accountId?: string }): Promise<OfficialApiAccountView>;
