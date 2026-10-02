@@ -1,4 +1,5 @@
 import { captureAccountAuthBoundary, invalidateAccountAuthBoundary } from "./account-auth-boundary";
+import { listWorkspaceJobs } from './workspace-jobs';
 import { assertExternalOperationAllowed } from './external-operation-policy';
 import { exportColleaguePackage,inspectColleaguePackage,importColleaguePackage } from './colleague-data-package';
 import { BUILD_IDENTITY } from '../shared/build-identity';
@@ -1942,7 +1943,7 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
     if (!result.validation.valid) throw Object.assign(new Error(result.validation.errors.join("；")), { code: "CONTENT_REJECTED" });
     return repository.createVideoPublishJob({ accountId: input.accountId, platformKey: input.platformKey, articleId: input.articleId, videoAssetId: input.videoAssetId, title: asset.title, description: asset.description, tags: asset.tags, coverPath: asset.coverPath ?? undefined, platformFields: asset.platformFields, scheduledAt: input.scheduledAt ?? new Date().toISOString(), dryRun: true, manualConfirmationRequired: true });
   });
-  register("jobs:list", (_event, payload) => repository.listJobs(z.object({ status: z.string().optional() }).optional().parse(payload)).filter(job => repository.getArticle(job.articleId)?.brandId === workspace.current()));
+  register("jobs:list", (_event, payload) => listWorkspaceJobs(repository, workspace, z.object({ status: z.string().optional() }).optional().parse(payload)));
   register("jobs:prepare-existing-douyin", async (_event, payload) => {
     const id = z.object({ id: idSchema }).parse(payload).id;
     if (process.env.DOUYIN_BODY_DIAGNOSTIC_ENABLED !== "true"

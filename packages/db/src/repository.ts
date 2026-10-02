@@ -2614,9 +2614,13 @@ export class AppRepository {
     return row ? toArticleVariant(row) : null;
   }
 
-  listJobs(filters: { status?: string } = {}): PublishJob[] {
-    if (filters.status) return (this.db.prepare("SELECT * FROM publish_jobs WHERE status=? ORDER BY scheduled_at").all(filters.status) as Row[]).map(toJob);
-    return (this.db.prepare("SELECT * FROM publish_jobs ORDER BY scheduled_at DESC").all() as Row[]).map(toJob);
+  listJobs(filters: { status?: string; brandId?: string } = {}): PublishJob[] {
+    const conditions: string[] = [], parameters: string[] = [];
+    if (filters.status) { conditions.push('status=?'); parameters.push(filters.status); }
+    if (filters.brandId) { conditions.push('article_id IN (SELECT id FROM articles WHERE brand_id=?)'); parameters.push(filters.brandId); }
+    const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
+    const order = filters.status ? ' ORDER BY scheduled_at' : ' ORDER BY scheduled_at DESC';
+    return (this.db.prepare('SELECT * FROM publish_jobs' + where + order).all(...parameters) as Row[]).map(toJob);
   }
 
   listDueJobs(currentTime = new Date().toISOString(), limit = 50): PublishJob[] {

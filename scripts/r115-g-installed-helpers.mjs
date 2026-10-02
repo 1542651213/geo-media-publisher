@@ -52,7 +52,7 @@ export async function launchInstalled(executablePath,userData,{origins=[],extra=
   if(build){assert.equal(build.deliveryId,'R1.15-G');assert.equal(build.packaged,true);assert.equal(build.runtimeAppVersion,build.appVersion);assert.match(build.sourceCommit,/^[a-f0-9]{40}$/u);}
   return{app,page,userData,guard,build,childProcess,startMs:Math.round(performance.now()-started)};
 }
-export async function screenshot(page,root,name,locator){const path=join(root,name+'.png');await(locator??page).screenshot({path,fullPage:!locator});return path;}
+export async function screenshot(page,root,name,locator){const path=join(root,name+'.png');await(locator??page).screenshot({path,fullPage:false});return path;}
 export function saveEvidence(root,name,data){writeFileSync(join(root,name+'.json'),JSON.stringify(data,null,2));}
 export async function waitForInstalledExit(run){const child=run.childProcess??run.app.process();let timer;const exited=child.exitCode!==null||child.signalCode!==null?Promise.resolve():new Promise(done=>child.once('exit',done));try{await Promise.race([exited,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('OWNED_MAIN_PROCESS_DID_NOT_EXIT')),10000);})]);}finally{clearTimeout(timer);}}
 export async function closeInstalled(run){if(!run)return;await run.app.close();await waitForInstalledExit(run);}

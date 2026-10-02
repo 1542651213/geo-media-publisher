@@ -27,10 +27,12 @@ const checkLayouts=async(name)=>{
   for(const button of buttons){await button.scrollIntoViewIfNeeded();const box=await button.boundingBox();assert.ok(box&&box.x>=-2&&box.x+box.width<=dimensions.width+2&&box.y>=-2&&box.y+box.height<=dimensions.height+2,name+' button unreachable');}
   result.stateLayouts.push({name,width,height,zoom,buttons:buttons.length,horizontalOverflow:false,buttonsReachable:true});saveEvidence(root,'acceptance',result);
  }
- await run.app.evaluate(new Function('electron',`const w=electron.BrowserWindow.getAllWindows()[0];w.setBounds({width:1480,height:960});w.webContents.setZoomFactor(1);`));
+ const restoredBounds=await run.app.evaluate(new Function('electron',`const w=electron.BrowserWindow.getAllWindows()[0];w.setBounds({width:1480,height:960});w.webContents.setZoomFactor(1);return w.getContentBounds();`));
+ await run.page.waitForFunction(bounds=>Math.abs(window.innerWidth-bounds.width)<=2&&Math.abs(window.innerHeight-bounds.height)<=2,restoredBounds);
+ await run.page.evaluate(()=>new Promise(done=>window.requestAnimationFrame(()=>window.requestAnimationFrame(done))));
  await run.page.evaluate(()=>{for(const selector of ['.drawer','.drawer-body','.content-area']){const element=document.querySelector(selector);if(element)element.scrollTop=0;}});
 };
-const shot=async name=>{await checkLayouts(name);result.screenshots.push(await screenshot(run.page,root,name));};
+const shot=async name=>{await checkLayouts(name);if(name==='01-import-errors')await run.page.locator('.operations-errors').scrollIntoViewIfNeeded();result.captureLayouts??=[];result.captureLayouts.push({name,...await run.page.evaluate(()=>({width:window.innerWidth,height:window.innerHeight}))});result.screenshots.push(await screenshot(run.page,root,name));};
 const start=async()=>{run=await launchInstalled(executable,userData,{origins:[origin]});result.normalStarts++;result.build=run.build;};
 const stop=async()=>{await closeInstalled(run);run=null;result.normalExits++;};
 const openArticle=async()=>{await nav(run.page,'文章库');const row=run.page.locator('.v11-article-row').filter({hasText:'合成员工源稿'}).first();await row.getByRole('button',{name:'修改',exact:true}).click();await run.page.getByLabel('编辑文章正文').waitFor();await run.page.waitForFunction(()=>!document.querySelector('[aria-label="编辑文章正文"]')?.disabled);};
