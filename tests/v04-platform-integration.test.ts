@@ -21,7 +21,8 @@ describe("V0.4 platform integration", () => {
         "0026_douyin_image_text_connection.sql", "0027_r115_b01_product_e2e_authorization.sql",
         "0028_b01_preboundary_retirement.sql", "0029_douyin_publish_content_outcome.sql"
       ]));
-      expect(applied.at(-1)?.id).toBe("0036_colleague_package_imports.sql");
+      expect(applied.at(-1)?.id).toBe("0037_jobs_company_page_index.sql");
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_publish_jobs_article_page'").get()).toBeTruthy();
       expect(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ai_generation_history'").get()).toBeTruthy();
       const b01Columns = db.prepare("PRAGMA table_info(b01_product_e2e_authorization)").all() as Array<{ name: string }>;
       expect(b01Columns.map((column) => column.name)).toEqual(expect.arrayContaining([

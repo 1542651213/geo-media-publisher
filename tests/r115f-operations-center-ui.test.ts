@@ -167,9 +167,12 @@ describe("R1.15-F operations center UI safety", () => {
     const source = readFileSync("apps/desktop/src/renderer/OperationsCenter.tsx", "utf8");
     expect(source).toContain("window.publisherAPI.product.health()");
     expect(source).not.toContain("account.loginStatus");
-    expect(source).toContain("publishStatusLabel(row.status) === status");
-    expect(source).toContain("publishStatusTone(row.status)");
-    expect(source).toContain("platformLabel(item.platformKey)");
+    const jobs = readFileSync("apps/desktop/src/renderer/JobsBoard.tsx", "utf8");
+    const ownership = readFileSync("apps/desktop/src/renderer/AccountOwnershipReview.tsx", "utf8");
+    expect(jobs).toContain("value={status}>{publishStatusLabel(status)}");
+    expect(jobs).toContain("publishStatusLabel(row.status)");
+    expect(jobs).toContain("publishStatusTone(row.status)");
+    expect(ownership).toContain("platformLabel(item.platformKey)");
   });
 
   it("exposes the complete draft-only operations workspace without final publish controls", () => {
