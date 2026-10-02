@@ -1,7 +1,8 @@
 import { assertCurrentContentApproved, assertJobCurrentCompany } from "./content-review-authority";
 import { app, BrowserWindow, safeStorage } from "electron";
 import { existsSync } from "node:fs";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { join } from "node:path";
+import { resolveRuntimePaths } from "./runtime-paths";
 import { openDatabase, restoreDatabaseSafely } from "@publisher/db";
 import { SafeStorageCredentialStore } from "@publisher/security";
 import { createFileLogger } from "@publisher/logger";
@@ -22,15 +23,11 @@ import { readSprintAcceptance, SprintAcceptanceController } from "./sprint-accep
 
 app.setName("codex-media-publisher");
 // Installed Candidate smoke must explicitly override Electron's cached userData path.
-const isolatedUserData = process.env.GMP_B01_ISOLATED_USER_DATA_DIR;
-if (isolatedUserData) {
-  const isolatedPath = resolve(isolatedUserData);
-  if (!isAbsolute(isolatedUserData) || basename(isolatedPath) !== "b01-isolated-user-data" || !existsSync(isolatedPath)
-    || isolatedPath.toLowerCase() === resolve(app.getPath("userData")).toLowerCase()) {
-    throw new Error("B01_ISOLATED_USER_DATA_PATH_INVALID");
-  }
-  app.setPath("userData", isolatedPath);
-}
+const runtimePaths = resolveRuntimePaths(app.getPath("userData"), process.env.GMP_B01_ISOLATED_USER_DATA_DIR, app.isPackaged || process.env.PUBLISHER_DATA_MODE === "production");
+app.setPath("userData", runtimePaths.userData);
+// Electron's lock is scoped to the resolved userData, before migrations or recovery.
+if (!app.requestSingleInstanceLock()) app.exit(0);
+app.on("second-instance", () => { const window = BrowserWindow.getAllWindows()[0]; if (window) { if (window.isMinimized()) window.restore(); window.focus(); } });
 const processDiagnostics = createProcessDiagnostics(join(app.getPath("userData"), "production-data", "logs", "main-process-diagnostics.log"));
 processDiagnostics.installProcessHandlers();
 
@@ -55,8 +52,8 @@ async function createWindow(): Promise<void> {
     throw new Error("DOUYIN_R14_READONLY_RUNTIME_BINDING_INVALID");
   const migrationsDir = firstExisting([join(app.getAppPath(), "packages", "db", "migrations"), join(process.resourcesPath, "packages", "db", "migrations"), join(process.cwd(), "packages", "db", "migrations"), join(__dirname, "../../packages/db/migrations")]);
   const csvPath = firstExisting([join(app.getAppPath(), "PLATFORMS.csv"), join(process.resourcesPath, "PLATFORMS.csv"), join(process.cwd(), "PLATFORMS.csv")]);
-  const dataDirectory = join(app.getPath("userData"), app.isPackaged || process.env.PUBLISHER_DATA_MODE === "production" ? "production-data" : "development-data");
-  const databasePath = join(dataDirectory, "publisher.db");
+  const dataDirectory = runtimePaths.dataDirectory;
+  const databasePath = runtimePaths.database;
   const database = openDatabase(databasePath, migrationsDir);
   const isDevelopment = isDevelopmentEnvironment(app.isPackaged);
   if (isDevelopment) database.repository.seedDevelopment(csvPath);

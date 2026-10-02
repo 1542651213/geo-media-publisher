@@ -2011,11 +2011,11 @@ export class AppRepository {
     })();
   }
 
-  syncOfficialApiAccount(input: { accountId: string; platformKey: string; accountName?: string | null; externalAccountId?: string | null; lastVerifiedAt?: string }): Account {
+  syncOfficialApiAccount(input: { accountId: string; platformKey: string; accountName?: string | null; externalAccountId?: string | null; lastVerifiedAt?: string; enabled?: boolean }): Account {
     const current = this.db.prepare("SELECT * FROM accounts WHERE id=? AND platform_key=?").get(input.accountId, input.platformKey) as Row | undefined;
     if (!current) throw new Error("账号不存在");
     const timestamp = input.lastVerifiedAt ?? now();
-    this.db.prepare("UPDATE accounts SET platform_account_name=COALESCE(NULLIF(?,''),platform_account_name), login_status='logged_in', enabled=1, paused_reason=NULL, connection_mode='OfficialAPI', authorization_status='Authorized', external_account_id=COALESCE(?,external_account_id), last_verified_at=?, last_login_check_at=?, last_used_at=?, updated_at=? WHERE id=? AND platform_key=?").run(input.accountName?.trim() ?? "", input.externalAccountId ?? null, timestamp, timestamp, timestamp, timestamp, input.accountId, input.platformKey);
+    this.db.prepare("UPDATE accounts SET platform_account_name=COALESCE(NULLIF(?,''),platform_account_name), login_status='logged_in', enabled=?, paused_reason=NULL, connection_mode='OfficialAPI', authorization_status='Authorized', external_account_id=COALESCE(?,external_account_id), last_verified_at=?, last_login_check_at=?, last_used_at=?, updated_at=? WHERE id=? AND platform_key=?").run(input.accountName?.trim() ?? "", input.enabled === false ? 0 : 1, input.externalAccountId ?? null, timestamp, timestamp, timestamp, timestamp, input.accountId, input.platformKey);
     this.upsertAccountAuthorization({ accountId: input.accountId, platformKey: input.platformKey, authorizationType: "AppCredential", status: "Authorized", providerAccountId: input.externalAccountId ?? null, providerAccountName: input.accountName ?? null });
     return toAccount(this.db.prepare("SELECT * FROM accounts WHERE id=?").get(input.accountId) as Row);
   }

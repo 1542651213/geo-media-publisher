@@ -22,6 +22,15 @@ class MemoryStore implements CredentialStore {
 }
 const directories: string[] = [];
 const databases: Array<{ close(): void }> = [];
+
+it("keeps an Owner-disabled Website account disabled after successful read-only verification", async () => {
+  const { repository, credentials } = fixture();
+  const deps = { repository, credentials, verify: async () => capabilities };
+  const view = await importOfficialApiCredential(deps, JSON.stringify(configuration), "staging");
+  repository.updateAccount(view.accountId, { enabled: false });
+  await verifyOfficialApiConnection(deps, view.accountId);
+  expect(repository.getAccountById(view.accountId)?.enabled).toBe(false);
+});
 afterEach(() => { databases.splice(0).forEach(db => db.close()); directories.splice(0).forEach(dir => rmSync(dir, { recursive: true, force: true })); });
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), "official-api-account-")); directories.push(directory);

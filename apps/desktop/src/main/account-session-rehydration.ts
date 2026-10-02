@@ -29,7 +29,9 @@ export interface AccountSessionRehydrationOptions {
 
 export class AccountSessionRehydrationCoordinator {
   private readonly snapshots = new Map<string, SafeAccountSessionSnapshot>();
-  private readonly pending = new Map<string, Promise<SafeAccountSessionSnapshot>>();
+  private readonly pending = new Map<string, { fingerprint: string; request: Promise<SafeAccountSessionSnapshot> }>();
+  private readonly epochs = new Map<string, number>();
+  private readonly fingerprints = new Map<string, string>();
   private initialRehydrationComplete = false;
   private readonly concurrency: number;
   private readonly now: () => Date;
@@ -76,13 +78,34 @@ export class AccountSessionRehydrationCoordinator {
     const requested = { ...target };
     const key = accountSessionRuntimeKey(requested);
     const existing = this.pending.get(key);
-    if (existing) return existing;
+    const fingerprint = targetFingerprint(requested);
+    if (existing?.fingerprint === fingerprint) return existing.request;
+    const epoch = (this.epochs.get(key) ?? 0) + 1;
+    this.epochs.set(key, epoch);
+    this.fingerprints.set(key, fingerprint);
     this.store(requested, "CHECKING", null, false, source);
-    const request = this.verify(requested, source).finally(() => {
-      if (this.pending.get(key) === request) this.pending.delete(key);
+    const request = this.verify(requested, source).then(async result => {
+      const stale = await this.staleBinding(requested);
+      if (this.epochs.get(key) !== epoch) return this.getSnapshot(requested.accountId, requested.platformKey)
+        ?? this.makeSnapshot(requested, "UNVERIFIED", "REQUEST_SUPERSEDED", false, source);
+      return stale && result.reasonCode !== "COMPANY_BINDING_MISMATCH" ? this.store(requested, stale.state, stale.reasonCode, false, source)
+        : this.store(requested, result.state, result.reasonCode, result.identityMatched, source);
+    }).finally(() => {
+      if (this.pending.get(key)?.request === request) this.pending.delete(key);
     });
-    this.pending.set(key, request);
+    this.pending.set(key, { fingerprint, request });
     return request;
+  }
+
+  invalidate(accountId: string, platformKey: string): void {
+    const key = accountSessionRuntimeKey({ accountId, platformKey });
+    this.epochs.set(key, (this.epochs.get(key) ?? 0) + 1);
+    this.pending.delete(key); this.snapshots.delete(key); this.fingerprints.delete(key);
+  }
+
+  getSnapshotForTarget(target: AccountSessionTarget): SafeAccountSessionSnapshot | null {
+    const key = accountSessionRuntimeKey(target);
+    return this.fingerprints.get(key) === targetFingerprint(target) ? this.getSnapshot(target.accountId, target.platformKey) : null;
   }
 
   createRefreshCallback(resolveTarget: (accountId: string, platformKey: string) => AccountSessionTarget | null | Promise<AccountSessionTarget | null>) {
@@ -106,25 +129,25 @@ export class AccountSessionRehydrationCoordinator {
   isInitialRehydrationComplete(): boolean { return this.initialRehydrationComplete; }
 
   private async verify(target: AccountSessionTarget, source: AccountSessionRefreshSource): Promise<SafeAccountSessionSnapshot> {
-    if (!target.enabled) return this.store(target, "DISABLED", "ACCOUNT_DISABLED", false, source);
+    if (!target.enabled) return this.makeSnapshot(target, "DISABLED", "ACCOUNT_DISABLED", false, source);
     let companyId: string | null;
     try { companyId = await this.options.resolveCompanyId(target.accountId); }
-    catch { return this.store(target, "UNVERIFIED", "COMPANY_BINDING_UNAVAILABLE", false, source); }
-    if (!companyId || companyId !== target.companyId) return this.store(target, "IDENTITY_MISMATCH", "COMPANY_BINDING_MISMATCH", false, source);
+    catch { return this.makeSnapshot(target, "UNVERIFIED", "COMPANY_BINDING_UNAVAILABLE", false, source); }
+    if (!companyId || companyId !== target.companyId) return this.makeSnapshot(target, "IDENTITY_MISMATCH", "COMPANY_BINDING_MISMATCH", false, source);
     let adapter: PlatformAdapter | null;
     try {
       adapter = this.options.resolveAdapter
         ? this.options.resolveAdapter(target)
         : this.options.registry.tryGetForConnection(target.platformKey);
     } catch {
-      return this.store(target, "UNVERIFIED", "ADAPTER_RESOLUTION_FAILED", false, source);
+      return this.makeSnapshot(target, "UNVERIFIED", "ADAPTER_RESOLUTION_FAILED", false, source);
     }
-    if (!adapter) return this.store(target, "UNVERIFIED", "ADAPTER_UNAVAILABLE", false, source);
+    if (!adapter) return this.makeSnapshot(target, "UNVERIFIED", "ADAPTER_UNAVAILABLE", false, source);
     const browser = target.connectionMode === "BrowserAutomation" || adapter.manifest.transport === "browser";
     try {
       if (browser) {
         const restored = await this.options.browserSessions.restore({ platformKey: target.platformKey, accountId: target.accountId });
-        if (!restored) return this.store(target, "NEEDS_LOGIN", "BROWSER_SESSION_MISSING", false, source);
+        if (!restored) return this.makeSnapshot(target, "NEEDS_LOGIN", "BROWSER_SESSION_MISSING", false, source);
       }
       const settings: Record<string, string | number | boolean> = {
         triggerSource: "APP_STARTUP",
@@ -136,20 +159,20 @@ export class AccountSessionRehydrationCoordinator {
         secrets: this.options.resolveSecrets?.(target.accountId, target.platformKey) };
       const login = await adapter.checkLogin(context);
       if (login !== "logged_in") return this.loginFailure(target, browser, login, source);
-      if (!target.expectedRemoteIdentity) return this.store(target, "UNVERIFIED", "EXPECTED_REMOTE_IDENTITY_MISSING", false, source);
+      if (!target.expectedRemoteIdentity) return this.makeSnapshot(target, "UNVERIFIED", "EXPECTED_REMOTE_IDENTITY_MISSING", false, source);
       const profile = adapter.getAccountProfile ? await adapter.getAccountProfile(context) : null;
       const remoteIdentity = profile?.accountId ?? await inspectOwnedRemoteIdentity(adapter, context);
-      if (!remoteIdentity) return this.store(target, "UNVERIFIED", "LIVE_IDENTITY_UNAVAILABLE", false, source);
+      if (!remoteIdentity) return this.makeSnapshot(target, "UNVERIFIED", "LIVE_IDENTITY_UNAVAILABLE", false, source);
       if (remoteIdentity !== target.expectedRemoteIdentity)
-        return this.store(target, "IDENTITY_MISMATCH", "REMOTE_IDENTITY_MISMATCH", false, source);
+        return this.makeSnapshot(target, "IDENTITY_MISMATCH", "REMOTE_IDENTITY_MISMATCH", false, source);
       if (target.platformKey === "website" && (profile?.authorizationStatus !== "Authorized" || !profile.scopes?.includes("write")))
-        return this.store(target, "UNVERIFIED", "WRITE_CAPABILITY_UNAVAILABLE", true, source);
+        return this.makeSnapshot(target, "UNVERIFIED", "WRITE_CAPABILITY_UNAVAILABLE", true, source);
       const stale = await this.staleBinding(target);
-      if (stale) return this.store(target, stale.state, stale.reasonCode, false, source);
-      return this.store(target, browser ? "AUTHENTICATED" : "CONNECTED", null, true, source);
+      if (stale) return this.makeSnapshot(target, stale.state, stale.reasonCode, false, source);
+      return this.makeSnapshot(target, browser ? "AUTHENTICATED" : "CONNECTED", null, true, source);
     } catch (error) {
       const state = stateForError(error, browser);
-      return this.store(target, state.state, state.reasonCode, false, source);
+      return this.makeSnapshot(target, state.state, state.reasonCode, false, source);
     }
   }
 
@@ -180,13 +203,19 @@ export class AccountSessionRehydrationCoordinator {
   }
 
   private loginFailure(target: AccountSessionTarget, browser: boolean, login: "logged_out" | "expired" | "needs_user_action" | "unknown", source: AccountSessionRefreshSource): SafeAccountSessionSnapshot {
-    if (login === "expired") return this.store(target, browser ? "NEEDS_LOGIN" : "CREDENTIAL_INVALID", browser ? "LOGIN_EXPIRED" : "CREDENTIAL_INVALID", false, source);
-    if (login === "logged_out") return this.store(target, browser ? "NEEDS_LOGIN" : "CREDENTIAL_INVALID", browser ? "LOGIN_REQUIRED" : "CREDENTIAL_MISSING", false, source);
-    if (login === "needs_user_action") return this.store(target, browser ? "NEEDS_LOGIN" : "UNVERIFIED", "USER_ACTION_REQUIRED", false, source);
-    return this.store(target, "UNVERIFIED", "LIVE_VERIFICATION_INCONCLUSIVE", false, source);
+    if (login === "expired") return this.makeSnapshot(target, browser ? "NEEDS_LOGIN" : "CREDENTIAL_INVALID", browser ? "LOGIN_EXPIRED" : "CREDENTIAL_INVALID", false, source);
+    if (login === "logged_out") return this.makeSnapshot(target, browser ? "NEEDS_LOGIN" : "CREDENTIAL_INVALID", browser ? "LOGIN_REQUIRED" : "CREDENTIAL_MISSING", false, source);
+    if (login === "needs_user_action") return this.makeSnapshot(target, browser ? "NEEDS_LOGIN" : "UNVERIFIED", "USER_ACTION_REQUIRED", false, source);
+    return this.makeSnapshot(target, "UNVERIFIED", "LIVE_VERIFICATION_INCONCLUSIVE", false, source);
   }
 
   private store(target: AccountSessionTarget, state: SafeAccountSessionSnapshot["state"], reasonCode: string | null, identityMatched: boolean, source: AccountSessionRefreshSource): SafeAccountSessionSnapshot {
+    const snapshot = this.makeSnapshot(target, state, reasonCode, identityMatched, source);
+    this.snapshots.set(accountSessionRuntimeKey(target), snapshot);
+    return { ...snapshot };
+  }
+
+  private makeSnapshot(target: AccountSessionTarget, state: SafeAccountSessionSnapshot["state"], reasonCode: string | null, identityMatched: boolean, source: AccountSessionRefreshSource): SafeAccountSessionSnapshot {
     const snapshot: SafeAccountSessionSnapshot = {
       accountId: target.accountId,
       platformKey: target.platformKey,
@@ -198,9 +227,12 @@ export class AccountSessionRehydrationCoordinator {
       identityMatched,
       loginGeneration: target.loginGeneration ?? null
     };
-    this.snapshots.set(accountSessionRuntimeKey(target), snapshot);
     return { ...snapshot };
   }
+}
+
+function targetFingerprint(target: AccountSessionTarget): string {
+  return JSON.stringify([target.accountId, target.platformKey, target.companyId, target.connectionMode, target.enabled, target.expectedRemoteIdentity, target.loginGeneration ?? null]);
 }
 
 async function inspectOwnedRemoteIdentity(adapter: PlatformAdapter, context: Parameters<PlatformAdapter["checkLogin"]>[0]): Promise<string | null> {

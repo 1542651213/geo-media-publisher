@@ -233,14 +233,14 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
   };
   sessionRuntime = deps.browserSessions ? new AccountSessionRehydrationCoordinator({ registry, browserSessions: deps.browserSessions, resolveCompanyId: accountId => operations.accountCompany(accountId), resolveAdapter: target => target.platformKey === "douyin" && target.connectionMode === "BrowserAutomation" ? registry.getForContent("douyin", "article") : registry.tryGetForConnection(target.platformKey), resolveAuthoritativeTarget: (accountId, platformKey) => { const target = sessionTarget(accountId); return target?.platformKey === platformKey ? target : null; }, resolveSecrets: resolveAccountSecrets, concurrency: 2 }) : null;
   function safeRuntimeSnapshot(accountId: string, platformKey: string) {
-    const snapshot = sessionRuntime?.getSnapshot(accountId, platformKey);
-    if (!snapshot) return null;
     const target = sessionTarget(accountId);
+    if (!target || target.platformKey !== platformKey) return null;
+    const snapshot = target && sessionRuntime?.getSnapshotForTarget(target);
     if (!snapshot || !target) return null;
     if (snapshot.companyId !== target.companyId || snapshot.loginGeneration !== target.loginGeneration || !target.enabled) return { ...snapshot, state: target.enabled ? "UNVERIFIED" as const : "DISABLED" as const, identityMatched: false };
     return snapshot;
   }
-  register("sessions:snapshots", () => sessionRuntime?.listSnapshots().filter(item => item.companyId === workspace.current()) ?? []);
+  register("sessions:snapshots", () => repository.listAccounts().map(account => safeRuntimeSnapshot(account.id, account.platformKey)).filter(item => item && item.companyId === workspace.current()));
   register("sessions:refresh", (_event, payload) => {
     const accountId = z.strictObject({ accountId: idSchema }).parse(payload).accountId;
     workspace.assertAccount(accountId);

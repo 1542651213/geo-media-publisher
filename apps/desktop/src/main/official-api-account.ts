@@ -88,7 +88,7 @@ export async function verifyOfficialApiConnection(deps: ConnectionDependencies, 
   assertUnchanged();
   const timestamp = new Date().toISOString();
   repository.syncOfficialApiAccount({ accountId, platformKey: "website", accountName: `康一官网 · ${config.environment} · OfficialAPI`,
-    externalAccountId: `${remote.siteId}:${remote.environment}`, lastVerifiedAt: timestamp });
+    externalAccountId: `${remote.siteId}:${remote.environment}`, lastVerifiedAt: timestamp, enabled: before.enabled });
   return { ...view, status: remote.writesEnabled ? "CONNECTED" : "READ_ONLY", writesEnabled: remote.writesEnabled,
     contentTypes: remote.contentKinds, apiVersion: remote.protocolVersion, lastVerifiedAt: timestamp };
 }
