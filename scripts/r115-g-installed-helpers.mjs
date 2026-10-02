@@ -1,4 +1,4 @@
-/* global window */
+/* global window,document */
 import assert from 'node:assert/strict';
 import { existsSync,mkdirSync,writeFileSync } from 'node:fs';
 import { join,resolve } from 'node:path';
@@ -16,10 +16,23 @@ const installDeny=new Function('electron','input',`
   for(const module of [http,https])for(const name of ['request','get']){const original=module[name];module[name]=function(...args){let raw=args[0];if(raw&&typeof raw==='object'&&!(raw instanceof URL))raw=(raw.protocol??(module===https?'https:':'http:'))+'//'+(raw.hostname??raw.host??'localhost')+(raw.port?':'+raw.port:'')+(raw.path??'/');check(raw);return original.apply(this,args);};}
   electron.session.defaultSession.webRequest.onBeforeRequest({urls:['http://*/*','https://*/*']},(details,callback)=>{try{check(details.url);callback({cancel:false});}catch{callback({cancel:true});}});
   let rejected=false;try{globalThis.fetch('https://r115-g-deny-proof.invalid/probe');}catch{rejected=true;}if(!rejected)throw new Error('NETWORK_DENY_NOT_ACTIVE');
-  return{packaged:electron.app.isPackaged,userDataMatched:true,denyProof:rejected,electron:process.versions.electron,node:process.versions.node,abi:process.versions.modules};
+  return{packaged:electron.app.isPackaged,userDataMatched:true,denyProof:rejected,mainPid:process.pid,parentPid:process.ppid,electron:process.versions.electron,node:process.versions.node,abi:process.versions.modules};
 `);
 export const nav=(page,name)=>page.locator('.sidebar .nav-item').filter({hasText:name}).click();
 export const tab=(page,name)=>page.getByRole('button',{name,exact:true}).first().click();
+// waitForFunction treats a returned Promise as truthy in this bundled Playwright.
+// Main IPC persistence must be awaited on every polling sample before it is accepted.
+export async function waitForIpcCondition(page,predicate,arg,{timeout=12000}={}){
+  const started=performance.now();
+  while(performance.now()-started<timeout){if(await page.evaluate(predicate,arg))return;await new Promise(done=>setTimeout(done,100));}
+  throw new Error('AWAITED_MAIN_CONDITION_TIMEOUT');
+}
+export async function selectCompany(page,id){
+  const select=page.getByLabel('当前企业工作区');
+  if(await select.inputValue()!==id)await select.selectOption(id);
+  await waitForIpcCondition(page,id=>window.publisherAPI.workspace.current().then(current=>current===id),id);
+  await page.waitForFunction(id=>{const node=document.querySelector('[aria-label="当前企业工作区"]');return node?.value===id&&!node.disabled;},id);
+}
 export const pickFile=new Function('electron','path',`electron.dialog.showOpenDialog=async()=>({canceled:false,filePaths:[path]});`);
 export const mainDatabase=new Function('electron','input',`
   const require=process.mainModule.require.bind(process.mainModule),path=require('node:path'),fs=require('node:fs'),crypto=require('node:crypto');
@@ -31,6 +44,7 @@ export async function launchInstalled(executablePath,userData,{origins=[],extra=
   assert.ok(existsSync(executablePath));assert.ok(existsSync(userData));const started=performance.now();
   const app=await electron.launch({executablePath,timeout:30000,env:isolatedEnv(userData,extra)});
   const guard=await app.evaluate(installDeny,{userData,origins});assert.equal(guard.packaged,true);
+  assert.equal(app.process().pid,process.platform==='win32'?guard.parentPid:guard.mainPid,'MAIN_MUST_BELONG_TO_OWNED_LAUNCH');
   const page=await app.firstWindow();page.setDefaultTimeout(12000);
   await page.route('**/*',route=>{const url=route.request().url();if(!/^https?:/u.test(url)||origins.includes(new URL(url).origin))return route.continue();return route.abort('blockedbyclient');});
   await page.getByLabel('当前企业工作区').waitFor();
@@ -40,4 +54,4 @@ export async function launchInstalled(executablePath,userData,{origins=[],extra=
 }
 export async function screenshot(page,root,name,locator){const path=join(root,name+'.png');await(locator??page).screenshot({path,fullPage:!locator});return path;}
 export function saveEvidence(root,name,data){writeFileSync(join(root,name+'.json'),JSON.stringify(data,null,2));}
-export async function closeInstalled(run){if(run)await run.app.close();}
+export async function closeInstalled(run){if(!run)return;const child=run.app.process();let timer;const exited=child.exitCode!==null||child.signalCode!==null?Promise.resolve():new Promise(done=>child.once('exit',done));await run.app.close();try{await Promise.race([exited,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('OWNED_MAIN_PROCESS_DID_NOT_EXIT')),10000);})]);}finally{clearTimeout(timer);}}

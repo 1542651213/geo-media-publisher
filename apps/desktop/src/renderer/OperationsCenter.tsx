@@ -292,10 +292,11 @@ function ReviewTab({ rows, busy, selectedId, onSelect, onNavigate, onReview }: {
 
 function QueueTab({ rows, items, providers, templates, defaults, busy, companyId, onAction }: { rows: OperationsGenerationQueue[]; items: OperationsGenerationItem[]; providers: OperationsViewSnapshot["providers"]; templates: OperationsViewSnapshot["templates"]; defaults: OperationsStudioDefaults; busy: boolean; companyId: string; onAction: (action: () => Promise<unknown>, success: string) => Promise<void> }): JSX.Element {
   const [providerId, setProviderId] = useState(""), [model, setModel] = useState(""), [templateId, setTemplateId] = useState(""), [topic, setTopic] = useState(""), [count, setCount] = useState(1), [concurrency, setConcurrency] = useState(1), [targets, setTargets] = useState<string[]>(["douyin"]);
+  const defaultTargetsKey = canonicalStudioTargets(defaults.targetPlatforms).join("|");
   useEffect(() => {
     setProviderId(defaults.profileId ?? ""); setModel(defaults.model ?? ""); setTemplateId(defaults.templateId ? `${defaults.templateId}@${defaults.templateVersion ?? 1}` : "");
-    setTopic(""); setCount(1); setConcurrency(1); setTargets(canonicalStudioTargets(defaults.targetPlatforms).length ? canonicalStudioTargets(defaults.targetPlatforms) : ["douyin"]);
-  }, [companyId, defaults.profileId, defaults.model, defaults.templateId, defaults.templateVersion, defaults.targetPlatforms, defaults.updatedAt]);
+    setTopic(""); setCount(1); setConcurrency(1); setTargets(defaultTargetsKey ? defaultTargetsKey.split("|") : ["douyin"]);
+  }, [companyId, defaults.profileId, defaults.model, defaults.templateId, defaults.templateVersion, defaultTargetsKey, defaults.updatedAt]);
   const [workload,setWorkload]=useState<AIWorkloadPreview|null>(null);
   useEffect(()=>setWorkload(null),[companyId,providerId,model,templateId,topic,count,targets]);
   const queueRequest=()=>{const [templateKey,versionText]=templateId.split("@");return{companyId,profileId:providerId,model:model.trim(),templateId:templateKey||templateId,templateVersion:Number(versionText)||1,topic:topic.trim(),requestedCount:count,targetPlatforms:canonicalStudioTargets(targets),concurrency:1};};

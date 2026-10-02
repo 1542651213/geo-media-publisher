@@ -144,7 +144,7 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
     try {
       assertExternalOperationAllowed(channel,payload,restoredExecutionPaused);
       if (!workspaceController?.current() && ["articles:list", "image-assets:list"].includes(channel)) return [];
-      if (!workspaceController?.current() && channel === "articles:page") return { items: [], page: 1, pageSize: 50, total: 0, totalPages: 1 };
+      if (!workspaceController?.current() && channel === "articles:page") return { items: [], page: 1, pageSize: 50, total: 0, totalPages: 1, qualityStatuses: {} };
       payload = workspaceController?.prepare(channel, payload) ?? payload;
       assertNoProductE2EDiagnosticSubmit(channel, payload);
       if (acceptanceRepository) assertOperatorPublishIpcRequest(

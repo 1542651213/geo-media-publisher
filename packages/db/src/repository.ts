@@ -228,6 +228,7 @@ export interface ArticlePage {
   pageSize: number;
   total: number;
   totalPages: number;
+  qualityStatuses: Record<string, ContentQualityStatus>;
 }
 
 export interface JobPage {
@@ -1667,8 +1668,14 @@ export class AppRepository {
     values.push(...sourceClause.values);
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     const total = intValue((this.db.prepare(`SELECT COUNT(*) AS count FROM articles a ${where}`).get(...values) as Row).count);
-    const items = (this.db.prepare(`${articleSelectSql} ${where} ORDER BY a.created_at DESC LIMIT ? OFFSET ?`).all(...values, pageSize, (page - 1) * pageSize) as Row[]).map(toArticle);
-    return { items, page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) };
+    const items = (this.db.prepare(`${articleSelectSql} ${where} ORDER BY a.created_at DESC,a.id DESC LIMIT ? OFFSET ?`).all(...values, pageSize, (page - 1) * pageSize) as Row[]).map(toArticle);
+    const qualityStatuses: Record<string, ContentQualityStatus> = Object.fromEntries(items.map(article => [article.id, "Draft"]));
+    if (items.length) {
+      const states = this.db.prepare(`SELECT q.content_id,q.status FROM content_quality_states q JOIN articles a ON a.id=q.content_id AND a.brand_id=q.brand_id
+        WHERE q.content_type='article' AND q.content_id IN (${items.map(() => "?").join(",")})`).all(...items.map(article => article.id)) as Row[];
+      for (const state of states) qualityStatuses[textValue(state.content_id)] = state.status as ContentQualityStatus;
+    }
+    return { items, page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)), qualityStatuses };
   }
 
   getArticle(id: string): Article | null {
