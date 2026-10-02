@@ -23,7 +23,7 @@ try {
     const measured = await page.evaluate(() => ({ width: window.innerWidth, scrollWidth: document.documentElement.scrollWidth, fontSize: getComputedStyle(document.body).fontSize }));
     assert.ok(measured.scrollWidth <= width + 2); assert.equal(await page.locator('img').count(), 11);
     await page.getByText('展开 28 个匿名待确认项', { exact: true }).click(); assert.equal(await page.locator('.pending li').count(), 28);
-    await page.screenshot({ path: join(root, `phone-guide-${width}.png`), fullPage: true }); checks.push({ width, measured, originalScreenshotsLoaded: 8, anonymousAccounts: 28 });
+    await page.screenshot({ path: join(root, `phone-guide-${width}.png`), fullPage: true }); checks.push({ width, measured, originalScreenshotsLoaded: await page.locator("img").count(), anonymousAccounts: 28 });
   }
   assert.equal(blocked, 0); writeFileSync(join(root, 'phone-guide-check.json'), JSON.stringify({ status: 'PASS', kind: 'PHONE_INDEX_LOCAL_BROWSER', checks, blockedExternalRequests: blocked, realPlatformRequests: 0 }, null, 2)); console.log(JSON.stringify({ status: 'PASS', checks: checks.length, evidence: join(root, 'phone-guide-check.json') }));
 } finally { if (browser) await browser.close(); await new Promise(done => server.close(done)); }

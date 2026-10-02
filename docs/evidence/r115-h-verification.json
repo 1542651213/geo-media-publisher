@@ -1,0 +1,268 @@
+{
+  "delivery": "R1.15-H",
+  "status": "R1_15_H_PARTIAL_BACKUP_REVIEW_REQUIRED",
+  "runtimeSource": "fa54951e874aa5e38eaf12d2ed38b930e9515e88",
+  "builtAt": "2026-10-02T20:00:24.435Z",
+  "evidenceKinds": {
+    "unit": "SYNTHETIC_FIXTURES",
+    "installed": "ACTUAL_NSIS_INSTALL_SYNTHETIC_UI_LOCAL_MOCK",
+    "private": "PROTECTED_CLOSED_PRODUCTION_COPY",
+    "realPlatform": "NOT_RUN_BY_DESIGN",
+    "realCloud": "NOT_RUN_BY_DESIGN"
+  },
+  "safety": {
+    "productionWrites": 0,
+    "productionFilesVerified": 2599,
+    "productionHashDifferences": 0,
+    "realPlatformWrites": 0,
+    "realFinalSubmits": 0,
+    "externalProductAIRequests": 0,
+    "realAccountAssignments": 0,
+    "batchEnabled": false
+  },
+  "credentials": {
+    "total": 26,
+    "decryptPass": 21,
+    "decryptFail": 5,
+    "classifiedRetiredUnused": 5,
+    "activeSafetyUnknown": 0,
+    "nativeFailureCause": "UNDETERMINED",
+    "ciphertextUnchanged": true
+  },
+  "ownership": {
+    "unassigned": 28,
+    "high": 0,
+    "medium": 7,
+    "low": 1,
+    "conflict": 3,
+    "noEvidence": 17,
+    "syntheticInstalledConfirmation": "PASS"
+  },
+  "privateUpgrade": {
+    "databaseMatrix": "PASS",
+    "migrations": [
+      44,
+      45,
+      44
+    ],
+    "comparedBusinessTables": 80,
+    "changedBusinessTables": 0,
+    "integrity": "ok",
+    "foreignKeys": 0,
+    "hashVerifiedClosedCopies": 4,
+    "oldExecutableOpenedHDatabase": false,
+    "fullSnapshot": "BLOCKED_PREEXISTING_MISSING_MEDIA",
+    "missingExternalFiles": 2,
+    "affectedHistoricalFixtureRows": 3,
+    "coverOrJobReferences": 0
+  },
+  "installed": {
+    "employeeStages": {
+      "newEmployeeWorkspace": "PASS",
+      "csvXlsxErrorsAndCorrection": "PASS",
+      "autosaveCompositionPasteUndo": "PASS_REAL_APP_DOM_COMPOSITION",
+      "companyIsolation": "PASS",
+      "normalRestartDraftRecovery": "PASS",
+      "crashRecoveryConflictExplicitChoice": "PASS",
+      "studioBudgetRepairTwoPlatforms": "PASS",
+      "queueBudgetSerialLoopback": "PASS",
+      "sameCompanyImageUi": "PASS",
+      "reviewPreflightNoPrepareAndEditInvalidation": "PASS",
+      "approvedEditRestartStillNeedsReview": "PASS",
+      "ownerSyntheticAssignmentUi": "PASS",
+      "colleaguePackageUi": "PASS",
+      "importedFactExplicitSameRowReviewUi": "PASS",
+      "frozenJobUnchangedAfterArticleEdit": "PASS",
+      "sameDirectorySingleWriter": "PASS",
+      "closedFullSnapshot": "PASS",
+      "isolatedRestoreNoReplay": "PASS"
+    },
+    "sessionStages": {
+      "normalStartupOfflineNotExpired": "PASS",
+      "explicitRecoverySameMainSessionPath": "PASS",
+      "normalSchedulerLateProbe_checking": "PASS",
+      "normalSchedulerLateProbe_company": "PASS",
+      "normalSchedulerLateProbe_generation": "PASS",
+      "deduplicatedLateProbeRejectsDisabledAccount": "PASS",
+      "manualDisabledPreserved": "PASS",
+      "normalSchedulerTwoTicksBatchClosedFrozenFinalPreserved": "PASS",
+      "disabledNormalRestartDoesNotAuthenticate": "PASS"
+    },
+    "aiStages": {
+      "repairUnknownRetainsSource": "PASS",
+      "restartDoesNotReplayUnknown": "PASS",
+      "knownSourceManualEditAndSave": "PASS",
+      "reconcileIssuesZeroRequestsAndPreservesUnknownJournal": "PASS",
+      "explicitContinueKeepsPauseAvailable": "PASS",
+      "cancelAndSecondRestartNoReplay": "PASS"
+    },
+    "failureStages": {
+      "emptyListActionable": "PASS",
+      "cancelledNativeFileChoice": "PASS",
+      "invalidAssetPathVisibleNoWrites": "PASS",
+      "duplicateClickIdempotentImport": "PASS",
+      "failedMainPersistenceRetainsEditorAndBlocksClose": "PASS",
+      "saveRetryPersistsRetainedText": "PASS",
+      "rapidCompanySwitchNoStaleBody": "PASS",
+      "unknownOperationWarningNoRepeatActionOrFrozenMutation": "PASS"
+    },
+    "instance": {
+      "startupCrash": "PASS",
+      "staleLock": "PASS",
+      "singleWriterActivation": "PASS"
+    },
+    "failedShutdown": "PASS",
+    "screenshots": 11,
+    "layoutChecks": 99,
+    "phone": [
+      {
+        "width": 390,
+        "images": 11,
+        "anonymousAccounts": 28,
+        "scrollWidth": 390
+      },
+      {
+        "width": 760,
+        "images": 11,
+        "anonymousAccounts": 28,
+        "scrollWidth": 760
+      }
+    ]
+  },
+  "performance": {
+    "dataset": {
+      "articles": 3000,
+      "images": 1000,
+      "jobs": 10000,
+      "executableJobs": 0
+    },
+    "samplesPerAction": 5,
+    "osCacheFlushed": false,
+    "before": {
+      "cold-process-first-jobs-page": {
+        "samples": 5,
+        "medianMs": 1231,
+        "p95NearestRankMs": 4902,
+        "minMs": 1041,
+        "maxMs": 4902
+      },
+      "warm-jobs-page": {
+        "samples": 5,
+        "medianMs": 646,
+        "p95NearestRankMs": 857,
+        "minMs": 584,
+        "maxMs": 857
+      },
+      "filter": {
+        "samples": 5,
+        "medianMs": 85,
+        "p95NearestRankMs": 140,
+        "minMs": 66,
+        "maxMs": 140
+      },
+      "pagination": {
+        "samples": 5,
+        "medianMs": 247,
+        "p95NearestRankMs": 684,
+        "minMs": 107,
+        "maxMs": 684
+      },
+      "company-switch": {
+        "samples": 5,
+        "medianMs": 581,
+        "p95NearestRankMs": 789,
+        "minMs": 522,
+        "maxMs": 789
+      }
+    },
+    "after": {
+      "cold-process-first-jobs-page": {
+        "samples": 5,
+        "medianMs": 976,
+        "p95NearestRankMs": 4855,
+        "minMs": 679,
+        "maxMs": 4855
+      },
+      "warm-jobs-page": {
+        "samples": 5,
+        "medianMs": 213,
+        "p95NearestRankMs": 326,
+        "minMs": 189,
+        "maxMs": 326
+      },
+      "filter": {
+        "samples": 5,
+        "medianMs": 94,
+        "p95NearestRankMs": 249,
+        "minMs": 85,
+        "maxMs": 249
+      },
+      "pagination": {
+        "samples": 5,
+        "medianMs": 112,
+        "p95NearestRankMs": 146,
+        "minMs": 94,
+        "maxMs": 146
+      },
+      "company-switch": {
+        "samples": 5,
+        "medianMs": 195,
+        "p95NearestRankMs": 213,
+        "minMs": 159,
+        "maxMs": 213
+      }
+    },
+    "coldTailResolved": false,
+    "coldEntryQueries": {
+      "before": 4629,
+      "after": 124
+    },
+    "coldEntryPayloadBytes": {
+      "before": 10003651,
+      "after": 596490
+    }
+  },
+  "verification": {
+    "fullTestFiles": 240,
+    "fullTests": 1698,
+    "typecheck": "PASS",
+    "lint": "PASS",
+    "build": "PASS",
+    "package": "PASS",
+    "independentReview": "ONE_P2_FIXED_AND_REVIEWED;NO_REMAINING_MATERIAL_SOURCE_FINDING"
+  },
+  "package": {
+    "status": "PASS",
+    "installerBytes": 101299540,
+    "installerSha256": "5546228947ba27c3401c1a82761398057b11c3e4a137664a0047fb675904629c",
+    "installedAppAsarSha256": "7d24394e58ded1427badf1c68246ff5e64f21612c4275074f38673937a109b34",
+    "packageRuntimeSourceCommit": "fa54951e874aa5e38eaf12d2ed38b930e9515e88",
+    "byteParityMainPreloadRendererCSS": true,
+    "closedSnapshotWorkerParity": true,
+    "migrationAndPlatformResourceParity": true,
+    "migrations": 38,
+    "candidateGrantsAbsent": true,
+    "sensitiveResourcesAbsent": true,
+    "authenticode": "NotSigned",
+    "secretScan": {
+      "status": "PASS",
+      "archiveEntries": 3809,
+      "forbiddenPathCount": 0,
+      "secretFindings": 0,
+      "rawSecretMatchesPrinted": false,
+      "scope": "Entire extracted installed app.asar and packaged resources; installer bytes separately verified identical to the installed package"
+    }
+  },
+  "limitations": [
+    "private_full_media_snapshot_blocked",
+    "cold_tail_and_filter_regression",
+    "hardware_IME_not_run",
+    "actual_Windows_DPI_not_run",
+    "actual_phone_not_run",
+    "cross_user_credential_recovery_not_run",
+    "off_device_backup_not_configured",
+    "code_signing_not_configured",
+    "real_platform_and_cloud_not_run"
+  ],
+  "privateArtifactsIncluded": false
+}

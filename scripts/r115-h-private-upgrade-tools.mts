@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve, relative } from 'node:path';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { extname, join, resolve, relative } from 'node:path';
 import Database from 'better-sqlite3';
 import { createClosedSnapshot, restoreFullSnapshot, validateFullSnapshot } from '../apps/desktop/src/main/backup-restore';
 
@@ -15,9 +15,22 @@ if(input.mode==='relocate'){
   assert.ok(input.originalRoot&&existsSync(join(input.userData,'restore-pending-owner-review.json')));
   const db=new Database(join(input.userData,'production-data/publisher.db'));
   try{
+    const refs=(db.prepare('SELECT file_path AS path FROM media_assets UNION SELECT file_path AS path FROM brand_assets UNION SELECT local_path AS path FROM video_assets').all() as {path:string}[]).map(r=>r.path);
+    for(const row of db.prepare('SELECT metadata_json FROM media_assets').all() as {metadata_json:string}[]){const metadata=JSON.parse(row.metadata_json) as Record<string,unknown>;if(typeof metadata.coverPath==='string'&&metadata.coverPath)refs.push(metadata.coverPath);}
+    const inventory=[...new Set(refs)].map(path=>({path,exists:existsSync(path),outside:relative(input.originalRoot!,path).startsWith('..'),extension:extname(path).toLowerCase()}));
+    writeFileSync(join(input.userData,'h-private-asset-inventory.json'),JSON.stringify(inventory,null,2));
+    const outside=inventory.filter(item=>item.outside),missing=inventory.filter(item=>!item.exists);
+    writeFileSync(input.receipt+'.asset-summary.json',JSON.stringify({references:inventory.length,outside:outside.length,missing:missing.length,missingExtensions:missing.map(r=>r.extension)}));
     const remap=(path:string):string=>{
       const suffix=relative(input.originalRoot!,path);
-      if(suffix.startsWith('..')||resolve(path).toLowerCase()===resolve(input.originalRoot!).toLowerCase())throw Error('PRIVATE_ASSET_OUTSIDE_CLOSED_USERDATA');
+      if(suffix.startsWith('..')){
+        const extension=extname(path).toLowerCase();
+        if(!['.png','.jpg','.jpeg','.webp','.gif','.mp4','.mov','.m4v'].includes(extension)||!existsSync(path)||!lstatSync(path).isFile()||lstatSync(path).isSymbolicLink())throw Error('PRIVATE_EXTERNAL_ASSET_UNAVAILABLE');
+        const bytes=readFileSync(path),digest=createHash('sha256').update(bytes).digest('hex'),root=join(input.userData,'production-data/recovery-assets');mkdirSync(root,{recursive:true});
+        const target=join(root,digest+extension);if(!existsSync(target))copyFileSync(path,target);
+        assert.equal(createHash('sha256').update(readFileSync(target)).digest('hex'),digest);assert.equal(createHash('sha256').update(readFileSync(path)).digest('hex'),digest);return target;
+      }
+      if(resolve(path).toLowerCase()===resolve(input.originalRoot!).toLowerCase())throw Error('PRIVATE_ASSET_SOURCE_INVALID');
       const target=join(input.userData,suffix);assert.ok(inside(target)&&existsSync(target),'PRIVATE_ASSET_COPY_MISSING');return target;
     };
     let remapped=0;
@@ -31,7 +44,7 @@ if(input.mode==='relocate'){
     const migrations=(db.prepare('SELECT id FROM migrations ORDER BY id').all() as {id:string}[]).map(r=>r.id);
     assert.equal(db.pragma('integrity_check',{simple:true}),'ok');assert.equal((db.pragma('foreign_key_check') as unknown[]).length,0);
     db.pragma('wal_checkpoint(TRUNCATE)');
-    writeFileSync(input.receipt,JSON.stringify({status:'PASS',remappedAssets:remapped,originalMigrations:migrations,originalProductionWrites:0}));
+    writeFileSync(input.receipt,JSON.stringify({status:'PASS',remappedAssets:remapped,externalMediaCopied:outside.length,originalMigrations:migrations,originalProductionWrites:0}));
   }finally{db.close();}
 }else if(input.mode==='snapshot'){
   assert.ok(input.identity);

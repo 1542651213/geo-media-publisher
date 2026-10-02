@@ -18,4 +18,4 @@ The H private-copy review found **28 UNASSIGNED accounts: 7 MEDIUM, 1 LOW, 3 CON
 
 Confirmation checks the version/company the Owner actually reviewed, invalidates old authentication generations, and requires a fresh identity check. It never rewrites historical Jobs, PublishRecords, frozen content, submission counts or remote results. Company ownership, session identity and article publish eligibility are separate checks.
 
-Focused evidence: 46 onboarding tests passed, including conflicting record/image/site relations and unchanged history. Actual H installed UI verification remains a final acceptance gate.
+Focused evidence: 46 onboarding tests passed, including conflicting record/image/site relations and unchanged history. Actual H installed UI confirmation passed using a synthetic account; the resulting company binding was checked through Main. The 28 real accounts remain UNASSIGNED and were not confirmed by this test. The installed screenshot index includes the one-page review and the Owner action list.

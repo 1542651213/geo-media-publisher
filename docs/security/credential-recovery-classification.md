@@ -25,11 +25,13 @@ The old account and platform still have enabled flags in historical data. Those 
 
 Current stored credentials for the ordinary Douyin, Website and Toutiao routes are readable. Current Website has two separate account configurations; none uses the failed namespace. Credential readability does not prove live authentication, publishing authorization, or Owner-confirmed company ownership.
 
-`ACTIVE_CREDENTIAL_SAFETY_UNKNOWN = 0` for this audited reference graph. Final H installation revalidation is still pending. The native failure could involve an older encryption context or damaged ciphertext; available evidence does not distinguish these and no stronger cause is asserted.
+`ACTIVE_CREDENTIAL_SAFETY_UNKNOWN = 0` for this audited reference graph. The actual H installation repeated the Main-only check during private-copy upgrade and restart: 21 readable / 5 unreadable, with the complete credential file unchanged. Restoring a separate pre-H copy and starting matching G gave the same result. The native failure could involve an older encryption context or damaged ciphertext; available evidence does not distinguish these and no stronger cause is asserted.
 
 ## Preservation and Owner action
 
 Original production files and all five encrypted records remain byte-identical. No account assignment, credential rewrite, delete, key rotation, platform request or cloud request was made. Full private reference metadata, ciphertext hashes and closed backup remain outside the repository in restricted storage. Public documentation contains only anonymous record identifiers and nonsecret field/platform metadata.
+
+The private media inventory independently found three retained historical test-media rows referencing two unavailable external images. This blocks a fully verified private snapshot and is reported as a Candidate limitation. It does not alter the credential classification or justify modifying either credentials or media history.
 
 Owner can keep these historical records unchanged. Do not attempt to resume the retired jobs or copy their encrypted fields into current Website accounts. Any future use of this legacy route requires a separately authorized migration and normal secure credential provisioning. Current account ownership still requires explicit Owner review.
 
