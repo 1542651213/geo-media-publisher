@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDatabase, type AppRepository } from "@publisher/db";
 import type { BrowserSession, BrowserSessionManager, PlatformAdapter } from "@publisher/adapters-core";
 import { AccountOnboarding } from "../apps/desktop/src/main/account-onboarding";
+import { CompanyWorkspace } from "../apps/desktop/src/main/company-workspace";
 import { AccountSessionRehydrationCoordinator, type AccountSessionTarget } from "../apps/desktop/src/main/account-session-rehydration";
 
 const timestamp = "2026-10-02T08:00:00.000Z";
@@ -65,6 +66,25 @@ afterEach(() => {
     resource.db.close();
     rmSync(resource.directory, { recursive: true, force: true });
   }
+});
+
+it("allows explicit Owner confirmation through the Main workspace guard while preserving ordinary account and company restrictions", () => {
+  const { repository, onboarding, invalidateAuthentication } = fixture();
+  const a = company(repository), b = company(repository, "合成企业乙"), owned = account(repository);
+  const workspace = new CompanyWorkspace(repository, id => onboarding.preview().find(row => row.accountId === id)?.currentCompanyId ?? null);
+  workspace.select(a.id);
+  const initial = { accountId: owned.id, companyId: a.id, expectedVersion: 0, expectedCompanyId: null };
+  expect(() => workspace.prepare("accounts:check-login", { accountId: owned.id })).toThrow("账号未绑定");
+  expect(onboarding.confirm(workspace.prepare("account-onboarding:confirm", initial))).toMatchObject({ bindingVersion: 1, authenticated: false });
+  workspace.select(b.id);
+  const reassignment = { accountId: owned.id, companyId: b.id, expectedVersion: 1, expectedCompanyId: a.id, confirmReassignment: true };
+  expect(() => workspace.prepare("accounts:update", { id: owned.id })).toThrow("账号未绑定");
+  expect(() => workspace.prepare("account-onboarding:confirm", { ...reassignment, companyId: a.id })).toThrow("企业工作区已切换");
+  expect(() => onboarding.confirm(workspace.prepare("account-onboarding:confirm", { ...reassignment, confirmReassignment: false }))).toThrow("明确确认修改归属");
+  expect(onboarding.confirm(workspace.prepare("account-onboarding:confirm", reassignment))).toMatchObject({ bindingVersion: 2, authenticated: false });
+  expect(() => onboarding.confirm(workspace.prepare("account-onboarding:confirm", reassignment))).toThrow("归属版本已变化");
+  expect(invalidateAuthentication).toHaveBeenCalledTimes(2);
+  expect(repository.listJobs()).toEqual([]);
 });
 
 describe("R1.15-G evidence-based account onboarding", () => {

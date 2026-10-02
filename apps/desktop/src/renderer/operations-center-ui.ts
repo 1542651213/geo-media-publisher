@@ -179,3 +179,10 @@ export function planStatusLabel(status: OperationsPlanStatus): string {
 export function planMatchesStatus(status: OperationsPlanStatus, filter: OperationsPlanStatus | ""): boolean {
   return filter === "" || status === filter;
 }
+
+/** Filter first, then render a bounded page without dropping historical rows. */
+export function operationsPage<T>(rows: readonly T[], requested: number): { items: T[]; page: number; pages: number; total: number } {
+  const pages = Math.max(1, Math.ceil(rows.length / 50));
+  const page = Math.min(pages, Math.max(1, Number.isFinite(requested) ? Math.floor(requested) : 1));
+  return { items: rows.slice((page - 1) * 50, page * 50), page, pages, total: rows.length };
+}

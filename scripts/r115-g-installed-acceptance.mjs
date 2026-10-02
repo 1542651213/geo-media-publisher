@@ -16,7 +16,21 @@ await new Promise(done=>server.listen(0,'127.0.0.1',done));const origin=`http://
 const result={kind:'INSTALLED_SYNTHETIC_UI_LOOPBACK_ONLY',root,realPlatformWrites:0,cloudRequests:0,stages:{},screenshots:[],normalStarts:0,normalExits:0,forcedOwnedProcessExits:0};
 let run,companyA,companyB,sourceId,assetId,accountId,frozenBefore;
 const mark=(key,value='PASS')=>{result.stages[key]=value;saveEvidence(root,'acceptance',result);console.log(JSON.stringify({stage:key,status:value}));};
-const shot=async name=>{result.screenshots.push(await screenshot(run.page,root,name));};
+const checkLayouts=async(name)=>{
+ result.stateLayouts??=[];
+ for(const [width,height] of [[1366,768],[1920,1080]])for(const zoom of [1,1.25,1.5]){
+  await run.app.evaluate(new Function('electron','input',`const w=electron.BrowserWindow.getAllWindows()[0];w.unmaximize();w.setBounds({width:input.width,height:input.height});w.webContents.setZoomFactor(input.zoom);`),{width,height,zoom});
+  await new Promise(done=>setTimeout(done,80));
+  const dimensions=await run.page.evaluate(()=>({width:window.innerWidth,height:window.innerHeight,scrollWidth:document.documentElement.scrollWidth}));
+  assert.ok(dimensions.scrollWidth<=dimensions.width+2,name+' horizontal overflow');
+  const drawer=run.page.locator('.drawer');const buttons=await(drawer.count().then(n=>n?drawer.locator('button:visible'):run.page.locator('.content-area button:visible'))).then(locator=>locator.all());
+  for(const button of buttons){await button.scrollIntoViewIfNeeded();const box=await button.boundingBox();assert.ok(box&&box.x>=-2&&box.x+box.width<=dimensions.width+2&&box.y>=-2&&box.y+box.height<=dimensions.height+2,name+' button unreachable');}
+  result.stateLayouts.push({name,width,height,zoom,buttons:buttons.length,horizontalOverflow:false,buttonsReachable:true});saveEvidence(root,'acceptance',result);
+ }
+ await run.app.evaluate(new Function('electron',`const w=electron.BrowserWindow.getAllWindows()[0];w.setBounds({width:1480,height:960});w.webContents.setZoomFactor(1);`));
+ await run.page.evaluate(()=>{for(const selector of ['.drawer','.drawer-body','.content-area']){const element=document.querySelector(selector);if(element)element.scrollTop=0;}});
+};
+const shot=async name=>{await checkLayouts(name);result.screenshots.push(await screenshot(run.page,root,name));};
 const start=async()=>{run=await launchInstalled(executable,userData,{origins:[origin]});result.normalStarts++;result.build=run.build;};
 const stop=async()=>{await closeInstalled(run);run=null;result.normalExits++;};
 const openArticle=async()=>{await nav(run.page,'文章库');const row=run.page.locator('.v11-article-row').filter({hasText:'合成员工源稿'}).first();await row.getByRole('button',{name:'修改',exact:true}).click();await run.page.getByLabel('编辑文章正文').waitFor();await run.page.waitForFunction(()=>!document.querySelector('[aria-label="编辑文章正文"]')?.disabled);};

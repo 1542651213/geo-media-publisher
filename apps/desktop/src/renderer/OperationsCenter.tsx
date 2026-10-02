@@ -30,6 +30,7 @@ import {
   isValidGenerationCount,
   isCurrentWorkspaceResponse,
   operationsHealthPresentation,
+  operationsPage,
   operationsPlatformOptions,
   planMatchesStatus,
   planDraftBody,
@@ -291,10 +292,13 @@ function TodayTab({ snapshot, onNavigate, onTab }: { snapshot: OperationsViewSna
 }
 
 function ReviewTab({ rows, busy, selectedId, onSelect, onNavigate, onReview }: { rows: OperationsReviewItem[]; busy: boolean; selectedId: string; onSelect: (id: string) => void; onNavigate?: (route: string) => void; onReview: (row: OperationsReviewItem, action: "approve" | "return_to_draft" | "archive") => Promise<void> }): JSX.Element {
+  const [page, setPage] = useState(1);
+  const view = operationsPage(rows, page);
   return <section className="panel operations-panel"><div className="panel-heading"><div><h3>内容审核队列</h3><span>AI 草稿必须人工审核；编辑内容后需要重新审核。</span></div></div>
-    {rows.length === 0 ? <Empty title="没有待处理内容" description="新生成或退回的草稿会出现在这里。" /> : <div className="operations-table operations-review-table"><div className="operations-table-head"><span>内容</span><span>来源</span><span>目标平台</span><span>状态与提醒</span><span>操作</span></div>{rows.map(row => <div className={selectedId === row.articleId ? "operations-table-row selected" : "operations-table-row"} key={row.articleId} onClick={() => onSelect(row.articleId)}>
+    {rows.length === 0 ? <Empty title="没有待处理内容" description="新生成或退回的草稿会出现在这里。" /> : <div className="operations-table operations-review-table"><div className="operations-table-head"><span>内容</span><span>来源</span><span>目标平台</span><span>状态与提醒</span><span>操作</span></div>{view.items.map(row => <div className={selectedId === row.articleId ? "operations-table-row selected" : "operations-table-row"} key={row.articleId} onClick={() => onSelect(row.articleId)}>
       <div><strong>{row.title}</strong><small>{dateText(row.createdAt)}</small></div><div><span>{row.source}</span><small>{row.aiGenerated ? "AI 生成" : "人工创建"}</small></div><span>{platformNames(row.targetPlatforms) || "尚未指定"}</span><div><Status label={row.reviewStatus} status={row.reviewStatus} />{row.validationWarnings.map(item => <small className="operations-warning" key={item}>{item}</small>)}</div><div className="operations-actions"><button className="mini-button" disabled={busy} onClick={event => { event.stopPropagation(); void onReview(row, "approve"); }}>通过</button><button className="mini-button" disabled={busy} onClick={event => { event.stopPropagation(); void onReview(row, "return_to_draft"); }}>退回草稿</button><button className="mini-button" disabled={busy || !onNavigate} title={onNavigate ? "将在文章库中打开当前企业内容" : "当前容器未提供文章编辑导航"} onClick={event => { event.stopPropagation(); onNavigate?.("articles"); }}>编辑</button><button className="mini-button" disabled={busy} onClick={event => { event.stopPropagation(); void onReview(row, "archive"); }}>归档</button></div>
     </div>)}</div>}
+    <OperationsPagination view={view} onPage={setPage} />
   </section>;
 }
 
@@ -370,10 +374,17 @@ function OwnerTab({ rows, companyId, busy, onNavigate, onAction }: { rows: Opera
     </article>;})}</section></div>;
 }
 
+function OperationsPagination({ view, onPage }: { view: { page: number; pages: number; total: number }; onPage: (page: number) => void }): JSX.Element {
+  return <nav className="operations-toolbar" aria-label="运营记录分页"><span>共 {view.total} 条 · 第 {view.page} / {view.pages} 页</span><button className="secondary-button" disabled={view.page === 1} onClick={() => onPage(view.page - 1)}>上一页</button><button className="secondary-button" disabled={view.page === view.pages} onClick={() => onPage(view.page + 1)}>下一页</button></nav>;
+}
+
 function PublishTab({ rows, companyId }: { rows: PublishBoardRow[]; companyId: string }): JSX.Element {
   const [platform, setPlatform] = useState(""), [account, setAccount] = useState(""), [date, setDate] = useState(""), [status, setStatus] = useState(""), [ownerOnly, setOwnerOnly] = useState(false);
+  const [page, setPage] = useState(1);
+  useEffect(() => { setPage(1); }, [companyId, platform, account, date, status, ownerOnly]);
   useEffect(() => { setPlatform(""); setAccount(""); setDate(""); setStatus(""); setOwnerOnly(false); }, [companyId]);
   const filtered = rows.filter(row => (!platform || row.platform === platform) && (!account || row.account === account) && (!date || row.date.slice(0, 10) === date) && (!status || publishStatusLabel(row.status) === status) && (!ownerOnly || row.ownerActionRequired));
+  const view = operationsPage(filtered, page);
   const statusLabels = [...new Set(rows.map(item => publishStatusLabel(item.status)))];
-  return <section className="panel operations-panel"><div className="panel-heading"><div><h3>发布看板</h3><span>这里仅查看当前企业的发布状态；正式操作继续在发布中心完成。</span></div></div><div className="operations-toolbar operations-publish-filters"><select value={platform} onChange={event => setPlatform(event.target.value)}><option value="">全部平台</option>{[...new Set(rows.map(item => item.platform))].map(item => <option value={item} key={item}>{platformLabel(item)}</option>)}</select><select value={account} onChange={event => setAccount(event.target.value)}><option value="">全部账号</option>{[...new Set(rows.map(item => item.account))].map(item => <option key={item}>{item}</option>)}</select><input type="date" aria-label="发布日期" value={date} onChange={event => setDate(event.target.value)} /><select value={status} onChange={event => setStatus(event.target.value)}><option value="">全部状态</option>{statusLabels.map(item => <option value={item} key={item}>{item}</option>)}</select><label className="operations-checkbox"><input type="checkbox" checked={ownerOnly} onChange={event => setOwnerOnly(event.target.checked)} />只看 Owner 处理项</label></div>{filtered.length === 0 ? <Empty title="当前筛选没有记录" description="调整平台、账号、日期或状态筛选。" /> : <div className="operations-table operations-publish-table"><div className="operations-table-head"><span>内容</span><span>平台</span><span>账号</span><span>日期</span><span>状态</span></div>{filtered.map(row => <div className="operations-table-row" key={row.id}><strong>{row.title}</strong><span>{platformLabel(row.platform)}</span><span>{row.account}</span><span>{dateText(row.date)}</span><div><Status label={publishStatusLabel(row.status)} status={row.status} tone={publishStatusTone(row.status)} />{row.ownerActionRequired && <small className="operations-warning">需要 Owner 处理</small>}</div></div>)}</div>}</section>;
+  return <section className="panel operations-panel"><div className="panel-heading"><div><h3>发布看板</h3><span>这里仅查看当前企业的发布状态；正式操作继续在发布中心完成。</span></div></div><div className="operations-toolbar operations-publish-filters"><select value={platform} onChange={event => setPlatform(event.target.value)}><option value="">全部平台</option>{[...new Set(rows.map(item => item.platform))].map(item => <option value={item} key={item}>{platformLabel(item)}</option>)}</select><select value={account} onChange={event => setAccount(event.target.value)}><option value="">全部账号</option>{[...new Set(rows.map(item => item.account))].map(item => <option key={item}>{item}</option>)}</select><input type="date" aria-label="发布日期" value={date} onChange={event => setDate(event.target.value)} /><select value={status} onChange={event => setStatus(event.target.value)}><option value="">全部状态</option>{statusLabels.map(item => <option value={item} key={item}>{item}</option>)}</select><label className="operations-checkbox"><input type="checkbox" checked={ownerOnly} onChange={event => setOwnerOnly(event.target.checked)} />只看 Owner 处理项</label></div>{filtered.length === 0 ? <Empty title="当前筛选没有记录" description="调整平台、账号、日期或状态筛选。" /> : <div className="operations-table operations-publish-table"><div className="operations-table-head"><span>内容</span><span>平台</span><span>账号</span><span>日期</span><span>状态</span></div>{view.items.map(row => <div className="operations-table-row" key={row.id}><strong>{row.title}</strong><span>{platformLabel(row.platform)}</span><span>{row.account}</span><span>{dateText(row.date)}</span><div><Status label={publishStatusLabel(row.status)} status={row.status} tone={publishStatusTone(row.status)} />{row.ownerActionRequired && <small className="operations-warning">需要 Owner 处理</small>}</div></div>)}</div>}<OperationsPagination view={view} onPage={setPage} /></section>;
 }

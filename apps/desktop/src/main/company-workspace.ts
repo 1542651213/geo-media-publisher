@@ -63,7 +63,10 @@ export class CompanyWorkspace {
       const row = this.repository.db.prepare("SELECT company_id FROM ai_generation_history WHERE generation_id=?").get(input.id) as { company_id: string } | undefined;
       this.assertCompany(row?.company_id);
     }
-    if (!channel.startsWith("operations:")) {
+    // Owner confirmation establishes or explicitly reassigns the binding. Its own
+    // transactional authority checks account existence, version and frozen jobs;
+    // requiring the old account binding here makes initial confirmation impossible.
+    if (!channel.startsWith("operations:") && channel !== "account-onboarding:confirm") {
       const accountRef = channel.startsWith("accounts:") && typeof input.id === "string" ? input.id : typeof input.accountId === "string" ? input.accountId : typeof input.platformAccountId === "string" ? input.platformAccountId : null;
       if (accountRef) {
         const account = this.repository.listAccounts().find(item => item.id === accountRef || item.platformAccountId === accountRef);
