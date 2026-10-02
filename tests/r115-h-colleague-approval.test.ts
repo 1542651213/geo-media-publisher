@@ -4,6 +4,8 @@ import { join, resolve } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { openDatabase } from '@publisher/db';
 import { exportColleaguePackage, importColleaguePackage } from '../apps/desktop/src/main/colleague-data-package';
+import { AIProductCenter } from '../apps/desktop/src/main/ai-product-center';
+import { ContentOperations } from '../apps/desktop/src/main/content-operations';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => cleanup.splice(0).forEach(close => close()));
@@ -43,4 +45,12 @@ it('shares only approved current facts without private notes and imports all fac
   const imported = importColleaguePackage(repository, directory, join(root, 'assets'));
   expect(db.prepare('SELECT statement,approved_for_ai,verified_at FROM operations_facts WHERE company_id=?').all(imported.companyId)).toEqual([{ statement: '可共享事实', approved_for_ai: 0, verified_at: null }]);
   expect(repository.getContentQualityState('article', repository.listArticles({ brandId: imported.companyId })[0]!.id)?.status).toBe('Draft');
+  const center=new AIProductCenter(repository,{get:()=>null,set:()=>{},delete:()=>{},has:()=>false},async()=>{throw new Error('NO_NETWORK_ALLOWED');}),operations=new ContentOperations(repository,center);
+  const fact=operations.snapshot(imported.companyId).facts[0]!;
+  expect(operations.activeFacts(imported.companyId)).toHaveLength(0);
+  const input={id:fact.id,companyId:imported.companyId,category:fact.category,statement:fact.statement,source:fact.source,sourceDate:fact.sourceDate,verifiedAt:new Date().toISOString(),expiresAt:null,approvedForAI:true,notes:''};
+  expect(()=>operations.saveFact({...input,companyId:company.id})).toThrow('当前企业不匹配');
+  operations.saveFact(input);
+  expect(operations.snapshot(imported.companyId).facts).toHaveLength(1);
+  expect(operations.activeFacts(imported.companyId)[0]?.id).toBe(fact.id);
 });
