@@ -325,6 +325,7 @@ body { min-width: 0; }
 .path-text,.notice,.table-row > *, .check-row { overflow-wrap: anywhere; }
 .form-grid > *,fieldset { min-width: 0; }
 .row-actions,.drawer-footer { flex-wrap: wrap; gap: 8px; }
+.drawer { min-width: 0; max-width: 96vw; overflow: auto; }
 .colleague-package-columns { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px; }
 .package-selection-list { max-height: 220px; overflow: auto; border: 1px solid #d9e3ef; padding: 10px; margin-bottom: 10px; }
 .package-selection-list label { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0; }

@@ -19,6 +19,9 @@ async function fixture(record: Record<string, unknown>, cachePresent = true) {
   const observations: Array<{ method: string; key?: string; body: string }> = [];
   let newlyEnqueued = 0;
   const server = createServer(async (request, response) => {
+    // Each fixture owns and closes its server. Do not retain pooled sockets across
+    // fixture lifetimes when Windows reuses an ephemeral loopback port.
+    response.setHeader("Connection", "close");
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const body = Buffer.concat(chunks).toString("utf8");

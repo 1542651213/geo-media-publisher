@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import Database from "better-sqlite3";
 import { z } from "zod";
 import { BUILD_IDENTITY } from '../shared/build-identity';
+import { RETIRED_MIGRATION_PROVENANCE } from './retired-migration-provenance';
 
 export interface SnapshotIdentity { appVersion: string; sourceCommit: string; deliveryId: string; migrations: string[] }
 const fileSchema=z.strictObject({path:z.string().min(1).max(1000),bytes:z.number().int().nonnegative().max(2_000_000_000),sha256:z.string().regex(/^[a-f0-9]{64}$/u)});
@@ -41,20 +42,34 @@ export function createClosedSnapshot(sourceRoot:string,destination:string,identi
       if(digest(target)!==sha256||digest(source)!==sha256||statSync(source).size!==before.size)throw new Error('SOURCE_CHANGED_DURING_BACKUP');
       manifest.files.push({path,bytes:before.size,sha256});
     }
+    // Validate all copied bytes while the public manifest still says Incomplete.
+    writeFileSync(manifestPath,JSON.stringify(manifest,null,2));
+    const check=validateFullSnapshot(destination,identity.appVersion,true);
+    if(!check.valid)throw new Error(check.message);
+    if(!sourceIsClosed())throw new Error('SOURCE_NOT_CLOSED');
     manifest.status='Complete';
     const temporary=join(destination,'manifest.complete.tmp');writeFileSync(temporary,JSON.stringify(manifest,null,2));renameSync(temporary,manifestPath);
-    const check=validateFullSnapshot(destination,identity.appVersion);
-    if(!check.valid)throw new Error(check.message);
     return manifest;
   } catch(error){manifest.status='Incomplete';writeFileSync(manifestPath,JSON.stringify(manifest,null,2));throw error;}
 }
 
-export function validateFullSnapshot(directory:string,appVersion:string):{valid:boolean;message:string;manifest?:FullSnapshotManifest} {
+export function fullSnapshotSummary(directory:string):{directory:string;status:string;createdAt:string;totalBytes:number} {
+  try {
+    const manifest=JSON.parse(readFileSync(join(directory,'manifest.json'),'utf8')) as {status?:string;createdAt?:string;totalBytes?:number};
+    const statusFile=directory+'.status.json';
+    const handoffFinished=!existsSync(statusFile)||(JSON.parse(readFileSync(statusFile,'utf8')) as {status?:string}).status==='Complete';
+    return{directory,status:handoffFinished?(manifest.status??'Incomplete'):'Incomplete',createdAt:manifest.createdAt??'',totalBytes:manifest.totalBytes??0};
+  }catch{return{directory,status:'Incomplete',createdAt:'',totalBytes:0};}
+}
+
+export function validateFullSnapshot(directory:string,appVersion:string,internalCreation=false):{valid:boolean;message:string;manifest?:FullSnapshotManifest} {
   try{
     const root=resolve(directory);if(!existsSync(root)||lstatSync(root).isSymbolicLink())throw new Error('SNAPSHOT_DIRECTORY_INVALID');
+    const statusFile=root+'.status.json';
+    if(!internalCreation&&existsSync(statusFile)&&(JSON.parse(readFileSync(statusFile,'utf8')) as {status?:string}).status!=='Complete')throw new Error('SNAPSHOT_HANDOFF_NOT_COMPLETE');
     const path=join(root,'manifest.json');if(!existsSync(path)||statSync(path).size>2_000_000)throw new Error('SNAPSHOT_MANIFEST_MISSING_OR_OVERSIZE');
     const manifest=manifestSchema.parse(JSON.parse(readFileSync(path,'utf8')));
-    if(manifest.status!=='Complete')throw new Error('SNAPSHOT_INCOMPLETE');
+    if(manifest.status!=='Complete'&&!internalCreation)throw new Error('SNAPSHOT_INCOMPLETE');
     if(manifest.appVersion!==appVersion)throw new Error('SNAPSHOT_VERSION_INCOMPATIBLE');
     const names=new Set(manifest.files.map(file=>file.path));if(names.size!==manifest.files.length)throw new Error('SNAPSHOT_DUPLICATE_PATH');
     if(!names.has('production-data/publisher.db'))throw new Error('SNAPSHOT_DATABASE_MISSING');
@@ -73,7 +88,9 @@ export function validateFullSnapshot(directory:string,appVersion:string):{valid:
       if(db.pragma('integrity_check',{simple:true})!=='ok'||(db.pragma('foreign_key_check') as unknown[]).length)throw new Error('SNAPSHOT_DATABASE_INVALID');
       const migrations=(db.prepare("SELECT id FROM migrations ORDER BY id").all() as {id:string}[]).map(row=>row.id);
       if(JSON.stringify(migrations)!==JSON.stringify([...manifest.migrations].sort()))throw new Error('SNAPSHOT_MIGRATIONS_MISMATCH');
-      const supported=supportedMigrations();if(migrations.some((name,index)=>supported[index]!==name))throw new Error('SNAPSHOT_SCHEMA_INCOMPATIBLE');
+      const supported=supportedMigrations(),retired=new Set<string>(RETIRED_MIGRATION_PROVENANCE.map(row=>row.id));
+      const current=migrations.filter(name=>!retired.has(name));
+      if(current.some((name,index)=>supported[index]!==name))throw new Error('SNAPSHOT_SCHEMA_INCOMPATIBLE');
       for(const path of assetReferences(db)){if(!within(path,manifest.sourceRoot))throw new Error('SNAPSHOT_ASSET_OUTSIDE_SOURCE');const assetPath=relative(manifest.sourceRoot,path).replaceAll('\\','/');if(!names.has(assetPath))throw new Error('SNAPSHOT_ASSET_MISSING');}
     }finally{db.close();}
     return{valid:true,message:'完整快照清单、文件校验、SQLite 完整性和外键通过；凭据仍需同一 Windows 用户的 Main 验证。',manifest};

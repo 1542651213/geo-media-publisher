@@ -12,7 +12,7 @@ export default defineConfig({
   main: {
     define,
     plugins: [externalizeDepsPlugin()],
-    build: { rollupOptions: { input: resolve(__dirname, "apps/desktop/src/main/main.ts"), external: ["playwright-core", "kerberos"] } },
+    build: { rollupOptions: { input: { main: resolve(__dirname, "apps/desktop/src/main/main.ts"), 'closed-snapshot-worker': resolve(__dirname, 'apps/desktop/src/main/closed-snapshot-worker.ts') }, output: { entryFileNames: chunk => chunk.name === 'main' ? 'main.js' : '[name].cjs', chunkFileNames: 'chunks/[name]-[hash].cjs' }, external: ["playwright-core", "kerberos"] } },
     resolve: {
       alias: {
         "@publisher/domain": resolve(__dirname, "packages/domain/src"),

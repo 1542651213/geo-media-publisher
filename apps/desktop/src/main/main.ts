@@ -1,8 +1,9 @@
 import { CredentialWriteScope } from "./credential-write-scope";
 import { assertCurrentContentApproved, assertJobCurrentCompany } from "./content-review-authority";
-import { app, BrowserWindow, ipcMain, safeStorage } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, safeStorage } from "electron";
 import { BUILD_IDENTITY } from '../shared/build-identity';
-import { createClosedSnapshot, type SnapshotIdentity } from "./backup-restore";
+import { type SnapshotIdentity } from "./backup-restore";
+import { assertSnapshotHandoffIdle, launchClosedSnapshotWorker } from './snapshot-handoff';
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DraftFlushBarrier } from "./draft-flush-barrier";
@@ -29,8 +30,15 @@ app.setName("codex-media-publisher");
 // Installed Candidate smoke must explicitly override Electron's cached userData path.
 const runtimePaths = resolveRuntimePaths(app.getPath("userData"), process.env.GMP_B01_ISOLATED_USER_DATA_DIR, app.isPackaged || process.env.PUBLISHER_DATA_MODE === "production");
 app.setPath("userData", runtimePaths.userData);
+function assertStartupSnapshotIdle(): void { if (existsSync(runtimePaths.userData)) {
+  try { assertSnapshotHandoffIdle(runtimePaths.userData); }
+  catch (error) { dialog.showErrorBox('完整快照尚未结束', error instanceof Error ? error.message : '请保留备份现场后重试。'); app.exit(0); }
+} }
+assertStartupSnapshotIdle();
 // Electron's lock is scoped to the resolved userData, before migrations or recovery.
 if (!app.requestSingleInstanceLock()) app.exit(0);
+// A departing Main may have created the lease between the first check and lock acquisition.
+assertStartupSnapshotIdle();
 app.on("second-instance", () => { const window = BrowserWindow.getAllWindows()[0]; if (window) { if (window.isMinimized()) window.restore(); window.focus(); } });
 const processDiagnostics = createProcessDiagnostics(join(app.getPath("userData"), "production-data", "logs", "main-process-diagnostics.log"));
 processDiagnostics.installProcessHandlers();
@@ -42,7 +50,6 @@ let shutdownReady = false;
 const draftFlushBarrier = new DraftFlushBarrier();
 const restoredExecutionPaused = existsSync(join(runtimePaths.userData, "restore-pending-owner-review.json"));
 let pendingFullSnapshot: {directory:string;identity:SnapshotIdentity} | null = null;
-let databaseClosed=false;
 let closeDatabase: (()=>void) | null = null;
 const approvedWindowCloses = new WeakSet<BrowserWindow>();
 ipcMain.on("drafts:flush-result", (event, requestId: unknown, success: unknown) => { draftFlushBarrier.respond(event.sender.id, requestId, success); });
@@ -70,7 +77,7 @@ async function createWindow(): Promise<void> {
   const dataDirectory = runtimePaths.dataDirectory;
   const databasePath = runtimePaths.database;
   const database = openDatabase(databasePath, migrationsDir);
-  closeDatabase = () => { if(database.db.open){database.db.pragma("wal_checkpoint(TRUNCATE)");database.db.close();databaseClosed=true;} };
+  closeDatabase = () => { if(database.db.open){database.db.pragma("wal_checkpoint(TRUNCATE)");database.db.close();} };
   const isDevelopment = isDevelopmentEnvironment(app.isPackaged);
   if (isDevelopment) database.repository.seedDevelopment(csvPath);
   else database.repository.seedPlatformCatalog(csvPath);
@@ -198,12 +205,17 @@ app.on("before-quit", (event) => {
     closeDatabase?.();
     if(pendingFullSnapshot){
       const {directory,identity}=pendingFullSnapshot;
-      try{const manifest=createClosedSnapshot(runtimePaths.userData,directory,identity,()=>databaseClosed&&BrowserWindow.getAllWindows().every(window=>approvedWindowCloses.has(window)));writeFileSync(directory+".status.json",JSON.stringify({status:"Complete",directory,createdAt:manifest.createdAt,totalBytes:manifest.totalBytes}));}
+      try{launchClosedSnapshotWorker(process.execPath,join(__dirname,'closed-snapshot-worker.cjs'),runtimePaths.userData,directory,identity);}
       catch(error){writeFileSync(directory+".status.json",JSON.stringify({status:"Incomplete",directory,error:error instanceof Error?error.message:"BACKUP_FAILED"}));processDiagnostics.record("FULL_SNAPSHOT_FAILED",{error});}
     }
     shutdownReady = true;
     app.quit();
-  })().catch((error: unknown) => { shutdownStarted = false; processDiagnostics.record("APP_CLOSE_FAILED", { error }); });
+  })().catch((error: unknown) => {
+    for(const window of BrowserWindow.getAllWindows())approvedWindowCloses.delete(window);
+    shutdownStarted = false;
+    if(pendingFullSnapshot){writeFileSync(pendingFullSnapshot.directory+'.status.json',JSON.stringify({status:'Incomplete',directory:pendingFullSnapshot.directory,error:'OWNED_RUNTIME_SHUTDOWN_FAILED'}));pendingFullSnapshot=null;}
+    processDiagnostics.record("APP_CLOSE_FAILED", { error });
+  });
 });
 
 app.on("window-all-closed", () => { scheduler?.stop(); if (process.platform !== "darwin") app.quit(); });

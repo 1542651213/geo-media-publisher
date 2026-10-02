@@ -4,7 +4,7 @@ import {join,resolve} from 'node:path';
 const git=['-c',`safe.directory=${resolve('.').replaceAll('\\','/')}`],start='d00b5d60c75e2d121986f6b1c0679ce64c97e9f1';
 const changed=execFileSync('git',[...git,'diff','--name-only',start],{encoding:'utf8'}).trim().split(/\r?\n/u),untracked=execFileSync('git',[...git,'ls-files','--others','--exclude-standard'],{encoding:'utf8'}).trim().split(/\r?\n/u);
 const files=new Set([...changed,...untracked].filter(Boolean));
-function walk(directory){if(!existsSync(directory))return;for(const item of readdirSync(directory,{withFileTypes:true})){const path=join(directory,item.name);if(item.isDirectory())walk(path);else if(/\.(?:js|css|html|sql|csv)$/iu.test(path))files.add(path);}}
+function walk(directory){if(!existsSync(directory))return;for(const item of readdirSync(directory,{withFileTypes:true})){const path=join(directory,item.name);if(item.isDirectory())walk(path);else if(/\.(?:js|cjs|css|html|sql|csv)$/iu.test(path))files.add(path);}}
 walk('out');walk('packages/db/migrations');files.add('PLATFORMS.csv');
 const patterns=[/\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,}/gu,/\bgh[pousr]_[A-Za-z0-9_]{20,}/gu,/\bAKIA[A-Z0-9]{16}\b/gu,/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]{40,}?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/gu];
 const suspicious=[];let checked=0;

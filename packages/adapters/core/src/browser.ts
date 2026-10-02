@@ -8,6 +8,9 @@ import type { CredentialStore } from "@publisher/security";
 // retain an old managed Edge build; Zhihu currently rejects that old client
 // before the editor loads. Edge remains the supported fallback.
 export const SYSTEM_BROWSER_CHANNELS = ["chrome", "msedge"] as const;
+class BrowserSessionCloseError extends Error {
+  constructor(cause: unknown) { super('OWNED_BROWSER_CLOSE_FAILED', { cause }); }
+}
 export type SystemBrowserChannel = (typeof SYSTEM_BROWSER_CHANNELS)[number];
 
 export const EXTERNAL_LAUNCH_TRIGGER_SOURCES = [
@@ -301,6 +304,7 @@ export function browserSessionProfilePath(rootDir: string, identity: BrowserSess
 /** Platform-neutral session storage. Platform adapters own navigation and selectors. */
 export class PlaywrightSessionManager {
   private readonly ownedSessions = new Set<BrowserSession>();
+  private readonly unclosedResourceClosers = new Map<BrowserContext | Browser, () => Promise<void>>();
   private readonly activeSessions = new Map<string, BrowserSession>();
   private readonly pendingOpenPromises = new Map<string, Promise<BrowserSession>>();
   private readonly pendingConnections = new Set<string>();
@@ -652,7 +656,8 @@ export class PlaywrightSessionManager {
       try { await session.browser.close(); } catch (error) { firstError ??= error; }
     }
     if (identity && (!this.activeSessions.has(browserSessionCredentialKey(identity)) || this.activeSessions.get(browserSessionCredentialKey(identity)) === session)) this.updateRuntimeState(browserSessionCredentialKey(identity), "UNVERIFIED", session.contextDebugId ?? null, null);
-    this.releaseSession(session, identity);
+    if (firstError) { if (identity) this.clearActiveSession(identity, session); }
+    else this.releaseSession(session, identity);
     if (identity) this.emitSessionLifecycle({ phase: firstError ? "CLOSE_FAILED" : "CLOSE_COMPLETED", identity, session, browserConnected: this.browserConnected(session.browser), closeInfo });
     this.explicitCloseSessions.delete(session);
     if (firstError) throw firstError;
@@ -667,11 +672,14 @@ export class PlaywrightSessionManager {
     ]);
     const sessions = [...this.ownedSessions];
     const pendingOpens = [...this.pendingOpenPromises.values()];
-    await Promise.allSettled([...sessions.map((session) => this.close(session, closeInfo)), ...pendingOpens]);
+    const orphanClosers = [...this.unclosedResourceClosers.values()];
+    const results = await Promise.allSettled([...sessions.map((session) => this.close(session, closeInfo)), ...pendingOpens, ...orphanClosers.map(close => close())]);
     for (const key of affectedKeys) this.updateRuntimeState(key, "UNVERIFIED", this.runtimeStates.get(key)?.contextDebugId ?? null, null);
     this.activeSessions.clear();
     this.pendingOpenPromises.clear();
     this.pendingConnections.clear();
+    const failures = results.filter((result, index): result is PromiseRejectedResult => result.status === 'rejected' && (index < sessions.length || index >= sessions.length + pendingOpens.length || result.reason instanceof BrowserSessionCloseError));
+    if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'OWNED_BROWSER_CLOSE_FAILED');
   }
 
   debugArtifactPath(identity: BrowserSessionIdentity, fileName: string): string | null {
@@ -974,6 +982,12 @@ export class PlaywrightSessionManager {
       try { await browser.close(); } catch (error) { firstError ??= error; }
     }
     this.emitSessionLifecycle({ phase: firstError ? "CLOSE_FAILED" : "CLOSE_COMPLETED", identity, ...metadata, pageCount: context ? this.safePageCount(context) : null, browserConnected: browser ? this.browserConnected(browser) : null, closeInfo });
+    const resource = context ?? browser;
+    if (firstError) {
+      if (resource) this.unclosedResourceClosers.set(resource, () => this.closeUnregisteredResources(identity, context, browser, metadata, closeInfo));
+      throw new BrowserSessionCloseError(firstError);
+    }
+    if (resource) this.unclosedResourceClosers.delete(resource);
   }
 
   private async registerOpenSession(identity: BrowserSessionIdentity, session: BrowserSession, closeAllGeneration: number): Promise<BrowserSession> {

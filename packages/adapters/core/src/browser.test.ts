@@ -18,6 +18,36 @@ class MemoryCredentialStore implements CredentialStore {
 const userAction: UserInitiatedAction = { userActionId: "11111111-1111-4111-8111-111111111111", triggerSource: "CONNECT_ACCOUNT" };
 
 describe("BrowserSessionManager credential boundary", () => {
+  it('reports close failure and keeps ownership for an explicit bounded shutdown retry', async () => {
+    const page = { isClosed: () => false, url: () => 'about:blank', context: () => context };
+    const close = vi.fn().mockRejectedValueOnce(new Error('synthetic-close-failure')).mockResolvedValue(undefined);
+    const context = { setDefaultTimeout: vi.fn(), newPage: async () => page, pages: () => [page], close } as unknown as BrowserContext;
+    const browser = { newContext: async () => context, close: async () => undefined, isConnected: () => true } as unknown as Browser;
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser: async () => browser });
+    await manager.open({ platformKey: 'fixture', accountId: 'shutdown' }, userAction);
+    await expect(manager.closeAll()).rejects.toThrow('OWNED_BROWSER_CLOSE_FAILED');
+    await expect(manager.closeAll()).resolves.toBeUndefined();
+    expect(close).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports and retains cleanup failure of a browser still opening during shutdown', async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>(done => { release = done; });
+    const page = { isClosed: () => false, url: () => 'about:blank', context: () => context };
+    const close = vi.fn().mockRejectedValueOnce(new Error('synthetic-pending-close-failure')).mockResolvedValue(undefined);
+    const context = { setDefaultTimeout: vi.fn(), newPage: async () => { await waiting; return page; }, pages: () => [page], close } as unknown as BrowserContext;
+    const browser = { newContext: async () => context, close: async () => undefined, isConnected: () => true } as unknown as Browser;
+    const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser: async () => browser });
+    const pending = manager.open({ platformKey: 'fixture', accountId: 'pending-shutdown' }, userAction);
+    await vi.waitFor(() => expect(manager.getSessionSnapshot({ platformKey: 'fixture', accountId: 'pending-shutdown' }).sessionExists).toBe(false));
+    const closing = manager.closeAll();
+    const rejected = expect(pending).rejects.toThrow('OWNED_BROWSER_CLOSE_FAILED');
+    release();
+    await expect(closing).rejects.toThrow('OWNED_BROWSER_CLOSE_FAILED');
+    await rejected;
+    await expect(manager.closeAll()).resolves.toBeUndefined();
+    expect(close).toHaveBeenCalledTimes(2);
+  });
   it("rehydrates only the exact stored platform/account session in a hidden browser", async () => {
     const store = new MemoryCredentialStore();
     const stored = { cookies: [{ name: "sid", value: "encrypted-store-fixture", domain: ".toutiao.com", path: "/", expires: -1, httpOnly: true, secure: true, sameSite: "Lax" as const }], origins: [] };
@@ -318,20 +348,24 @@ describe("BrowserSessionManager credential boundary", () => {
   });
 
   it("attempts both context and browser cleanup and closeAll only touches owned sessions", async () => {
-    const contextClose = vi.fn(async () => { throw new Error("context close failed"); });
+    const contextClose = vi.fn(async (): Promise<void> => { throw new Error("context close failed"); });
     const browserClose = vi.fn(async () => undefined);
     const context = { setDefaultTimeout: vi.fn(), newPage: vi.fn(async () => ({ url: vi.fn(() => "about:blank") })), close: contextClose } as unknown as BrowserContext;
     const browser = { newContext: vi.fn(async () => context), close: browserClose } as unknown as Browser;
     const manager = new BrowserSessionManager(new MemoryCredentialStore(), { launchBrowser: vi.fn(async () => browser) });
 
     await manager.open({ platformKey: "zhihu", accountId: "owned-account" }, userAction);
-    await manager.closeAll();
+    await expect(manager.closeAll()).rejects.toThrow('OWNED_BROWSER_CLOSE_FAILED');
 
     expect(contextClose).toHaveBeenCalledTimes(1);
     expect(browserClose).toHaveBeenCalledTimes(1);
+    contextClose.mockResolvedValue(undefined);
     await manager.closeAll();
-    expect(contextClose).toHaveBeenCalledTimes(1);
-    expect(browserClose).toHaveBeenCalledTimes(1);
+    expect(contextClose).toHaveBeenCalledTimes(2);
+    expect(browserClose).toHaveBeenCalledTimes(2);
+    await manager.closeAll();
+    expect(contextClose).toHaveBeenCalledTimes(2);
+    expect(browserClose).toHaveBeenCalledTimes(2);
   });
 
   it("keeps one account-scoped active Page and pending marker available across adapter instances", async () => {

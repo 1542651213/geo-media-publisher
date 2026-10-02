@@ -43,15 +43,16 @@ export const mainDatabase=new Function('electron','input',`
 export async function launchInstalled(executablePath,userData,{origins=[],extra={},identity=true}={}){
   assert.ok(existsSync(executablePath));assert.ok(existsSync(userData));const started=performance.now();
   const app=await electron.launch({executablePath,timeout:30000,env:isolatedEnv(userData,extra)});
-  const guard=await app.evaluate(installDeny,{userData,origins});assert.equal(guard.packaged,true);
-  assert.equal(app.process().pid,process.platform==='win32'?guard.parentPid:guard.mainPid,'MAIN_MUST_BELONG_TO_OWNED_LAUNCH');
+  const childProcess=app.process(),guard=await app.evaluate(installDeny,{userData,origins});assert.equal(guard.packaged,true);
+  assert.equal(childProcess.pid,process.platform==='win32'?guard.parentPid:guard.mainPid,'MAIN_MUST_BELONG_TO_OWNED_LAUNCH');
   const page=await app.firstWindow();page.setDefaultTimeout(12000);
   await page.route('**/*',route=>{const url=route.request().url();if(!/^https?:/u.test(url)||origins.includes(new URL(url).origin))return route.continue();return route.abort('blockedbyclient');});
   await page.getByLabel('当前企业工作区').waitFor();
   const build=identity?await page.evaluate(()=>window.publisherAPI.product.buildIdentity()):null;
   if(build){assert.equal(build.deliveryId,'R1.15-G');assert.equal(build.packaged,true);assert.equal(build.runtimeAppVersion,build.appVersion);assert.match(build.sourceCommit,/^[a-f0-9]{40}$/u);}
-  return{app,page,userData,guard,build,startMs:Math.round(performance.now()-started)};
+  return{app,page,userData,guard,build,childProcess,startMs:Math.round(performance.now()-started)};
 }
 export async function screenshot(page,root,name,locator){const path=join(root,name+'.png');await(locator??page).screenshot({path,fullPage:!locator});return path;}
 export function saveEvidence(root,name,data){writeFileSync(join(root,name+'.json'),JSON.stringify(data,null,2));}
-export async function closeInstalled(run){if(!run)return;const child=run.app.process();let timer;const exited=child.exitCode!==null||child.signalCode!==null?Promise.resolve():new Promise(done=>child.once('exit',done));await run.app.close();try{await Promise.race([exited,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('OWNED_MAIN_PROCESS_DID_NOT_EXIT')),10000);})]);}finally{clearTimeout(timer);}}
+export async function waitForInstalledExit(run){const child=run.childProcess??run.app.process();let timer;const exited=child.exitCode!==null||child.signalCode!==null?Promise.resolve():new Promise(done=>child.once('exit',done));try{await Promise.race([exited,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('OWNED_MAIN_PROCESS_DID_NOT_EXIT')),10000);})]);}finally{clearTimeout(timer);}}
+export async function closeInstalled(run){if(!run)return;await run.app.close();await waitForInstalledExit(run);}
