@@ -1,0 +1,618 @@
+{
+  "schema": "GEO_R115_G_VERIFICATION_V1",
+  "generatedAt": "2026-10-02T17:41:08.224Z",
+  "task": "R1.15-G_RELEASE_HARDENING_AND_OPERATOR_ONBOARDING",
+  "finalStatus": "R1_15_G_PARTIAL_READY",
+  "artifactClass": "CANDIDATE",
+  "identity": {
+    "startHead": "d00b5d60c75e2d121986f6b1c0679ce64c97e9f1",
+    "branch": "release/2026-10-02-r1.15-g-release-hardening-onboarding",
+    "packageSourceCommit": "770c22e1087e4f506eb4b3c2e25095df47e33373",
+    "packageSourceTag": "r1.15-g-package-source-v3-20261003",
+    "finalHandoffTag": "r1.15-g-hardening-onboarding-candidate-20261003",
+    "endHeadResolution": "git rev-parse r1.15-g-hardening-onboarding-candidate-20261003^{commit}",
+    "appVersion": "1.1.9",
+    "deliveryId": "R1.15-G",
+    "builtAt": "2026-10-02T17:20:58.821Z",
+    "postPackageVerificationOnlyCommit": "ab1063d576dd497839f093affa366954a12d4dbd",
+    "runtimeAfterPackageUnchanged": true,
+    "fReadyArchiveBlob": "07a047f65616c9c84ecf1968e6e8d9aeb9438105",
+    "cdefAncestryPreserved": true
+  },
+  "boundaries": {
+    "realPlatformPublishCount": 0,
+    "realFinalSubmitCount": 0,
+    "realRemoteDraftOrMediaWriteCount": 0,
+    "geoExternalAIAPIRequestCount": 0,
+    "productionAccountCompanyAssignments": 0,
+    "productionDataWrites": 0,
+    "publicGitHubPush": false,
+    "mainMerged": false,
+    "allBatch": "OFF",
+    "realPlatformNetwork": "NOT_RUN_BY_DESIGN",
+    "douyinOrdinary": "ON",
+    "websiteOrdinary": "ON",
+    "toutiaoOrdinary": "ON",
+    "otherPlatformGates": "PRESERVED"
+  },
+  "tests": {
+    "full": {
+      "receipt": "output/r115-g-final-full-9.log",
+      "files": 232,
+      "tests": 1671,
+      "status": "PASS",
+      "durationSeconds": 255.01,
+      "nativeElectronABIRebuild": "PASS",
+      "skippedOrWeakenedForThisTask": false
+    },
+    "focusedRuns": [
+      {
+        "receipt": "output/r115-g-m0-m2-green.log",
+        "files": 4,
+        "tests": 50,
+        "status": "PASS"
+      },
+      {
+        "receipt": "output/r115-g-m1-green.log",
+        "files": 1,
+        "tests": 41,
+        "status": "PASS"
+      },
+      {
+        "receipt": "output/r115-g-m3-main-green.log",
+        "files": 1,
+        "tests": 17,
+        "status": "PASS"
+      },
+      {
+        "receipt": "output/r115-g-m4-green.log",
+        "files": 1,
+        "tests": 4,
+        "status": "PASS"
+      },
+      {
+        "receipt": "output/r115-g-m5-fault-green.log",
+        "files": 1,
+        "tests": 10,
+        "status": "PASS"
+      },
+      {
+        "receipt": "output/r115-g-m5-budget-green.log",
+        "files": 1,
+        "tests": 4,
+        "status": "PASS"
+      },
+      {
+        "receipt": "output/r115-g-final-review-green.log",
+        "files": 5,
+        "tests": 26,
+        "status": "PASS"
+      },
+      {
+        "receipt": "output/r115-g-legacy-migrations-green.log",
+        "files": 2,
+        "tests": 17,
+        "status": "PASS"
+      },
+      {
+        "receipt": "output/r115-g-snapshot-handoff-green.log",
+        "files": 1,
+        "tests": 6,
+        "status": "PASS"
+      },
+      {
+        "receipt": "output/r115-g-snapshot-exit-race-green.log",
+        "files": 2,
+        "tests": 20,
+        "status": "PASS"
+      },
+      {
+        "receipt": "output/r115-g-workspace-jobs-green.log",
+        "files": 3,
+        "tests": 4,
+        "status": "PASS"
+      }
+    ],
+    "typecheck": {
+      "status": "PASS",
+      "receipt": "output/r115-g-final-typecheck-10.log"
+    },
+    "lint": {
+      "status": "PASS",
+      "receipt": "output/r115-g-final-lint-15.log"
+    },
+    "build": {
+      "status": "PASS",
+      "receipt": "output/r115-g-build-770c22e.log"
+    },
+    "independentReview": {
+      "kind": "STATIC_ONLY",
+      "remainingConcreteCriticalOrImportantFindings": 0,
+      "topics": [
+        "binding and stale callbacks",
+        "working-copy version and approval guards",
+        "snapshot exit, lease and exact PID identity",
+        "AI budget and Unknown recovery",
+        "job company filter and immutable history"
+      ],
+      "runtimeEvidenceProducedByPrimary": true
+    },
+    "historicalFailedReceiptsResolved": [
+      {
+        "receipt": "output/r115-g-m4-remap-green.log",
+        "actualStatus": "FAIL_1_OF_6",
+        "reason": "Fixture required companyName missing",
+        "resolvedBy": "output/r115-g-final-full-9.log"
+      },
+      {
+        "receipt": "output/r115-g-colleague-green.log",
+        "actualStatus": "FAIL_1_OF_2",
+        "resolvedBy": [
+          "output/r115-g-final-review-green.log",
+          "output/r115-g-final-full-9.log"
+        ]
+      },
+      {
+        "receipt": "output/r115-g-snapshot-review-green.log",
+        "actualStatus": "FAIL_1_OF_58",
+        "reason": "closeAll now explicitly fails and preserves ownership for retry; assertion strengthened",
+        "resolvedBy": "output/r115-g-final-full-9.log"
+      },
+      {
+        "receipt": "output/r115-g-final-lint-14.log",
+        "actualStatus": "FAIL_UNUSED_IMPORT_IN_LOCAL_DOCUMENT_ASSEMBLER",
+        "resolvedBy": "output/r115-g-final-lint-15.log"
+      }
+    ]
+  },
+  "installed": {
+    "receiptPaths": {
+      "employee": "output/r115-g-execution-20261002/employee-1790961969494/acceptance.json",
+      "failedExit": "output/r115-g-execution-20261002/failed-exit-1790961768770/failed-exit.json",
+      "scheduler": "output/r115-g-execution-20261002/scheduler-session-1790961848839/scheduler-session.json",
+      "ai": "output/r115-g-execution-20261002/ai-unknown-recovery-1790961862137/ai-recovery.json",
+      "faults": "output/r115-g-execution-20261002/failure-branches-1790961907128/failure-branches.json",
+      "upgrade": "output/r115-g-execution-20261002/upgrade-rollback-1790961911600/upgrade-rollback.json",
+      "performance": "output/r115-g-execution-20261002/performance-1790962039367/performance.json",
+      "privateDecrypt": "output/r115-g-execution-20261002/private-decrypt-770c22e-redacted.json",
+      "browser": "output/r115-g-execution-20261002/browser-restore-smoke.json",
+      "sourceRecovery": "output/r115-g-execution-20261002/source-recovery-770c22e.json",
+      "phone": "output/r115-g-phone-preview-770c22e/phone-guide-check.json",
+      "package": "output/r115-g-execution-20261002/package-identity.json"
+    },
+    "employee": {
+      "status": "PASS",
+      "stages": {
+        "newEmployeeWorkspace": "PASS",
+        "csvXlsxErrorsAndCorrection": "PASS",
+        "autosaveCompositionPasteUndo": "PASS_REAL_APP_DOM_COMPOSITION",
+        "companyIsolation": "PASS",
+        "normalRestartDraftRecovery": "PASS",
+        "crashRecoveryConflictExplicitChoice": "PASS",
+        "studioBudgetRepairTwoPlatforms": "PASS",
+        "queueBudgetSerialLoopback": "PASS",
+        "sameCompanyImageUi": "PASS",
+        "reviewPreflightNoPrepareAndEditInvalidation": "PASS",
+        "ownerSyntheticAssignmentUi": "PASS",
+        "colleaguePackageUi": "PASS",
+        "sameDirectorySingleWriter": "PASS",
+        "closedFullSnapshot": "PASS",
+        "isolatedRestoreNoReplay": "PASS"
+      },
+      "normalStarts": 5,
+      "normalExits": 4,
+      "forcedOwnedProcessExits": 1,
+      "maxConcurrentMockRequests": 1,
+      "localMockAIRequests": 6,
+      "localModelReads": 1,
+      "viewportStateChecks": 48,
+      "finalDatabase": {
+        "integrity": "ok",
+        "foreignKeys": 0,
+        "credentialEncrypted": true,
+        "frozenRowsPreserved": true
+      }
+    },
+    "scheduler": {
+      "status": "PASS",
+      "stages": {
+        "normalStartupOfflineNotExpired": "PASS",
+        "explicitRecoverySameMainSessionPath": "PASS",
+        "deduplicatedLateProbeRejectsDisabledAccount": "PASS",
+        "manualDisabledPreserved": "PASS",
+        "normalSchedulerTwoTicksBatchClosedFrozenFinalPreserved": "PASS",
+        "disabledNormalRestartDoesNotAuthenticate": "PASS"
+      },
+      "normalTimerTicks": 2,
+      "localReads": 10,
+      "localWrites": 0,
+      "lateResponseCount": 6,
+      "lateResponseRejected": true,
+      "manualDisabledPreserved": true,
+      "offlineNotExpired": true,
+      "normalSchedulerLogicReplaced": false
+    },
+    "ai": {
+      "status": "PASS",
+      "stages": {
+        "repairUnknownRetainsSource": "PASS",
+        "restartDoesNotReplayUnknown": "PASS",
+        "knownSourceManualEditAndSave": "PASS",
+        "reconcileIssuesZeroRequestsAndPreservesUnknownJournal": "PASS",
+        "explicitContinueKeepsPauseAvailable": "PASS",
+        "cancelAndSecondRestartNoReplay": "PASS"
+      },
+      "localMockRequests": 3,
+      "lateMockResponses": 1,
+      "requestJournal": [
+        {
+          "purpose": "Base",
+          "status": "Succeeded"
+        },
+        {
+          "purpose": "TitleRepair",
+          "status": "Unknown"
+        },
+        {
+          "purpose": "Base",
+          "status": "Unknown"
+        }
+      ],
+      "unknownAutomaticallyReplayed": false,
+      "reconcileRequests": 0,
+      "douyinTitleMax20UTF16": true
+    },
+    "failedExit": {
+      "status": "PASS",
+      "quitRequestAfterEditMs": 2,
+      "failedShutdownRetainedEditor": true,
+      "immediateRequitFlushedNewText": true
+    },
+    "faults": {
+      "status": "PASS",
+      "stages": {
+        "emptyListActionable": "PASS",
+        "cancelledNativeFileChoice": "PASS",
+        "invalidAssetPathVisibleNoWrites": "PASS",
+        "duplicateClickIdempotentImport": "PASS",
+        "failedMainPersistenceRetainsEditorAndBlocksClose": "PASS",
+        "saveRetryPersistsRetainedText": "PASS",
+        "rapidCompanySwitchNoStaleBody": "PASS",
+        "unknownOperationWarningNoRepeatActionOrFrozenMutation": "PASS"
+      },
+      "injectedDraftFailures": 2
+    },
+    "upgradeRollback": {
+      "status": "PASS",
+      "migrationCounts": [
+        33,
+        37,
+        33
+      ],
+      "contentUnchanged": true,
+      "frozenRowsUnchanged": true,
+      "olderAppOpenedGDatabase": false,
+      "originalProductionWrites": 0
+    },
+    "browserRecovery": {
+      "blockedExternalRequests": 0,
+      "kind": "LOCAL_BROWSER_SYNTHETIC_DOM_ONLY",
+      "status": "PASS",
+      "realBrowserContexts": 2,
+      "restartedManagers": 2,
+      "hiddenRestore": true,
+      "exactIdentity": true,
+      "accountAndCompanyIsolation": true,
+      "wrongIdentity": "IDENTITY_MISMATCH",
+      "missingSession": "NEEDS_LOGIN",
+      "encryptedFixtureSnapshot": true,
+      "livePlatformProbe": "NOT_RUN",
+      "realPlatformPublishCount": 0,
+      "newFinalSubmitCount": 0
+    },
+    "ownedInstalledTestProcessesRemaining": 0
+  },
+  "privateCopy": {
+    "kind": "MAIN_ONLY_COUNTS_NO_PLAINTEXT",
+    "status": "PARTIAL",
+    "safeStorageAvailable": true,
+    "encryptedEntries": 26,
+    "decryptSucceeded": 21,
+    "decryptFailed": 5,
+    "failureOrigin": "UNKNOWN_NOT_PROVEN_NEW_OR_INHERITED",
+    "plaintextReturnedToRenderer": false,
+    "automaticExecutionDisabled": true,
+    "realAccountCount": 28,
+    "unassignedCount": 28,
+    "suggestions": {
+      "unique": 8,
+      "conflict": 3,
+      "noEvidence": 17,
+      "confirmed": 0
+    },
+    "ownerAssignments": 0,
+    "matchingClosedFullCopyFiles": 2599,
+    "matchingClosedFullCopyHashesVerified": true,
+    "rawAccountNamesIdsCompaniesAndEvidence": "RESTRICTED_OUTSIDE_GIT_ONLY",
+    "migrationCount": 44,
+    "currentResourceMigrations": 37,
+    "recognizedRetiredMigrations": 7,
+    "retiredSQLProvenance": "EXACT_LOCAL_ARCHIVED_RELEASE_COMMITS_AND_SQL_SHA256_NOT_ALL_F_ANCESTORS",
+    "retiredSQLReplayed": false,
+    "sqliteIntegrity": "ok",
+    "foreignKeyErrors": 0,
+    "frozenRowsAndBindingsUnchanged": true,
+    "crossUserMigration": "NOT_CLAIMED"
+  },
+  "productionProtection": {
+    "status": "PASS_BYTES_UNCHANGED",
+    "filesCompared": 2599,
+    "changedFiles": 0,
+    "comparisonIncludesOriginalDatabaseCredentialsLocalStateAndProfiles": true,
+    "rawHashManifestOutsideGit": true,
+    "receipt": "output/r115-g-protection-final-770c22e.log"
+  },
+  "performance": {
+    "status": "PASS_MEASURED_WITH_LIMITATIONS",
+    "receipt": "output/r115-g-execution-20261002/performance-1790962039367/performance.json",
+    "environment": {
+      "platform": "win32",
+      "arch": "x64",
+      "windowsRelease": "10.0.19045",
+      "logicalCpus": 12,
+      "totalMemoryBytes": 34088599552
+    },
+    "dataset": {
+      "articles": 3000,
+      "images": 1000,
+      "jobs": 10000,
+      "executableJobs": 0
+    },
+    "samples": [
+      {
+        "sample": 1,
+        "processStartMs": 1519,
+        "articlePageMs": 195,
+        "articleSearchMs": 830,
+        "companySwitchMs": 88,
+        "imagePageMs": 840,
+        "jobsPageMs": 4606,
+        "jobsFilterMs": 211,
+        "articleVisibleRows": 50,
+        "jobsUnfilteredVisibleRows": 50,
+        "workingSetMiB": 662.6,
+        "sumOfProcessPeakWorkingSetMiB": 878.7
+      },
+      {
+        "sample": 2,
+        "processStartMs": 1101,
+        "articlePageMs": 573,
+        "articleSearchMs": 508,
+        "companySwitchMs": 85,
+        "imagePageMs": 1010,
+        "jobsPageMs": 4511,
+        "jobsFilterMs": 68,
+        "articleVisibleRows": 50,
+        "jobsUnfilteredVisibleRows": 50,
+        "workingSetMiB": 683.4,
+        "sumOfProcessPeakWorkingSetMiB": 876
+      },
+      {
+        "sample": 3,
+        "processStartMs": 1122,
+        "articlePageMs": 136,
+        "articleSearchMs": 519,
+        "companySwitchMs": 108,
+        "imagePageMs": 510,
+        "jobsPageMs": 4698,
+        "jobsFilterMs": 212,
+        "articleVisibleRows": 50,
+        "jobsUnfilteredVisibleRows": 50,
+        "workingSetMiB": 655.7,
+        "sumOfProcessPeakWorkingSetMiB": 862
+      }
+    ],
+    "sampleCount": 3,
+    "osCacheFlushed": false,
+    "startupDescription": "FIRST_NEW_PROCESS_THEN_TWO_RESTARTS_NOT_OS_COLD_CACHE",
+    "windowsSystemDpiChanged": false,
+    "windowAndPageZoomOnly": true,
+    "viewportChecks": 9,
+    "widths": [
+      1280,
+      1366,
+      1920
+    ],
+    "zoomFactors": [
+      1,
+      1.25,
+      1.5
+    ],
+    "nineOperationsTabsAndLongChineseFooterReachable": true,
+    "fullCompanyJobsAccessible": 5000,
+    "jobsPageSize": 50,
+    "remainingJobsPageMsRange": [
+      4511,
+      4698
+    ],
+    "summedProcessPeaksAreNotSimultaneousAppPeak": true
+  },
+  "screenshots": {
+    "count": 8,
+    "files": [
+      {
+        "file": "output/r115-g-execution-20261002/employee-1790961969494/01-import-errors.png",
+        "width": 1464,
+        "height": 895,
+        "sha256": "167c31b3e80129280391398423a5220368510b6aafe146c33e3ccbe70dea8b51",
+        "visualReview": "PASS_ACTUAL_SYNTHETIC_SOFTWARE"
+      },
+      {
+        "file": "output/r115-g-execution-20261002/employee-1790961969494/02-autosave.png",
+        "width": 1464,
+        "height": 895,
+        "sha256": "d4e83970aaa63366d6f8afa44e94f245d7c254efc3c0da31199d024b3e4f410a",
+        "visualReview": "PASS_ACTUAL_SYNTHETIC_SOFTWARE"
+      },
+      {
+        "file": "output/r115-g-execution-20261002/employee-1790961969494/03-crash-conflict.png",
+        "width": 1464,
+        "height": 895,
+        "sha256": "73a890c724e0a4281fe9635d194e465ade5f63f333e3bada40d0c822b1fc02d5",
+        "visualReview": "PASS_ACTUAL_SYNTHETIC_SOFTWARE"
+      },
+      {
+        "file": "output/r115-g-execution-20261002/employee-1790961969494/04-ai-budget-data.png",
+        "width": 1464,
+        "height": 895,
+        "sha256": "9ffc2770256d0c4dfff5c6000971d2ac8cc1d94800964be8f7bfe18b7ab85978",
+        "visualReview": "PASS_ACTUAL_SYNTHETIC_SOFTWARE"
+      },
+      {
+        "file": "output/r115-g-execution-20261002/employee-1790961969494/05-preflight-protected.png",
+        "width": 1464,
+        "height": 895,
+        "sha256": "a1fa3ef125c4b253a2b11b769b621911872bf457fe72bd351b0b013bd3844dcc",
+        "visualReview": "PASS_ACTUAL_SYNTHETIC_SOFTWARE"
+      },
+      {
+        "file": "output/r115-g-execution-20261002/employee-1790961969494/06-owner-confirmation.png",
+        "width": 1464,
+        "height": 895,
+        "sha256": "f54940f0be21eb7f7944f6275401c29ea0b0b25d6b154172c06c45cae02fa4a9",
+        "visualReview": "PASS_ACTUAL_SYNTHETIC_SOFTWARE"
+      },
+      {
+        "file": "output/r115-g-execution-20261002/employee-1790961969494/07-backup-restore.png",
+        "width": 1464,
+        "height": 895,
+        "sha256": "cf9e6284907afc534a2191713b2d0318bd04d408559f9d4b90613489faf1d970",
+        "visualReview": "PASS_ACTUAL_SYNTHETIC_SOFTWARE"
+      },
+      {
+        "file": "output/r115-g-execution-20261002/employee-1790961969494/08-build-identity-restored.png",
+        "width": 1464,
+        "height": 895,
+        "sha256": "b33d3a0a747df41edccfa33bd3bc4c4af17295f09982fd927eddfc935c32dd20",
+        "visualReview": "PASS_ACTUAL_SYNTHETIC_SOFTWARE"
+      }
+    ],
+    "phonePreviewPath": "output/r115-g-phone-preview-770c22e/index.html",
+    "phoneCheck": {
+      "status": "PASS",
+      "kind": "PHONE_INDEX_LOCAL_BROWSER",
+      "checks": [
+        {
+          "width": 390,
+          "measured": {
+            "width": 390,
+            "scrollWidth": 390,
+            "fontSize": "17px"
+          },
+          "originalScreenshotsLoaded": 8,
+          "anonymousAccounts": 28
+        },
+        {
+          "width": 760,
+          "measured": {
+            "width": 760,
+            "scrollWidth": 760,
+            "fontSize": "17px"
+          },
+          "originalScreenshotsLoaded": 8,
+          "anonymousAccounts": 28
+        }
+      ],
+      "blockedExternalRequests": 0,
+      "realPlatformRequests": 0
+    },
+    "anonymousOwnerList": {
+      "count": 28,
+      "unique": 8,
+      "conflict": 3,
+      "noEvidence": 17,
+      "realNamesIdsCompaniesAndEvidenceOmitted": true
+    },
+    "hardwareChineseIME": "NOT_RUN_DOM_COMPOSITION_ONLY",
+    "realSystemDPI": "NOT_RUN_BY_DESIGN"
+  },
+  "package": {
+    "status": "PASS",
+    "installerBytes": 101296155,
+    "installerSha256": "2017ea5acdcbc6018e6ea9d701b68d5cdb75c5d173f5696f47f9ec402d43c55b",
+    "installedAppAsarSha256": "ec7fc554fea381c9295c04c9aeb07a0afda007ea924bbed7a90447a2a0108588",
+    "packageRuntimeSourceCommit": "770c22e1087e4f506eb4b3c2e25095df47e33373",
+    "byteParityMainPreloadRendererCSS": true,
+    "closedSnapshotWorkerParity": true,
+    "migrationAndPlatformResourceParity": true,
+    "migrations": 37,
+    "candidateGrantsAbsent": true,
+    "sensitiveResourcesAbsent": true,
+    "artifactClass": "CANDIDATE",
+    "filename": "Geo Media Publisher Setup 1.1.9 - R1.15-G HARDENING CANDIDATE.exe",
+    "installerPath": "output/r115-g-package-770c22e/Geo Media Publisher Setup 1.1.9 - R1.15-G HARDENING CANDIDATE.exe",
+    "installDirectory": "output/r115-g-isolated-install-770c22e",
+    "authenticode": "NotSigned",
+    "preservedEAndFInstallers": [
+      {
+        "sha256": "503bb5b7f208b087c41a23161efb2d24bb473cabf69902cc4d78b724d0bc5afb",
+        "bytes": 101270018,
+        "file": "Geo Media Publisher Setup 1.1.9 - R1.15-F OPERATIONS RELEASE.exe"
+      },
+      {
+        "sha256": "bc6a59e60a395f3ad68a95e46d456b1c29e905f31118a30b1cff474f920245b9",
+        "bytes": 101236741,
+        "file": "Geo Media Publisher Setup 1.1.9 - R1.15-E AI CONTENT STUDIO RELEASE.exe"
+      }
+    ]
+  },
+  "recovery": {
+    "sourceTagRecovery": {
+      "privateBundleOutsideGit": true,
+      "recoveredTag": "r1.15-g-package-source-v3-20261003",
+      "recoveredSourceCommit": "770c22e1087e4f506eb4b3c2e25095df47e33373",
+      "cdefAncestryPreserved": true,
+      "status": "PASS",
+      "offDeviceBackup": "NOT_CONFIGURED",
+      "bundleSha256": "6e3f00ceb6bcbf89567197aeb4bc8d11569e8e8e7a5f5db1a2672e72350d5f2b",
+      "kind": "OFFLINE_GIT_BUNDLE_SOURCE_TAG_RECOVERY",
+      "networkRequests": 0,
+      "bundleBytes": 3802481,
+      "cloneBuild": "NOT_RUN_SOURCE_CHECKOUT_ONLY",
+      "recoveredWorktreeClean": true
+    },
+    "offDeviceBackup": "NOT_CONFIGURED",
+    "wholeSnapshotAndNewIsolatedRestore": "PASS_SYNTHETIC_INSTALLED",
+    "colleagueContentPackage": "PASS_ONE_ARTICLE_ONE_IMAGE_NO_AUTHORIZATION_IMPORT_NEW_COMPANY_DRAFT",
+    "productionUpgrade": "NOT_RUN_BY_DESIGN"
+  },
+  "unresolved": {
+    "newTestFailures": 0,
+    "inheritedTestFailuresRemaining": 0,
+    "privateCredentialFailuresOfUnknownOrigin": 5,
+    "allRealAccountLoginRestored": "NOT_CLAIMED",
+    "liveDouyinToutiaoAuth": "NOT_RUN_BY_DESIGN",
+    "realCloudGeneration": "NOT_RUN_BY_DESIGN",
+    "crossWindowsUserCredentialMigration": "NOT_CLAIMED",
+    "privateGitHubPush": "NOT_RUN_NO_AUTHORIZED_TARGET"
+  },
+  "secretScan": {
+    "receipt": "output/r115-g-execution-20261002/secret-scan.json",
+    "scope": "CHANGED_SOURCE_DOCS_COMPILED_RESOURCES_PLUS_PACKAGE_ALLOWLIST_AND_VISUAL_REDACTION",
+    "rawMatchesPrinted": false,
+    "originalPlaintextCredentialsNeverScanned": true,
+    "status": "PASS",
+    "filesChecked": 161,
+    "highConfidenceCredentialLiteralFiles": 0,
+    "scopeIncludesChangedTrackedAndUntrackedFiles": true,
+    "compiledResourcesScanned": true
+  },
+  "ownerActions": [
+    "Preserve original full closed copy and F installer; review five undecrypted records without automatic cleanup or rekey",
+    "Confirm 28 historical account company mappings in Owner page; 8 unique, 3 conflict, 17 no evidence",
+    "Use normal platform login or designated secure credential update and verify real identity after restart",
+    "Separately authorize any real cloud generation, media upload, remote draft or final publishing"
+  ],
+  "nextTask": "OWNER_ASSIGNMENT_AND_LOGIN_THEN_SEPARATELY_AUTHORIZED_LIVE_ACCEPTANCE",
+  "automaticContinuationArranged": false
+}
