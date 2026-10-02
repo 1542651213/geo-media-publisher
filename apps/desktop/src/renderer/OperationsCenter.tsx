@@ -3,7 +3,7 @@ import type { AIWorkloadPreview } from "../shared/ai-request-budget";
 import { AccountOwnershipReview } from "./AccountOwnershipReview";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { JSX } from "react";
-import type { PublishJob } from "@publisher/domain";
+import { JobsBoard } from "./JobsBoard";
 import type {
   ContentPlanItem,
   OperationsApi,
@@ -20,7 +20,7 @@ import type {
   OperationsUsageRow,
 } from "../shared/content-operations";
 import type { ProductHealthStatus } from "../shared/product-platform-policy";
-import { platformLabel, publishStatusLabel, publishStatusTone } from "./v11-ui-model";
+import { platformLabel } from "./v11-ui-model";
 import {
   advanceWorkspaceRequest,
   startOperationsQueueRefresh, canonicalStudioTargets,
@@ -51,19 +51,9 @@ interface PlatformHealthRow {
   message: string;
 }
 
-interface PublishBoardRow {
-  id: string;
-  title: string;
-  platform: string;
-  account: string;
-  date: string;
-  status: PublishJob["status"];
-  ownerActionRequired: boolean;
-}
-
 interface OperationsViewSnapshot extends OperationsSnapshot {
   platformHealth: PlatformHealthRow[];
-  publishBoard: PublishBoardRow[];
+
   providers: Array<{ id: string; name: string; models: string[]; configured: boolean }>;
   templates: Array<{ id: string; name: string }>;
 }
@@ -88,7 +78,7 @@ const emptySnapshot: OperationsViewSnapshot = {
   companyId: "", accounts: [], review: [], plans: [], generationQueues: [], generationItems: [], facts: [], usage: [], ownerActions: [],
   studioDefaults: { companyId: "", profileId: null, model: null, templateId: null, templateVersion: null, purpose: "生成文章", targetPlatforms: ["douyin"], updatedAt: null },
   dashboard: { pendingReview: 0, approved: 0, draftPlansToday: 0, generating: 0, failed: 0, needsOwnerAction: 0, todayPublished: 0 },
-  platformHealth: [], publishBoard: [], providers: [], templates: [],
+  platformHealth: [], providers: [], templates: [],
 };
 
 const contentTypes = ["行业科普", "FAQ", "现场案例", "公司介绍", "GEO/SEO", "服务流程", "避坑", "季节性内容"];
@@ -158,6 +148,7 @@ export function OperationsCenter({ companyId, initialTab = "today", onNavigate, 
   const [uiState, setUiState] = useState(() => initialOperationsUiState(companyId));
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [jobsRefreshVersion, setJobsRefreshVersion] = useState(0);
   const [message, setMessage] = useState("");
   const [importPreview, setImportPreview] = useState<OperationsImportPreview | null>(null);
   const requestToken = useRef<WorkspaceRequestToken>(advanceWorkspaceRequest(undefined, companyId));
@@ -165,17 +156,15 @@ export function OperationsCenter({ companyId, initialTab = "today", onNavigate, 
   const load = async (token: WorkspaceRequestToken): Promise<void> => {
     setLoading(true);
     try {
-      const [next, profiles, templates, articles, jobs, productHealth] = await Promise.all([
+      const [next, profiles, templates, productHealth] = await Promise.all([
         operationsApi().snapshot(token.companyId),
         window.publisherAPI.aiCenter.profiles(),
         window.publisherAPI.aiCenter.templates(),
-        window.publisherAPI.articles.list({ brandId: token.companyId }),
-        window.publisherAPI.jobs.list(),
+
+
         window.publisherAPI.product.health(),
       ]);
       if (isCurrentWorkspaceResponse(requestToken.current, token)) {
-        const articleById = new Map(articles.map(article => [article.id, article]));
-        const accountById = new Map(next.accounts.map(account => [account.accountId, account]));
         const boundAccountIds = new Set(next.accounts.map(account => account.accountId));
         const relevantHealth = productHealth.filter(row => row.accountId && boundAccountIds.has(row.accountId));
         const platformHealth: PlatformHealthRow[] = relevantHealth.map(row => ({
@@ -183,19 +172,10 @@ export function OperationsCenter({ companyId, initialTab = "today", onNavigate, 
           status: row.status,
           message: `${row.accountName} · ${row.ownerNextAction}`,
         }));
-        const publishBoard = jobs.filter(job => articleById.has(job.articleId)).map(job => ({
-          id: job.id,
-          title: articleById.get(job.articleId)?.title ?? "未命名内容",
-          platform: job.platformKey,
-          account: accountById.get(job.accountId)?.accountAlias ?? accountById.get(job.platformAccountId)?.accountAlias ?? "历史账号",
-          date: job.finishedAt ?? job.startedAt ?? job.createdAt,
-          status: job.status,
-          ownerActionRequired: job.status === "NeedsUserAction" || job.status === "NeedsReconciliation",
-        }));
         setSnapshot({
           ...next,
           platformHealth,
-          publishBoard,
+
           providers: profiles.map(profile => ({ id: profile.id, name: profile.displayName, models: [profile.defaultModel], configured: profile.configured })),
           templates: templates.filter(template => template.enabled).map(template => ({ id: `${template.templateId}@${template.version}`, name: `${template.name} · v${template.version}` })),
         });
@@ -254,7 +234,7 @@ export function OperationsCenter({ companyId, initialTab = "today", onNavigate, 
   return <div className="operations-center">
     <header className="operations-title">
       <div><span>内容运营</span><h2>{tabs.find(item => item.id === tab)?.label}</h2><p>当前企业范围内规划、生成并审核草稿；正式发布仍在发布中心逐项确认。</p></div>
-      <button className="secondary-button" disabled={loading || busy} onClick={() => void reload()}>{loading ? "正在刷新…" : "刷新"}</button>
+      <button className="secondary-button" disabled={loading || busy} onClick={() => { setJobsRefreshVersion(value => value + 1); void reload(); }}>{loading ? "正在刷新…" : "刷新"}</button>
     </header>
     <nav className="operations-tabs" aria-label="内容运营功能">{tabs.map(item => <button type="button" key={item.id} className={tab === item.id ? "active" : ""} disabled={busy} onClick={() => setTab(item.id)}>{item.label}</button>)}</nav>
     {message && <div className="notice" role="status">{message}</div>}
@@ -266,7 +246,7 @@ export function OperationsCenter({ companyId, initialTab = "today", onNavigate, 
     {tab === "usage" && <UsageTab companyId={companyId} initialRows={snapshot.usage} />}
     {tab === "import" && <ImportTab companyId={companyId} busy={busy} preview={importPreview} onPreview={preview => { setImportPreview(preview); setUiState(current => ({ ...current, importFileName: preview?.fileName ?? "", importPreviewReady: Boolean(preview) })); }} onMessage={setMessage} onReload={reload} />}
     {tab === "owner" && <OwnerTab rows={snapshot.ownerActions} companyId={companyId} busy={busy} onNavigate={onNavigate} onAction={act} />}
-    {tab === "publish" && <PublishTab rows={snapshot.publishBoard} companyId={companyId} />}
+    {tab === "publish" && <JobsBoard companyId={companyId} refreshVersion={jobsRefreshVersion} />}
   </div>;
 }
 
@@ -370,15 +350,4 @@ function OwnerTab({ rows, companyId, busy, onNavigate, onAction }: { rows: Opera
 
 function OperationsPagination({ view, onPage }: { view: { page: number; pages: number; total: number }; onPage: (page: number) => void }): JSX.Element {
   return <nav className="operations-toolbar" aria-label="运营记录分页"><span>共 {view.total} 条 · 第 {view.page} / {view.pages} 页</span><button className="secondary-button" disabled={view.page === 1} onClick={() => onPage(view.page - 1)}>上一页</button><button className="secondary-button" disabled={view.page === view.pages} onClick={() => onPage(view.page + 1)}>下一页</button></nav>;
-}
-
-function PublishTab({ rows, companyId }: { rows: PublishBoardRow[]; companyId: string }): JSX.Element {
-  const [platform, setPlatform] = useState(""), [account, setAccount] = useState(""), [date, setDate] = useState(""), [status, setStatus] = useState(""), [ownerOnly, setOwnerOnly] = useState(false);
-  const [page, setPage] = useState(1);
-  useEffect(() => { setPage(1); }, [companyId, platform, account, date, status, ownerOnly]);
-  useEffect(() => { setPlatform(""); setAccount(""); setDate(""); setStatus(""); setOwnerOnly(false); }, [companyId]);
-  const filtered = rows.filter(row => (!platform || row.platform === platform) && (!account || row.account === account) && (!date || row.date.slice(0, 10) === date) && (!status || publishStatusLabel(row.status) === status) && (!ownerOnly || row.ownerActionRequired));
-  const view = operationsPage(filtered, page);
-  const statusLabels = [...new Set(rows.map(item => publishStatusLabel(item.status)))];
-  return <section className="panel operations-panel"><div className="panel-heading"><div><h3>发布看板</h3><span>这里仅查看当前企业的发布状态；正式操作继续在发布中心完成。</span></div></div><div className="operations-toolbar operations-publish-filters"><select value={platform} onChange={event => setPlatform(event.target.value)}><option value="">全部平台</option>{[...new Set(rows.map(item => item.platform))].map(item => <option value={item} key={item}>{platformLabel(item)}</option>)}</select><select value={account} onChange={event => setAccount(event.target.value)}><option value="">全部账号</option>{[...new Set(rows.map(item => item.account))].map(item => <option key={item}>{item}</option>)}</select><input type="date" aria-label="发布日期" value={date} onChange={event => setDate(event.target.value)} /><select value={status} onChange={event => setStatus(event.target.value)}><option value="">全部状态</option>{statusLabels.map(item => <option value={item} key={item}>{item}</option>)}</select><label className="operations-checkbox"><input type="checkbox" checked={ownerOnly} onChange={event => setOwnerOnly(event.target.checked)} />只看 Owner 处理项</label></div>{filtered.length === 0 ? <Empty title="当前筛选没有记录" description="调整平台、账号、日期或状态筛选。" /> : <div className="operations-table operations-publish-table"><div className="operations-table-head"><span>内容</span><span>平台</span><span>账号</span><span>日期</span><span>状态</span></div>{view.items.map(row => <div className="operations-table-row" key={row.id}><strong>{row.title}</strong><span>{platformLabel(row.platform)}</span><span>{row.account}</span><span>{dateText(row.date)}</span><div><Status label={publishStatusLabel(row.status)} status={row.status} tone={publishStatusTone(row.status)} />{row.ownerActionRequired && <small className="operations-warning">需要 Owner 处理</small>}</div></div>)}</div>}<OperationsPagination view={view} onPage={setPage} /></section>;
 }

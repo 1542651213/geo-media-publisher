@@ -1,3 +1,4 @@
+import { readOperationsReviewItems } from './operations-review-read-model';
 import { aiRequestGovernor, requestFingerprint } from "./ai-request-budget";
 import type { AISentDataPreview,AIWorkloadPreview } from "../shared/ai-request-budget";
 import { createHash, randomUUID } from "node:crypto";
@@ -237,10 +238,7 @@ export class ContentOperations {
   }
 
   private reviewItems(companyId: string): OperationsReviewItem[] {
-    return this.repository.listContentQualityItems(companyId).filter((item) => item.contentType === "article").map((item) => {
-      const article = this.repository.getArticle(item.articleId)!;
-      return { articleId: article.id, companyId, title: article.title, source: article.source ?? "production", aiGenerated: article.source === "content_studio" || !["manual", "excel_import"].includes(article.aiProvider), targetPlatforms: article.targetPlatforms ?? [], articleStatus: article.status, reviewStatus: item.status, contentHash: article.contentHash, validationWarnings: article.qualityWarnings ?? [], createdAt: article.createdAt, updatedAt: item.updatedAt };
-    });
+    return readOperationsReviewItems(this.repository, companyId);
   }
 
   generatePlan(payload: unknown): ContentPlanItem[] {
