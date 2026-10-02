@@ -2,7 +2,7 @@ import { mkdtempSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { assertSnapshotHandoffIdle, createSnapshotHandoff, registerSnapshotWorker, runSnapshotHandoff } from '../apps/desktop/src/main/snapshot-handoff';
+import { assertSnapshotHandoffIdle, createSnapshotHandoff, readWindowsProcessIdentity, registerSnapshotWorker, runSnapshotHandoff } from '../apps/desktop/src/main/snapshot-handoff';
 
 const identity = { appVersion: '1.1.9', sourceCommit: 'a'.repeat(40), deliveryId: 'R1.15-G', migrations: [] };
 function fixture() {
@@ -18,6 +18,24 @@ function fixture() {
 const complete = { format: 'GEO_CLOSED_USERDATA_V1' as const, status: 'Complete' as const, createdAt: 'synthetic', ...identity, sourceRoot: '', files: [], totalBytes: 0 };
 
 describe('complete snapshot runs after the owning Electron process exits', () => {
+  it('accepts exit between the liveness check and the Windows creation-time query', () => {
+    const missing = new Error('WINDOWS_PROCESS_ALREADY_EXITED');
+    expect(readWindowsProcessIdentity(101, () => { throw missing; }, () => false)).toBeNull();
+    expect(readWindowsProcessIdentity(101, () => '', () => false)).toBeNull();
+  });
+
+  it('preserves query errors and refuses unavailable identity while the process is still alive', () => {
+    const denied = new Error('WINDOWS_PROCESS_QUERY_DENIED');
+    expect(() => readWindowsProcessIdentity(101, () => { throw denied; }, () => true)).toThrow(denied);
+    expect(() => readWindowsProcessIdentity(101, () => '', () => true)).toThrow('PROCESS_IDENTITY_UNAVAILABLE');
+  });
+
+  it('retains exact Windows creation ticks and rejects invalid PIDs before querying', () => {
+    expect(readWindowsProcessIdentity(101, () => '638950000000000001\r\n', () => true)).toBe('638950000000000001');
+    let queried = false;
+    expect(() => readWindowsProcessIdentity(-1, () => { queried = true; return ''; })).toThrow('PROCESS_IDENTITY_INVALID');
+    expect(queried).toBe(false);
+  });
   it('waits for process exit, holds the startup lease, then publishes Complete and releases only its lease', async () => {
     const f = fixture();
     let parentAlive = true, called = false, waits = 0;

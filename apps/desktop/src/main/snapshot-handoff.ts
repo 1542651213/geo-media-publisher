@@ -30,13 +30,25 @@ function owned(handoff: SnapshotHandoff): Request {
   return request;
 }
 export function processAlive(pid: number): boolean { try { process.kill(pid, 0); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false; return true; } }
+export function readWindowsProcessIdentity(pid: number, query = (): string => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `$taskProcess = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($taskProcess) { $taskProcess.StartTime.ToUniversalTime().Ticks.ToString() }`], { windowsHide: true, encoding: 'utf8', timeout: 5_000 }), isAlive = processAlive): string | null {
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('PROCESS_IDENTITY_INVALID');
+  try {
+    const stamp = query().trim();
+    if (!/^\d+$/u.test(stamp)) throw new Error('PROCESS_IDENTITY_UNAVAILABLE');
+    return stamp;
+  } catch (error) {
+    // Get-Process exits nonzero if the parent disappears during the query.
+    // Accept only confirmed exit; a query failure for a live process stays closed.
+    if (!isAlive(pid)) return null;
+    throw error;
+  }
+}
 export function processIdentity(pid: number): string | null {
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('PROCESS_IDENTITY_INVALID');
   if (!processAlive(pid)) return null;
   if (process.platform === 'win32') {
     // Only the exact PID's creation time is read. No names, command lines or secrets.
-    const stamp = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `$taskProcess = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($taskProcess) { $taskProcess.StartTime.ToUniversalTime().Ticks.ToString() }`], { windowsHide: true, encoding: 'utf8', timeout: 5_000 }).trim();
-    return stamp || null;
+    return readWindowsProcessIdentity(pid);
   }
   if (process.platform === 'linux') {
     try { const stat = readFileSync(`/proc/${pid}/stat`, 'utf8'); return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19] ?? null; } catch { return null; }
