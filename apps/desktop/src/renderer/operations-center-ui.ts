@@ -12,6 +12,18 @@ export function canonicalStudioTargets(values: readonly string[]): Array<typeof 
   return values.filter((value): value is typeof STUDIO_TARGETS[number] => allowed.has(value));
 }
 
+export function startOperationsQueueRefresh(refresh:()=>Promise<unknown>,intervalMs=1000):()=>void {
+  let active=true;
+  let timer:ReturnType<typeof setTimeout>;
+  const tick=async():Promise<void>=>{
+    // The UI refresh callback displays read errors; a rejected read must not leak a timer.
+    await refresh().catch(()=>undefined);
+    if(active)timer=setTimeout(()=>void tick(),intervalMs);
+  };
+  timer=setTimeout(()=>void tick(),intervalMs);
+  return()=>{active=false;clearTimeout(timer);};
+}
+
 export async function transitionAndRunGenerationQueue(
   transition: () => Promise<unknown>,
   run: () => Promise<unknown>,

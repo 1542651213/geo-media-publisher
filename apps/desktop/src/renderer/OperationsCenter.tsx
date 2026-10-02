@@ -23,7 +23,7 @@ import type { ProductHealthStatus } from "../shared/product-platform-policy";
 import { platformLabel, publishStatusLabel, publishStatusTone } from "./v11-ui-model";
 import {
   advanceWorkspaceRequest,
-  canonicalStudioTargets,
+  startOperationsQueueRefresh, canonicalStudioTargets,
   factExpiryIso,
   generationProgressPercent,
   initialOperationsUiState,
@@ -217,6 +217,14 @@ export function OperationsCenter({ companyId, initialTab = "today", onNavigate, 
     if (!companyId) { setLoading(false); return; }
     void load(token);
   }, [companyId, initialTab]);
+
+  const queueRefresh=useRef<()=>Promise<unknown>>(async()=>undefined);
+  queueRefresh.current=async()=>{if(!busy)await load(requestToken.current);};
+  const activeGeneration=snapshot.generationQueues.some(queue=>queue.status==="Pending"||queue.status==="Running");
+  useEffect(()=>{
+    if(!activeGeneration)return;
+    return startOperationsQueueRefresh(()=>queueRefresh.current());
+  },[companyId,activeGeneration]);
 
   const reload = async (): Promise<void> => {
     const token = advanceWorkspaceRequest(requestToken.current, companyId);
