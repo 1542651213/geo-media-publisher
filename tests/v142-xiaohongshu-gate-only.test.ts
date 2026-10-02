@@ -83,11 +83,11 @@ describe("v142 Xiaohongshu gate-only runner helpers", () => {
 
   it("keeps active login persistence and release after same-Page identity readback", () => {
     const source = readFileSync(join(process.cwd(), "apps", "desktop", "src", "main", "ipc.ts"), "utf8");
-    const completion = source.indexOf("status = await adapter.completeConnection(completedContext);");
-    const profile = source.indexOf("const profile = adapter.getAccountProfile ? await adapter.getAccountProfile(completedContext) : undefined;", completion);
-    const persistence = source.indexOf("await adapter.persistConnectionSession?.(effectiveContext);", profile);
-    const sync = source.indexOf("const account = await syncBrowserAccount(adapter, effectiveAccountId, input.platformKey, action, profile);", persistence);
-    const release = source.indexOf("await adapter.releaseConnectionSession?.(effectiveContext);", sync);
+    const completion = source.indexOf("status = await authIo(assertCurrent,()=>adapter.completeConnection(completedContext));");
+    const profile = source.indexOf("const profile = adapter.getAccountProfile ? await authIo(assertCurrent,()=>adapter.getAccountProfile!(completedContext)) : undefined;", completion);
+    const persistence = source.indexOf("await authIo(assertBeforeSync,async()=>adapter.persistConnectionSession?.(effectiveContext));", profile);
+    const sync = source.indexOf("const synced = await syncBrowserAccount(adapter, effectiveAccountId, input.platformKey, action, assertBeforeSync,profile);synced.assertCurrent();", persistence);
+    const release = source.indexOf("await authIo(assertCurrent,async()=>adapter.releaseConnectionSession?.(effectiveContext));", sync);
     expect(completion).toBeGreaterThan(-1);
     expect(profile).toBeGreaterThan(completion);
     expect(persistence).toBeGreaterThan(profile);

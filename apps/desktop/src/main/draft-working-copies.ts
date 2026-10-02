@@ -284,12 +284,14 @@ export class DraftWorkingCopies {
   private conflicts(row: Row, canonical: CanonicalDocument): boolean {
     return row.base_version !== canonical.version || row.base_snapshot_hash !== snapshotHash(canonical.snapshot);
   }
-  private view(row: Row, canonical = this.canonicalForRow(row)): DraftWorkingCopy {
+  private view(row: Row, canonical?:CanonicalDocument): DraftWorkingCopy {
+    let canonicalMissing=false;
+    if(!canonical){try{canonical=this.canonicalForRow(row);}catch(reason){if(!reason||typeof reason!=='object'||!('code' in reason)||reason.code!=='DRAFT_DOCUMENT_NOT_FOUND')throw reason;canonicalMissing=true;canonical={companyId:str(row.company_id),version:'MISSING_CANONICAL',snapshot:{title:'原文不存在；恢复文本仍保留',body:''},outputArticleId:null};}}
     const status = z.enum(DRAFT_COPY_STATUSES).parse(row.status);
     return { copyId: str(row.copy_id), companyId: str(row.company_id), documentKind: z.enum(DRAFT_DOCUMENT_KINDS).parse(row.document_kind),
       documentId: str(row.document_id), baseVersion: str(row.base_version), localVersion: Number(row.local_version),
       baseSnapshot: this.snapshot(row.base_snapshot_json), snapshot: this.snapshot(row.snapshot_json),
-      currentVersion: canonical.version, currentSnapshot: canonical.snapshot, hasChanges: row.snapshot_hash !== row.base_snapshot_hash,
+      currentVersion: canonical.version, currentSnapshot: canonical.snapshot, hasChanges: row.snapshot_hash !== row.base_snapshot_hash,canonicalMissing,
       activeEditing: row.active_editing === 1, status: !terminal(status) && this.conflicts(row, canonical) ? "Conflict" : status,
       createdAt: str(row.created_at), updatedAt: str(row.updated_at), persistedAt: str(row.persisted_at) };
   }

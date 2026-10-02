@@ -37,6 +37,8 @@ const connectAction: UserInitiatedAction = { userActionId: "test-connect-action"
 
 function setup(): { manager: OAuthSessionManager; adapter: PlatformAdapter; repository: Record<string, ReturnType<typeof vi.fn>>; credentials: MemoryCredentialStore } {
   const repository = {
+    getAccountById: vi.fn().mockReturnValue({ id: "account-1", platformKey: "example", enabled: true, archivedAt: null,
+      connectionMode: "OAuth", externalAccountId: null, browserSessionId: null }),
     updateAccount: vi.fn(),
     upsertAccountAuthorization: vi.fn(),
     getAccountAuthorization: vi.fn().mockReturnValue(null)

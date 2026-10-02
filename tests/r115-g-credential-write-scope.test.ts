@@ -1,0 +1,4 @@
+import { expect, it } from 'vitest';
+import type { CredentialStore } from '@publisher/security';
+import { CredentialWriteScope } from '../apps/desktop/src/main/credential-write-scope';
+it('rejects stale async credential mutations while leaving ordinary safe storage and disconnect usable',async()=>{const values=new Map<string,string>();const store:CredentialStore={get:key=>values.get(key)??null,has:key=>values.has(key),set:(key,value)=>{values.set(key,value);},delete:key=>{values.delete(key);}};const scope=new CredentialWriteScope(store);let current=true;await expect(scope.run(()=>current,async()=>{scope.credentials.set('first','synthetic');await Promise.resolve();current=false;scope.credentials.set('late','synthetic');})).rejects.toThrow('AUTH_REQUEST_SUPERSEDED');expect(values.has('late')).toBe(false);scope.credentials.delete('first');expect(values.size).toBe(0);});

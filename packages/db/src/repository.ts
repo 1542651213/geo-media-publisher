@@ -1933,14 +1933,14 @@ export class AppRepository {
     return toAccount(this.db.prepare("SELECT * FROM accounts WHERE id=?").get(id) as Row);
   }
 
-  syncBrowserPlatformAccount(input: { accountId: string; platformKey: string; accountName?: string; browserSessionId: string; externalAccountId?: string | null; lastVerifiedAt?: string }): Account {
+  syncBrowserPlatformAccount(input: { accountId: string; platformKey: string; accountName?: string; browserSessionId: string; externalAccountId?: string | null; lastVerifiedAt?: string; enabled?:boolean }): Account {
     const current = this.db.prepare("SELECT * FROM accounts WHERE id=? AND platform_key=?").get(input.accountId, input.platformKey) as Row | undefined;
     if (!current) throw new Error("知乎账号映射不存在");
     const existingByExternal = input.externalAccountId ? this.db.prepare("SELECT id FROM accounts WHERE platform_key=? AND external_account_id=? AND id<>?").get(input.platformKey, input.externalAccountId, input.accountId) as Row | undefined : undefined;
     if (existingByExternal) throw new Error("平台外部账号已绑定到其他内部账号");
     const timestamp = input.lastVerifiedAt ?? now();
     const preservedExternalId = input.externalAccountId === undefined ? (typeof current.external_account_id === "string" ? current.external_account_id : null) : input.externalAccountId;
-    this.db.prepare("UPDATE accounts SET platform_account_name=COALESCE(NULLIF(?,''),platform_account_name), login_status='logged_in', enabled=1, paused_reason=NULL, connection_mode='BrowserAutomation', authorization_status='Authorized', browser_session_id=?, external_account_id=?, archived_at=NULL, last_verified_at=?, last_login_check_at=?, last_used_at=?, updated_at=? WHERE id=? AND platform_key=?").run(input.accountName?.trim() ?? "", input.browserSessionId, preservedExternalId, timestamp, timestamp, timestamp, timestamp, input.accountId, input.platformKey);
+    this.db.prepare("UPDATE accounts SET platform_account_name=COALESCE(NULLIF(?,''),platform_account_name), login_status='logged_in', enabled=?, paused_reason=NULL, connection_mode='BrowserAutomation', authorization_status='Authorized', browser_session_id=?, external_account_id=?, archived_at=NULL, last_verified_at=?, last_login_check_at=?, last_used_at=?, updated_at=? WHERE id=? AND platform_key=?").run(input.accountName?.trim() ?? "", (input.enabled??(current.enabled===1))?1:0, input.browserSessionId, preservedExternalId, timestamp, timestamp, timestamp, timestamp, input.accountId, input.platformKey);
     this.upsertAccountAuthorization({ accountId: input.accountId, platformKey: input.platformKey, authorizationType: "BrowserAutomation", status: "Authorized", providerAccountId: preservedExternalId, providerAccountName: input.accountName ?? null });
     return toAccount(this.db.prepare("SELECT * FROM accounts WHERE id=?").get(input.accountId) as Row);
   }
@@ -1966,7 +1966,7 @@ export class AppRepository {
         creator_id=excluded.creator_id,browser_session_id_hash=excluded.browser_session_id_hash,
         login_generation=excluded.login_generation,active=1,verified_at=excluded.verified_at,updated_at=excluded.updated_at`)
         .run(input.accountId, input.creatorId, input.browserSessionIdHash, loginGeneration, timestamp, timestamp);
-      this.db.prepare("UPDATE accounts SET enabled=1,updated_at=? WHERE id=? AND platform_key='douyin'").run(timestamp, input.accountId);
+    this.db.prepare("UPDATE accounts SET updated_at=? WHERE id=? AND platform_key='douyin'").run(timestamp, input.accountId);
       return { loginGeneration };
     })();
   }
@@ -2005,7 +2005,7 @@ export class AppRepository {
       const account = input.accountId ? this.getAccountById(input.accountId, input.platformKey)
         : this.createAccount({ platformKey: input.platformKey, name: input.name, allowAutoPublish: false, publishMode: "assisted" });
       if (!account || account.archivedAt) throw new Error("OFFICIAL_API_ACCOUNT_NOT_FOUND");
-      const updated = this.syncOfficialApiAccount({ accountId: account.id, platformKey: input.platformKey, accountName: input.name, externalAccountId: input.externalAccountId });
+      const updated = this.syncOfficialApiAccount({ accountId: account.id, platformKey: input.platformKey, accountName: input.name, externalAccountId: input.externalAccountId,enabled:account.enabled });
       persistCredentials(account.id);
       return updated;
     })();

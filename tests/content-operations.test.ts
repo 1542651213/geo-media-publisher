@@ -297,7 +297,7 @@ describe("company-scoped operations", () => {
 
     await operations.runGenerationQueue({ companyId: company.id, queueId: queue.id });
     const source = operations.snapshot(company.id).generationItems.find((item) => item.queueId === queue.id && item.itemKind === "Source")!;
-    expect(source).toMatchObject({ status: "Blocked", errorCode: "CONTENT_VALIDATION_REQUIRED" });
+    expect(source).toMatchObject({ status: "Recoverable", errorCode: "TRANSPORT_UNKNOWN" });
     expect(() => operations.retryFailedGeneration({ companyId: company.id, queueId: queue.id })).toThrow("没有可重试");
     expect(requests).toBe(2);
 
@@ -305,6 +305,7 @@ describe("company-scoped operations", () => {
     expect(operations.reconcileGenerationQueue({ companyId: company.id, queueId: queue.id }).status).toBe("Pending");
     await operations.runGenerationQueue({ companyId: company.id, queueId: queue.id });
     expect(requests).toBe(3);
+    expect(repository.db.prepare("SELECT status FROM ai_request_journal WHERE generation_id=? AND purpose='TitleRepair'").get(source.generationId)).toEqual({status:'Unknown'});
     expect(ai.history(company.id).filter((entry) => entry.sourceArticleId === null)).toHaveLength(1);
     expect(operations.snapshot(company.id).generationItems.find((item) => item.id === source.id)).toMatchObject({ status: "Completed", generationId: source.generationId });
     expect(repository.listJobs()).toEqual([]);

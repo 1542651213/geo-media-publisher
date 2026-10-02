@@ -1,10 +1,12 @@
+import { aiRequestGovernor, requestFingerprint } from "./ai-request-budget";
+import type { AISentDataPreview,AIWorkloadPreview } from "../shared/ai-request-budget";
 import { createHash, randomUUID } from "node:crypto";
 import { assertNoUnsubmittedEdits } from "./draft-working-copies";
 import { z } from "zod";
 import { createAICenterStore, type AppRepository, type GenerationHistory } from "@publisher/db";
 import type { ExcelArticleRowInput, ExcelImportPreview } from "@publisher/domain";
 import { STUDIO_PURPOSES, STUDIO_TARGETS, validateStudioDraft } from "@publisher/domain";
-import type { ProductProviderProfile, StudioOutput } from "./ai-product-center";
+import type { ProductProviderProfile, StudioOutput, StudioGenerationOptions } from "./ai-product-center";
 import {
   OPERATIONS_REVIEW_ACTIONS,
   type ContentPlanItem,
@@ -32,7 +34,9 @@ type Row = Record<string, unknown>;
 
 export interface ContentOperationsAIPort {
   profiles(): ProductProviderProfile[];
-  generate(payload: unknown): Promise<StudioOutput[]>;
+  generate(payload: unknown,options?:StudioGenerationOptions): Promise<StudioOutput[]>;
+  configurationFingerprint?(input:{companyId:string;profileId:string;model:string;templateId:string;templateVersion:number}):string;
+  requestDataPreview?(input:{companyId:string;profileId:string;templateId:string;templateVersion:number;sourceText:string},sourcePolicy?:string):AISentDataPreview;
   saveDraft(id: string, title: string, body: string): { articleId: string; variantId: string | null };
   history(companyId?: string): GenerationHistory[];
 }
@@ -52,7 +56,7 @@ const nullableDateTime = z.iso.datetime({ offset: true }).nullable();
 const factSchema = z.strictObject({ id: idSchema.optional(), companyId: idSchema, category: z.string().trim().min(1).max(100), statement: z.string().trim().min(1).max(10000), source: factSourceSchema, sourceDate: z.iso.date().nullable(), verifiedAt: nullableDateTime, expiresAt: nullableDateTime, approvedForAI: z.boolean(), notes: z.string().max(5000) });
 const studioDefaultsSchema = z.strictObject({ companyId: idSchema, profileId: idSchema.nullable(), model: z.string().trim().min(1).max(200).nullable(), templateId: idSchema.nullable(), templateVersion: z.number().int().positive().nullable(), purpose: z.enum(STUDIO_PURPOSES), targetPlatforms: z.array(z.enum(STUDIO_TARGETS)).min(1).max(6) });
 const duplicateSchema = z.strictObject({ companyId: idSchema, title: z.string().max(2000), body: z.string().max(100000) });
-const queueCreateSchema = z.strictObject({ companyId: idSchema, topic: z.string().trim().min(1).max(10000), requestedCount: z.number().int().min(1).max(20), targetPlatforms: z.array(z.enum(STUDIO_TARGETS)).min(1).max(6), profileId: idSchema, model: z.string().trim().min(1).max(200), templateId: idSchema, templateVersion: z.number().int().positive(), concurrency: z.number().int().min(1).max(4).optional() });
+const queueCreateSchema = z.strictObject({ companyId: idSchema, topic: z.string().trim().min(1).max(10000), requestedCount: z.number().int().min(1).max(20), targetPlatforms: z.array(z.enum(STUDIO_TARGETS)).min(1).max(6), profileId: idSchema, model: z.string().trim().min(1).max(200), templateId: idSchema, templateVersion: z.number().int().positive(), concurrency: z.number().int().min(1).max(4).optional(), previewId:idSchema.optional() });
 const usageSchema = z.strictObject({ companyId: idSchema, days: z.union([z.literal(1), z.literal(7), z.literal(30)]) });
 const optionalImportColumn = z.preprocess(value => typeof value === "string" && !value.trim() ? undefined : value, idSchema.optional());
 // A blank required mapping still produces a preview with row errors so unknown headers can be mapped in UI.
@@ -75,10 +79,14 @@ const planTopics = ["行业科普", "FAQ", "现场案例", "公司介绍", "GEO/
 
 export class ContentOperations {
   private readonly importPreviews = new Map<string, { companyId: string; preview: ExcelImportPreview }>();
+  private readonly activeWork=new Map<string,Promise<void>>();
+  private readonly queueControllers=new Map<string,AbortController>();
+  private readonly governor;
   private readonly runningQueues = new Set<string>();
   private readonly runningCompanies = new Set<string>();
 
   constructor(private readonly repository: AppRepository, private readonly aiCenter: ContentOperationsAIPort, private readonly runtimeHealth?: (accountId: string) => OperationsRuntimeHealth | null, autoBindLegacyAccounts = true) {
+    this.governor=aiRequestGovernor(repository);
     const timestamp = now();
     const interruptedQueueIds = (this.repository.db.prepare("SELECT id FROM operations_generation_queues WHERE status='Running'").all() as Row[]).map((row) => text(row.id));
     this.repository.db.transaction(() => {
@@ -408,9 +416,10 @@ export class ContentOperations {
     const input = usageSchema.parse(payload);
     this.ensureCompany(input.companyId);
     const since = new Date(Date.now() - (input.days - 1) * 86400000).toISOString().slice(0, 10);
-    const rows = this.repository.db.prepare("SELECT provider,model,status,token_usage_json FROM ai_generation_history WHERE company_id=? AND created_at>=?").all(input.companyId, since) as Row[];
+    const rows = this.repository.db.prepare("SELECT provider,model,status,token_usage_json,request_budget_id FROM ai_generation_history WHERE company_id=? AND created_at>=?").all(input.companyId, since) as Row[];
     const groups = new Map<string, OperationsUsageRow>();
     for (const row of rows) {
+      if(typeof row.request_budget_id==="string")continue;
       const provider = text(row.provider), model = text(row.model), key = `${provider}\u0000${model}`;
       const current = groups.get(key) ?? { provider, model, requestCount: 0, successCount: 0, failedCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: null, currency: null };
       let tokenUsage: { input?: number; output?: number } = {};
@@ -421,20 +430,34 @@ export class ContentOperations {
       current.inputTokens += Number(tokenUsage.input ?? 0); current.outputTokens += Number(tokenUsage.output ?? 0); current.totalTokens = current.inputTokens + current.outputTokens;
       groups.set(key, current);
     }
+    const journal=this.repository.db.prepare("SELECT h.provider,h.model,j.status,j.input_tokens,j.output_tokens FROM ai_request_journal j JOIN ai_generation_history h ON h.generation_id=j.generation_id WHERE h.company_id=? AND j.created_at>=?").all(input.companyId,since) as Row[];
+    for(const row of journal){const provider=text(row.provider),model=text(row.model),key=`${provider}\u0000${model}`,current=groups.get(key)??{provider,model,requestCount:0,successCount:0,failedCount:0,inputTokens:0,outputTokens:0,totalTokens:0,cost:null,currency:null};current.requestCount++;if(row.status==="Succeeded")current.successCount++;else if(row.status==="Failed"||row.status==="Unknown")current.failedCount++;current.inputTokens+=integer(row.input_tokens);current.outputTokens+=integer(row.output_tokens);current.totalTokens=current.inputTokens+current.outputTokens;groups.set(key,current);}
     return [...groups.values()].sort((left, right) => right.requestCount - left.requestCount || left.provider.localeCompare(right.provider));
   }
 
+  private queueFingerprint(input:z.infer<typeof queueCreateSchema>):string {const {previewId:_preview,...request}=input;return requestFingerprint({...request,targetPlatforms:unique(input.targetPlatforms)});}
+  private queueSnapshot(input:{companyId:string;profileId:string;model:string;templateId:string;templateVersion:number}):string {return this.aiCenter.configurationFingerprint?.(input)??requestFingerprint({input,profile:this.repository.getAiProviderProfile(input.profileId),context:this.repository.getBrand(input.companyId),facts:this.activeFacts(input.companyId)});}
+  previewGenerationQueue(payload:unknown):AIWorkloadPreview {
+    const input=queueCreateSchema.parse(payload);this.ensureCompany(input.companyId);const profile=this.repository.getAiProviderProfile(input.profileId);if(!profile)throw new Error("AI 服务商配置不存在");
+    const targetCount=unique(input.targetPlatforms).length,workItemCount=input.requestedCount*(1+targetCount);
+    return this.governor.preview({kind:"Queue",companyId:input.companyId,sourceCount:input.requestedCount,targetCount,workItemCount,baseRequests:workItemCount,maxRequests:workItemCount*4,titleRepairAllowance:workItemCount,rateLimitRetryAllowance:workItemCount*2,globalConcurrency:1,maxOutputTokensPerRequest:profile.maxOutputTokens,inputCharacters:input.topic.length*input.requestedCount,model:input.model,templateId:input.templateId,templateVersion:input.templateVersion,costEstimate:null,currency:null,dataSent:this.aiCenter.requestDataPreview?.({...input,sourceText:input.topic},'先按此主题和当前企业资料生成 N 篇源稿（附稿件序号），再把本队列新源稿发送给所选平台的改写请求。未生成的源稿内容尚未知，不读取其他企业或其他历史原稿。')},this.queueFingerprint(input),this.queueSnapshot(input));
+  }
+  async waitForIdle():Promise<void>{await Promise.all(this.activeWork.values());}
+  cancelAllGeneration():void {for(const controller of this.queueControllers.values())controller.abort();}
   createGenerationQueue(payload: unknown): OperationsGenerationQueue {
     const input = queueCreateSchema.parse(payload);
     this.ensureCompany(input.companyId);
     const profile = this.aiCenter.profiles().find((item) => item.id === input.profileId);
     if (!profile) throw new Error("AI 服务商配置不存在");
+    const previewId=input.previewId??this.previewGenerationQueue(input).previewId;
+    const budget=this.governor.activate(previewId,input.companyId,this.queueFingerprint(input),this.queueSnapshot(input));
     const id = randomUUID(), timestamp = now(), targets = unique(input.targetPlatforms);
     const insertItem = this.repository.db.prepare("INSERT INTO operations_generation_items(id,queue_id,company_id,source_index,item_kind,target_platform,status,attempt_count,generation_id,source_draft_id,output_article_id,error_code,available_after,created_at,updated_at) VALUES(?,?,?,?,?,?,'Pending',0,NULL,NULL,NULL,NULL,NULL,?,?)");
     this.repository.db.transaction(() => {
       // AIProductCenter rejects concurrent requests for one company. Persist the
       // effective lane count truthfully until a lower-level global lane manager exists.
       this.repository.db.prepare("INSERT INTO operations_generation_queues(id,company_id,provider,model,profile_id,template_id,template_version,topic,requested_count,target_platforms_json,completed_count,failed_count,status,concurrency,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,0,0,'Pending',1,?,?)").run(id, input.companyId, profile.provider, input.model, input.profileId, input.templateId, input.templateVersion, input.topic, input.requestedCount, JSON.stringify(targets), timestamp, timestamp);
+      this.repository.db.prepare("UPDATE operations_generation_queues SET request_budget_id=?,snapshot_fingerprint=? WHERE id=?").run(budget.previewId,budget.snapshotFingerprint,id);
       for (let sourceIndex = 0; sourceIndex < input.requestedCount; sourceIndex += 1) {
         insertItem.run(randomUUID(), id, input.companyId, sourceIndex, "Source", targets[0], timestamp, timestamp);
         for (const target of targets) insertItem.run(randomUUID(), id, input.companyId, sourceIndex, "Variant", target, timestamp, timestamp);
@@ -454,15 +477,18 @@ export class ContentOperations {
 
   async runGenerationQueue(payload: unknown): Promise<OperationsGenerationQueue> {
     const input = queueIdentitySchema.parse(payload);
-    let queue = this.generationQueue(input);
+    let queue = this.generationQueue({companyId:input.companyId,queueId:input.queueId});
     if (["Completed", "Cancelled"].includes(queue.status)) return queue;
     if (queue.status === "Paused") throw operationsError("QUEUE_STATE_INVALID", "生成队列已暂停");
     if (this.runningQueues.has(queue.id) || this.runningCompanies.has(queue.companyId)) return queue;
+    if(!queue.requestBudgetId)throw operationsError("AI_PREVIEW_REQUIRED","旧队列须重新确认工作量后创建新队列，不能自动补发");
+    let completeWork:()=>void=()=>{};this.activeWork.set(queue.id,new Promise<void>(resolve=>{completeWork=resolve;}));
+    this.queueControllers.set(queue.id,new AbortController());
     this.runningQueues.add(queue.id); this.runningCompanies.add(queue.companyId);
     try {
       this.repository.db.prepare("UPDATE operations_generation_queues SET status='Running',updated_at=? WHERE id=? AND company_id=? AND status IN ('Pending','Failed')").run(now(), queue.id, queue.companyId);
       while (true) {
-        queue = this.generationQueue(input);
+        queue = this.generationQueue({companyId:input.companyId,queueId:input.queueId});
         if (queue.status !== "Running") break;
         const row = this.repository.db.prepare("SELECT * FROM operations_generation_items WHERE queue_id=? AND status='Pending' ORDER BY source_index,CASE item_kind WHEN 'Source' THEN 0 ELSE 1 END,target_platform LIMIT 1").get(queue.id) as Row | undefined;
         if (!row) break;
@@ -472,7 +498,7 @@ export class ContentOperations {
       }
     } finally {
       this.finishQueue(queue.id);
-      this.runningQueues.delete(queue.id); this.runningCompanies.delete(queue.companyId);
+      this.runningQueues.delete(queue.id); this.runningCompanies.delete(queue.companyId);this.queueControllers.delete(queue.id);completeWork();this.activeWork.delete(queue.id);
     }
     return this.generationQueue({ companyId: input.companyId, queueId: input.queueId });
   }
@@ -504,10 +530,15 @@ export class ContentOperations {
       try {
         const sourceRow = item.itemKind === "Variant" ? this.repository.db.prepare("SELECT source_draft_id FROM operations_generation_items WHERE queue_id=? AND source_index=? AND item_kind='Source'").get(queue.id, item.sourceIndex) as Row : undefined;
         const sourceArticleId = sourceRow && typeof sourceRow.source_draft_id === "string" ? sourceRow.source_draft_id : null;
-        const outputs = await this.aiCenter.generate({ companyId: queue.companyId, sourceArticleId, sourceText: `${queue.topic}\n稿件序号：${item.sourceIndex + 1}`, purpose: item.itemKind === "Source" ? "生成文章" : "平台适配", targetPlatforms: [item.targetPlatform], profileId: queue.profileId, model: queue.model, templateId: queue.templateId, templateVersion: queue.templateVersion });
+        const outputs = await this.aiCenter.generate({ companyId: queue.companyId, sourceArticleId, sourceText: `${queue.topic}\n稿件序号：${item.sourceIndex + 1}`, purpose: item.itemKind === "Source" ? "生成文章" : "平台适配", targetPlatforms: [item.targetPlatform], profileId: queue.profileId, model: queue.model, templateId: queue.templateId, templateVersion: queue.templateVersion },{budgetId:queue.requestBudgetId??undefined,signal:this.queueControllers.get(queue.id)?.signal,beforeRequest:()=>{
+          const current=this.generationQueue({companyId:queue.companyId,queueId:queue.id});const live=this.repository.db.prepare("SELECT status FROM operations_generation_items WHERE id=?").get(item.id) as Row|undefined;
+          if(current.status!=="Running"||live?.status!=="Running")throw operationsError("AI_CANCELED","当前生成项已暂停或取消");
+          if(current.snapshotFingerprint!==this.queueSnapshot(current))throw operationsError("AI_PREVIEW_STALE","配置或企业事实已变化，请重新预览工作量");
+        }});
         const output = outputs[0];
         if (!output) throw Object.assign(new Error("生成服务未返回草稿"), { code: "OUTPUT_MISSING" });
-        this.repository.db.prepare("UPDATE operations_generation_items SET generation_id=?,updated_at=? WHERE id=? AND generation_id IS NULL").run(output.generationId, now(), item.id);
+        this.repository.db.prepare("UPDATE operations_generation_items SET generation_id=?,updated_at=? WHERE id=? AND status IN ('Running','Cancelled')").run(output.generationId, now(), item.id);
+        this.repository.db.prepare("INSERT OR IGNORE INTO operations_generation_attempts(item_id,generation_id,created_at) VALUES(?,?,?)").run(item.id,output.generationId,now());
         const history = this.repository.db.prepare("SELECT company_id,source_article_id,target_platform,error_code FROM ai_generation_history WHERE generation_id=?").get(output.generationId) as Row | undefined;
         if (!history || history.company_id !== queue.companyId || history.target_platform !== item.targetPlatform || (typeof history.source_article_id === "string" ? history.source_article_id : null) !== sourceArticleId) {
           this.repository.db.prepare("UPDATE operations_generation_items SET status='Recoverable',error_code='GENERATION_LINKAGE_UNVERIFIED',available_after=NULL,updated_at=? WHERE id=? AND status='Running'").run(now(), item.id);
@@ -629,32 +660,33 @@ export class ContentOperations {
   }
 
   pauseGenerationQueue(payload: unknown): OperationsGenerationQueue {
-    const input = queueIdentitySchema.parse(payload), queue = this.generationQueue(input);
+    const input = queueIdentitySchema.parse(payload), queue = this.generationQueue({companyId:input.companyId,queueId:input.queueId});
     if (!["Pending", "Running"].includes(queue.status)) throw operationsError("QUEUE_STATE_INVALID", "当前队列不能暂停");
     this.repository.db.prepare("UPDATE operations_generation_queues SET status='Paused',updated_at=? WHERE id=?").run(now(), queue.id);
-    return this.generationQueue(input);
+    return this.generationQueue({companyId:input.companyId,queueId:input.queueId});
   }
 
   resumeGenerationQueue(payload: unknown): OperationsGenerationQueue {
-    const input = queueIdentitySchema.parse(payload), queue = this.generationQueue(input);
+    const input = queueIdentitySchema.parse(payload), queue = this.generationQueue({companyId:input.companyId,queueId:input.queueId});
     if (queue.status !== "Paused") throw operationsError("QUEUE_STATE_INVALID", "只有已暂停队列可以恢复");
     this.repository.db.prepare("UPDATE operations_generation_queues SET status='Pending',updated_at=? WHERE id=?").run(now(), queue.id);
-    return this.generationQueue(input);
+    return this.generationQueue({companyId:input.companyId,queueId:input.queueId});
   }
 
   cancelGenerationQueue(payload: unknown): OperationsGenerationQueue {
-    const input = queueIdentitySchema.parse(payload), queue = this.generationQueue(input);
+    const input = queueIdentitySchema.parse(payload), queue = this.generationQueue({companyId:input.companyId,queueId:input.queueId});
     if (["Completed", "Cancelled"].includes(queue.status)) return queue;
+    this.queueControllers.get(queue.id)?.abort();
     const timestamp = now();
     this.repository.db.transaction(() => {
       this.repository.db.prepare("UPDATE operations_generation_queues SET status='Cancelled',updated_at=? WHERE id=?").run(timestamp, queue.id);
       this.repository.db.prepare("UPDATE operations_generation_items SET status='Cancelled',updated_at=? WHERE queue_id=? AND status<>'Completed'").run(timestamp, queue.id);
     })();
-    return this.generationQueue(input);
+    return this.generationQueue({companyId:input.companyId,queueId:input.queueId});
   }
 
   retryFailedGeneration(payload: unknown): OperationsGenerationQueue {
-    const input = queueIdentitySchema.parse(payload), queue = this.generationQueue(input), timestamp = now();
+    const input = queueIdentitySchema.parse(payload), queue = this.generationQueue({companyId:input.companyId,queueId:input.queueId}), timestamp = now();
     if (queue.status === "Cancelled") throw operationsError("QUEUE_STATE_INVALID", "已取消队列不能重试");
     const failedSources = (this.repository.db.prepare("SELECT source_index FROM operations_generation_items WHERE queue_id=? AND item_kind='Source' AND status='Failed'").all(queue.id) as Row[]).map((row) => integer(row.source_index));
     let changed = this.repository.db.prepare(`UPDATE operations_generation_items SET status='Pending',
@@ -665,12 +697,12 @@ export class ContentOperations {
     if (!changed) throw operationsError("QUEUE_STATE_INVALID", "没有可重试的失败项");
     this.repository.db.prepare("UPDATE operations_generation_queues SET status='Pending',updated_at=? WHERE id=?").run(timestamp, queue.id);
     this.refreshQueueCounts(queue.id, timestamp);
-    return this.generationQueue(input);
+    return this.generationQueue({companyId:input.companyId,queueId:input.queueId});
   }
 
   reconcileGenerationQueue(payload: unknown): OperationsGenerationQueue {
-    const input = queueIdentitySchema.parse(payload), queue = this.generationQueue(input), timestamp = now();
-    const blocked = this.repository.db.prepare("SELECT * FROM operations_generation_items WHERE queue_id=? AND status='Blocked' AND error_code='CONTENT_VALIDATION_REQUIRED' ORDER BY source_index,CASE item_kind WHEN 'Source' THEN 0 ELSE 1 END").all(queue.id) as Row[];
+    const input = queueIdentitySchema.parse(payload), queue = this.generationQueue({companyId:input.companyId,queueId:input.queueId}), timestamp = now();
+    const blocked = this.repository.db.prepare("SELECT * FROM operations_generation_items WHERE queue_id=? AND ((status='Blocked' AND error_code='CONTENT_VALIDATION_REQUIRED') OR status='Recoverable') ORDER BY source_index,CASE item_kind WHEN 'Source' THEN 0 ELSE 1 END").all(queue.id) as Row[];
     this.repository.db.transaction(() => {
       for (const row of blocked) {
         const item = this.itemFromRow(row), generationId = item.generationId;
@@ -680,16 +712,16 @@ export class ContentOperations {
         if (!history || history.status !== "Saved" || typeof history.output_article_id !== "string" || history.company_id !== queue.companyId || history.target_platform !== item.targetPlatform || (typeof history.source_article_id === "string" ? history.source_article_id : null) !== expectedSourceId) continue;
         const article = this.repository.getArticle(history.output_article_id);
         if (!article || article.brandId !== queue.companyId) continue;
-        const completed = this.repository.db.prepare("UPDATE operations_generation_items SET status='Completed',source_draft_id=?,output_article_id=?,error_code=NULL,available_after=NULL,updated_at=? WHERE id=? AND status='Blocked' AND error_code='CONTENT_VALIDATION_REQUIRED'").run(item.itemKind === "Source" ? article.id : expectedSourceId, article.id, timestamp, item.id);
+        const completed = this.repository.db.prepare("UPDATE operations_generation_items SET status='Completed',source_draft_id=?,output_article_id=?,error_code=NULL,available_after=NULL,updated_at=? WHERE id=? AND status=? AND error_code=?").run(item.itemKind === "Source" ? article.id : expectedSourceId, article.id, timestamp, item.id,item.status,row.error_code);
         if (completed.changes === 1 && item.itemKind === "Source") this.repository.db.prepare("UPDATE operations_generation_items SET status='Pending',error_code=NULL,updated_at=? WHERE queue_id=? AND source_index=? AND item_kind='Variant' AND status='Blocked' AND error_code='SOURCE_DRAFT_NOT_AVAILABLE'").run(timestamp, queue.id, item.sourceIndex);
       }
     })();
     this.finishQueue(queue.id);
-    return this.generationQueue(input);
+    return this.generationQueue({companyId:input.companyId,queueId:input.queueId});
   }
 
   resolveValidationGeneration(payload: unknown): OperationsGenerationQueue {
-    const input = validationDecisionSchema.parse(payload), queue = this.generationQueue(input);
+    const input = validationDecisionSchema.parse(payload), queue = this.generationQueue({companyId:input.companyId,queueId:input.queueId});
     const item = this.repository.db.prepare("SELECT * FROM operations_generation_items WHERE id=? AND queue_id=? AND company_id=?").get(input.itemId, queue.id, input.companyId) as Row | undefined;
     if (!item || item.status !== "Blocked" || item.error_code !== "CONTENT_VALIDATION_REQUIRED") throw operationsError("QUEUE_STATE_INVALID", "该生成项不是待人工处理的内容校验红项");
     const timestamp = now();
@@ -699,16 +731,16 @@ export class ContentOperations {
       if (input.decision === "regenerate") this.repository.db.prepare("UPDATE operations_generation_queues SET status='Pending',updated_at=? WHERE id=?").run(timestamp, queue.id);
     })();
     this.finishQueue(queue.id);
-    return this.generationQueue(input);
+    return this.generationQueue({companyId:input.companyId,queueId:input.queueId});
   }
 
   resolveRecoverableGeneration(payload: unknown): OperationsGenerationQueue {
-    const input = recoverableDecisionSchema.parse(payload), queue = this.generationQueue(input);
+    const input = recoverableDecisionSchema.parse(payload), queue = this.generationQueue({companyId:input.companyId,queueId:input.queueId});
     const item = this.repository.db.prepare("SELECT * FROM operations_generation_items WHERE id=? AND queue_id=? AND company_id=?").get(input.itemId, queue.id, input.companyId) as Row | undefined;
     if (!item || item.status !== "Recoverable") throw operationsError("QUEUE_STATE_INVALID", "该生成项不是待人工决定的未知结果");
     const timestamp = now();
     this.repository.db.transaction(() => {
-      this.repository.db.prepare("UPDATE operations_generation_items SET status=?,error_code=NULL,available_after=NULL,updated_at=? WHERE id=? AND status='Recoverable'").run(input.decision === "retry" ? "Pending" : "Cancelled", timestamp, input.itemId);
+      this.repository.db.prepare("UPDATE operations_generation_items SET status=?,generation_id=CASE WHEN ?='retry' THEN NULL ELSE generation_id END,error_code=NULL,available_after=NULL,updated_at=? WHERE id=? AND status='Recoverable'").run(input.decision === "retry" ? "Pending" : "Cancelled", input.decision, timestamp, input.itemId);
       if (item.item_kind === "Source") this.repository.db.prepare("UPDATE operations_generation_items SET status=?,error_code=NULL,updated_at=? WHERE queue_id=? AND source_index=? AND item_kind='Variant' AND status='Blocked' AND error_code='SOURCE_DRAFT_NOT_AVAILABLE'").run(input.decision === "retry" ? "Pending" : "Cancelled", timestamp, queue.id, item.source_index);
       this.repository.db.prepare("UPDATE operations_generation_queues SET status='Pending',updated_at=? WHERE id=? AND status='Failed'").run(timestamp, queue.id);
     })();
@@ -742,7 +774,8 @@ export class ContentOperations {
   }
 
   private queueFromRow(row: Row): OperationsGenerationQueue {
-    return { id: text(row.id), companyId: text(row.company_id), provider: text(row.provider), model: text(row.model), profileId: text(row.profile_id), templateId: text(row.template_id), templateVersion: integer(row.template_version), topic: text(row.topic), requestedCount: integer(row.requested_count), targetPlatforms: parseArray(row.target_platforms_json), completedCount: integer(row.completed_count), failedCount: integer(row.failed_count), status: row.status as OperationsGenerationQueue["status"], concurrency: integer(row.concurrency), executionPolicy: "SerialPerCompany", createdAt: text(row.created_at), updatedAt: text(row.updated_at) };
+    const requestBudgetId=typeof row.request_budget_id==="string"?row.request_budget_id:null,budget=requestBudgetId?this.governor.get(requestBudgetId):null;
+    return { requestBudgetId,snapshotFingerprint:typeof row.snapshot_fingerprint==="string"?row.snapshot_fingerprint:null,issuedRequests:budget?.issuedRequests??0,maxRequests:budget?.maxRequests??0, id: text(row.id), companyId: text(row.company_id), provider: text(row.provider), model: text(row.model), profileId: text(row.profile_id), templateId: text(row.template_id), templateVersion: integer(row.template_version), topic: text(row.topic), requestedCount: integer(row.requested_count), targetPlatforms: parseArray(row.target_platforms_json), completedCount: integer(row.completed_count), failedCount: integer(row.failed_count), status: row.status as OperationsGenerationQueue["status"], concurrency: integer(row.concurrency), executionPolicy: "SerialPerCompany", createdAt: text(row.created_at), updatedAt: text(row.updated_at) };
   }
 
   private generationItems(companyId: string): OperationsGenerationItem[] {

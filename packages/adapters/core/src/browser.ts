@@ -651,7 +651,7 @@ export class PlaywrightSessionManager {
     if (session.storageMode !== "PERSISTENT_PROFILE") {
       try { await session.browser.close(); } catch (error) { firstError ??= error; }
     }
-    if (identity) this.updateRuntimeState(browserSessionCredentialKey(identity), "UNVERIFIED", session.contextDebugId ?? null, null);
+    if (identity && (!this.activeSessions.has(browserSessionCredentialKey(identity)) || this.activeSessions.get(browserSessionCredentialKey(identity)) === session)) this.updateRuntimeState(browserSessionCredentialKey(identity), "UNVERIFIED", session.contextDebugId ?? null, null);
     this.releaseSession(session, identity);
     if (identity) this.emitSessionLifecycle({ phase: firstError ? "CLOSE_FAILED" : "CLOSE_COMPLETED", identity, session, browserConnected: this.browserConnected(session.browser), closeInfo });
     this.explicitCloseSessions.delete(session);

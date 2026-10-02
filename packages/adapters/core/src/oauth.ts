@@ -55,6 +55,14 @@ interface TokenPayload {
 
 type FetchPort = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
+const TOKEN_REJECTION_ERRORS = new Set(["invalid_grant", "invalid_token", "expired_token", "token_expired", "token_revoked", "refresh_token_revoked", "invalid_refresh_token"]);
+
+/** A local missing refresh token, permission/configuration error or network failure is not proof of revocation. */
+export function isOAuthCredentialRejection(error: unknown): boolean {
+  return error instanceof PlatformAdapterError && error.code === "LOGIN_EXPIRED"
+    && TOKEN_REJECTION_ERRORS.has(error.providerCode?.toLowerCase() ?? "");
+}
+
 function base64Url(bytes: Buffer): string {
   return bytes.toString("base64url");
 }
@@ -108,7 +116,9 @@ export class OAuthManager {
   }
 
   async completeAuthorization(accountId: string, config: OAuthPlatformConfig, secrets: Record<string, string> | undefined, code: string, state: string): Promise<OAuthTokenSet> {
-    const pending = this.readPending(accountId, config.platformKey);
+    const pendingKey = this.pendingKey(accountId, config.platformKey);
+    const pendingSnapshot = this.store.get(pendingKey);
+    const pending = this.readPending(pendingSnapshot);
     if (!pending || pending.state !== state) throw new PlatformAdapterError("PERMISSION_DENIED", "OAuth state 校验失败，请重新发起授权");
     if (Date.now() - new Date(pending.createdAt).getTime() > 10 * 60 * 1000) throw new PlatformAdapterError("AUTH_REQUIRED", "OAuth 授权会话已过期，请重新发起授权");
     const body = new URLSearchParams({
@@ -119,13 +129,19 @@ export class OAuthManager {
     });
     if (pending.verifier) body.set("code_verifier", pending.verifier);
     const token = await this.exchange(config, secrets, body);
+    // The remote exchange already happened. This comparison protects only local persistence and the newer pending session.
+    if (this.store.get(pendingKey) !== pendingSnapshot)
+      throw new PlatformAdapterError("USER_ACTION_REQUIRED", "OAuth 授权轮次已变化，迟到结果未写入安全存储", "OAUTH_REQUEST_SUPERSEDED");
     this.store.set(this.tokenKey(accountId, config.platformKey), JSON.stringify(token));
-    this.store.delete(this.pendingKey(accountId, config.platformKey));
+    this.store.delete(pendingKey);
     return token;
   }
 
   getToken(accountId: string, platformKey: string): OAuthTokenSet | null {
-    const stored = this.store.get(this.tokenKey(accountId, platformKey));
+    return this.readToken(this.store.get(this.tokenKey(accountId, platformKey)));
+  }
+
+  private readToken(stored: string | null): OAuthTokenSet | null {
     if (!stored) return null;
     try {
       const value = JSON.parse(stored) as OAuthTokenSet;
@@ -136,12 +152,15 @@ export class OAuthManager {
   }
 
   async refresh(accountId: string, config: OAuthPlatformConfig, secrets: Record<string, string> | undefined): Promise<OAuthTokenSet> {
-    const current = this.getToken(accountId, config.platformKey);
+    const tokenKey = this.tokenKey(accountId, config.platformKey), tokenSnapshot = this.store.get(tokenKey);
+    const current = this.readToken(tokenSnapshot);
     if (!current?.refreshToken) throw new PlatformAdapterError("LOGIN_EXPIRED", "OAuth refresh token 不可用，请重新授权");
     const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: current.refreshToken, ...config.extraTokenParams });
     const refreshed = await this.exchange({ ...config, tokenUrl: config.refreshUrl ?? config.tokenUrl }, secrets, body);
     const token = { ...refreshed, refreshToken: refreshed.refreshToken ?? current.refreshToken };
-    this.store.set(this.tokenKey(accountId, config.platformKey), JSON.stringify(token));
+    if (this.store.get(tokenKey) !== tokenSnapshot)
+      throw new PlatformAdapterError("USER_ACTION_REQUIRED", "OAuth 凭据已变化，迟到刷新结果未写入安全存储", "OAUTH_REQUEST_SUPERSEDED");
+    this.store.set(tokenKey, JSON.stringify(token));
     return token;
   }
 
@@ -177,7 +196,10 @@ export class OAuthManager {
     }
     if (!response.ok || payload.error) {
       const detail = stringValue(payload.error_description) ?? stringValue(payload.message) ?? stringValue(payload.error) ?? `HTTP ${response.status}`;
-      throw new PlatformAdapterError(response.status === 401 || response.status === 403 ? "PERMISSION_DENIED" : "NETWORK_ERROR", `OAuth Token 交换失败：${detail}`);
+      const providerCode = stringValue(payload.error);
+      const rejectedToken = response.status < 500 && response.status !== 429 && TOKEN_REJECTION_ERRORS.has(providerCode?.toLowerCase() ?? "");
+      throw new PlatformAdapterError(rejectedToken ? "LOGIN_EXPIRED" : response.status === 401 || response.status === 403 ? "PERMISSION_DENIED" : "NETWORK_ERROR",
+        `OAuth Token 交换失败：${detail}`, providerCode);
     }
     const nested = payload.data && typeof payload.data === "object" ? payload.data as TokenPayload : payload;
     const accessToken = stringValue(nested.access_token);
@@ -210,8 +232,7 @@ export class OAuthManager {
     return headers;
   }
 
-  private readPending(accountId: string, platformKey: string): PendingAuthorization | null {
-    const stored = this.store.get(this.pendingKey(accountId, platformKey));
+  private readPending(stored: string | null): PendingAuthorization | null {
     if (!stored) return null;
     try {
       const value = JSON.parse(stored) as PendingAuthorization;

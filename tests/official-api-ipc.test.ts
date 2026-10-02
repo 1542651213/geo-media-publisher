@@ -24,7 +24,7 @@ function fixture() {
   const values = new Map<string, string>();
   const credentials: CredentialStore = { get: key => values.get(key) ?? null, has: key => values.has(key),
     set: (key, value) => { values.set(key, value); }, delete: key => { values.delete(key); } };
-  registerIpc({ repository, credentials, aiCredentials: credentials, publisher: {}, scheduler: {}, registry: {},
+  registerIpc({ repository, credentials, aiCredentials: credentials, publisher: {}, scheduler: {}, registry: {tryGetForConnection:()=>null,getAccountConnectionMode:()=> 'OfficialAPI'},
     resolveAccountSecrets: () => ({}), dataDirectory: root, coverDir: root, appLogPath: "", databasePath: join(root, "publisher.db"),
     logger: { info: () => {}, warn: () => {}, error: () => {} } } as unknown as IpcDependencies);
   const invoke = (channel: string, payload: unknown) => { const handler = handlers.get(channel); if (!handler) throw Error("IPC_NOT_FOUND"); return handler({}, payload); };

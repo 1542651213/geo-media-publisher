@@ -84,7 +84,9 @@ describe("R1.15-F operations center UI safety", () => {
     releaseRun?.();
 
     const source = readFileSync("apps/desktop/src/renderer/OperationsCenter.tsx", "utf8");
-    expect(source.match(/transitionAndRunGenerationQueue/g)?.length).toBeGreaterThanOrEqual(6);
+    for (const action of ["resumeGenerationQueue", "retryFailedGeneration", "resolveRecoverableGeneration", "resolveValidationGeneration"]) {
+      expect(source).toContain(`transitionAndRunGenerationQueue(() => operationsApi().${action}`);
+    }
     expect(source).toContain("operationsApi().reconcileGenerationQueue");
     expect(source).toContain("operationsApi().resolveValidationGeneration");
   });
@@ -167,7 +169,7 @@ describe("R1.15-F operations center UI safety", () => {
     expect(source).not.toContain("account.loginStatus");
     expect(source).toContain("publishStatusLabel(row.status) === status");
     expect(source).toContain("publishStatusTone(row.status)");
-    expect(source).toContain("platformLabel(account.platformKey)");
+    expect(source).toContain("platformLabel(item.platformKey)");
   });
 
   it("exposes the complete draft-only operations workspace without final publish controls", () => {
@@ -180,4 +182,13 @@ describe("R1.15-F operations center UI safety", () => {
     expect(source).not.toContain("preparePublish");
     expect(source).not.toContain("confirmPublish");
   });
+  it("keeps saved-result reconciliation separate from an explicit remaining-budget run", () => {
+    const source = readFileSync("apps/desktop/src/renderer/OperationsCenter.tsx", "utf8");
+    expect(source).toContain('onAction(() => operationsApi().reconcileGenerationQueue');
+    expect(source).not.toContain('transitionAndRunGenerationQueue(() => operationsApi().reconcileGenerationQueue');
+    expect(source).toContain('继续剩余预算生成');
+    expect(source).toContain('validationBlocked.length > 0 || recoverable.length > 0');
+  });
+
+
 });

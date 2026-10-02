@@ -1,0 +1,9 @@
+const legacyPaidEntries=new Set(['content-studio:start','content-studio:plan-topics','content-studio:regenerate','ai:start-batch','articles:generate-variant','settings:test-ai','settings:set-secret']);
+const restoredExternalEntries=new Set(['sessions:refresh','product:preflight','platforms:open','ai-center:list-models','ai-center:test-connection','ai-center:generate','operations:run-generation-queue','operations:resume-generation-queue','articles:prepare-publish','jobs:run','jobs:retry','jobs:confirm','jobs:reconcile','jobs:reconcile-browser','jobs:prepare-existing-douyin','website:import-credentials','website:verify-connection','website:recover','website:maintain','b01:request-final-approval']);
+const localAccountEntries=new Set(['accounts:list','accounts:overview','accounts:create','accounts:update','accounts:credential-schema','accounts:credential-status','accounts:set-credentials','accounts:disconnect','accounts:cancel-login','accounts:get-runtime-session-status','accounts:close-runtime-session']);
+export function assertExternalOperationAllowed(channel:string,payload:unknown,restoredPaused:boolean):void{
+  if(legacyPaidEntries.has(channel)||(channel==='quality-benchmark:run'&&(!payload||typeof payload!=='object'||!('runType' in payload)||payload.runType!=='MOCK_BASELINE')))
+    throw Object.assign(new Error('旧 AI 生成入口已暂停。请使用 AI Studio 或运营生成队列，先查看资料与请求预算，再确认生成。历史记录仍可读取。'),{code:'AI_LEGACY_ENTRY_PAUSED'});
+  if(restoredPaused&&(restoredExternalEntries.has(channel)||channel.startsWith('toutiao:')||channel.startsWith('platform-self-test:')&& !['platform-self-test:list','platform-self-test:get'].includes(channel)||channel.startsWith('accounts:')&&!localAccountEntries.has(channel)))
+    throw Object.assign(new Error('隔离恢复处于人工复核状态，外部请求和自动执行已暂停；请先核对企业、身份、Unknown 和旧任务。'),{code:'RESTORE_EXTERNAL_EXECUTION_PAUSED'});
+}

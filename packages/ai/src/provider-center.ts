@@ -10,7 +10,7 @@ export const PROVIDER_DEFINITIONS: readonly ProviderDefinition[] = [
 ];
 export interface ProviderConfig { provider: ProviderKey; baseUrl: string; defaultModel: string; timeoutMs?: number; maxOutputTokens?: number }
 export interface ModelDescriptor { id: string; displayName: string }
-export interface GenerationRequest { model: string; systemPrompt: string; userPrompt: string }
+export interface GenerationRequest { signal?: AbortSignal; model: string; systemPrompt: string; userPrompt: string }
 export interface GenerationResult { text: string; model: string; tokenUsage?: { input: number; output: number }; durationMs: number }
 export class TextProviderError extends Error {
   constructor(readonly code: string, message: string, readonly httpStatus?: number) { super(message); this.name = "TextProviderError"; }
@@ -33,14 +33,16 @@ export class TextProviderClient {
     validateProviderConfig(config);
     this.base = config.baseUrl.replace(/\/+$/u, "");
   }
-  private async request(path: string, body?: unknown): Promise<Record<string, unknown>> {
+  private async request(path: string, body?: unknown, signal?:AbortSignal): Promise<Record<string, unknown>> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (this.config.provider !== "ollama") {
       if (!this.secret?.trim()) throw new TextProviderError("KEY_NOT_CONFIGURED", "API Key 尚未配置");
       headers[this.config.provider === "mimo" ? "api-key" : "Authorization"] = this.config.provider === "mimo" ? this.secret.trim() : `Bearer ${this.secret.trim()}`;
     }
+    if(signal?.aborted)throw new TextProviderError("AI_CANCELED","请求尚未发出，已取消");
+    const requestSignal=signal?AbortSignal.any([signal,AbortSignal.timeout(this.config.timeoutMs??30000)]):AbortSignal.timeout(this.config.timeoutMs??30000);
     let response: Response;
-    try { response = await this.fetchPort(`${this.base}${path}`, { method: body ? "POST" : "GET", headers, body: body ? JSON.stringify(body) : undefined, redirect: "error", signal: AbortSignal.timeout(this.config.timeoutMs ?? 30000) }); }
+    try { response = await this.fetchPort(`${this.base}${path}`, { method: body ? "POST" : "GET", headers, body: body ? JSON.stringify(body) : undefined, redirect: "error", signal: requestSignal }); }
     catch { throw new TextProviderError("TRANSPORT_UNKNOWN", "连接暂时不可用或请求超时，生成结果无法确认；请检查连接后自行决定是否重新生成"); }
     if (!response.ok) {
       const code = response.status === 401 || response.status === 403 ? "AUTH_INVALID" : response.status === 429 ? "RATE_LIMITED" : response.status >= 500 ? "SERVICE_UNAVAILABLE" : "REQUEST_REJECTED";
@@ -54,7 +56,7 @@ export class TextProviderClient {
       const decoder = new TextDecoder(); let bytes = 0, text = "";
       try {
         while (true) {
-          const chunk = await reader.read();
+          const chunk = await reader.read().catch(()=>{throw new TextProviderError("TRANSPORT_UNKNOWN","生成响应在读取期间中断；结果无法确认，请人工核对后决定");});
           if (chunk.done) break;
           bytes += chunk.value.byteLength;
           if (bytes > 2_000_000) { await reader.cancel(); throw new Error(); }
@@ -63,7 +65,7 @@ export class TextProviderClient {
         text += decoder.decode(); data = JSON.parse(text);
       } finally { reader.releaseLock(); }
     }
-    catch { throw new TextProviderError("RESPONSE_INVALID", "AI 服务返回了无法读取的结果"); }
+    catch(error) { if(error instanceof TextProviderError)throw error; if(requestSignal.aborted)throw new TextProviderError("TRANSPORT_UNKNOWN","请求已发出，结果无法确认"); throw new TextProviderError("RESPONSE_INVALID", "AI 服务返回了无法读取的结果"); }
     if (!data || typeof data !== "object" || Array.isArray(data)) throw new TextProviderError("RESPONSE_INVALID", "AI 服务结果格式无效");
     return data as Record<string, unknown>;
   }
@@ -94,7 +96,7 @@ export class TextProviderClient {
     const tokens = this.config.maxOutputTokens ?? 3000;
     const body = { model: input.model, messages: [{ role: "system", content: input.systemPrompt }, { role: "user", content: input.userPrompt }], stream: false,
       ...(native ? { options: { num_predict: tokens } } : this.config.provider === "mimo" || this.config.provider === "openai" ? { max_completion_tokens: tokens } : { max_tokens: tokens }) };
-    const data = await this.request(native ? "/api/chat" : "/chat/completions", body);
+    const data = await this.request(native ? "/api/chat" : "/chat/completions", body, input.signal);
     const message = native ? data.message : Array.isArray(data.choices) ? (data.choices[0] as { message?: unknown })?.message : null;
     const text = message && typeof message === "object" ? (message as { content?: unknown }).content : undefined;
     if (typeof text !== "string" || !text.trim()) throw new TextProviderError("EMPTY_OUTPUT", "AI 返回空内容，请检查模型和输入");

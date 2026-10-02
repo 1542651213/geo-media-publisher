@@ -33,6 +33,8 @@ describe("Douyin image/text account overview", () => {
     repository.seedDevelopment(join(process.cwd(), "PLATFORMS.csv"));
     const account = repository.createAccount({ platformKey: "douyin", name: "Owner" });
     const other = repository.createAccount({ platformKey: "douyin", name: "Other" });
+    const fixtureCompany=repository.listBrands()[0]!; repository.setSetting("operationsWorkspaceCompanyId",fixtureCompany.id);
+    for(const fixtureAccount of [account,other])repository.db.prepare("INSERT INTO operations_account_company_bindings(account_id,company_id,bound_at,updated_at) VALUES(?,?,?,?)").run(fixtureAccount.id,fixtureCompany.id,"fixture","fixture");
     repository.updateAccount(other.id, { loginStatus: "logged_in" });
     repository.saveDouyinImageTextConnection({ accountId: account.id, creatorId: "72388977613", browserSessionIdHash: "owned-session" });
     repository.updateAccount(account.id, { loginStatus: "logged_in" });

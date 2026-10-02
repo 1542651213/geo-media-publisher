@@ -24,6 +24,7 @@ export interface DraftWorkingCopy extends DraftDocumentRef {
   currentVersion: string;
   currentSnapshot: DraftEditSnapshot;
   hasChanges: boolean;
+  canonicalMissing?:boolean;
   activeEditing: boolean;
   status: DraftCopyStatus;
   createdAt: string;

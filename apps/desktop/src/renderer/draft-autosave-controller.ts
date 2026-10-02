@@ -14,8 +14,9 @@ export class DraftAutosaveController {
   private timer:ReturnType<typeof setTimeout>|null=null;
   private deadline:ReturnType<typeof setTimeout>|null=null;
   private pending:Promise<void>|null=null;
+  private transitioning=false;
   constructor(copy:DraftWorkingCopy,private readonly api:DraftWorkingCopiesApi,private readonly changed:()=>void){this.confirmed=copy;this.snapshot={...copy.snapshot};this.revision=copy.localVersion;if(copy.status==='Conflict')this.state={phase:'Conflict',message:'存在版本冲突；恢复文本已保留'};}
-  capture(snapshot:DraftEditSnapshot):void {if(snapshot.title===this.snapshot.title&&snapshot.body===this.snapshot.body)return;this.snapshot={...snapshot};this.revision++;this.state={phase:'Saving',message:'保存中…'};this.changed();this.schedule();}
+  capture(snapshot:DraftEditSnapshot):void {if(this.transitioning)throw new Error('DRAFT_TRANSITION_IN_PROGRESS');if(snapshot.title===this.snapshot.title&&snapshot.body===this.snapshot.body)return;this.snapshot={...snapshot};this.revision++;this.state={phase:'Saving',message:'保存中…'};this.changed();this.schedule();}
   composition(value:boolean):void {this.composing=value;if(value)this.clearTimers();else if(this.revision>this.confirmed.localVersion)this.schedule();}
   private schedule():void {if(this.composing)return;if(this.timer)clearTimeout(this.timer);this.timer=setTimeout(()=>{void this.flush().catch(()=>{});},350);if(!this.deadline)this.deadline=setTimeout(()=>{void this.flush().catch(()=>{});},750);}
   private clearTimers():void {if(this.timer)clearTimeout(this.timer);if(this.deadline)clearTimeout(this.deadline);this.timer=null;this.deadline=null;}
@@ -32,7 +33,9 @@ export class DraftAutosaveController {
       try{await this.pending;}finally{this.pending=null;}
     }
   }
-  async leave():Promise<void>{await this.flush();this.confirmed=await this.api.release({companyId:this.confirmed.companyId,copyId:this.confirmed.copyId,localVersion:this.confirmed.localVersion});}
-  async commit():Promise<DraftCommitResult>{await this.flush();return this.api.commit({companyId:this.confirmed.companyId,copyId:this.confirmed.copyId,baseVersion:this.confirmed.baseVersion,localVersion:this.confirmed.localVersion});}
+  private async transition<T>(operation:()=>Promise<T>):Promise<T>{if(this.transitioning)throw new Error('DRAFT_TRANSITION_IN_PROGRESS');this.transitioning=true;this.changed();try{await this.flush();return await operation();}finally{this.transitioning=false;this.changed();}}
+  get locked():boolean{return this.transitioning;}
+  async leave():Promise<void>{await this.transition(async()=>{this.confirmed=await this.api.release({companyId:this.confirmed.companyId,copyId:this.confirmed.copyId,localVersion:this.confirmed.localVersion});});}
+  async commit():Promise<DraftCommitResult>{return this.transition(()=>this.api.commit({companyId:this.confirmed.companyId,copyId:this.confirmed.copyId,baseVersion:this.confirmed.baseVersion,localVersion:this.confirmed.localVersion}));}
   async discard():Promise<void>{this.clearTimers();if(this.pending)await this.pending;this.confirmed=await this.api.discard({companyId:this.confirmed.companyId,copyId:this.confirmed.copyId,localVersion:this.confirmed.localVersion});this.snapshot={...this.confirmed.currentSnapshot};this.revision=this.confirmed.localVersion;this.changed();}
 }

@@ -1,3 +1,4 @@
+import type { AIWorkloadPreview } from "./ai-request-budget";
 export const OPERATIONS_QUEUE_STATUSES = ["Pending", "Running", "Paused", "Completed", "Failed", "Cancelled"] as const;
 export type OperationsQueueStatus = typeof OPERATIONS_QUEUE_STATUSES[number];
 export const OPERATIONS_ITEM_STATUSES = ["Pending", "Running", "Completed", "Failed", "Cancelled", "Recoverable", "Blocked"] as const;
@@ -101,6 +102,7 @@ export interface DuplicateWarningResult {
 }
 
 export interface OperationsGenerationQueue {
+  requestBudgetId?:string|null; snapshotFingerprint?:string|null; issuedRequests?:number; maxRequests?:number;
   id: string;
   companyId: string;
   provider: string;
@@ -232,7 +234,8 @@ export interface OperationsApi {
   saveStudioDefaults(input: Omit<OperationsStudioDefaults, "updatedAt">): Promise<OperationsStudioDefaults>;
   duplicateWarnings(input: { companyId: string; title: string; body: string }): Promise<DuplicateWarningResult>;
   usage(input: { companyId: string; days: OperationsUsageRange }): Promise<OperationsUsageRow[]>;
-  createGenerationQueue(input: { companyId: string; topic: string; requestedCount: number; targetPlatforms: string[]; profileId: string; model: string; templateId: string; templateVersion: number; concurrency?: number }): Promise<OperationsGenerationQueue>;
+  previewGenerationQueue(input: { companyId: string; topic: string; requestedCount: number; targetPlatforms: string[]; profileId: string; model: string; templateId: string; templateVersion: number; concurrency?: number }): Promise<AIWorkloadPreview>;
+  createGenerationQueue(input: { companyId: string; topic: string; requestedCount: number; targetPlatforms: string[]; profileId: string; model: string; templateId: string; templateVersion: number; concurrency?: number; previewId?:string }): Promise<OperationsGenerationQueue>;
   generationQueue(input: { companyId: string; queueId: string }): Promise<OperationsGenerationQueue>;
   runGenerationQueue(input: { companyId: string; queueId: string }): Promise<OperationsGenerationQueue>;
   pauseGenerationQueue(input: { companyId: string; queueId: string }): Promise<OperationsGenerationQueue>;

@@ -23,6 +23,8 @@ export interface AccountSessionRehydrationOptions {
   /** Re-read the Main-owned binding after remote I/O so stale probes cannot promote a replaced login generation. */
   resolveAuthoritativeTarget?(accountId: string, platformKey: string): AccountSessionTarget | null | Promise<AccountSessionTarget | null>;
   resolveSecrets?(accountId: string, platformKey: string): Record<string, string> | undefined;
+  runInAuthScope?<T>(isCurrent:()=>boolean,operation:()=>Promise<T>):Promise<T>;
+  isAuthoritativeTargetCurrent?(target:AccountSessionTarget):boolean;
   concurrency?: number;
   now?: () => Date;
 }
@@ -84,7 +86,9 @@ export class AccountSessionRehydrationCoordinator {
     this.epochs.set(key, epoch);
     this.fingerprints.set(key, fingerprint);
     this.store(requested, "CHECKING", null, false, source);
-    const request = this.verify(requested, source).then(async result => {
+    const isCurrent=():boolean=>this.epochs.get(key)===epoch&&(this.options.isAuthoritativeTargetCurrent?.(requested)??true);
+    const operation=this.options.runInAuthScope?this.options.runInAuthScope(isCurrent,()=>this.verify(requested,source)):this.verify(requested,source);
+    const request = operation.then(async result => {
       const stale = await this.staleBinding(requested);
       if (this.epochs.get(key) !== epoch) return this.getSnapshot(requested.accountId, requested.platformKey)
         ?? this.makeSnapshot(requested, "UNVERIFIED", "REQUEST_SUPERSEDED", false, source);

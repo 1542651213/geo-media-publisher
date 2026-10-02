@@ -1,5 +1,7 @@
+import { CredentialWriteScope } from "./credential-write-scope";
 import { assertCurrentContentApproved, assertJobCurrentCompany } from "./content-review-authority";
 import { app, BrowserWindow, ipcMain, safeStorage } from "electron";
+import { BUILD_IDENTITY } from '../shared/build-identity';
 import { createClosedSnapshot, type SnapshotIdentity } from "./backup-restore";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -40,6 +42,7 @@ let shutdownReady = false;
 const draftFlushBarrier = new DraftFlushBarrier();
 const restoredExecutionPaused = existsSync(join(runtimePaths.userData, "restore-pending-owner-review.json"));
 let pendingFullSnapshot: {directory:string;identity:SnapshotIdentity} | null = null;
+let databaseClosed=false;
 let closeDatabase: (()=>void) | null = null;
 const approvedWindowCloses = new WeakSet<BrowserWindow>();
 ipcMain.on("drafts:flush-result", (event, requestId: unknown, success: unknown) => { draftFlushBarrier.respond(event.sender.id, requestId, success); });
@@ -67,14 +70,15 @@ async function createWindow(): Promise<void> {
   const dataDirectory = runtimePaths.dataDirectory;
   const databasePath = runtimePaths.database;
   const database = openDatabase(databasePath, migrationsDir);
-  closeDatabase = () => { if(database.db.open){database.db.pragma("wal_checkpoint(TRUNCATE)");database.db.close();} };
+  closeDatabase = () => { if(database.db.open){database.db.pragma("wal_checkpoint(TRUNCATE)");database.db.close();databaseClosed=true;} };
   const isDevelopment = isDevelopmentEnvironment(app.isPackaged);
   if (isDevelopment) database.repository.seedDevelopment(csvPath);
   else database.repository.seedPlatformCatalog(csvPath);
   const appLogPath = join(dataDirectory, "logs", "app.log");
   const logger = createFileLogger(appLogPath);
   recordAppStartup(logger, { pid: process.pid, packaged: app.isPackaged, userDataPath: app.getPath("userData"), productionDataPath: dataDirectory, appLogPath });
-  const credentials = new SafeStorageCredentialStore(join(dataDirectory, "credentials.enc"), safeStorage);
+  const credentialWriteScope=new CredentialWriteScope(new SafeStorageCredentialStore(join(dataDirectory, "credentials.enc"), safeStorage));
+  const credentials=credentialWriteScope.credentials;
   const ordinaryDouyinEnabled = productPlatform("douyin")?.ordinaryPublishEnabled === true;
   const b01AcceptanceEnabled = !ordinaryDouyinEnabled && b01CandidateCapabilityEnabled(app.isPackaged, process.resourcesPath);
   const ordinaryWebsiteEnabled = productPlatform("website")?.ordinaryPublishEnabled === true;
@@ -95,6 +99,7 @@ async function createWindow(): Promise<void> {
   ownedBrowserSessionClosers.add(async () => {
     const closableAdapters = registry.listAll().filter((adapter): adapter is typeof adapter & { closeOwnedSessions(): Promise<void> } => typeof (adapter as { closeOwnedSessions?: unknown }).closeOwnedSessions === "function");
     await Promise.all(closableAdapters.map((adapter) => adapter.closeOwnedSessions()));
+    await registry.browserSessionManager?.closeAll();
   });
   database.repository.syncAdapterManifests(registry.list().map((adapter) => ({ manifest: adapter.manifest, capabilities: adapter.getCapabilities() })));
   database.repository.reconcileAdapterRegistrations(registry.list().map((adapter) => adapter.platformKey));
@@ -124,11 +129,12 @@ async function createWindow(): Promise<void> {
     allowScheduledJob: (job) => productPlatform(job.platformKey)?.batchPublishEnabled === true
       && operatorPublishBlockReason(job.platformKey, database.repository.listPlatforms().find((platform) => platform.platformKey === job.platformKey)) === null
   });
-  registerIpc({ repository: database.repository, publisher, scheduler, registry, browserSessions: registry.browserSessionManager, b01AcceptanceEnabled, officialApi, sprintAcceptance, resolveAccountSecrets, dataDirectory, coverDir: join(dataDirectory, "covers"), logger, credentials, aiCredentials: credentials, appLogPath, databasePath, processDiagnostics, automaticExecutionDisabled: restoredExecutionPaused, queueClosedSnapshot: () => {
+  registerIpc({ registerShutdown:cleanup=>ownedBrowserSessionClosers.add(cleanup), runInAuthScope:(isCurrent,operation)=>credentialWriteScope.run(isCurrent,operation), repository: database.repository, publisher, scheduler, registry, browserSessions: registry.browserSessionManager, b01AcceptanceEnabled, officialApi, sprintAcceptance, resolveAccountSecrets, dataDirectory, coverDir: join(dataDirectory, "covers"), logger, credentials, aiCredentials: credentials, appLogPath, databasePath, processDiagnostics, automaticExecutionDisabled: restoredExecutionPaused, queueClosedSnapshot: () => {
+    const active=database.db.prepare("SELECT COUNT(*) AS count FROM publish_jobs WHERE status IN ('Running','Preparing','Submitting','Publishing')").get() as {count:number};if(active.count)throw new Error("存在运行中的发布或提交操作，请先核对原任务后创建完整快照");
     if(pendingFullSnapshot)throw new Error("完整快照正在安排，请等待正常退出完成");
     const root=join(dirname(runtimePaths.userData),"geo-full-snapshots");mkdirSync(root,{recursive:true});
     const directory=join(root,`snapshot-${new Date().toISOString().replace(/[:.]/gu,"-")}`);
-    pendingFullSnapshot={directory,identity:{appVersion:app.getVersion(),sourceCommit: "SOURCE_IDENTITY_PENDING",deliveryId:"R1.15-G",migrations:(database.db.prepare("SELECT id FROM migrations ORDER BY id").all() as {id:string}[]).map(row=>row.id)}};
+    pendingFullSnapshot={directory,identity:{appVersion:app.getVersion(),sourceCommit:BUILD_IDENTITY.sourceCommit,deliveryId:BUILD_IDENTITY.deliveryId,migrations:(database.db.prepare("SELECT id FROM migrations ORDER BY id").all() as {id:string}[]).map(row=>row.id)}};
     writeFileSync(directory+".status.json",JSON.stringify({status:"PendingClose",directory,createdAt:new Date().toISOString()}));
     setTimeout(()=>app.quit(),250);
     return {directory,status:"PendingClose" as const};
@@ -142,8 +148,8 @@ async function createWindow(): Promise<void> {
   const window = new BrowserWindow({
     width: 1480,
     height: 960,
-    minWidth: 1180,
-    minHeight: 760,
+    minWidth: 960,
+    minHeight: 600,
     backgroundColor: "#f4f6f9",
     webPreferences: { preload: join(__dirname, "../preload/preload.js"), contextIsolation: true, nodeIntegration: false, sandbox: true }
   });
@@ -192,7 +198,7 @@ app.on("before-quit", (event) => {
     closeDatabase?.();
     if(pendingFullSnapshot){
       const {directory,identity}=pendingFullSnapshot;
-      try{const manifest=createClosedSnapshot(runtimePaths.userData,directory,identity,()=>BrowserWindow.getAllWindows().every(window=>approvedWindowCloses.has(window)));writeFileSync(directory+".status.json",JSON.stringify({status:"Complete",directory,createdAt:manifest.createdAt,totalBytes:manifest.totalBytes}));}
+      try{const manifest=createClosedSnapshot(runtimePaths.userData,directory,identity,()=>databaseClosed&&BrowserWindow.getAllWindows().every(window=>approvedWindowCloses.has(window)));writeFileSync(directory+".status.json",JSON.stringify({status:"Complete",directory,createdAt:manifest.createdAt,totalBytes:manifest.totalBytes}));}
       catch(error){writeFileSync(directory+".status.json",JSON.stringify({status:"Incomplete",directory,error:error instanceof Error?error.message:"BACKUP_FAILED"}));processDiagnostics.record("FULL_SNAPSHOT_FAILED",{error});}
     }
     shutdownReady = true;

@@ -4,12 +4,14 @@ import type { PublisherApi } from "../shared/api";
 const invoke = <T>(channel: string, payload?: unknown): Promise<T> => ipcRenderer.invoke(channel, payload) as Promise<T>;
 
 const api: PublisherApi = {
+  colleaguePackages:{export:input=>invoke('colleague-packages:export',input),pick:()=>invoke('colleague-packages:pick'),import:previewId=>invoke('colleague-packages:import',{previewId})},
   accountOnboarding: { preview: () => invoke("account-onboarding:preview"), confirm: input => invoke("account-onboarding:confirm", input) },
   drafts: { open: input => invoke("drafts:open", input), get: input => invoke("drafts:get", input), persist: input => invoke("drafts:persist", input), listRecovery: input => invoke("drafts:list-recovery", input), commit: input => invoke("drafts:commit", input), discard: input => invoke("drafts:discard", input), release: input => invoke("drafts:release", input), resolve: input => invoke("drafts:resolve", input) },
   lifecycle: { onDraftFlush: listener => { const handler = (_event: Electron.IpcRendererEvent, requestId: string): void => listener(requestId); ipcRenderer.on("drafts:flush-request", handler); return () => ipcRenderer.removeListener("drafts:flush-request", handler); }, draftFlushResult: (requestId, success) => ipcRenderer.send("drafts:flush-result", requestId, success) },
   sessions: { snapshots: () => invoke("sessions:snapshots"), refresh: accountId => invoke("sessions:refresh", { accountId }) },
   workspace: { companies: () => invoke("workspace:companies"), current: () => invoke("workspace:current"), select: companyId => invoke("workspace:select", { companyId }) },
   operations: {
+    previewGenerationQueue:input=>invoke("operations:preview-generation-queue",input),
     preparePlanGeneration: input => invoke("operations:prepare-plan-generation", input), consumePlanGenerationSeed: companyId => invoke("operations:consume-plan-generation-seed", { companyId }),
     getStudioDefaults: companyId => invoke("operations:get-studio-defaults", { companyId }), saveStudioDefaults: input => invoke("operations:save-studio-defaults", input),
     snapshot: companyId => invoke("operations:snapshot", { companyId }), accountCompany: accountId => invoke("operations:account-company", { accountId }), listUnboundAccounts: () => invoke("operations:unbound-accounts"),
@@ -22,8 +24,9 @@ const api: PublisherApi = {
     reconcileGenerationQueue: input => invoke("operations:reconcile-generation-queue", input), resolveValidationGeneration: input => invoke("operations:resolve-validation-generation", input),
     resolveRecoverableGeneration: input => invoke("operations:resolve-recoverable-generation", input)
   },
-  product: { health: () => invoke("product:health"), preflight: input => invoke("product:preflight", input), diagnostics: () => invoke("product:diagnostics"), exportDiagnostics: () => invoke("product:export-diagnostics") },
+  product: { buildIdentity:()=>invoke('product:build-identity'),health: () => invoke("product:health"), preflight: input => invoke("product:preflight", input), diagnostics: () => invoke("product:diagnostics"), exportDiagnostics: () => invoke("product:export-diagnostics") },
   aiCenter: {
+    previewGeneration:input=>invoke("ai-center:preview-generation" ,input),requestBudget:(id,companyId)=>invoke("ai-center:request-budget",{id,companyId}),cancel:companyId=>invoke("ai-center:cancel",{companyId}),
     definitions: () => invoke("ai-center:definitions"), profiles: () => invoke("ai-center:profiles"), saveProfile: input => invoke("ai-center:save-profile", input),
     setCredential: (id, value) => invoke("ai-center:set-credential", { id, value }), listModels: id => invoke("ai-center:list-models", { id }), testConnection: id => invoke("ai-center:test-connection", { id }),
     context: companyId => invoke("ai-center:context", { companyId }), saveContext: input => invoke("ai-center:save-context", input), templates: () => invoke("ai-center:templates"), saveTemplate: input => invoke("ai-center:save-template", input),

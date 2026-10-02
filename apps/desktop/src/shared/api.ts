@@ -6,6 +6,8 @@ import type { AIProductCenter } from "../main/ai-product-center";
 import type { OperationsApi } from "./content-operations";
 import type { AccountOnboardingApi } from "./account-onboarding";
 import type { DraftWorkingCopiesApi } from "./draft-working-copies";
+import type { ColleaguePackagesApi } from './colleague-data-package';
+import type { BuildIdentity } from './build-identity';
 import type { SafeAccountSessionSnapshot } from "@publisher/adapters-core";
 import type { ProductAccountHealth, ProductPreflightResult } from "./product-platform-policy";
 import type { ContentQualityAuditView, ContentQualityItemView, ContentQualityReviewView, ContentQualityStateView, HumanReviewDatasetItemView, HumanReviewDatasetView, HumanReviewSubmitInput, HumanReviewItemReviewView, QualityBenchmarkContentView, QualityBenchmarkMetrics, QualityBenchmarkRunView } from "@publisher/db";
@@ -185,14 +187,18 @@ export interface ManagedVideoAsset extends VideoAsset {
 }
 
 export interface PublisherApi {
+  colleaguePackages:ColleaguePackagesApi;
   accountOnboarding: AccountOnboardingApi;
   drafts: DraftWorkingCopiesApi;
   lifecycle: { onDraftFlush(listener: (requestId: string) => void): () => void; draftFlushResult(requestId: string, success: boolean): void };
   sessions: { snapshots(): Promise<SafeAccountSessionSnapshot[]>; refresh(accountId: string): Promise<SafeAccountSessionSnapshot | null> };
   workspace: { companies(): Promise<Brand[]>; current(): Promise<string | null>; select(companyId: string): Promise<{ companyId: string }> };
   operations: OperationsApi & { pickImportFile(): Promise<{ fileName: string; columns: string[]; rows: Array<Record<string, string>> } | null> };
-  product: { health(): Promise<ProductAccountHealth[]>; preflight(input: { articleId: string; platformKey: string; platformAccountId: string; selectedImageAssetId?: string | null; websiteSettings?: OfficialApiContentSettings }): Promise<ProductPreflightResult>; diagnostics(): Promise<Record<string, unknown>>; exportDiagnostics(): Promise<string | null> };
+  product: { buildIdentity():Promise<BuildIdentity&{runtimeAppVersion:string;packaged:boolean;automaticExecutionDisabled:boolean}>;health(): Promise<ProductAccountHealth[]>; preflight(input: { articleId: string; platformKey: string; platformAccountId: string; selectedImageAssetId?: string | null; websiteSettings?: OfficialApiContentSettings }): Promise<ProductPreflightResult>; diagnostics(): Promise<Record<string, unknown>>; exportDiagnostics(): Promise<string | null> };
   aiCenter: {
+    previewGeneration(input:Parameters<AIProductCenter["previewGeneration"]>[0]):Promise<ReturnType<AIProductCenter["previewGeneration"]>>;
+    requestBudget(id:string,companyId:string):Promise<ReturnType<AIProductCenter["requestBudget"]>>;
+    cancel(companyId:string):Promise<{requested:boolean}>;
     definitions(): Promise<ReturnType<AIProductCenter["definitions"]>>;
     profiles(): Promise<ReturnType<AIProductCenter["profiles"]>>;
     saveProfile(input: Parameters<AIProductCenter["saveProfile"]>[0]): Promise<ReturnType<AIProductCenter["saveProfile"]>>;

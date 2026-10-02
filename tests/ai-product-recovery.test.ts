@@ -27,10 +27,12 @@ it("retains the first draft when its one title repair has an unknown result", as
     const brand = repository.createBrand({ name: "甲品牌", companyName: "甲企业" });
     const [draft] = await service.generate(request(brand.id, profileId));
     expect(calls).toBe(2);
-    expect(draft).toMatchObject({ title: "甲".repeat(21), body: "甲企业流程资料", status: "NeedsUserAction" });
+    // G retains known Base output, but the unknown repair remains Unknown rather than a retryable failure.
+    expect(draft).toMatchObject({ title: "甲".repeat(21), body: "甲企业流程资料", status: "Unknown" });
     expect(service.draft(draft!.generationId)?.body).toBe("甲企业流程资料");
     expect(() => service.saveDraft(draft!.generationId, draft!.title, draft!.body)).toThrow("校验");
     expect(repository.listJobs()).toEqual([]);
+    expect(repository.db.prepare("SELECT status FROM ai_request_journal WHERE generation_id=? AND purpose='TitleRepair'").get(draft!.generationId)).toEqual({status:'Unknown'});
   }, async () => { calls++; if (calls === 2) throw new Error("request outcome unknown"); return completion("甲".repeat(21)); });
 });
 

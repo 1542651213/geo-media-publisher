@@ -116,6 +116,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
   protected readonly sessionManager: BrowserSessionManager;
   private readonly fallbackActiveSessions = new Map<string, BrowserSession>();
   private readonly fallbackPendingConnections = new Set<string>();
+  private readonly connectionGenerations = new Map<string, number>();
   private readonly diagnosticColdOpenAllowances = new Set<string>();
   private readonly onConnectionDiagnostic?: (diagnostic: BrowserConnectionDiagnostic) => void;
   readonly adapterDebugId = randomUUID();
@@ -313,10 +314,13 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
 
   async logout(ctx: AccountContext): Promise<void> {
     const identity = this.identity(ctx);
+    const generation = this.connectionGenerations.get(`${identity.platformKey}:${identity.accountId}`);
     try { await this.closeActive(this.identity(ctx), { reason: "EXPLICIT_LOGOUT", callerOperation: "BrowserAutomationAdapter.logout" }); }
     finally {
-      this.finishConnection(identity);
-      this.sessionManager.clear(identity);
+      if (this.connectionGenerations.get(`${identity.platformKey}:${identity.accountId}`) === generation) {
+        this.finishConnection(identity);
+        this.sessionManager.clear(identity);
+      }
     }
   }
 
@@ -608,6 +612,8 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
   }
 
   private markConnectionPending(identity: { platformKey: string; accountId: string }): void {
+    const key = `${identity.platformKey}:${identity.accountId}`;
+    this.connectionGenerations.set(key, (this.connectionGenerations.get(key) ?? 0) + 1);
     const manager = this.sessionManager as unknown as { markConnectionPending?: (value: { platformKey: string; accountId: string }) => void };
     manager.markConnectionPending?.(identity);
     this.fallbackPendingConnections.add(`${identity.platformKey}:${identity.accountId}`);
@@ -631,7 +637,7 @@ export class BrowserAutomationAdapter implements AutomationAdapter {
     finally {
       const manager = this.sessionManager as unknown as { clearActiveSession?: (value: { platformKey: string; accountId: string }, value2?: BrowserSession) => void };
       manager.clearActiveSession?.(identity, active ?? undefined);
-      this.fallbackActiveSessions.delete(key);
+      if (this.fallbackActiveSessions.get(key) === active) this.fallbackActiveSessions.delete(key);
     }
   }
 

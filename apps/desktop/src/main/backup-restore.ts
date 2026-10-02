@@ -4,12 +4,19 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import Database from "better-sqlite3";
 import { z } from "zod";
+import { BUILD_IDENTITY } from '../shared/build-identity';
 
 export interface SnapshotIdentity { appVersion: string; sourceCommit: string; deliveryId: string; migrations: string[] }
 const fileSchema=z.strictObject({path:z.string().min(1).max(1000),bytes:z.number().int().nonnegative().max(2_000_000_000),sha256:z.string().regex(/^[a-f0-9]{64}$/u)});
 const manifestSchema=z.strictObject({format:z.literal('GEO_CLOSED_USERDATA_V1'),status:z.enum(['Incomplete','Complete']),createdAt:z.string(),appVersion:z.string(),sourceCommit:z.string(),deliveryId:z.string(),migrations:z.array(z.string()).max(1000),sourceRoot:z.string(),files:z.array(fileSchema).max(100000),totalBytes:z.number().nonnegative().max(10_000_000_000)});
 export type FullSnapshotManifest=z.infer<typeof manifestSchema>;
 const MAX_BYTES=10_000_000_000;
+function supportedMigrations():string[]{return BUILD_IDENTITY.migrations.length?BUILD_IDENTITY.migrations:readdirSync(resolve('packages/db/migrations')).filter(name=>name.endsWith('.sql')).sort();}
+function assetReferences(db:Database.Database):string[]{
+  const paths=(db.prepare('SELECT file_path AS path FROM media_assets UNION SELECT file_path AS path FROM brand_assets UNION SELECT local_path AS path FROM video_assets').all() as {path:string}[]).map(row=>row.path);
+  for(const row of db.prepare('SELECT metadata_json FROM media_assets').all() as {metadata_json:string}[]){const metadata=JSON.parse(row.metadata_json) as Record<string,unknown>;if(typeof metadata.coverPath==='string'&&metadata.coverPath)paths.push(metadata.coverPath);}
+  return [...new Set(paths)];
+}
 function digest(path:string):string { const hash=createHash('sha256'),fd=openSync(path,'r'),buffer=Buffer.alloc(1024*1024);try{let count:number;while((count=readSync(fd,buffer,0,buffer.length,null))>0)hash.update(buffer.subarray(0,count));return hash.digest('hex');}finally{closeSync(fd);} }
 function canonical(path:string):string { const absolute=resolve(path);if(existsSync(absolute))return realpathSync(absolute);return join(canonical(dirname(absolute)),relative(dirname(absolute),absolute)); }
 function within(path:string,root:string):boolean {const p=canonical(path).toLowerCase(),r=canonical(root).toLowerCase();return p===r||p.startsWith(r+'\\')||p.startsWith(r+'/');}
@@ -66,8 +73,8 @@ export function validateFullSnapshot(directory:string,appVersion:string):{valid:
       if(db.pragma('integrity_check',{simple:true})!=='ok'||(db.pragma('foreign_key_check') as unknown[]).length)throw new Error('SNAPSHOT_DATABASE_INVALID');
       const migrations=(db.prepare("SELECT id FROM migrations ORDER BY id").all() as {id:string}[]).map(row=>row.id);
       if(JSON.stringify(migrations)!==JSON.stringify([...manifest.migrations].sort()))throw new Error('SNAPSHOT_MIGRATIONS_MISMATCH');
-      const assets=db.prepare("SELECT file_path FROM media_assets UNION SELECT file_path FROM brand_assets").all() as {file_path:string}[];
-      for(const asset of assets){if(!within(asset.file_path,manifest.sourceRoot))throw new Error('SNAPSHOT_ASSET_OUTSIDE_SOURCE');const assetPath=relative(manifest.sourceRoot,asset.file_path).replaceAll('\\','/');if(!names.has(assetPath))throw new Error('SNAPSHOT_ASSET_MISSING');}
+      const supported=supportedMigrations();if(migrations.some((name,index)=>supported[index]!==name))throw new Error('SNAPSHOT_SCHEMA_INCOMPATIBLE');
+      for(const path of assetReferences(db)){if(!within(path,manifest.sourceRoot))throw new Error('SNAPSHOT_ASSET_OUTSIDE_SOURCE');const assetPath=relative(manifest.sourceRoot,path).replaceAll('\\','/');if(!names.has(assetPath))throw new Error('SNAPSHOT_ASSET_MISSING');}
     }finally{db.close();}
     return{valid:true,message:'完整快照清单、文件校验、SQLite 完整性和外键通过；凭据仍需同一 Windows 用户的 Main 验证。',manifest};
   }catch(error){return{valid:false,message:error instanceof Error&&!(error instanceof z.ZodError)?error.message:'SNAPSHOT_MANIFEST_INVALID'};}
@@ -83,10 +90,12 @@ export function restoreFullSnapshot(directory:string,destination:string,appVersi
   // Remap managed asset references in this new copy. Frozen jobs/intents/records are never rewritten.
   const db=new Database(join(destination,'production-data','publisher.db'));
   try{db.transaction(()=>{
-    for(const table of ['media_assets','brand_assets']){
-      const assets=db.prepare(`SELECT id,file_path FROM ${table}`).all() as {id:string;file_path:string}[];
-      for(const asset of assets){if(!within(asset.file_path,check.manifest!.sourceRoot))throw new Error('RESTORE_ASSET_OUTSIDE_SOURCE');const target=join(destination,relative(check.manifest!.sourceRoot,asset.file_path));if(!existsSync(target))throw new Error('RESTORE_ASSET_MISSING');db.prepare(`UPDATE ${table} SET file_path=? WHERE id=?`).run(target,asset.id);}
+    const remap=(path:string):string=>{if(!within(path,check.manifest!.sourceRoot))throw new Error('RESTORE_ASSET_OUTSIDE_SOURCE');const target=join(destination,relative(check.manifest!.sourceRoot,path));if(!existsSync(target))throw new Error('RESTORE_ASSET_MISSING');return target;};
+    for(const [table,column] of [['media_assets','file_path'],['brand_assets','file_path'],['video_assets','local_path']]){
+      const assets=db.prepare(`SELECT id,${column} AS path FROM ${table}`).all() as {id:string;path:string}[];
+      for(const asset of assets)db.prepare(`UPDATE ${table} SET ${column}=? WHERE id=?`).run(remap(asset.path),asset.id);
     }
+    for(const row of db.prepare('SELECT id,metadata_json FROM media_assets').all() as {id:string;metadata_json:string}[]){const metadata=JSON.parse(row.metadata_json) as Record<string,unknown>;if(typeof metadata.coverPath==='string'&&metadata.coverPath){metadata.coverPath=remap(metadata.coverPath);db.prepare('UPDATE media_assets SET metadata_json=? WHERE id=?').run(JSON.stringify(metadata),row.id);}}
   })();db.pragma('wal_checkpoint(TRUNCATE)');}finally{db.close();}
   return{directory:destination,automaticExecutionDisabled:true};
 }

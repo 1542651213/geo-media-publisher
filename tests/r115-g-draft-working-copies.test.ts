@@ -27,6 +27,7 @@ function fixture(): Fixture {
   return value;
 }
 function open(f: Fixture) { return f.drafts.open({ companyId: f.companyId, documentKind: "Article", documentId: f.articleId }); }
+it('keeps orphaned recovery text readable without blocking another document in the company',()=>{const f=fixture(),copy=open(f);write(f,copy);f.repository.deleteArticle(f.articleId);const recovery=f.drafts.listRecovery({companyId:f.companyId});expect(recovery[0]).toMatchObject({canonicalMissing:true,snapshot:changed,status:'Conflict'});expect(f.drafts.get({companyId:f.companyId,copyId:copy.copyId}).snapshot).toEqual(changed);const next=f.repository.createArticle({brandId:f.companyId,...initial,topic:'其他文档',keyword:'其他',city:'',summary:'',tags:[],seoKeywords:[],articleType:'article',aiProvider:'manual',aiModel:'manual',generatedAt:'fixture',reusePolicy:'once',contentHash:'other-version'});if(!next)throw new Error('fixture required');expect(f.drafts.open({companyId:f.companyId,documentKind:'Article',documentId:next.id}).documentId).toBe(next.id);expect(()=>f.drafts.commit({companyId:f.companyId,copyId:copy.copyId,baseVersion:copy.baseVersion,localVersion:1})).toThrow('原文章不存在');});
 function write(f: Fixture, copy: ReturnType<typeof open>, localVersion = 1, snapshot = changed) {
   return f.drafts.persist({ companyId: f.companyId, copyId: copy.copyId, baseVersion: copy.baseVersion, localVersion, snapshot });
 }

@@ -1,3 +1,7 @@
+import { captureAccountAuthBoundary, invalidateAccountAuthBoundary } from "./account-auth-boundary";
+import { assertExternalOperationAllowed } from './external-operation-policy';
+import { exportColleaguePackage,inspectColleaguePackage,importColleaguePackage } from './colleague-data-package';
+import { BUILD_IDENTITY } from '../shared/build-identity';
 import { restoreFullSnapshot, validateFullSnapshot } from "./backup-restore";
 import { AccountOnboarding } from "./account-onboarding";
 import { assertCurrentContentApproved } from "./content-review-authority";
@@ -110,6 +114,8 @@ export interface IpcDependencies {
   appLogPath: string;
   errorLogPath?: string;
   databasePath: string;
+  registerShutdown?(cleanup:()=>Promise<void>):void;
+  runInAuthScope?<T>(isCurrent:()=>boolean,operation:()=>Promise<T>):Promise<T>;
   automaticExecutionDisabled?: boolean;
   queueClosedSnapshot?: ()=>{directory:string;status:"PendingClose"};
   restoreDatabase?: (backupPath: string) => void;
@@ -136,7 +142,7 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
   ipcMain.removeHandler(channel);
   ipcMain.handle(channel, async (event, payload) => {
     try {
-      if(restoredExecutionPaused && (/^(?:accounts:(?:begin-login|complete-login|refresh-login|check-login|open-backend)|website:(?:verify-connection|recover|maintain)|sessions:refresh|ai-center:(?:generate|test-connection|list-models)|operations:(?:run-generation-queue|resume-generation-queue)|ai:(?:generate|run)|content-studio:(?:generate|run)|jobs:(?:confirm|run|retry)|articles:prepare-publish|platform-self-test:)/u.test(channel)))throw new Error("隔离恢复处于人工复核状态，外部请求和自动执行已暂停；请先核对企业、身份、Unknown 和旧任务。");
+      assertExternalOperationAllowed(channel,payload,restoredExecutionPaused);
       if (!workspaceController?.current() && ["articles:list", "image-assets:list"].includes(channel)) return [];
       if (!workspaceController?.current() && channel === "articles:page") return { items: [], page: 1, pageSize: 50, total: 0, totalPages: 1 };
       payload = workspaceController?.prepare(channel, payload) ?? payload;
@@ -244,7 +250,7 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
       expectedRemoteIdentity: binding?.active ? binding.creatorId : account.externalAccountId ?? repository.getAccountAuthorization(account.id, account.platformKey)?.providerAccountId ?? null,
       loginGeneration: binding?.active ? binding.loginGeneration : Number((repository.db.prepare("SELECT version FROM operations_account_company_bindings WHERE account_id=?").get(account.id) as {version:number}|undefined)?.version ?? 0) };
   };
-  sessionRuntime = deps.browserSessions ? new AccountSessionRehydrationCoordinator({ registry, browserSessions: deps.browserSessions, resolveCompanyId: accountId => operations.accountCompany(accountId), resolveAdapter: target => target.platformKey === "douyin" && target.connectionMode === "BrowserAutomation" ? registry.getForContent("douyin", "article") : registry.tryGetForConnection(target.platformKey), resolveAuthoritativeTarget: (accountId, platformKey) => { const target = sessionTarget(accountId); return target?.platformKey === platformKey ? target : null; }, resolveSecrets: resolveAccountSecrets, concurrency: 2 }) : null;
+  sessionRuntime = deps.browserSessions ? new AccountSessionRehydrationCoordinator({ registry, browserSessions: deps.browserSessions, resolveCompanyId: accountId => operations.accountCompany(accountId), resolveAdapter: target => target.platformKey === "douyin" && target.connectionMode === "BrowserAutomation" ? registry.getForContent("douyin", "article") : registry.tryGetForConnection(target.platformKey), resolveAuthoritativeTarget: (accountId, platformKey) => { const target = sessionTarget(accountId); return target?.platformKey === platformKey ? target : null; }, resolveSecrets: resolveAccountSecrets, concurrency: 2,runInAuthScope:deps.runInAuthScope,isAuthoritativeTargetCurrent: target=>{const current=sessionTarget(target.accountId);return current?.platformKey===target.platformKey&&JSON.stringify(current)===JSON.stringify(target);} }) : null;
   function safeRuntimeSnapshot(accountId: string, platformKey: string) {
     const target = sessionTarget(accountId);
     if (!target || target.platformKey !== platformKey) return null;
@@ -253,7 +259,7 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
     if (snapshot.companyId !== target.companyId || snapshot.loginGeneration !== target.loginGeneration || !target.enabled) return { ...snapshot, state: target.enabled ? "UNVERIFIED" as const : "DISABLED" as const, identityMatched: false };
     return snapshot;
   }
-  const onboarding = new AccountOnboarding(repository, { invalidateAuthentication: (id, key) => { sessionRuntime?.invalidate(id, key); }, runtimeHealth: (id, key) => safeRuntimeSnapshot(id, key) });
+  const onboarding = new AccountOnboarding(repository, { invalidateAuthentication: (id, key) => { invalidateAccountAuthBoundary(repository,id,key);sessionRuntime?.invalidate(id, key);oauthSessions.invalidate(id,key); }, runtimeHealth: (id, key) => safeRuntimeSnapshot(id, key) });
   register("account-onboarding:preview", () => onboarding.preview());
   register("account-onboarding:confirm", (_event, payload) => { const result = onboarding.confirm(payload); logger.info("ACCOUNT", "OWNER_COMPANY_CONFIRMED", "Owner 已逐账号确认所属企业；身份须重新验证", { accountId: result.accountId, companyId: result.companyId, bindingVersion: result.bindingVersion }); return result; });
   register("operations:bind-account", () => { throw new Error("历史账号归属须在 Owner Action 一页入口核对证据及版本后逐账号确认"); });
@@ -267,9 +273,9 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
   if (sessionRuntime && !restoredExecutionPaused) void sessionRuntime.rehydrate(repository.listAccounts().map(account => sessionTarget(account.id)).filter((target): target is AccountSessionTarget => target !== null && Boolean(target.companyId)));
   register("workspace:companies", () => repository.listBrands());
   register("workspace:current", () => workspace.current());
-  register("workspace:select", (_event, payload) => workspace.select(z.strictObject({ companyId: idSchema }).parse(payload).companyId));
-  const operationsMethods = [ "saveStudioDefaults", "reviewArticle", "generatePlan", "createPlanItem", "createDraftFromPlan", "saveFact", "duplicateWarnings", "usage", "createGenerationQueue", "generationQueue", "runGenerationQueue", "pauseGenerationQueue", "resumeGenerationQueue", "cancelGenerationQueue", "retryFailedGeneration", "previewImport", "commitImport", "resolveRecoverableGeneration", "reconcileGenerationQueue", "resolveValidationGeneration", "preparePlanGeneration"] as const;
-  for (const method of operationsMethods) register(`operations:${method.replace(/[A-Z]/gu, letter => `-${letter.toLowerCase()}`)}`, (_event, payload) => operations[method](payload as never));
+  register("workspace:select", (_event, payload) => { const input=z.strictObject({companyId:idSchema}).parse(payload);const previous=workspace.current();if(previous&&previous!==input.companyId)aiCenter.cancel(previous);return workspace.select(input.companyId); });
+  const operationsMethods = ["previewGenerationQueue", "saveStudioDefaults", "reviewArticle", "generatePlan", "createPlanItem", "createDraftFromPlan", "saveFact", "duplicateWarnings", "usage", "createGenerationQueue", "generationQueue", "runGenerationQueue", "pauseGenerationQueue", "resumeGenerationQueue", "cancelGenerationQueue", "retryFailedGeneration", "previewImport", "commitImport", "resolveRecoverableGeneration", "reconcileGenerationQueue", "resolveValidationGeneration", "preparePlanGeneration"] as const;
+  for (const method of operationsMethods) register(`operations:${method.replace(/[A-Z]/gu, letter => `-${letter.toLowerCase()}`)}`, (_event, payload) => { if(method==="createGenerationQueue")z.object({previewId:idSchema}).parse(payload); return operations[method](payload as never); });
   register("operations:snapshot", (_event, payload) => operations.snapshot(z.strictObject({ companyId: idSchema }).parse(payload).companyId));
   register("operations:consume-plan-generation-seed", (_event, payload) => operations.consumePlanGenerationSeed(z.strictObject({ companyId: idSchema }).parse(payload).companyId));
   register("operations:get-studio-defaults", (_event, payload) => operations.getStudioDefaults(z.strictObject({ companyId: idSchema }).parse(payload).companyId));
@@ -305,7 +311,10 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
   register("ai-center:save-template", (_event, payload) => aiCenter.saveTemplate(payload));
   register("ai-center:history", (_event, payload) => aiCenter.history(z.object({ companyId: idSchema.optional() }).parse(payload).companyId));
   register("ai-center:draft", (_event, payload) => aiCenter.draft(z.object({ id: idSchema }).parse(payload).id));
-  register("ai-center:generate", (_event, payload) => aiCenter.generate(payload));
+  register("ai-center:preview-generation",(_event,payload)=>aiCenter.previewGeneration(payload));
+  register("ai-center:request-budget",(_event,payload)=>{const input=z.strictObject({id:idSchema,companyId:idSchema}).parse(payload);workspace.assertCompany(input.companyId);return aiCenter.requestBudget(input.id,input.companyId);});
+  register("ai-center:cancel",(_event,payload)=>{const {companyId}=z.strictObject({companyId:idSchema}).parse(payload);workspace.assertCompany(companyId);aiCenter.cancel(companyId);return{requested:true};});
+  register("ai-center:generate", (_event, payload) => { const input=z.object({companyId:idSchema,previewId:idSchema}).parse(payload);workspace.assertCompany(input.companyId);return aiCenter.generate(payload,{beforeRequest:()=>workspace.assertCompany(input.companyId)}); });
   const aiDraftInput = z.strictObject({ id: idSchema, title: z.string().max(2000), body: z.string().max(100000) });
   register("ai-center:validate-draft", (_event, payload) => { const input = aiDraftInput.parse(payload); return aiCenter.validateDraft(input.id, input.title, input.body); });
   register("ai-center:save-draft", (_event, payload) => { const input = aiDraftInput.parse(payload); return aiCenter.saveDraft(input.id, input.title, input.body); });
@@ -362,6 +371,7 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
   };
   const inspectProductIdentity = async (account: Account | undefined): Promise<boolean> => {
     let verified = false;
+    const assertCurrent=account?captureAccountAuthBoundary(repository,account.id,account.platformKey):null;
     if (account && productPlatform(account.platformKey)?.ordinaryPublishEnabled) {
       try {
         if (account.platformKey === "website") verified = (await verifyOfficialApiConnection({ repository, credentials }, account.id)).status === "CONNECTED";
@@ -378,6 +388,7 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
         }
       } catch { verified = false; }
     }
+    try{assertCurrent?.();}catch{return false;}
     return verified;
   };
   register("product:health", async () => {
@@ -401,10 +412,13 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
     const verified = await inspectProductIdentity(account);
     return collectProductPreflight(input, verified);
   });
-  const syncBrowserAccount = async (adapter: AutomationAdapter, accountId: string, platformKey: string, action: UserInitiatedAction, profileOverride?: AccountProfile) => {
-    const profile = profileOverride ?? (adapter.getAccountProfile ? await adapter.getAccountProfile(accountContext(accountId, platformKey, action)) : undefined);
+  const authIo=async<T>(assertCurrent:()=>void,operation:()=>Promise<T>):Promise<T>=>{assertCurrent();const result=await(deps.runInAuthScope?deps.runInAuthScope(()=>{try{assertCurrent();return true;}catch{return false;}},operation):operation());assertCurrent();return result;};
+  const startAuthRequest=(accountId:string,platformKey:string):(()=>void)=>{invalidateAccountAuthBoundary(repository,accountId,platformKey);sessionRuntime?.invalidate(accountId,platformKey);const guard=captureAccountAuthBoundary(repository,accountId,platformKey),company=workspace.current();return()=>{guard();if(workspace.current()!==company)throw new Error('ACCOUNT_AUTH_WORKSPACE_CHANGED');};};
+  const syncBrowserAccount = async (adapter: AutomationAdapter, accountId: string, platformKey: string, action: UserInitiatedAction, assertCurrent:()=>void, profileOverride?: AccountProfile) => {
+    const profile = profileOverride ?? (adapter.getAccountProfile ? await authIo(assertCurrent,()=>adapter.getAccountProfile!(accountContext(accountId, platformKey, action))) : undefined);
+    assertCurrent();
     const localAccount = repository.listAccounts().find((item) => item.id === accountId);
-    return repository.syncBrowserPlatformAccount({
+    const account=repository.syncBrowserPlatformAccount({
       accountId,
       platformKey,
       accountName: profile?.accountName ?? localAccount?.name,
@@ -412,8 +426,10 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
       ...(adapter.getAccountProfile ? { externalAccountId: profile?.accountId ?? null } : {}),
       lastVerifiedAt: new Date().toISOString()
     });
+    return{account,assertCurrent:captureAccountAuthBoundary(repository,accountId,platformKey)};
   };
-  const oauthSessions = new OAuthSessionManager({ repository, registry, credentials, logger, accountContext });
+  const oauthSessions = new OAuthSessionManager({ repository, registry, credentials, logger, accountContext,runInAuthScope:deps.runInAuthScope,sessionFingerprint:(id,key)=>{const target=sessionTarget(id);return target?.platformKey===key&&target.companyId?JSON.stringify(target):null;} });
+  deps.registerShutdown?.(async()=>{for(const account of repository.listAccounts()){invalidateAccountAuthBoundary(repository,account.id,account.platformKey);sessionRuntime?.invalidate(account.id,account.platformKey);oauthSessions.invalidate(account.id,account.platformKey);}operations.cancelAllGeneration();aiCenter.cancelAll();await Promise.all([operations.waitForIdle(),aiCenter.waitForIdle()]);});
   const toutiaoSessionActivation = new ToutiaoSessionActivation({
     account: (accountId) => repository.listAccounts().find((item) => item.id === accountId && item.platformKey === "toutiao") ?? null,
     hasStoredSession: (accountId) => credentials.has(browserSessionCredentialKey({ platformKey: "toutiao", accountId })),
@@ -628,7 +644,7 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
     if (!brand) throw new Error("品牌不存在");
     let image: Awaited<ReturnType<ImageProvider["generateCover"]>>;
     try {
-      image = await createImageProvider(repository, aiCredentials).generateCover({ articleId: article.id, title: article.title, brandName: brand.name, city: article.city, articleType: article.articleType });
+      image = await new MockImageProvider().generateCover({ articleId: article.id, title: article.title, brandName: brand.name, city: article.city, articleType: article.articleType });
     } catch (error) {
       logger.warn("IMAGE", "IMAGE_PROVIDER_FALLBACK", "真实图片 Provider 失败，已回退模板封面", { articleId: article.id, error: error instanceof Error ? error.message : "unknown" });
       image = await new MockImageProvider().generateCover({ articleId: article.id, title: article.title, brandName: brand.name, city: article.city, articleType: article.articleType });
@@ -1603,7 +1619,7 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
     }));
   });
   register("accounts:create", (_event, payload) => { const companyId = workspace.current(); if (!companyId) throw new Error("请先选择企业工作区"); const account = repository.createAccount(z.object({ platformKey: idSchema, name: z.string().min(1), accountAlias: z.string().trim().min(1).max(100).optional(), allowAutoPublish: z.boolean().optional(), publishMode: z.enum(["inherit", "manual", "auto", "assisted"]).optional() }).parse(payload)); operations.bindAccount({ companyId, accountId: account.id }); return account; });
-  register("accounts:update", (_event, payload) => { const input = z.object({ id: idSchema, data: z.object({ accountAlias: z.string().trim().min(1).max(100).optional(), enabled: z.boolean().optional(), loginStatus: z.enum(["logged_in", "logged_out", "expired", "needs_user_action", "unknown"]).optional(), pausedReason: z.string().nullable().optional(), allowAutoPublish: z.boolean().optional(), publishMode: z.enum(["inherit", "manual", "auto", "assisted"]).optional(), minimumIntervalSeconds: z.number().int().min(0).max(86400).optional() }) }).parse(payload); const account = repository.getAccountById(input.id); if (!account) throw new Error("账号不存在"); sessionRuntime?.invalidate(input.id, account.platformKey); return repository.updateAccount(input.id, input.data); });
+  register("accounts:update", (_event, payload) => { const input = z.object({ id: idSchema, data: z.object({ accountAlias: z.string().trim().min(1).max(100).optional(), enabled: z.boolean().optional(), loginStatus: z.enum(["logged_in", "logged_out", "expired", "needs_user_action", "unknown"]).optional(), pausedReason: z.string().nullable().optional(), allowAutoPublish: z.boolean().optional(), publishMode: z.enum(["inherit", "manual", "auto", "assisted"]).optional(), minimumIntervalSeconds: z.number().int().min(0).max(86400).optional() }) }).parse(payload); const account = repository.getAccountById(input.id); if (!account) throw new Error("账号不存在"); invalidateAccountAuthBoundary(repository,input.id,account.platformKey);sessionRuntime?.invalidate(input.id, account.platformKey);oauthSessions.invalidate(input.id,account.platformKey); return repository.updateAccount(input.id, input.data); });
   register("accounts:set-credentials", (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema, values: z.record(z.string(), z.string().max(8192)) }).parse(payload);
     if (input.platformKey === "website") throw new Error("官网凭据须通过 Main 安全文件导入入口配置");
@@ -1614,7 +1630,7 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
       if (!allowed.has(key)) throw new Error(`不允许的凭据字段：${key}`);
       if (value.trim()) credentials.set(`account:${input.accountId}:${input.platformKey}:${key}`, value.trim());
     }
-    sessionRuntime?.invalidate(input.accountId, input.platformKey);
+    invalidateAccountAuthBoundary(repository,input.accountId,input.platformKey);sessionRuntime?.invalidate(input.accountId, input.platformKey);oauthSessions.invalidate(input.accountId,input.platformKey);
     const fields = adapter.getCredentialSchema().map((field) => ({ ...field, configured: credentials.has(`account:${input.accountId}:${input.platformKey}:${field.key}`) }));
     return { configured: fields.filter((field) => field.required).every((field) => field.configured), fields };
   });
@@ -1671,7 +1687,8 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
     // File bytes and the secret never pass through Renderer or IPC payloads.
     const result = await importOfficialApiCredential({ repository, credentials,
       assertBeforePersist: () => workspace.assertCompany(selectedCompany), bindAccount: accountId => operations.bindAccount({ companyId: selectedCompany, accountId }),
-      assertReconfiguration: (accountId, config) => deps.officialApi?.assertCredentialReconfiguration(accountId, config) }, raw, input.environment, input.accountId);
+       assertReconfiguration: (accountId, config) => deps.officialApi?.assertCredentialReconfiguration(accountId, config) }, raw, input.environment, input.accountId);
+    invalidateAccountAuthBoundary(repository,result.accountId,'website');sessionRuntime?.invalidate(result.accountId,'website');oauthSessions.invalidate(result.accountId,'website');
     logger.info("ACCOUNT", "WEBSITE_CREDENTIAL_IMPORTED", "官网签名凭据已安全导入", {
       accountId: result.accountId, siteId: result.siteId, environment: result.environment, configured: result.configured });
     return result;
@@ -1686,16 +1703,19 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
     const adapter = input.contentKind === "article" ? registry.getForContent("douyin", "article") : registry.getForConnection(input.platformKey);
     const action = createUserAction("CONNECT_ACCOUNT");
     if (input.platformKey === "cnblogs") {
-      const status = await adapter.checkLogin(accountContext(input.accountId, input.platformKey, action));
-      if (status === "logged_in") repository.syncOfficialApiAccount({ accountId: input.accountId, platformKey: input.platformKey, lastVerifiedAt: new Date().toISOString() });
+      const assertCurrent=startAuthRequest(input.accountId,input.platformKey);
+      const status = await authIo(assertCurrent,()=>adapter.checkLogin(accountContext(input.accountId, input.platformKey, action)));
+      if (status === "logged_in") repository.syncOfficialApiAccount({ accountId: input.accountId, platformKey: input.platformKey, lastVerifiedAt: new Date().toISOString(),enabled:repository.getAccountById(input.accountId,input.platformKey)?.enabled });
       else repository.updateAccount(input.accountId, { loginStatus: status, pausedReason: status === "expired" ? "博客园 PAT 已失效" : status === "logged_out" ? "请先配置博客园 PAT" : "博客园连接需要处理" });
       return { sessionId: `cnblogs-pat-${Date.now()}`, requiresUserAction: status !== "logged_in", opened: false, authStrategy: adapter.manifest.authStrategy, callbackStrategy: adapter.manifest.callbackStrategy, message: status === "logged_in" ? "博客园 PAT 连接验证通过" : "博客园 PAT 尚未通过连接验证" };
     }
     if (isAutomationAdapter(adapter)) {
+      const assertCurrent=startAuthRequest(input.accountId,input.platformKey);
       if (input.contentKind !== "article") repository.updateAccount(input.accountId, { loginStatus: "needs_user_action", pausedReason: "等待用户在官方浏览器完成登录和安全验证" });
       try {
-        return await adapter.connectAccount(accountContext(input.accountId, input.platformKey, action));
+        return await authIo(assertCurrent,()=>adapter.connectAccount(accountContext(input.accountId, input.platformKey, action)));
       } catch (error) {
+        assertCurrent();
         if (!(error instanceof BrowserRuntimeError)) throw error;
         const diagnostic = error.diagnostic;
         logger.error("BROWSER_RUNTIME", diagnostic.errorCode, "浏览器组件启动失败", { platformKey: input.platformKey, module: diagnostic.module, timestamp: diagnostic.timestamp, attemptedChannels: diagnostic.attemptedChannels });
@@ -1717,13 +1737,14 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
     }
     const adapter = input.contentKind === "article" ? registry.getForContent("douyin", "article") : registry.getForConnection(input.platformKey);
     if (isAutomationAdapter(adapter)) {
+      let assertCurrent=startAuthRequest(input.accountId,input.platformKey);
       const completedContext = accountContext(input.accountId, input.platformKey, action);
       const debugState = adapter.getBrowserConnectionDebugState?.(completedContext);
       logger.info("ACCOUNT", "ACTIVE_LOGIN_SESSION_STATE", "complete-login 调用 Adapter 前的 active Session 状态", { timestamp: new Date().toISOString(), ...(debugState ?? { requestedAccountId: input.accountId, activeSessionKeys: [], targetSessionFound: false, targetSessionState: "MISSING" }) });
       logger.info("ACCOUNT", "COMPLETE_CONNECTION_ENTERED", "即将调用 Adapter.completeConnection", { entered: true, accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, targetSessionFound: debugState?.targetSessionFound ?? false });
       let status: Awaited<ReturnType<typeof adapter.completeConnection>>;
       try {
-        status = await adapter.completeConnection(completedContext);
+        status = await authIo(assertCurrent,()=>adapter.completeConnection(completedContext));
       } catch (error) {
         logger.warn("ACCOUNT", "COMPLETE_LOGIN_RESPONSE", "Adapter.completeConnection 返回错误", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, status: null, reason: error instanceof Error ? error.message.slice(0, 300) : "unknown", errorCode: safeErrorCode(error) });
         throw error;
@@ -1734,7 +1755,7 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
         logger.info("ACCOUNT", "COMPLETE_LOGIN_RESPONSE", "主进程完成登录结果", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, status, reason: "CHECK_LOGIN_NOT_PASSED", errorCode: null, resultContract: { configured: result.configured, accountStatus: result.accountStatus, authorizationStatus: result.authorizationStatus } });
         return result;
       }
-      const profile = adapter.getAccountProfile ? await adapter.getAccountProfile(completedContext) : undefined;
+      const profile = adapter.getAccountProfile ? await authIo(assertCurrent,()=>adapter.getAccountProfile!(completedContext)) : undefined;
       if (input.platformKey === "douyin" && input.contentKind === "article") {
         const imageTextAdapter = adapter instanceof DouyinImageTextBrowserAdapter ? adapter : null;
         if (!imageTextAdapter) throw new Error("Douyin image/text BrowserNative route is unavailable");
@@ -1742,14 +1763,14 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
         const prior = repository.getDouyinImageTextConnection(input.accountId);
         if (prior?.active && prior.creatorId !== profile.accountId)
           throw new Error("Douyin Creator identity changed; disconnect the old image-text binding before connecting another account");
-        await adapter.persistConnectionSession?.(completedContext);
-        const sessionEvidence = await adapter.getBrowserSessionEvidence?.(completedContext);
+        await authIo(assertCurrent,async()=>adapter.persistConnectionSession?.(completedContext));
+        const sessionEvidence = await authIo(assertCurrent,async()=>adapter.getBrowserSessionEvidence?.(completedContext));
         if (!sessionEvidence || sessionEvidence.accountId !== input.accountId || sessionEvidence.platformKey !== "douyin")
           throw new Error("Douyin account-scoped Browser Session evidence is missing");
         const binding = repository.saveDouyinImageTextConnection({ accountId: input.accountId,
           creatorId: profile.accountId, browserSessionIdHash: sessionEvidence.sessionIdHash });
-        await adapter.releaseConnectionPage?.(completedContext);
-        const readiness = await imageTextAdapter.inspectOwnedCreatorReadiness(accountContext(input.accountId, "douyin"));
+        await authIo(assertCurrent,async()=>adapter.releaseConnectionPage?.(completedContext));
+        const readiness = await authIo(assertCurrent,()=>imageTextAdapter.inspectOwnedCreatorReadiness(accountContext(input.accountId, "douyin")));
         if (!readiness.identityVerified || readiness.runtimeAuthState !== "AUTHENTICATED")
           throw new Error("Douyin Creator identity was not verified in the active owned session after binding");
         logger.info("ACCOUNT", "DOUYIN_IMAGE_TEXT_LOGIN_VERIFIED", "抖音图文账号身份和受控浏览器会话已绑定", {
@@ -1761,16 +1782,19 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
       const effectiveAccountId = archivedAccount?.id ?? input.accountId;
       const effectiveContext = effectiveAccountId === input.accountId ? completedContext : accountContext(effectiveAccountId, input.platformKey, action, true);
       if (archivedAccount) {
+        if(operations.accountCompany(archivedAccount.id)!==operations.accountCompany(input.accountId))throw new Error('ARCHIVED_ACCOUNT_COMPANY_REVIEW_REQUIRED');
         if (!adapter.rebindAccountSession) throw new Error("无法安全恢复归档账号：Adapter 不支持 Session 重绑定");
         repository.restoreArchivedAccountByExternalId(input.platformKey, profile?.accountId ?? "");
         adapter.rebindAccountSession(completedContext, effectiveContext);
       }
-      await adapter.persistConnectionSession?.(effectiveContext);
-      const account = await syncBrowserAccount(adapter, effectiveAccountId, input.platformKey, action, profile);
+      const assertEffective=captureAccountAuthBoundary(repository,effectiveAccountId,input.platformKey),assertBeforeSync=()=>{assertCurrent();assertEffective();};
+      await authIo(assertBeforeSync,async()=>adapter.persistConnectionSession?.(effectiveContext));
+      const synced = await syncBrowserAccount(adapter, effectiveAccountId, input.platformKey, action, assertBeforeSync,profile);synced.assertCurrent();const account=synced.account;
       if (archivedAccount) repository.markPlatformAccountDisconnected(input.accountId, input.platformKey, adapter.manifest.authStrategy);
-      const sessionEvidence = await adapter.getBrowserSessionEvidence?.(effectiveContext);
-      if (adapter.releaseConnectionPage) await adapter.releaseConnectionPage(effectiveContext);
-      else await adapter.releaseConnectionSession?.(effectiveContext);
+      assertCurrent=synced.assertCurrent;
+      const sessionEvidence = await authIo(assertCurrent,async()=>adapter.getBrowserSessionEvidence?.(effectiveContext));
+      if (adapter.releaseConnectionPage) await authIo(assertCurrent,()=>adapter.releaseConnectionPage!(effectiveContext));
+      else await authIo(assertCurrent,async()=>adapter.releaseConnectionSession?.(effectiveContext));
       logger.info("ACCOUNT", "LOGIN_SUCCEEDED", "平台登录成功，Session 已安全保存，身份已回写，登录资源已释放", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, sessionEvidence: sessionEvidence ?? null });
       const result = browserAccountConnectionResult(account);
       logger.info("ACCOUNT", "COMPLETE_LOGIN_RESPONSE", "主进程完成登录结果", { accountId: input.accountId, platformKey: input.platformKey, userActionId: action.userActionId, status, reason: null, errorCode: null, resultContract: { configured: result.configured, accountStatus: result.accountStatus, authorizationStatus: result.authorizationStatus } });
@@ -1786,9 +1810,10 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
     const adapter = registry.getForConnection(input.platformKey);
     const action = createUserAction("CONNECT_ACCOUNT");
     if (isAutomationAdapter(adapter)) {
-      const status = await adapter.checkSession(accountContext(input.accountId, input.platformKey, action));
+      const assertCurrent=startAuthRequest(input.accountId,input.platformKey);
+      const status = await authIo(assertCurrent,()=>adapter.checkSession(accountContext(input.accountId, input.platformKey, action)));
       if (status !== "logged_in") throw new Error("浏览器 Session 仍需用户完成登录");
-      await syncBrowserAccount(adapter, input.accountId, input.platformKey, action);
+      const synced=await syncBrowserAccount(adapter, input.accountId, input.platformKey, action,assertCurrent);synced.assertCurrent();
       return { accountStatus: "Connected" as const, authorizationStatus: "Authorized" as const, expiresAt: null };
     }
     return oauthSessions.refresh(input.accountId, input.platformKey);
@@ -1798,7 +1823,8 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
     if (input.contentKind && input.platformKey !== "douyin") throw new Error("Unsupported content-specific account login route");
     const adapter = input.contentKind === "article" ? registry.getForContent("douyin", "article") : registry.getForConnection(input.platformKey);
     if (!isAutomationAdapter(adapter) || !adapter.cancelConnection) throw new Error("该平台没有可取消的浏览器连接会话");
-    await adapter.cancelConnection(accountContext(input.accountId, input.platformKey, createUserAction("CONNECT_ACCOUNT")));
+    const assertCurrent=startAuthRequest(input.accountId,input.platformKey);
+    await authIo(assertCurrent,()=>adapter.cancelConnection!(accountContext(input.accountId, input.platformKey, createUserAction("CONNECT_ACCOUNT"))));
     if (input.contentKind === "article") return { loginStatus: repository.getAccountById(input.accountId, input.platformKey)?.loginStatus ?? "unknown" };
     repository.updateAccount(input.accountId, { loginStatus: "logged_out", pausedReason: "连接已取消" });
     return { loginStatus: "logged_out" as const };
@@ -1807,12 +1833,13 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
     const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);
     const account = repository.getAccountById(input.accountId, input.platformKey);
     if (!account) throw new Error("账号与平台不匹配");
-    sessionRuntime?.invalidate(input.accountId, input.platformKey);
+    const assertCurrent=startAuthRequest(input.accountId,input.platformKey);oauthSessions.invalidate(input.accountId,input.platformKey);
     const adapter = registry.getForConnection(input.platformKey);
     const action = createUserAction("CONNECT_ACCOUNT");
     if (input.platformKey === "douyin") {
       const imageAdapter = registry.getForContent("douyin", "article");
-      if (isAutomationAdapter(imageAdapter)) await imageAdapter.logout(accountContext(input.accountId, "douyin", action, true));
+      if (isAutomationAdapter(imageAdapter)) await authIo(assertCurrent,()=>imageAdapter.logout(accountContext(input.accountId, "douyin", action, true)));
+      assertCurrent();
       repository.disconnectDouyinImageTextConnection(input.accountId);
     }
     let result: AccountDisconnectResult;
@@ -1820,7 +1847,8 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
       const context = accountContext(input.accountId, input.platformKey, action, true);
       const activeSession = adapter.getBrowserConnectionDebugState?.(context)?.targetSessionFound ?? false;
       result = browserAccountDisconnectResult({ loginStatus: account.loginStatus, credentialPresent: credentials.has(browserSessionCredentialKey({ platformKey: input.platformKey, accountId: input.accountId })), activeSession, archived: account.archivedAt != null });
-      await adapter.logout(context);
+      await authIo(assertCurrent,()=>adapter.logout(context));
+      assertCurrent();
       repository.markPlatformAccountDisconnected(input.accountId, input.platformKey, adapter.manifest.authStrategy);
     }
     else if (input.platformKey === "cnblogs") {
@@ -1860,15 +1888,16 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
       return diagnosticAdapter.consumeCompletedCheckLoginOperationId?.(input.accountId) ?? null;
     };
     let operationId: string | null = null;
+    const assertCurrent=startAuthRequest(input.accountId,input.platformKey);
     try {
-      const status = await adapter.checkLogin(accountContext(input.accountId, input.platformKey, action));
+      const status = await authIo(assertCurrent,()=>adapter.checkLogin(accountContext(input.accountId, input.platformKey, action)));
       operationId = consumeCheckLoginOperationId();
       if (status === "logged_in" && isAutomationAdapter(adapter)) {
-        await syncBrowserAccount(adapter, input.accountId, input.platformKey, action);
+        const synced=await syncBrowserAccount(adapter, input.accountId, input.platformKey, action,assertCurrent);synced.assertCurrent();
       }
       else if (status === "logged_in" && input.platformKey === "cnblogs") {
-        const profile = adapter.getAccountProfile ? await adapter.getAccountProfile(accountContext(input.accountId, input.platformKey, action)) : undefined;
-        repository.syncOfficialApiAccount({ accountId: input.accountId, platformKey: input.platformKey, accountName: profile?.accountName, externalAccountId: profile?.accountId, lastVerifiedAt: new Date().toISOString() });
+        const profile = adapter.getAccountProfile ? await authIo(assertCurrent,()=>adapter.getAccountProfile!(accountContext(input.accountId, input.platformKey, action))) : undefined;
+        repository.syncOfficialApiAccount({ accountId: input.accountId, platformKey: input.platformKey, accountName: profile?.accountName, externalAccountId: profile?.accountId, lastVerifiedAt: new Date().toISOString(),enabled:repository.getAccountById(input.accountId,input.platformKey)?.enabled });
       }
       else repository.updateAccount(input.accountId, { loginStatus: status, pausedReason: status === "expired" ? "平台登录已过期，需要重新授权" : status === "needs_user_action" ? "等待用户完成平台正常验证" : null });
       const authorization = repository.getAccountAuthorization(input.accountId, input.platformKey);
@@ -1993,6 +2022,16 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
   });
   const fullSnapshotRoot=join(dirname(app.getPath("userData")),"geo-full-snapshots");
   const isolatedRestoreRoot=join(dirname(app.getPath("userData")),"geo-isolated-restores");
+  const colleaguePreviews=new Map<string,{directory:string;contentFingerprint:string;createdAt:number}>();
+  register('product:build-identity',()=>({...BUILD_IDENTITY,runtimeAppVersion:app.getVersion(),packaged:app.isPackaged,automaticExecutionDisabled:restoredExecutionPaused}));
+  register('colleague-packages:export',async(_event,payload)=>{
+    const input=z.strictObject({companyId:idSchema,articleIds:z.array(idSchema).max(1000),assetIds:z.array(idSchema).max(1000),includeTemplates:z.boolean()}).parse(payload);workspace.assertCompany(input.companyId);
+    const picked=await dialog.showOpenDialog({title:'选择同事资料包的保存目录',properties:['openDirectory','createDirectory']});if(picked.canceled||picked.filePaths.length!==1)throw new Error('资料包导出已取消');workspace.assertCompany(input.companyId);
+    const directory=join(picked.filePaths[0]!,`GEO-资料包-${new Date().toISOString().slice(0,10)}-${randomUUID().slice(0,8)}`),currentUserData=resolve(app.getPath('userData')).toLowerCase();if(resolve(directory).toLowerCase().startsWith(currentUserData+'\\'))throw new Error('资料包应保存到当前工作区外的新目录');
+    const result=exportColleaguePackage(repository,input,directory,{appVersion:app.getVersion(),deliveryId:BUILD_IDENTITY.deliveryId});logger.info('BACKUP','COLLEAGUE_PACKAGE_EXPORTED','已导出选中的企业资料包',{packageId:result.packageId,articleCount:result.articleCount,assetCount:result.assetCount});return{...result,directory};
+  });
+  register('colleague-packages:pick',async()=>{const picked=await dialog.showOpenDialog({title:'选择同事资料包（包含 manifest.json）',properties:['openDirectory']});if(picked.canceled||picked.filePaths.length!==1)return null;const directory=picked.filePaths[0]!,preview=inspectColleaguePackage(directory),previewId=randomUUID();colleaguePreviews.set(previewId,{directory,contentFingerprint:preview.contentFingerprint,createdAt:Date.now()});if(colleaguePreviews.size>20)colleaguePreviews.delete(colleaguePreviews.keys().next().value!);return{...preview,previewId};});
+  register('colleague-packages:import',(_event,payload)=>{const {previewId}=z.strictObject({previewId:idSchema}).parse(payload),selected=colleaguePreviews.get(previewId);if(!selected||Date.now()-selected.createdAt>30*60*1000)throw new Error('资料包预览已失效，请重新选择');if(inspectColleaguePackage(selected.directory).contentFingerprint!==selected.contentFingerprint)throw new Error('资料包已变化，请重新预览');const result=importColleaguePackage(repository,selected.directory,join(dataDirectory,'media','colleague-imports'),selected.contentFingerprint);colleaguePreviews.delete(previewId);logger.info('BACKUP','COLLEAGUE_PACKAGE_IMPORTED','资料包已作为新的 Draft 企业导入',{packageId:result.packageId,companyId:result.companyId,articleCount:result.articleCount,assetCount:result.assetCount});return result;});
   register("backups:queue-full",()=>{if(!deps.queueClosedSnapshot)throw new Error("当前运行方式不支持关闭后完整快照");return deps.queueClosedSnapshot();});
   register("backups:full-list",()=>{try{return readdirSync(fullSnapshotRoot).filter(name=>!name.includes(".")||name.startsWith("snapshot-")).filter(name=>{try{return statSync(join(fullSnapshotRoot,name)).isDirectory();}catch{return false;}}).sort().reverse().slice(0,100).map(name=>{const directory=join(fullSnapshotRoot,name);try{const manifest=JSON.parse(readFileSync(join(directory,"manifest.json"),"utf8")) as {status?:string;createdAt?:string;totalBytes?:number};return{directory,status:manifest.status??"Incomplete",createdAt:manifest.createdAt??"",totalBytes:manifest.totalBytes??0};}catch{return{directory,status:"Incomplete",createdAt:"",totalBytes:0};}});}catch{return[];}});
   register("backups:validate-full",(_event,payload)=>{const {path}=z.strictObject({path:z.string().min(1).max(1000)}).parse(payload);const result=validateFullSnapshot(path,app.getVersion());return{valid:result.valid,message:result.message};});
@@ -2000,7 +2039,7 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
   register("backups:list", () => { const dir = join(dataDirectory, "backups"); try { return readdirSync(dir).filter((name) => name.endsWith(".db")).sort().reverse().map((name) => join(dir, name)); } catch { return []; } });
   register("backups:create", async () => { const dir = join(dataDirectory, "backups"); const path = join(dir, `publisher-${new Date().toISOString().replace(/[:.]/gu, "-")}.db`); await backupDatabase(repository.db, path); return path; });
   register("backups:validate", (_event, payload) => validateDatabaseBackup(z.object({ path: z.string().min(1) }).parse(payload).path));
-  register("backups:restore", (_event, payload) => { const input = z.object({ path: z.string().min(1), confirm: z.literal(true) }).parse(payload); const result = validateDatabaseBackup(input.path); if (!result.valid) throw new Error(`备份校验失败：${result.message}`); if (!deps.restoreDatabase) throw new Error("当前运行模式不支持自动恢复，请关闭应用后手动恢复"); deps.restoreDatabase(input.path); return { accepted: true }; });
+  register("backups:restore", () => {throw new Error('单文件数据库备份不能覆盖当前工作区。请使用校验通过的完整快照，恢复到新的隔离目录。');});
   // A process restart is not consent for another paid request. Preserve unfinished legacy tasks for explicit review.
   logger.info("AI", "AUTO_REPLAY_PAUSED", "重启后的未知生成结果保留，未经人工确认不自动补发", {});
 

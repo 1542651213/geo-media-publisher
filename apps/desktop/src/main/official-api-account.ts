@@ -1,3 +1,4 @@
+import { captureAccountAuthBoundary } from "./account-auth-boundary";
 import type { AppRepository } from "@publisher/db";
 import { CredentialDecryptError, type CredentialStore } from "@publisher/security";
 import { KANGYI_SITE_CONFIG, OfficialApiAdapter, assertOfficialApiCapabilities, officialApiCredentialFields, officialApiCredentialRef,
@@ -28,6 +29,7 @@ export function officialApiAccountView(repository: AppRepository, credentials: C
 export async function importOfficialApiCredential(deps: ConnectionDependencies, raw: string, environment: WebsiteEnvironment, accountId?: string): Promise<OfficialApiAccountView> {
   const config = parseOfficialApiCredential(raw, environment);
   const { repository, credentials } = deps;
+  const assertAuthBoundary=accountId?captureAccountAuthBoundary(repository,accountId,'website'):null;
   const assertSelectedAccountScope = () => {
     if (!accountId) return;
     const selected = repository.getAccountById(accountId, "website");
@@ -48,6 +50,7 @@ export async function importOfficialApiCredential(deps: ConnectionDependencies, 
   assertUniqueScope();
   if (!credentials.setMany) throw new Error("WEBSITE_ATOMIC_CREDENTIAL_STORAGE_REQUIRED");
   const remote = assertOfficialApiCapabilities(config, await (deps.verify ?? (value => new OfficialApiAdapter(credentials).inspect(value)))(config));
+  assertAuthBoundary?.();
   deps.assertBeforePersist?.();
   assertSelectedAccountScope();
   // Verification yielded; re-check against accounts created by any other completed request.
@@ -68,7 +71,9 @@ export async function verifyOfficialApiConnection(deps: ConnectionDependencies, 
   const view = officialApiAccountView(repository, credentials, accountId);
   if (!before || !view.configured) throw new Error("WEBSITE_CREDENTIAL_MISSING_OR_DECRYPT_FAILED");
   const config = readOfficialApiCredential(credentials, accountId);
+  const assertAuthBoundary=captureAccountAuthBoundary(repository,accountId,"website");
   const assertUnchanged = () => {
+    try{assertAuthBoundary();}catch{throw new Error("WEBSITE_ACCOUNT_CHANGED_DURING_VERIFICATION");}deps.assertBeforePersist?.();
     const current = repository.getAccountById(accountId, "website");
     if (!current || current.archivedAt || current.enabled !== before.enabled || current.loginStatus !== before.loginStatus
       || current.authorizationStatus !== before.authorizationStatus || current.externalAccountId !== before.externalAccountId

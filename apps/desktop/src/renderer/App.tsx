@@ -25,6 +25,8 @@ import { ProductAICenter } from "./ProductAICenter";
 import { DeveloperModeContext, DEVELOPER_ROUTES } from "./developer-mode";
 import { ProductAccountHealth } from "./ProductAccountHealth";
 import { OperationsCenter } from "./OperationsCenter";
+import { ColleagueDataPackage } from './ColleagueDataPackage';
+import { BUILD_IDENTITY } from '../shared/build-identity';
 
 type Route = V11NavigationTarget;
 
@@ -57,7 +59,7 @@ export function App(): JSX.Element {
     {route === "accounts" && <><ProductAccountHealth refreshKey={refreshKey} /><V11AccountsCenter refresh={refresh} refreshKey={refreshKey} onNavigate={navigate} /></>}
     {route === "publishing" && <V11PublishCenter refresh={refresh} refreshKey={refreshKey} onNavigate={navigate} />}
     {route === "statistics" && <V11Statistics refreshKey={refreshKey} />}
-    {route === "preferences" && <V11Preferences />}
+    {route === "preferences" && <><section className="panel"><h3>关于此版本</h3><p>{BUILD_IDENTITY.deliveryId} · 应用版本 {BUILD_IDENTITY.appVersion}</p><p>构建时间 {BUILD_IDENTITY.builtAt}</p><p style={{overflowWrap:"anywhere"}}>源码提交 {BUILD_IDENTITY.sourceCommit}</p></section><V11Preferences /></>}
     {route === "advanced" && <V11AdvancedSettings onNavigate={navigate} developerMode={developerMode} toggleDeveloperMode={toggleDeveloperMode} />}
     {route === "studio" && <AIContentStudio refresh={refresh} />}
     {route === "quality" && <QualityGatePage refresh={refresh} />}
@@ -73,7 +75,7 @@ export function App(): JSX.Element {
     {route === "plans" && <PlansPageV031 refresh={refresh} />}
     {route === "queue" && <QueuePageV031 refresh={refresh} />}
     {route === "logs" && <LogsPage />}
-    {route === "backups" && <BackupsPage />}
+    {route === "backups" && <><ColleagueDataPackage companyId={companyId} onImported={refresh}/><BackupsPage /></>}
     {route === "settings" && <DeepSeekSettingsPage />}
     {route === "placeholder" && <EmptyState title="模块准备中" description="该扩展入口已纳入工作台导航，后续版本会复用现有数据与任务基础继续完善。" />}
   </div></Layout></DeveloperModeContext.Provider>;
@@ -81,14 +83,16 @@ export function App(): JSX.Element {
 
 function Layout({ route, onNavigate, children, companies, companyId, switching, onSelectCompany }: { route: Route; onNavigate: (route: Route) => void; children: React.ReactNode; companies: Brand[]; companyId: string; switching: boolean; onSelectCompany: (id: string) => Promise<void> }): JSX.Element {
   const current = routeLabels.get(route) ?? "首页";
+  const [runtime,setRuntime]=useState<Awaited<ReturnType<typeof window.publisherAPI.product.buildIdentity>>|null>(null);
+  useEffect(()=>{void window.publisherAPI.product.buildIdentity().then(setRuntime).catch(()=>{});},[]);
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand-lockup"><div className="brand-mark">矩</div><div><strong>矩阵发布</strong><span>内容运营工作台</span></div></div>
       <div className="workspace-switch"><label>当前企业工作区<select aria-label="当前企业工作区" value={companyId} disabled={switching} onChange={event => void onSelectCompany(event.target.value)}><option value="" disabled>请先创建企业</option>{companies.map(company => <option key={company.id} value={company.id}>{company.companyName || company.name}</option>)}</select></label></div>
       <nav>{navGroups.map((group) => <div className="nav-group" key={group.title}><div className="nav-caption">{group.title}</div>{group.items.map((item) => <button className={`nav-item ${item.route === route ? "active" : ""}`} key={item.route} onClick={() => onNavigate(item.route)}><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</div>)}</nav>
-      <div className="sidebar-footer"><button className={`nav-item ${route === "preferences" ? "active" : ""}`} onClick={() => onNavigate("preferences")}><span className="nav-icon">⚙</span>设置</button><button className={`nav-item ${route === "advanced" ? "active" : ""}`} onClick={() => onNavigate("advanced")}><span className="nav-icon">⌘</span>高级功能</button></div>
+       <div className="sidebar-footer"><button className={`nav-item ${route === "preferences" ? "active" : ""}`} onClick={() => onNavigate("preferences")}><span className="nav-icon">⚙</span>设置</button><button className={`nav-item ${route === "advanced" ? "active" : ""}`} onClick={() => onNavigate("advanced")}><span className="nav-icon">⌘</span>高级功能</button><div className="build-stamp" title={`源码 ${BUILD_IDENTITY.sourceCommit} · 构建 ${BUILD_IDENTITY.builtAt}`}>{BUILD_IDENTITY.deliveryId} · {BUILD_IDENTITY.appVersion}<small>{BUILD_IDENTITY.sourceCommit.slice(0,8)}</small></div></div>
     </aside>
-    <main className="main-area"><header className="topbar"><div><div className="breadcrumb">内容运营 <span>/</span> {current}</div><h1>{current}</h1></div><div className="top-actions"><div className="avatar">运</div></div></header><section className="content-area">{children}</section></main>
+    <main className="main-area"><header className="topbar"><div><div className="breadcrumb">内容运营 <span>/</span> {current}</div><h1>{current}</h1></div><div className="top-actions"><div className="avatar">运</div></div></header><section className="content-area">{runtime?.automaticExecutionDisabled&&<div role="status" className="notice warning">隔离恢复 · 人工复核中。外部连接、云请求与自动执行已暂停；请核对企业、账号身份和未知结果后按恢复说明处理。</div>}{runtime&&runtime.sourceCommit!==BUILD_IDENTITY.sourceCommit&&<div role="alert" className="notice error">安装包组件版本不一致，请使用交付清单中的完整安装包。</div>}{children}</section></main>
   </div>;
 }
 

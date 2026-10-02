@@ -313,3 +313,39 @@
 .v11-channel-list { flex-shrink: 0; }
 .v11-channel-list .check-row.disabled { opacity: 1; }
 .v11-channel-list .check-row.disabled em { color: #526780; font-size: 11px; }
+/* G: viewport and zoom adaptation; local tables/pickers scroll within their panels. */
+body { min-width: 0; }
+.app-shell { height: 100vh; min-height: 0; overflow: hidden; }
+.sidebar { overflow-y: auto; }
+.main-area { display: flex; flex-direction: column; overflow: hidden; }
+.content-area { width: 100%; min-height: 0; overflow: auto; }
+.topbar { flex-shrink: 0; }
+.build-stamp { margin: 12px 10px 0; color: #c6d6ea; line-height: 1.6; font-size: 11px; }
+.build-stamp small { display: block; color: #9fb2cd; }
+.path-text,.notice,.table-row > *, .check-row { overflow-wrap: anywhere; }
+.form-grid > *,fieldset { min-width: 0; }
+.row-actions,.drawer-footer { flex-wrap: wrap; gap: 8px; }
+.colleague-package-columns { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px; }
+.package-selection-list { max-height: 220px; overflow: auto; border: 1px solid #d9e3ef; padding: 10px; margin-bottom: 10px; }
+.package-selection-list label { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0; }
+.package-selection-list input { width: auto; flex-shrink: 0; }
+.ai-workload-preview textarea { width: 100%; margin: 5px 0 12px; font-size: 12px; }
+.ai-workload-preview summary { cursor: pointer; font-weight: 600; padding: 8px 0; }
+@media (max-width: 1100px) {
+  .sidebar { width: 184px; padding: 16px 10px; }
+  .content-area { padding: 22px 20px 40px; }
+  .topbar { padding: 0 20px; height: 70px; }
+  .stat-grid,.v11-stat-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .form-grid,.v11-form-grid,.image-library-layout { grid-template-columns: minmax(0,1fr); }
+}
+@media (max-width: 820px) {
+  .sidebar { width: 155px; padding: 12px 7px; }
+  .brand-lockup { padding-left: 5px; padding-right: 0; gap: 7px; }
+  .brand-lockup strong { font-size: 13px; }
+  .nav-item { font-size: 12px; padding: 0 7px; }
+  .content-area { padding: 16px 14px 28px; }
+  .page-title,.v11-page-heading { flex-wrap: wrap; gap: 12px; }
+  .colleague-package-columns,.v11-advanced-grid { grid-template-columns: minmax(0,1fr); }
+  .drawer { max-width: 96vw; }
+  .table-row { display: flex; flex-wrap: wrap; gap: 10px; }
+}

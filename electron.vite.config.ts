@@ -1,9 +1,16 @@
 import { resolve } from "node:path";
+import { execFileSync } from 'node:child_process';
+import { readFileSync,readdirSync } from 'node:fs';
 import react from "@vitejs/plugin-react";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 
+const sourceCommit=execFileSync('git',['-c',`safe.directory=${__dirname.replaceAll('\\','/')}`,'rev-parse','HEAD'],{cwd:__dirname,encoding:'utf8'}).trim();
+if(!/^[a-f0-9]{40}$/u.test(sourceCommit))throw new Error('BUILD_SOURCE_COMMIT_REQUIRED');
+const identity={appVersion:(JSON.parse(readFileSync(resolve(__dirname,'package.json'),'utf8')) as {version:string}).version,deliveryId:'R1.15-G',sourceCommit,builtAt:new Date().toISOString(),migrations:readdirSync(resolve(__dirname,'packages/db/migrations')).filter(name=>name.endsWith('.sql')).sort()};
+const define={__GEO_BUILD_IDENTITY__:JSON.stringify(identity)};
 export default defineConfig({
   main: {
+    define,
     plugins: [externalizeDepsPlugin()],
     build: { rollupOptions: { input: resolve(__dirname, "apps/desktop/src/main/main.ts"), external: ["playwright-core", "kerberos"] } },
     resolve: {
@@ -31,6 +38,7 @@ export default defineConfig({
     }
   },
   preload: {
+    define,
     plugins: [externalizeDepsPlugin()],
     build: { rollupOptions: { input: resolve(__dirname, "apps/desktop/src/main/preload.ts") } },
     resolve: {
@@ -40,6 +48,7 @@ export default defineConfig({
     }
   },
   renderer: {
+    define,
     plugins: [react()],
     resolve: {
       alias: {
