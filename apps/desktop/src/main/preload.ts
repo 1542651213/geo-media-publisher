@@ -24,7 +24,7 @@ const api: PublisherApi = {
     reconcileGenerationQueue: input => invoke("operations:reconcile-generation-queue", input), resolveValidationGeneration: input => invoke("operations:resolve-validation-generation", input),
     resolveRecoverableGeneration: input => invoke("operations:resolve-recoverable-generation", input)
   },
-  product: { buildIdentity:()=>invoke('product:build-identity'),health: () => invoke("product:health"), preflight: input => invoke("product:preflight", input), diagnostics: () => invoke("product:diagnostics"), exportDiagnostics: () => invoke("product:export-diagnostics") },
+  product: { readiness:()=>invoke('product:readiness'),buildIdentity:()=>invoke('product:build-identity'),health: () => invoke("product:health"), preflight: input => invoke("product:preflight", input), diagnostics: () => invoke("product:diagnostics"), exportDiagnostics: () => invoke("product:export-diagnostics") },
   aiCenter: {
     previewGeneration:input=>invoke("ai-center:preview-generation" ,input),requestBudget:(id,companyId)=>invoke("ai-center:request-budget",{id,companyId}),cancel:companyId=>invoke("ai-center:cancel",{companyId}),
     definitions: () => invoke("ai-center:definitions"), profiles: () => invoke("ai-center:profiles"), saveProfile: input => invoke("ai-center:save-profile", input),

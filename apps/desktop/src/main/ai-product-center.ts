@@ -1,3 +1,4 @@
+import { assertAIRequestProfile } from './ai-request-budget';
 import { aiRequestGovernor, requestFingerprint } from "./ai-request-budget";
 import type { AISentDataPreview,AIWorkloadPreview } from "../shared/ai-request-budget";
 import { createHash, randomUUID } from "node:crypto";
@@ -99,7 +100,7 @@ export class AIProductCenter {
     return profile;
   }
   private client(id: string) {
-    const profile = this.profile(id);
+    const profile = this.profile(id);assertAIRequestProfile(profile);
     return createTextProvider({ provider: profile.provider as ProviderKey, baseUrl: profile.baseUrl, defaultModel: profile.model, timeoutMs: profile.timeoutMs, maxOutputTokens: profile.maxOutputTokens }, profile.provider === "ollama" ? null : this.credentials.get(profile.credentialRef), this.fetchPort);
   }
   private async trackedRead<T>(operation:()=>Promise<T>):Promise<T>{const pending=this.governor.read(operation);this.pendingReads.add(pending);try{return await pending;}finally{this.pendingReads.delete(pending);}}
@@ -140,7 +141,7 @@ export class AIProductCenter {
   }
   private generationFingerprint(input:StudioRequest):string {const {previewId:_preview,...request}=input;const source=input.sourceArticleId?this.repository.getArticle(input.sourceArticleId):null;return requestFingerprint({...request,sourceVersion:source?.contentHash??null,sourceText:source?source.title+"\n"+source.body:input.sourceText});}
   requestDataPreview(input:{companyId:string;profileId:string;templateId:string;templateVersion:number;sourceText:string},sourcePolicy='仅发送所选源稿、当前企业 AI Context 和明确允许 AI 使用的事实；标题修复仍使用相同事实边界。'):AISentDataPreview{
-    const context=this.effectiveContext(input.companyId),profile=this.profile(input.profileId),template=this.templates().find(item=>item.templateId===input.templateId&&item.version===input.templateVersion&&item.enabled);if(!template)throw new Error('模板不存在或已停用');
+    const context=this.effectiveContext(input.companyId),profile=this.profile(input.profileId),template=this.templates().find(item=>item.templateId===input.templateId&&item.version===input.templateVersion&&item.enabled);if(!template)throw new Error('模板不存在或已停用');assertAIRequestProfile(profile);
     return{provider:profile.provider,endpoint:profile.baseUrl,companyName:context.companyName,sourceText:input.sourceText,contextText:JSON.stringify(context,null,2),templateText:template.systemPrompt+'\n'+template.userPromptTemplate,sourcePolicy};
   }
   previewGeneration(payload:unknown):AIWorkloadPreview {

@@ -26,6 +26,7 @@ import { DeveloperModeContext, DEVELOPER_ROUTES } from "./developer-mode";
 import { ProductAccountHealth } from "./ProductAccountHealth";
 import { OperationsCenter } from "./OperationsCenter";
 import { ColleagueDataPackage } from './ColleagueDataPackage';
+import { AboutRelease } from './AboutRelease';
 import { BUILD_IDENTITY } from '../shared/build-identity';
 
 type Route = V11NavigationTarget;
@@ -59,7 +60,7 @@ export function App(): JSX.Element {
     {route === "accounts" && <><ProductAccountHealth refreshKey={refreshKey} /><V11AccountsCenter refresh={refresh} refreshKey={refreshKey} onNavigate={navigate} /></>}
     {route === "publishing" && <V11PublishCenter refresh={refresh} refreshKey={refreshKey} onNavigate={navigate} />}
     {route === "statistics" && <V11Statistics refreshKey={refreshKey} />}
-    {route === "preferences" && <><section className="panel"><h3>关于此版本</h3><p>{BUILD_IDENTITY.deliveryId} · 应用版本 {BUILD_IDENTITY.appVersion}</p><p>构建时间 {BUILD_IDENTITY.builtAt}</p><p style={{overflowWrap:"anywhere"}}>源码提交 {BUILD_IDENTITY.sourceCommit}</p></section><V11Preferences /></>}
+    {route === "preferences" && <><AboutRelease/><V11Preferences /></>}
     {route === "advanced" && <V11AdvancedSettings onNavigate={navigate} developerMode={developerMode} toggleDeveloperMode={toggleDeveloperMode} />}
     {route === "studio" && <AIContentStudio refresh={refresh} />}
     {route === "quality" && <QualityGatePage refresh={refresh} />}

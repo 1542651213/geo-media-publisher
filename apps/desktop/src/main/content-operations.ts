@@ -1,3 +1,4 @@
+import { assertAIRequestProfile } from './ai-request-budget';
 import { readOperationsReviewItems } from './operations-review-read-model';
 import { aiRequestGovernor, requestFingerprint } from "./ai-request-budget";
 import type { AISentDataPreview,AIWorkloadPreview } from "../shared/ai-request-budget";
@@ -436,7 +437,7 @@ export class ContentOperations {
   private queueFingerprint(input:z.infer<typeof queueCreateSchema>):string {const {previewId:_preview,...request}=input;return requestFingerprint({...request,targetPlatforms:unique(input.targetPlatforms)});}
   private queueSnapshot(input:{companyId:string;profileId:string;model:string;templateId:string;templateVersion:number}):string {return this.aiCenter.configurationFingerprint?.(input)??requestFingerprint({input,profile:this.repository.getAiProviderProfile(input.profileId),context:this.repository.getBrand(input.companyId),facts:this.activeFacts(input.companyId)});}
   previewGenerationQueue(payload:unknown):AIWorkloadPreview {
-    const input=queueCreateSchema.parse(payload);this.ensureCompany(input.companyId);const profile=this.repository.getAiProviderProfile(input.profileId);if(!profile)throw new Error("AI 服务商配置不存在");
+    const input=queueCreateSchema.parse(payload);this.ensureCompany(input.companyId);const profile=this.repository.getAiProviderProfile(input.profileId);if(!profile)throw new Error("AI 服务商配置不存在");assertAIRequestProfile(profile);
     const targetCount=unique(input.targetPlatforms).length,workItemCount=input.requestedCount*(1+targetCount);
     return this.governor.preview({kind:"Queue",companyId:input.companyId,sourceCount:input.requestedCount,targetCount,workItemCount,baseRequests:workItemCount,maxRequests:workItemCount*4,titleRepairAllowance:workItemCount,rateLimitRetryAllowance:workItemCount*2,globalConcurrency:1,maxOutputTokensPerRequest:profile.maxOutputTokens,inputCharacters:input.topic.length*input.requestedCount,model:input.model,templateId:input.templateId,templateVersion:input.templateVersion,costEstimate:null,currency:null,dataSent:this.aiCenter.requestDataPreview?.({...input,sourceText:input.topic},'先按此主题和当前企业资料生成 N 篇源稿（附稿件序号），再把本队列新源稿发送给所选平台的改写请求。未生成的源稿内容尚未知，不读取其他企业或其他历史原稿。')},this.queueFingerprint(input),this.queueSnapshot(input));
   }

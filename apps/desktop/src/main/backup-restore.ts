@@ -7,9 +7,9 @@ import { z } from "zod";
 import { BUILD_IDENTITY } from '../shared/build-identity';
 import { RETIRED_MIGRATION_PROVENANCE } from './retired-migration-provenance';
 
-export interface SnapshotIdentity { appVersion: string; sourceCommit: string; deliveryId: string; migrations: string[] }
+export interface SnapshotIdentity { appVersion: string; sourceCommit: string; deliveryId: string; builtAt?:string; migrations: string[] }
 const fileSchema=z.strictObject({path:z.string().min(1).max(1000),bytes:z.number().int().nonnegative().max(2_000_000_000),sha256:z.string().regex(/^[a-f0-9]{64}$/u)});
-const manifestSchema=z.strictObject({format:z.literal('GEO_CLOSED_USERDATA_V1'),status:z.enum(['Incomplete','Complete']),createdAt:z.string(),appVersion:z.string(),sourceCommit:z.string(),deliveryId:z.string(),migrations:z.array(z.string()).max(1000),sourceRoot:z.string(),files:z.array(fileSchema).max(100000),totalBytes:z.number().nonnegative().max(10_000_000_000)});
+const manifestSchema=z.strictObject({format:z.literal('GEO_CLOSED_USERDATA_V1'),status:z.enum(['Incomplete','Complete']),createdAt:z.string(),appVersion:z.string(),sourceCommit:z.string(),deliveryId:z.string(),builtAt:z.string().optional(),dataSchemaVersion:z.string().optional(),secureContext:z.strictObject({sameWindowsUserRequired:z.literal(true),files:z.array(z.string()).max(1000),browserProfileRoots:z.array(z.string()).max(1000)}).optional(),migrations:z.array(z.string()).max(1000),sourceRoot:z.string(),files:z.array(fileSchema).max(100000),totalBytes:z.number().nonnegative().max(10_000_000_000)});
 export type FullSnapshotManifest=z.infer<typeof manifestSchema>;
 const MAX_BYTES=10_000_000_000;
 function supportedMigrations():string[]{return BUILD_IDENTITY.migrations.length?BUILD_IDENTITY.migrations:readdirSync(resolve('packages/db/migrations')).filter(name=>name.endsWith('.sql')).sort();}
@@ -30,7 +30,8 @@ export function createClosedSnapshot(sourceRoot:string,destination:string,identi
   if(!sourceIsClosed())throw new Error('SOURCE_NOT_CLOSED');
   if(!existsSync(sourceRoot)||lstatSync(sourceRoot).isSymbolicLink()||(within(destination,sourceRoot)||within(sourceRoot,destination)))throw new Error('SNAPSHOT_SOURCE_INVALID');
   assertEmpty(destination);mkdirSync(destination,{recursive:true});
-  const manifest:FullSnapshotManifest={format:'GEO_CLOSED_USERDATA_V1',status:'Incomplete',createdAt:new Date().toISOString(),...identity,sourceRoot:canonical(sourceRoot),files:[],totalBytes:0};
+  const names=entries(sourceRoot);
+  const manifest:FullSnapshotManifest={format:'GEO_CLOSED_USERDATA_V1',status:'Incomplete',createdAt:new Date().toISOString(),...identity,dataSchemaVersion:[...identity.migrations].sort().at(-1)??'none',secureContext:{sameWindowsUserRequired:true,files:names.filter(path=>path==='Local State'||path==='production-data/credentials.enc'),browserProfileRoots:[...new Set(names.filter(path=>/(?:^|\/)browser-profiles\//u.test(path)).map(path=>path.split('/').slice(0,path.split('/').indexOf('browser-profiles')+2).join('/')))]},sourceRoot:canonical(sourceRoot),files:[],totalBytes:0};
   const manifestPath=join(destination,'manifest.json');
   writeFileSync(manifestPath,JSON.stringify(manifest,null,2));
   try {

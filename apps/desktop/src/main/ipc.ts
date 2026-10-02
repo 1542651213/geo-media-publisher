@@ -2026,8 +2026,16 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
   const isolatedRestoreRoot=join(dirname(app.getPath("userData")),"geo-isolated-restores");
   const colleaguePreviews=new Map<string,{directory:string;contentFingerprint:string;createdAt:number}>();
   register('product:build-identity',()=>({...BUILD_IDENTITY,runtimeAppVersion:app.getVersion(),packaged:app.isPackaged,automaticExecutionDisabled:restoredExecutionPaused}));
+  register('product:readiness',()=>{
+    const count=(sql:string):number=>(repository.db.prepare(sql).get() as {count:number}).count;
+    const migrations=(repository.db.prepare('SELECT id FROM migrations ORDER BY id').all() as {id:string}[]).map(row=>row.id);
+    const unassignedAccounts=count('SELECT COUNT(*) AS count FROM accounts a LEFT JOIN operations_account_company_bindings b ON b.account_id=a.id WHERE b.account_id IS NULL');
+    const attentionJobs=count("SELECT COUNT(*) AS count FROM publish_jobs WHERE status IN ('NeedsUserAction','NeedsReconciliation','Unknown')");
+    const unknownAIRequests=count("SELECT COUNT(*) AS count FROM ai_request_journal WHERE status='Unknown'");
+    return{dataSchemaVersion:migrations.at(-1)??'none',migrationCount:migrations.length,unassignedAccounts,attentionJobs,unknownAIRequests,ownerActionCount:unassignedAccounts+attentionJobs+unknownAIRequests,backupRecommended:'升级前、账号授权变更后及每日收工时创建并校验完整快照；同事分享请用内容资料包。'};
+  });
   register('colleague-packages:export',async(_event,payload)=>{
-    const input=z.strictObject({companyId:idSchema,articleIds:z.array(idSchema).max(1000),assetIds:z.array(idSchema).max(1000),includeTemplates:z.boolean()}).parse(payload);workspace.assertCompany(input.companyId);
+    const input=z.strictObject({companyId:idSchema,articleIds:z.array(idSchema).max(1000),assetIds:z.array(idSchema).max(1000),includeTemplates:z.boolean(),includeFacts:z.boolean().default(false)}).parse(payload);workspace.assertCompany(input.companyId);
     const picked=await dialog.showOpenDialog({title:'选择同事资料包的保存目录',properties:['openDirectory','createDirectory']});if(picked.canceled||picked.filePaths.length!==1)throw new Error('资料包导出已取消');workspace.assertCompany(input.companyId);
     const directory=join(picked.filePaths[0]!,`GEO-资料包-${new Date().toISOString().slice(0,10)}-${randomUUID().slice(0,8)}`),currentUserData=resolve(app.getPath('userData')).toLowerCase();if(resolve(directory).toLowerCase().startsWith(currentUserData+'\\'))throw new Error('资料包应保存到当前工作区外的新目录');
     const result=exportColleaguePackage(repository,input,directory,{appVersion:app.getVersion(),deliveryId:BUILD_IDENTITY.deliveryId});logger.info('BACKUP','COLLEAGUE_PACKAGE_EXPORTED','已导出选中的企业资料包',{packageId:result.packageId,articleCount:result.articleCount,assetCount:result.assetCount});return{...result,directory};

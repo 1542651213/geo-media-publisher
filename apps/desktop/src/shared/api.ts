@@ -8,7 +8,7 @@ import type { OperationsApi } from "./content-operations";
 import type { AccountOnboardingApi } from "./account-onboarding";
 import type { DraftWorkingCopiesApi } from "./draft-working-copies";
 import type { ColleaguePackagesApi } from './colleague-data-package';
-import type { BuildIdentity } from './build-identity';
+import type { BuildIdentity, ProductReadiness } from './build-identity';
 import type { SafeAccountSessionSnapshot } from "@publisher/adapters-core";
 import type { ProductAccountHealth, ProductPreflightResult } from "./product-platform-policy";
 import type { ArticlePage, ContentQualityAuditView, ContentQualityItemView, ContentQualityReviewView, ContentQualityStateView, HumanReviewDatasetItemView, HumanReviewDatasetView, HumanReviewSubmitInput, HumanReviewItemReviewView, QualityBenchmarkContentView, QualityBenchmarkMetrics, QualityBenchmarkRunView } from "@publisher/db";
@@ -195,7 +195,7 @@ export interface PublisherApi {
   sessions: { snapshots(): Promise<SafeAccountSessionSnapshot[]>; refresh(accountId: string): Promise<SafeAccountSessionSnapshot | null> };
   workspace: { companies(): Promise<Brand[]>; current(): Promise<string | null>; select(companyId: string): Promise<{ companyId: string }> };
   operations: OperationsApi & { pickImportFile(): Promise<{ fileName: string; columns: string[]; rows: Array<Record<string, string>> } | null> };
-  product: { buildIdentity():Promise<BuildIdentity&{runtimeAppVersion:string;packaged:boolean;automaticExecutionDisabled:boolean}>;health(): Promise<ProductAccountHealth[]>; preflight(input: { articleId: string; platformKey: string; platformAccountId: string; selectedImageAssetId?: string | null; websiteSettings?: OfficialApiContentSettings }): Promise<ProductPreflightResult>; diagnostics(): Promise<Record<string, unknown>>; exportDiagnostics(): Promise<string | null> };
+  product: { readiness():Promise<ProductReadiness>;buildIdentity():Promise<BuildIdentity&{runtimeAppVersion:string;packaged:boolean;automaticExecutionDisabled:boolean}>;health(): Promise<ProductAccountHealth[]>; preflight(input: { articleId: string; platformKey: string; platformAccountId: string; selectedImageAssetId?: string | null; websiteSettings?: OfficialApiContentSettings }): Promise<ProductPreflightResult>; diagnostics(): Promise<Record<string, unknown>>; exportDiagnostics(): Promise<string | null> };
   aiCenter: {
     previewGeneration(input:Parameters<AIProductCenter["previewGeneration"]>[0]):Promise<ReturnType<AIProductCenter["previewGeneration"]>>;
     requestBudget(id:string,companyId:string):Promise<ReturnType<AIProductCenter["requestBudget"]>>;

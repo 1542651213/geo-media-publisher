@@ -4,6 +4,10 @@ import type { AIRequestBudget, AIWorkloadEstimate, AIWorkloadPreview } from '../
 type BudgetRow={id:string;company_id:string;preview_json:string;max_requests:number;issued_requests:number;status:string;request_fingerprint:string;snapshot_fingerprint:string;created_at:string};
 export function requestFingerprint(value:unknown):string{return createHash('sha256').update(JSON.stringify(value)).digest('hex');}
 function error(code:string):Error{return Object.assign(new Error(code),{code});}
+export function assertAIRequestProfile(profile:{enabled:boolean;maxOutputTokens:number}):void{
+  if(!profile.enabled)throw new Error('AI 服务商已停用，请由 Owner 确认后启用');
+  if(!Number.isSafeInteger(profile.maxOutputTokens)||profile.maxOutputTokens<128||profile.maxOutputTokens>32000)throw new Error('AI 输出 Token 上限必须为 128–32000');
+}
 const shared=new WeakMap<AppRepository,AiRequestGovernor>();
 export function aiRequestGovernor(repository:AppRepository):AiRequestGovernor{let governor=shared.get(repository);if(!governor){governor=new AiRequestGovernor(repository);shared.set(repository,governor);}return governor;}
 
@@ -13,6 +17,7 @@ export class AiRequestGovernor {
   constructor(private readonly repository:AppRepository){repository.db.prepare("UPDATE ai_request_journal SET status='Unknown',error_code='PROCESS_INTERRUPTED',finished_at=? WHERE status='Started'").run(new Date().toISOString());}
   preview(estimate:AIWorkloadEstimate,fingerprint:string,snapshotFingerprint:string):AIWorkloadPreview{
     if(!Number.isSafeInteger(estimate.maxRequests)||estimate.maxRequests<1||estimate.maxRequests>1000||estimate.baseRequests>estimate.maxRequests)throw error('AI_BUDGET_INVALID');
+    assertAIRequestProfile({enabled:true,maxOutputTokens:estimate.maxOutputTokensPerRequest});
     const preview={...estimate,previewId:randomUUID(),createdAt:new Date().toISOString()};
     this.repository.db.prepare("INSERT INTO ai_request_budgets(id,company_id,kind,request_fingerprint,snapshot_fingerprint,preview_json,max_requests,issued_requests,status,created_at) VALUES(?,?,?,?,?,?,?,0,'Preview',?)").run(preview.previewId,preview.companyId,preview.kind,fingerprint,snapshotFingerprint,JSON.stringify(preview),preview.maxRequests,preview.createdAt);return preview;
   }

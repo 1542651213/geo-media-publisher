@@ -5,7 +5,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { z } from 'zod';
 import { createClosedSnapshot, type FullSnapshotManifest, type SnapshotIdentity } from './backup-restore';
 
-const requestSchema = z.strictObject({ token: z.uuid(), source: z.string(), directory: z.string(), parentPid: z.number().int().positive(), parentIdentity: z.string().min(1), workerPid: z.number().int().positive().nullable(), workerIdentity: z.string().min(1).nullable(), identity: z.strictObject({ appVersion: z.string(), sourceCommit: z.string(), deliveryId: z.string(), migrations: z.array(z.string()) }) });
+const requestSchema = z.strictObject({ token: z.uuid(), source: z.string(), directory: z.string(), parentPid: z.number().int().positive(), parentIdentity: z.string().min(1), workerPid: z.number().int().positive().nullable(), workerIdentity: z.string().min(1).nullable(), identity: z.strictObject({ appVersion: z.string(), sourceCommit: z.string(), deliveryId: z.string(), builtAt: z.string().optional(), migrations: z.array(z.string()) }) });
 type Request = z.infer<typeof requestSchema>;
 export interface SnapshotHandoff { leasePath: string; token: string }
 function leaseFor(source: string): string { return join(dirname(source), 'geo-full-snapshot-' + createHash('sha256').update(source.toLowerCase()).digest('hex').slice(0, 20) + '.lease.json'); }

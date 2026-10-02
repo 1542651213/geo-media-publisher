@@ -141,7 +141,7 @@ async function createWindow(): Promise<void> {
     if(pendingFullSnapshot)throw new Error("完整快照正在安排，请等待正常退出完成");
     const root=join(dirname(runtimePaths.userData),"geo-full-snapshots");mkdirSync(root,{recursive:true});
     const directory=join(root,`snapshot-${new Date().toISOString().replace(/[:.]/gu,"-")}`);
-    pendingFullSnapshot={directory,identity:{appVersion:app.getVersion(),sourceCommit:BUILD_IDENTITY.sourceCommit,deliveryId:BUILD_IDENTITY.deliveryId,migrations:(database.db.prepare("SELECT id FROM migrations ORDER BY id").all() as {id:string}[]).map(row=>row.id)}};
+    pendingFullSnapshot={directory,identity:{appVersion:app.getVersion(),sourceCommit:BUILD_IDENTITY.sourceCommit,deliveryId:BUILD_IDENTITY.deliveryId,builtAt:BUILD_IDENTITY.builtAt,migrations:(database.db.prepare("SELECT id FROM migrations ORDER BY id").all() as {id:string}[]).map(row=>row.id)}};
     writeFileSync(directory+".status.json",JSON.stringify({status:"PendingClose",directory,createdAt:new Date().toISOString()}));
     setTimeout(()=>app.quit(),250);
     return {directory,status:"PendingClose" as const};
