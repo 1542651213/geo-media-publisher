@@ -24,6 +24,9 @@ export function ProductAICenter({ initialTab = "studio", refresh }: { initialTab
   const [context, setContext] = useState<EnterpriseAIContext | null>(null), [templateEdit, setTemplateEdit] = useState<PromptTemplate | null>(null);
   const [providerEdit, setProviderEdit] = useState({ id: "", provider: "mimo" as ProviderKey, displayName: "Xiaomi MiMo", baseUrl: "https://api.xiaomimimo.com/v1", defaultModel: "mimo-v2.6-pro", isDefault: true });
   const [key, setKey] = useState(""), [models, setModels] = useState<ModelDescriptor[]>([]), [studioModels, setStudioModels] = useState<ModelDescriptor[]>([]);
+  const [defaultsRevision,setDefaultsRevision]=useState(0),[defaultsLoadFailed,setDefaultsLoadFailed]=useState(false);
+  const [loadedCompanyId,setLoadedCompanyId]=useState<string|null>(null);
+  const studioLoading=Boolean(companyId)&&loadedCompanyId!==companyId;
   const [workload,setWorkload]=useState<AIWorkloadPreview|null>(null),[usedRequests,setUsedRequests]=useState<number|undefined>();
   useEffect(()=>{setWorkload(null);setUsedRequests(undefined);},[companyId,sourceId,sourceText,purpose,targets,profileId,model,templateKey]);
   const studioRequest=()=>{const [templateId,version]=templateKey.split("@");return {companyId,sourceArticleId:sourceId||null,sourceText,purpose,targetPlatforms:targets,profileId,model,templateId:templateId??"industry",templateVersion:Number(version)};};
@@ -35,15 +38,16 @@ export function ProductAICenter({ initialTab = "studio", refresh }: { initialTab
   useEffect(() => { void Promise.all([window.publisherAPI.brands.list(), window.publisherAPI.articles.list(), window.publisherAPI.aiCenter.definitions()]).then(([nextBrands, nextArticles, nextDefinitions]) => { setBrands(nextBrands); setArticles(nextArticles); setDefinitions(nextDefinitions); setCompanyId(nextBrands[0]?.id ?? ""); }).catch(() => setMessage("无法读取本地企业资料")); void reload().catch(() => setMessage("无法读取 AI 配置")); }, []);
   useEffect(() => {
     let current = true;
+    setDefaultsLoadFailed(false);
     setSourceId(""); setSourceText(""); setOutputs([]); setContext(null);
     if (companyId) void Promise.all([window.publisherAPI.operations.getStudioDefaults(companyId), window.publisherAPI.operations.consumePlanGenerationSeed(companyId)]).then(([value, seed]) => {
       if (!current) return;
-      setProfileId(value.profileId ?? ""); setModel(value.model ?? ""); setTemplateKey(value.templateId ? `${value.templateId}@${value.templateVersion ?? 1}` : "industry@1"); setPurpose(value.purpose); setTargets(value.targetPlatforms);
+      setProfileId(value.profileId ?? ""); setModel(value.model ?? ""); setTemplateKey(value.templateId ? `${value.templateId}@${value.templateVersion ?? 1}` : "industry@1"); setPurpose(value.purpose); setTargets(value.targetPlatforms); setLoadedCompanyId(companyId);
       if (seed) { setSourceId(seed.articleId); setTargets(seed.targetPlatforms); setMessage(`已载入内容计划：${seed.topic}，生成结果保存为关联草稿版本。`); }
-    }).catch(() => { if (current) setMessage("企业生成默认值或内容计划草稿暂时无法载入"); });
+    }).catch(() => { if (current) {setDefaultsLoadFailed(true);setMessage("企业生成资料暂时无法载入，请重新载入后继续。");} });
     if (companyId) void window.publisherAPI.aiCenter.context(companyId).then(value => { if (current) setContext(value); }).catch(() => { if (current) setMessage("企业资料暂时无法读取"); });
     return () => { current = false; };
-  }, [companyId]);
+  }, [companyId,defaultsRevision]);
   useEffect(() => { if (!profileId && profiles.length) { const profile = profiles.find(item => item.isDefault) ?? profiles[0]!; setProfileId(profile.id); setModel(profile.defaultModel); } }, [profiles, profileId]);
   const act = async (operation: () => Promise<void>): Promise<void> => { if (activeAction.current) return; activeAction.current = true; setBusy(true); setMessage(""); try { await operation(); } catch (error) { setMessage(error instanceof Error ? productErrorMessage(error) : "操作未完成，请重试"); } finally { activeAction.current = false; setBusy(false); } };
   const selectProfile = (id: string): void => { setProfileId(id); setModel(profiles.find(item => item.id === id)?.defaultModel ?? ""); setStudioModels([]); };
@@ -57,7 +61,8 @@ export function ProductAICenter({ initialTab = "studio", refresh }: { initialTab
     <div className="row-actions">{(Object.keys(labels) as Tab[]).map(item => <button key={item} className={tab === item ? "primary-button" : "secondary-button"} disabled={busy} onClick={() => void act(async () => { await flushDraftEditors(); setTab(item); })}>{labels[item]}</button>)}</div>
     {message && <div role="status" className="notice">{message}</div>}
     {busy&&tab==="studio"&&<button className="secondary-button" onClick={()=>void window.publisherAPI.aiCenter.cancel(companyId).then(()=>setMessage("已请求取消；已发出请求的结果需核对，不会自动追加请求。"))}>取消本次生成</button>}
-    <fieldset disabled={busy} style={{ border: 0, padding: 0, minWidth: 0 }}>
+    {tab==="studio"&&studioLoading&&(defaultsLoadFailed?<button className="secondary-button" onClick={()=>setDefaultsRevision(value=>value+1)}>重新载入企业生成资料</button>:<p role="status">正在载入企业生成资料…</p>)}
+    <fieldset disabled={busy||(tab==="studio"&&studioLoading)} style={{ border: 0, padding: 0, minWidth: 0 }}>
     {tab === "providers" && <section className="panel form-grid">
       <h3>服务商配置</h3><label>服务商<select aria-label="AI 服务商" disabled={Boolean(providerEdit.id) || busy} value={providerEdit.provider} onChange={event => selectDefinition(event.target.value as ProviderKey)}>{definitions.map(item => <option key={item.key} value={item.key}>{item.displayName}</option>)}</select></label>
       <label>配置名称<input value={providerEdit.displayName} onChange={event => setProviderEdit(current => ({ ...current, displayName: event.target.value }))} /></label>
@@ -72,7 +77,7 @@ export function ProductAICenter({ initialTab = "studio", refresh }: { initialTab
       <p>缺少 Key 时显示未配置；Ollama 只读取本机已有模型，不自动下载。模型列表不代表所有模型均支持文本生成。</p>
       {profiles.map(item => <div className="table-row" key={item.id}><strong>{item.displayName}</strong><span>{item.defaultModel}</span><span>{!item.configured ? "未配置" : item.verificationStatus === "Failed" ? "连接失败，请检查配置" : item.verificationStatus === "Unavailable" ? "本机服务或模型不可用" : item.lastVerifiedAt ? "已验证" : "已配置，待验证"}</span><span>{item.lastVerifiedAt ? new Date(item.lastVerifiedAt).toLocaleString("zh-CN") : "尚未验证"}</span><button className="mini-button" disabled={busy} onClick={() => editProfile(item)}>编辑配置</button></div>)}
     </section>}
-    {tab === "studio" && <button className="secondary-button" disabled={busy || !companyId || !profileId || !model || !targets.length} onClick={() => void act(async () => { const [templateId, version] = templateKey.split("@"); await window.publisherAPI.operations.saveStudioDefaults({ companyId, profileId, model, templateId: templateId ?? null, templateVersion: Number(version) || null, purpose: purpose as typeof STUDIO_PURPOSES[number], targetPlatforms: targets as typeof STUDIO_TARGETS[number][] }); setMessage("当前企业的提示词默认值已保存"); })}>保存企业生成默认值</button>}
+    {tab === "studio" && <button className="secondary-button" disabled={busy || studioLoading || !companyId || !profileId || !model || !targets.length} onClick={() => void act(async () => { const [templateId, version] = templateKey.split("@"); await window.publisherAPI.operations.saveStudioDefaults({ companyId, profileId, model, templateId: templateId ?? null, templateVersion: Number(version) || null, purpose: purpose as typeof STUDIO_PURPOSES[number], targetPlatforms: targets as typeof STUDIO_TARGETS[number][] }); setMessage("当前企业的提示词默认值已保存"); })}>保存企业生成默认值</button>}
     {tab === "studio" && <><section className="panel form-grid"><label>企业<select aria-label="AI 企业" value={companyId} disabled={busy} onChange={event => setCompanyId(event.target.value)}><option value="">选择企业</option>{brands.map(item => <option key={item.id} value={item.id}>{item.companyName || item.name}</option>)}</select></label>
       <label>源文章<select aria-label="AI 源文章" value={sourceId} disabled={busy} onChange={event => setSourceId(event.target.value)}><option value="">粘贴源稿或资料</option>{articles.filter(item => item.brandId === companyId).map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
       {!sourceId && <label>源稿或资料<textarea aria-label="AI 源稿" rows={8} value={sourceText} disabled={busy} onChange={event => setSourceText(event.target.value)} /></label>}
@@ -82,7 +87,7 @@ export function ProductAICenter({ initialTab = "studio", refresh }: { initialTab
       <button className="secondary-button" disabled={busy || !selectedProfile?.configured} onClick={() => void act(async () => { setStudioModels(await window.publisherAPI.aiCenter.listModels(profileId)); setMessage("可从模型列表选择，也可手工填写兼容的文本模型 ID。"); })}>读取可选模型</button>
       <label>Prompt Template<select aria-label="生成模板" value={templateKey} disabled={busy} onChange={event => setTemplateKey(event.target.value)}>{latestTemplates.filter(item => item.enabled).map(item => <option key={`${item.templateId}@${item.version}`} value={`${item.templateId}@${item.version}`}>{item.name} · v{item.version}</option>)}</select></label>
       <div><strong>目标平台</strong>{STUDIO_TARGETS.map(platform => <label className="check-row" key={platform}><input type="checkbox" disabled={busy} checked={targets.includes(platform)} onChange={event => setTargets(current => event.target.checked ? [...current, platform] : current.filter(item => item !== platform))} />{productPlatform(platform)?.displayName ?? platform}<span>{productPlatform(platform)?.ordinaryPublishEnabled ? "" : "草稿可生成，当前平台尚未开放正式发布"}</span></label>)}</div>
-      <button className="secondary-button" disabled={busy||!companyId||!profileId||!model.trim()||!targets.length||!sourceId&&!sourceText.trim()} onClick={()=>void act(async()=>{await flushDraftEditors();setWorkload(await window.publisherAPI.aiCenter.previewGeneration(studioRequest()));setUsedRequests(undefined);setMessage("工作量已由 Main 计算；确认预算后才能发起生成。");})}>预览 AI 工作量</button>
+      <button className="secondary-button" disabled={busy||studioLoading||!companyId||!profileId||!model.trim()||!targets.length||!sourceId&&!sourceText.trim()} onClick={()=>void act(async()=>{await flushDraftEditors();setWorkload(await window.publisherAPI.aiCenter.previewGeneration(studioRequest()));setUsedRequests(undefined);setMessage("工作量已由 Main 计算；确认预算后才能发起生成。");})}>预览 AI 工作量</button>
       {workload&&<AIWorkloadNotice preview={workload} issued={usedRequests}/>}<button className="primary-button" disabled={busy||!workload||!selectedProfile?.configured||usedRequests!==undefined} onClick={()=>void act(async()=>{if(!workload)throw new Error("请先预览工作量");await flushDraftEditors();const result=await window.publisherAPI.aiCenter.generate({...studioRequest(),previewId:workload.previewId});setOutputs(result);setUsedRequests((await window.publisherAPI.aiCenter.requestBudget(workload.previewId,companyId)).issuedRequests);await reload();setMessage("生成已结束，请核对结果并保存 Draft；请求预算已保留。");})}>{busy?"正在生成…":"确认预算并生成本地草稿"}</button></section>
       {outputs.length > 0 && <p>生成结果已保留在本机生成历史。人工修改后请点击“保存 Draft”，再切换页面。</p>}
       {outputs.map(item => <StudioDraftEditor key={item.generationId} companyId={companyId} item={item} busy={busy} onChange={changes=>updateOutput(item.generationId,changes)} onSaved={async()=>{await reload();refresh();}} onMessage={setMessage} />)}</>}

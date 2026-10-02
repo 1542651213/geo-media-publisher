@@ -15,7 +15,7 @@ const formats: Record<string, { mime: string; extension: string }> = { jpg: { mi
 
 export class OperationsAssets {
   constructor(private readonly repository: AppRepository, private readonly directory: string) {}
-  list(companyId: string): OperationsAsset[] { return this.repository.listImageAssets(companyId).map(asset => this.view(asset)); }
+  list(companyId: string): OperationsAsset[] { return this.views(this.repository.listImageAssets(companyId)); }
   import(companyId: string, paths: string[], metadata: Partial<Pick<ImageAsset, "name" | "tags" | "business" | "city" | "usage" | "platform" | "universal">> = {}): OperationsAsset[] {
     if (!this.repository.getBrand(companyId)) throw new Error("企业不存在");
     if (paths.length < 1 || paths.length > 100) throw new Error("一次请选择 1 到 100 张图片");
@@ -44,15 +44,32 @@ export class OperationsAssets {
       return { ...this.view(asset), duplicate: false };
     });
   }
-  view(asset: ImageAsset): OperationsAsset {
+  view(asset: ImageAsset): OperationsAsset { return this.views([asset])[0]!; }
+  views(assets: ImageAsset[]): OperationsAsset[] {
+    if (!assets.length) return [];
+    const articleCounts=new Map<string,number>();
+    for(const brandId of new Set(assets.map(asset=>asset.brandId))) {
+      for(const article of this.repository.listArticles({brandId:brandId??""})) {
+        if(!article.coverAssetId) continue;
+        const key=(brandId??"")+"\0"+article.coverAssetId;
+        articleCounts.set(key,(articleCounts.get(key)??0)+1);
+      }
+    }
+    const jobCounts=new Map<string,number>(),latestJobs=new Map<string,ReturnType<AppRepository["listJobs"]>[number]>();
+    for(const job of this.repository.listJobs()) {
+      if(!job.selectedImageAssetId) continue;
+      jobCounts.set(job.selectedImageAssetId,(jobCounts.get(job.selectedImageAssetId)??0)+1);
+      const latest=latestJobs.get(job.selectedImageAssetId);
+      if(!latest||job.createdAt>latest.createdAt) latestJobs.set(job.selectedImageAssetId,job);
+    }
+    return assets.map(asset=>{
     let width: number | null = null, height: number | null = null;
     try { const dimensions = imageSize(readFileSync(asset.filePath)); width = dimensions.width ?? null; height = dimensions.height ?? null; } catch { /* Older missing/unreadable assets remain visible with unknown dimensions. */ }
-    const articles = this.repository.listArticles({ brandId: asset.brandId ?? "" }).filter(item => item.coverAssetId === asset.id);
-    const jobs = this.repository.listJobs().filter(item => item.selectedImageAssetId === asset.id);
-    const latest = [...jobs].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-    return { ...asset, width, height, orientation: width && height ? width === height ? "square" : width > height ? "landscape" : "portrait" : "unknown", usedByArticleCount: articles.length, usedByJobCount: jobs.length, lastUsedPlatform: latest?.platformKey ?? null,
+    const latest=latestJobs.get(asset.id);
+    return { ...asset, width, height, orientation: width && height ? width === height ? "square" : width > height ? "landscape" : "portrait" : "unknown", usedByArticleCount: articleCounts.get((asset.brandId??"")+"\0"+asset.id)??0, usedByJobCount: jobCounts.get(asset.id)??0, lastUsedPlatform: latest?.platformKey ?? null,
       lastUsedAt: latest?.createdAt ?? asset.lastUsedAt,
       // Dimensions/bytes are observed; platform-specific complete size contracts remain unknown.
       platformSuitability: ["douyin", "toutiao", "weibo", "sohu_media", "website", "cnblogs"].map(platformKey => ({ platformKey, status: !width || !height ? "可能不适合" : "未知" })) };
+    });
   }
 }

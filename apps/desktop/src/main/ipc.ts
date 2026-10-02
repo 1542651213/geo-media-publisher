@@ -926,7 +926,7 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
     return imageAssetView(image);
   });
   const imageInputSchema = z.strictObject({ brandId: idSchema, sourcePaths: z.array(z.string().min(1).max(8192)).min(1).max(100), name: z.string().trim().max(200).optional(), tags: z.array(z.string().trim().min(1).max(80)).max(30), business: z.array(z.string().trim().min(1).max(80)).max(20), city: z.array(z.string().trim().min(1).max(80)).max(20), usage: z.array(z.string().trim().min(1).max(80)).max(30), platform: z.array(z.string().trim().min(1).max(80)).max(20), universal: z.boolean() });
-  register("image-assets:list", (_event, payload) => { const input = z.object({ brandId: idSchema.optional(), enabledOnly: z.boolean().optional() }).optional().parse(payload); return repository.listImageAssets(input?.brandId, input?.enabledOnly ?? false).map(asset => imageAssetView(assets.view(asset))); });
+  register("image-assets:list", (_event, payload) => { const input = z.object({ brandId: idSchema.optional(), enabledOnly: z.boolean().optional() }).optional().parse(payload); return assets.views(repository.listImageAssets(input?.brandId, input?.enabledOnly ?? false)).map(imageAssetView); });
   register("image-assets:pick-files", async () => { const result = await dialog.showOpenDialog({ properties: ["openFile", "multiSelections"], filters: [{ name: "图片", extensions: ["jpg", "jpeg", "png", "webp", "gif", "bmp"] }] }); return result.canceled ? [] : result.filePaths; });
   register("image-assets:import", (_event, payload) => {
     const input = imageInputSchema.parse(payload);

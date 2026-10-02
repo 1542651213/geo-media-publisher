@@ -78,6 +78,9 @@ export const articleReviewTone = (status?: string | null): string => ({
   Draft: "muted"
 }[status ?? "Draft"] ?? "muted");
 
+export const unknownPublishResult = (status: string): boolean => ["Unknown", "NeedsReconciliation"].includes(status);
+export const requiresReadOnlyPublishReconciliation = (job: {status:string;platformKey:string}): boolean => unknownPublishResult(job.status) || (["toutiao","douyin"].includes(job.platformKey) && ["Submitted","Publishing"].includes(job.status));
+
 export const publishStatusLabel = (status: PublishJob["status"]): string => {
   if (["Pending", "Scheduled", "Retry"].includes(status)) return "待发布";
   if (["AwaitingConfirmation", "ReadyToSubmit"].includes(status)) return "等待确认";
