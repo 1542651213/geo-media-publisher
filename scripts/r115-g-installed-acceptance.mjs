@@ -32,7 +32,15 @@ const checkLayouts=async(name)=>{
  await run.page.evaluate(()=>new Promise(done=>window.requestAnimationFrame(()=>window.requestAnimationFrame(done))));
  await run.page.evaluate(()=>{for(const selector of ['.drawer','.drawer-body','.content-area']){const element=document.querySelector(selector);if(element)element.scrollTop=0;}});
 };
-const shot=async name=>{await checkLayouts(name);if(name==='01-import-errors')await run.page.locator('.operations-errors').scrollIntoViewIfNeeded();result.captureLayouts??=[];result.captureLayouts.push({name,...await run.page.evaluate(()=>({width:window.innerWidth,height:window.innerHeight}))});result.screenshots.push(await screenshot(run.page,root,name));};
+const shot=async name=>{
+ await checkLayouts(name);
+ if(name==='01-import-errors')await run.page.locator('.operations-errors').scrollIntoViewIfNeeded();
+ if(name==='04-ai-budget-data')await run.page.locator('.ai-workload-preview strong').first().evaluate(element=>element.scrollIntoView({block:'start'}));
+ if(name==='05-preflight-protected')await run.page.locator('.drawer-footer').evaluate(element=>element.scrollIntoView({block:'end'}));
+ if(name==='07-backup-restore')await run.page.getByRole('heading',{name:'备份与隔离恢复',exact:true}).evaluate(element=>element.scrollIntoView({block:'start'}));
+ await run.page.evaluate(()=>new Promise(done=>window.requestAnimationFrame(()=>window.requestAnimationFrame(done))));
+ result.captureLayouts??=[];result.captureLayouts.push({name,...await run.page.evaluate(()=>({width:window.innerWidth,height:window.innerHeight}))});result.screenshots.push(await screenshot(run.page,root,name));
+};
 const start=async()=>{run=await launchInstalled(executable,userData,{origins:[origin]});result.normalStarts++;result.build=run.build;};
 const stop=async()=>{await closeInstalled(run);run=null;result.normalExits++;};
 const openArticle=async()=>{await nav(run.page,'文章库');const row=run.page.locator('.v11-article-row').filter({hasText:'合成员工源稿'}).first();await row.getByRole('button',{name:'修改',exact:true}).click();await run.page.getByLabel('编辑文章正文').waitFor();await run.page.waitForFunction(()=>!document.querySelector('[aria-label="编辑文章正文"]')?.disabled);};
