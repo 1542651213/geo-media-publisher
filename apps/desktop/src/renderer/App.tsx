@@ -1,3 +1,4 @@
+import { flushDraftEditors } from "./draft-autosave-controller";
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { JSX } from "react";
@@ -37,22 +38,24 @@ export function App(): JSX.Element {
   const [developerMode, setDeveloperMode] = useState(false);
   useEffect(() => { void window.publisherAPI.settings.get().then(settings => setDeveloperMode(settings.developerMode === true)); }, []);
   useEffect(() => { if (!developerMode && DEVELOPER_ROUTES.has(route)) setRoute("advanced"); }, [route, developerMode]);
-  const navigate = (next: Route): void => setRoute(!developerMode && DEVELOPER_ROUTES.has(next) ? "advanced" : next);
+  const [navigationError, setNavigationError] = useState("");
+  const navigate = (next: Route): void => { void flushDraftEditors().then(() => { setNavigationError(""); setRoute(!developerMode && DEVELOPER_ROUTES.has(next) ? "advanced" : next); }).catch(error => setNavigationError(error instanceof Error ? error.message : "草稿保存失败，当前页面已保留")); };
+  useEffect(() => window.publisherAPI.lifecycle.onDraftFlush(requestId => { void flushDraftEditors().then(() => window.publisherAPI.lifecycle.draftFlushResult(requestId, true)).catch(error => { setNavigationError(error instanceof Error ? error.message : "草稿保存失败；应用继续保持打开"); window.publisherAPI.lifecycle.draftFlushResult(requestId, false); }); }), []);
   const toggleDeveloperMode = async (): Promise<void> => { await window.publisherAPI.settings.update("developerMode", !developerMode); setDeveloperMode(!developerMode); };
   const [refreshKey, setRefreshKey] = useState(0);
   const refresh = (): void => setRefreshKey((value) => value + 1);
   const [companies, setCompanies] = useState<Brand[]>([]), [companyId, setCompanyId] = useState(""), [switching, setSwitching] = useState(false);
   useEffect(() => { let active = true; void Promise.all([window.publisherAPI.workspace.companies(), window.publisherAPI.workspace.current()]).then(([next, current]) => { if (active) { setCompanies(next); setCompanyId(current ?? ""); } }); return () => { active = false; }; }, [refreshKey]);
-  const selectCompany = async (id: string): Promise<void> => { setSwitching(true); try { await window.publisherAPI.workspace.select(id); setCompanyId(id); refresh(); } finally { setSwitching(false); } };
-  return <DeveloperModeContext.Provider value={developerMode}><Layout route={route} onNavigate={navigate} companies={companies} companyId={companyId} switching={switching} onSelectCompany={selectCompany}><div key={companyId} className="company-workspace-content">
+  const selectCompany = async (id: string): Promise<void> => { setSwitching(true); try { await flushDraftEditors(); await window.publisherAPI.workspace.select(id); setCompanyId(id); refresh(); } catch (error) { setNavigationError(error instanceof Error ? error.message : "切换前保存失败，请重试"); } finally { setSwitching(false); } };
+  return <DeveloperModeContext.Provider value={developerMode}><Layout route={route} onNavigate={navigate} companies={companies} companyId={companyId} switching={switching} onSelectCompany={selectCompany}><div key={companyId} className="company-workspace-content">{navigationError && <div role="alert" className="notice error">{navigationError}</div>}
     {route === "dashboard" && (companyId ? <OperationsCenter companyId={companyId} refresh={refresh} onNavigate={next => navigate(next as Route)} /> : <EmptyState title="今日工作台" description="请先在高级功能的企业资料中创建企业，然后选择工作区。" />)}
     {route === "operations" && (companyId ? <OperationsCenter companyId={companyId} refresh={refresh} onNavigate={next => navigate(next as Route)} /> : <EmptyState title="内容运营" description="请先创建并选择企业工作区。" />)}
     {route === "production" && <ProductAICenter refresh={refresh} />}
     {route === "ai-center" && <ProductAICenter initialTab="providers" refresh={refresh} />}
-    {route === "articles" && <V11ArticleLibrary refresh={refresh} refreshKey={refreshKey} onNavigate={setRoute} />}
+    {route === "articles" && <V11ArticleLibrary refresh={refresh} refreshKey={refreshKey} onNavigate={navigate} />}
     {route === "images" && <V11ImageLibrary refresh={refresh} refreshKey={refreshKey} />}
     {route === "accounts" && <><ProductAccountHealth refreshKey={refreshKey} /><V11AccountsCenter refresh={refresh} refreshKey={refreshKey} onNavigate={navigate} /></>}
-    {route === "publishing" && <V11PublishCenter refresh={refresh} refreshKey={refreshKey} onNavigate={setRoute} />}
+    {route === "publishing" && <V11PublishCenter refresh={refresh} refreshKey={refreshKey} onNavigate={navigate} />}
     {route === "statistics" && <V11Statistics refreshKey={refreshKey} />}
     {route === "preferences" && <V11Preferences />}
     {route === "advanced" && <V11AdvancedSettings onNavigate={navigate} developerMode={developerMode} toggleDeveloperMode={toggleDeveloperMode} />}
@@ -64,9 +67,9 @@ export function App(): JSX.Element {
     {route === "ai-tasks" && <AiTasksPage />}
     {route === "assets" && <VideoAssetCenter refresh={refresh} />}
     {route === "images-advanced" && <ImageLibraryPage refresh={refresh} />}
-    {(route === "brand" || route === "knowledge") && <EnterpriseProfileManager initialView={route === "knowledge" ? "knowledge" : "profile"} refresh={refresh} onNavigate={setRoute} />}
+    {(route === "brand" || route === "knowledge") && <EnterpriseProfileManager initialView={route === "knowledge" ? "knowledge" : "profile"} refresh={refresh} onNavigate={navigate} />}
     {route === "platforms" && <PlatformConnectionCenter refresh={refresh} onNavigate={(nextRoute) => setRoute(nextRoute)} />}
-    {route === "self-test" && <PlatformSelfTestCenter onNavigate={setRoute} />}
+    {route === "self-test" && <PlatformSelfTestCenter onNavigate={navigate} />}
     {route === "plans" && <PlansPageV031 refresh={refresh} />}
     {route === "queue" && <QueuePageV031 refresh={refresh} />}
     {route === "logs" && <LogsPage />}
@@ -232,13 +235,11 @@ function LogsPage(): JSX.Element {
 }
 
 function BackupsPage(): JSX.Element {
-  const [backups, setBackups] = useState<string[]>([]);
-  const [message, setMessage] = useState("");
-  const load = (): void => { void window.publisherAPI.backups.list().then(setBackups); };
-  useEffect(load, []);
-  const create = async (): Promise<void> => { const path = await window.publisherAPI.backups.create(); setMessage(`已创建备份：${path}`); load(); };
-  const restore = async (path: string): Promise<void> => { if (!window.confirm("恢复备份会关闭并重启应用，当前数据库将被替换。确定继续吗？")) return; await window.publisherAPI.backups.restore(path); };
-  return <><PageTitle eyebrow="系统设置 / 数据备份" title="数据备份" description="使用 SQLite 在线备份 API 创建一致性快照；恢复前会执行完整性校验并要求二次确认。" action={<button className="primary-button" onClick={() => void create()}>立即备份</button>} />{message && <div className="notice success">✓ {message}</div>}<section className="panel table-panel"><div className="panel-heading"><div><h3>备份历史</h3><span>备份保存在 Electron userData/backups，不写入源码目录。</span></div></div>{backups.length === 0 ? <EmptyState compact title="暂无备份" description="建议在真实平台联调前先创建备份。" /> : <div className="log-list">{backups.map((path) => <div className="log-row" key={path}><strong>{path.split(/[\\/]/u).pop()}</strong><span>{path}</span><button className="mini-button" onClick={() => void window.publisherAPI.backups.validate(path).then((result) => setMessage(result.message))}>校验</button><button className="mini-button danger-mini" onClick={() => void restore(path)}>恢复</button></div>)}</div>}</section></>;
+  const [backups,setBackups]=useState<string[]>([]),[full,setFull]=useState<Awaited<ReturnType<typeof window.publisherAPI.backups.fullList>>>([]),[message,setMessage]=useState(""),[busy,setBusy]=useState(false);
+  const load=():void=>{void Promise.all([window.publisherAPI.backups.list(),window.publisherAPI.backups.fullList()]).then(([db,snapshots])=>{setBackups(db);setFull(snapshots);}).catch(error=>setMessage(error instanceof Error?error.message:"无法读取备份列表"));};
+  useEffect(load,[]);
+  const act=async(operation:()=>Promise<string>):Promise<void>=>{setBusy(true);try{setMessage(await operation());load();}catch(error){setMessage(error instanceof Error?error.message:"备份操作失败，已有文件保留");}finally{setBusy(false);}};
+  return <><PageTitle eyebrow="系统设置 / 备份与隔离恢复" title="备份与隔离恢复" description="数据库在线备份适合数据库回退；完整快照包含媒体、加密凭据上下文及浏览器资料，在正常关闭后创建并校验。"/>{message&&<div role="status" className="notice">{message}</div>}<section className="panel form-grid"><h3>创建备份</h3><div className="row-actions"><button className="secondary-button" disabled={busy} onClick={()=>void act(async()=>`数据库在线备份已创建：${await window.publisherAPI.backups.create()}（不包含媒体与凭据）`)}>仅备份数据库</button><button className="primary-button" disabled={busy} onClick={()=>void act(async()=>{await flushDraftEditors();const result=await window.publisherAPI.backups.queueFull();return `已安排正常退出后完整快照：${result.directory}`;})}>创建完整快照并正常退出</button></div><p>完整快照失败会标为 Incomplete 并保留现场；已有合格快照不会覆盖。</p></section><section className="panel form-grid"><h3>完整快照</h3>{full.length===0&&<p>尚无完整快照。正常退出创建后可重新启动查看校验结果。</p>}{full.map(item=><article key={item.directory}><strong>{item.status==="Complete"?"完整快照已完成":"快照未完成"}</strong><p className="path-text">{item.directory}</p><p>{item.createdAt} · {(item.totalBytes/1024/1024).toFixed(1)} MB</p><div className="row-actions"><button className="secondary-button" disabled={busy} onClick={()=>void act(async()=>{const result=await window.publisherAPI.backups.validateFull(item.directory);return `${result.valid?"校验通过":"校验失败"}：${result.message}`;})}>校验完整快照</button><button className="secondary-button" disabled={busy||item.status!=="Complete"} onClick={()=>void act(async()=>{const result=await window.publisherAPI.backups.restoreIsolated(item.directory);return `已恢复到新的隔离目录：${result.directory}。自动执行已暂停；请按恢复说明启动、核对身份和未知结果。`;})}>恢复到新隔离目录</button></div></article>)}</section><section className="panel form-grid"><h3>数据库在线备份历史</h3>{backups.map(path=><article key={path}><p className="path-text">{path}</p><button className="secondary-button" disabled={busy} onClick={()=>void act(async()=>{const result=await window.publisherAPI.backups.validate(path);return `${result.valid?"校验通过":"校验失败"}：${result.message}`;})}>校验数据库</button></article>)}</section></>;
 }
 
 function AccountsCenterPage({ refresh }: { refresh: () => void }): JSX.Element {

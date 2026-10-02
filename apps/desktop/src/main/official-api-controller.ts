@@ -1,3 +1,4 @@
+import { assertNoUnsubmittedEdits } from "./draft-working-copies";
 import type { AppRepository } from "@publisher/db";
 import type { AccountContext, PublishJob } from "@publisher/domain";
 import type { CredentialStore } from "@publisher/security";
@@ -70,6 +71,7 @@ export class OfficialApiController {
   }
 
   async prepare(input: PrepareInput) {
+    assertNoUnsubmittedEdits(this.deps.repository, input.articleId);
     const selected = this.selection(input);
     this.deps.assertWorkspace?.(input.articleId, selected.account.id);
     return this.exclusive(`prepare:${selected.account.id}:${input.articleId}`, async () => {
@@ -77,6 +79,7 @@ export class OfficialApiController {
         verify: config => this.deps.adapter.inspect(config) }, selected.account.id);
       if (!verified.writesEnabled) throw new Error("WEBSITE_WRITES_DISABLED");
       const { account, prepared } = this.selection(input);
+      assertNoUnsubmittedEdits(this.deps.repository, input.articleId);
       this.deps.assertWorkspace?.(input.articleId, account.id);
       const existing = this.deps.store.findBySource(account.id, input.articleId);
       if (existing && existing.contentBindingId !== prepared.contentBindingId) throw new Error("WEBSITE_FROZEN_BINDING_CHANGED");

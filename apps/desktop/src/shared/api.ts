@@ -4,6 +4,8 @@ import type { Account, AccountStatus, ActivityLog, AIProviderProfile, Article, A
 import type { AIConnectionResult } from "@publisher/ai";
 import type { AIProductCenter } from "../main/ai-product-center";
 import type { OperationsApi } from "./content-operations";
+import type { AccountOnboardingApi } from "./account-onboarding";
+import type { DraftWorkingCopiesApi } from "./draft-working-copies";
 import type { SafeAccountSessionSnapshot } from "@publisher/adapters-core";
 import type { ProductAccountHealth, ProductPreflightResult } from "./product-platform-policy";
 import type { ContentQualityAuditView, ContentQualityItemView, ContentQualityReviewView, ContentQualityStateView, HumanReviewDatasetItemView, HumanReviewDatasetView, HumanReviewSubmitInput, HumanReviewItemReviewView, QualityBenchmarkContentView, QualityBenchmarkMetrics, QualityBenchmarkRunView } from "@publisher/db";
@@ -183,6 +185,9 @@ export interface ManagedVideoAsset extends VideoAsset {
 }
 
 export interface PublisherApi {
+  accountOnboarding: AccountOnboardingApi;
+  drafts: DraftWorkingCopiesApi;
+  lifecycle: { onDraftFlush(listener: (requestId: string) => void): () => void; draftFlushResult(requestId: string, success: boolean): void };
   sessions: { snapshots(): Promise<SafeAccountSessionSnapshot[]>; refresh(accountId: string): Promise<SafeAccountSessionSnapshot | null> };
   workspace: { companies(): Promise<Brand[]>; current(): Promise<string | null>; select(companyId: string): Promise<{ companyId: string }> };
   operations: OperationsApi & { pickImportFile(): Promise<{ fileName: string; columns: string[]; rows: Array<Record<string, string>> } | null> };
@@ -280,7 +285,7 @@ export interface PublisherApi {
   jobs: { list(filters?: { status?: string }): Promise<PublishJob[]>; createVideo(input: { accountId: string; platformKey: string; articleId: string; videoAssetId: string; scheduledAt: string }): Promise<PublishJob>; prepareExistingDouyin(id: string): Promise<{ job: PublishJob; record: PublishRecord | null; message: string }>; run(id: string): Promise<{ job: PublishJob; message: string }>; confirm(id: string, dryRun?: boolean): Promise<PublishJob>; reconcile(id: string): Promise<{ job: PublishJob; message: string }>; reconcileBrowser(id: string): Promise<{ job: PublishJob; message: string }>; reconcileNotSubmitted(id: string): Promise<PublishJob>; retry(id: string): Promise<PublishJob>; recover(): Promise<number> };
   logs: { list(limit?: number, filters?: { level?: string; module?: string; search?: string }): Promise<ActivityLog[]>; export(): Promise<string | null> };
   notifications: { list(limit?: number): Promise<Notification[]>; markRead(id: string): Promise<void>; markAllRead(): Promise<void> };
-  backups: { list(): Promise<string[]>; create(): Promise<string>; validate(path: string): Promise<{ valid: boolean; message: string }>; restore(path: string): Promise<{ accepted: boolean }> };
+  backups: { queueFull(): Promise<{directory:string;status:"PendingClose"}>; fullList():Promise<{directory:string;status:string;createdAt:string;totalBytes:number}[]>; validateFull(path:string):Promise<{valid:boolean;message:string}>; restoreIsolated(path:string):Promise<{directory:string;automaticExecutionDisabled:true}>; list(): Promise<string[]>; create(): Promise<string>; validate(path: string): Promise<{ valid: boolean; message: string }>; restore(path: string): Promise<{ accepted: boolean }> };
   settings: { get(): Promise<Record<string, unknown>>; update(key: string, value: unknown): Promise<void>; setSecret(kind: "apiKey" | "imageApiKey", value: string): Promise<{ configured: boolean; validationStatus?: string; validationResult?: AIConnectionResult }>; testAi(): Promise<AIConnectionResult> };
 }
 

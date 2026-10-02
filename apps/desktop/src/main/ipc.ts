@@ -1,8 +1,11 @@
+import { restoreFullSnapshot, validateFullSnapshot } from "./backup-restore";
+import { AccountOnboarding } from "./account-onboarding";
 import { assertCurrentContentApproved } from "./content-review-authority";
+import { DraftWorkingCopies, assertNoUnsubmittedEdits } from "./draft-working-copies";
 import { app, dialog, ipcMain, shell } from "electron";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { basename, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { importOfficialApiCredential, officialApiAccountView, verifyOfficialApiConnection } from "./official-api-account";
@@ -24,7 +27,7 @@ import { BrowserRuntimeError, assertExternalLaunchAllowed, browserSessionCredent
 import type { Logger } from "@publisher/logger";
 import type { PublisherService, PersistentScheduler } from "@publisher/publisher";
 import { resumePersistentBatches, runPersistentBatchTask } from "./ai-batch";
-import { CONTENT_STUDIO_PROMPT_VERSION, resumeContentStudioTasks, runContentStudioTask } from "./content-studio";
+import { CONTENT_STUDIO_PROMPT_VERSION, runContentStudioTask } from "./content-studio";
 import { AIProductCenter } from "./ai-product-center";
 import { runQualityGate, runQualityGateForArticle, runQualityGateForVariant } from "./quality-gate";
 import { runQualityBenchmark } from "./quality-benchmark";
@@ -107,6 +110,8 @@ export interface IpcDependencies {
   appLogPath: string;
   errorLogPath?: string;
   databasePath: string;
+  automaticExecutionDisabled?: boolean;
+  queueClosedSnapshot?: ()=>{directory:string;status:"PendingClose"};
   restoreDatabase?: (backupPath: string) => void;
   processDiagnostics?: ProcessDiagnostics;
   /** True only for an explicitly marked B01 Candidate package. */
@@ -125,11 +130,13 @@ const mvp5PausedChannels = new Set(["articles:prepare-publish", "jobs:run", "job
   "platform-self-test:run-post-upload-discovery", "platform-self-test:continue", "platform-self-test:run-level",
   "platform-self-test:request-publish", "platform-self-test:confirm-publish"]);
 
+let restoredExecutionPaused = false;
 let workspaceController: CompanyWorkspace | null = null;
 function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent, payload: unknown) => unknown): void {
   ipcMain.removeHandler(channel);
   ipcMain.handle(channel, async (event, payload) => {
     try {
+      if(restoredExecutionPaused && (/^(?:accounts:(?:begin-login|complete-login|refresh-login|check-login|open-backend)|website:(?:verify-connection|recover|maintain)|sessions:refresh|ai-center:(?:generate|test-connection|list-models)|operations:(?:run-generation-queue|resume-generation-queue)|ai:(?:generate|run)|content-studio:(?:generate|run)|jobs:(?:confirm|run|retry)|articles:prepare-publish|platform-self-test:)/u.test(channel)))throw new Error("隔离恢复处于人工复核状态，外部请求和自动执行已暂停；请先核对企业、身份、Unknown 和旧任务。");
       if (!workspaceController?.current() && ["articles:list", "image-assets:list"].includes(channel)) return [];
       if (!workspaceController?.current() && channel === "articles:page") return { items: [], page: 1, pageSize: 50, total: 0, totalPages: 1 };
       payload = workspaceController?.prepare(channel, payload) ?? payload;
@@ -205,6 +212,7 @@ function register(channel: string, handler: (event: Electron.IpcMainInvokeEvent,
 }
 
 export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoordinator | null {
+  restoredExecutionPaused = deps.automaticExecutionDisabled===true;
   processDiagnostics = deps.processDiagnostics ?? null;
   acceptanceRepository = deps.repository;
   b01CandidateActive = deps.b01AcceptanceEnabled === true;
@@ -216,8 +224,13 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
   const operations: ContentOperations = new ContentOperations(repository, aiCenter, accountId => {
     const account = repository.listAccounts().find(item => item.id === accountId);
     return account && sessionRuntime ? safeRuntimeSnapshot(account.id, account.platformKey) : null;
-  });
+  }, false);
   const workspace = new CompanyWorkspace(repository, accountId => operations.accountCompany(accountId));
+  const drafts = new DraftWorkingCopies(repository, { assertCompany: id => workspace.assertCompany(id),
+    studio: { get: id => { const history = aiCenter.store.generation(id), draft = aiCenter.draft(id); return history && draft ? { companyId: history.companyId, title: draft.title, body: draft.body, outputArticleId: history.outputArticleId, variantId: history.variantId } : null; }, saveDraft: (id, title, body) => aiCenter.saveDraft(id, title, body) },
+    audit: (event, metadata) => logger.info("DRAFT", event, "本地编辑工作副本状态更新", { ...metadata }) });
+  for (const method of ["open", "get", "persist", "listRecovery", "commit", "discard", "release", "resolve"] as const)
+    register(`drafts:${method.replace(/[A-Z]/gu, letter => `-${letter.toLowerCase()}`)}`, (_event, payload) => drafts[method](payload));
   workspaceController = workspace;
   const assets = new OperationsAssets(repository, join(dataDirectory, "media", "images"));
   const sessionTarget = (accountId: string): AccountSessionTarget | null => {
@@ -229,7 +242,7 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
       companyId: operations.accountCompany(account.id) ?? "", enabled: account.enabled && !account.archivedAt,
       connectionMode: binding?.active || adapter?.manifest.transport === "browser" ? "BrowserAutomation" : account.connectionMode === "OAuth" ? "OAuth" : "OfficialAPI",
       expectedRemoteIdentity: binding?.active ? binding.creatorId : account.externalAccountId ?? repository.getAccountAuthorization(account.id, account.platformKey)?.providerAccountId ?? null,
-      loginGeneration: binding?.active ? binding.loginGeneration : null };
+      loginGeneration: binding?.active ? binding.loginGeneration : Number((repository.db.prepare("SELECT version FROM operations_account_company_bindings WHERE account_id=?").get(account.id) as {version:number}|undefined)?.version ?? 0) };
   };
   sessionRuntime = deps.browserSessions ? new AccountSessionRehydrationCoordinator({ registry, browserSessions: deps.browserSessions, resolveCompanyId: accountId => operations.accountCompany(accountId), resolveAdapter: target => target.platformKey === "douyin" && target.connectionMode === "BrowserAutomation" ? registry.getForContent("douyin", "article") : registry.tryGetForConnection(target.platformKey), resolveAuthoritativeTarget: (accountId, platformKey) => { const target = sessionTarget(accountId); return target?.platformKey === platformKey ? target : null; }, resolveSecrets: resolveAccountSecrets, concurrency: 2 }) : null;
   function safeRuntimeSnapshot(accountId: string, platformKey: string) {
@@ -240,6 +253,10 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
     if (snapshot.companyId !== target.companyId || snapshot.loginGeneration !== target.loginGeneration || !target.enabled) return { ...snapshot, state: target.enabled ? "UNVERIFIED" as const : "DISABLED" as const, identityMatched: false };
     return snapshot;
   }
+  const onboarding = new AccountOnboarding(repository, { invalidateAuthentication: (id, key) => { sessionRuntime?.invalidate(id, key); }, runtimeHealth: (id, key) => safeRuntimeSnapshot(id, key) });
+  register("account-onboarding:preview", () => onboarding.preview());
+  register("account-onboarding:confirm", (_event, payload) => { const result = onboarding.confirm(payload); logger.info("ACCOUNT", "OWNER_COMPANY_CONFIRMED", "Owner 已逐账号确认所属企业；身份须重新验证", { accountId: result.accountId, companyId: result.companyId, bindingVersion: result.bindingVersion }); return result; });
+  register("operations:bind-account", () => { throw new Error("历史账号归属须在 Owner Action 一页入口核对证据及版本后逐账号确认"); });
   register("sessions:snapshots", () => repository.listAccounts().map(account => safeRuntimeSnapshot(account.id, account.platformKey)).filter(item => item && item.companyId === workspace.current()));
   register("sessions:refresh", (_event, payload) => {
     const accountId = z.strictObject({ accountId: idSchema }).parse(payload).accountId;
@@ -247,11 +264,11 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
     const target = sessionTarget(accountId);
     return target && sessionRuntime ? sessionRuntime.refresh(target, "MANUAL") : null;
   });
-  if (sessionRuntime) void sessionRuntime.rehydrate(repository.listAccounts().map(account => sessionTarget(account.id)).filter((target): target is AccountSessionTarget => target !== null && Boolean(target.companyId)));
+  if (sessionRuntime && !restoredExecutionPaused) void sessionRuntime.rehydrate(repository.listAccounts().map(account => sessionTarget(account.id)).filter((target): target is AccountSessionTarget => target !== null && Boolean(target.companyId)));
   register("workspace:companies", () => repository.listBrands());
   register("workspace:current", () => workspace.current());
   register("workspace:select", (_event, payload) => workspace.select(z.strictObject({ companyId: idSchema }).parse(payload).companyId));
-  const operationsMethods = ["bindAccount", "saveStudioDefaults", "reviewArticle", "generatePlan", "createPlanItem", "createDraftFromPlan", "saveFact", "duplicateWarnings", "usage", "createGenerationQueue", "generationQueue", "runGenerationQueue", "pauseGenerationQueue", "resumeGenerationQueue", "cancelGenerationQueue", "retryFailedGeneration", "previewImport", "commitImport", "resolveRecoverableGeneration", "reconcileGenerationQueue", "resolveValidationGeneration", "preparePlanGeneration"] as const;
+  const operationsMethods = [ "saveStudioDefaults", "reviewArticle", "generatePlan", "createPlanItem", "createDraftFromPlan", "saveFact", "duplicateWarnings", "usage", "createGenerationQueue", "generationQueue", "runGenerationQueue", "pauseGenerationQueue", "resumeGenerationQueue", "cancelGenerationQueue", "retryFailedGeneration", "previewImport", "commitImport", "resolveRecoverableGeneration", "reconcileGenerationQueue", "resolveValidationGeneration", "preparePlanGeneration"] as const;
   for (const method of operationsMethods) register(`operations:${method.replace(/[A-Z]/gu, letter => `-${letter.toLowerCase()}`)}`, (_event, payload) => operations[method](payload as never));
   register("operations:snapshot", (_event, payload) => operations.snapshot(z.strictObject({ companyId: idSchema }).parse(payload).companyId));
   register("operations:consume-plan-generation-seed", (_event, payload) => operations.consumePlanGenerationSeed(z.strictObject({ companyId: idSchema }).parse(payload).companyId));
@@ -334,6 +351,7 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
   const productPreflightSchema = z.strictObject({ articleId: idSchema, platformKey: idSchema, platformAccountId: idSchema, selectedImageAssetId: idSchema.nullable().optional(), websiteSettings: officialApiContentSettingsSchema.optional() });
   const collectProductPreflight = (input: z.infer<typeof productPreflightSchema>, identityVerified: boolean, publishMode = "CONFIRM_BEFORE_PUBLISH") => {
     const article = repository.getArticle(input.articleId), brand = article && repository.getBrand(article.brandId);
+    if (article) assertNoUnsubmittedEdits(repository, article.id);
     const account = repository.listAccounts().find(item => item.platformKey === input.platformKey && (item.platformAccountId === input.platformAccountId || item.id === input.platformAccountId)) ?? null;
     workspace.assertCompany(article?.brandId);
     workspace.assertAccount(account?.id ?? "");
@@ -1585,7 +1603,7 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
     }));
   });
   register("accounts:create", (_event, payload) => { const companyId = workspace.current(); if (!companyId) throw new Error("请先选择企业工作区"); const account = repository.createAccount(z.object({ platformKey: idSchema, name: z.string().min(1), accountAlias: z.string().trim().min(1).max(100).optional(), allowAutoPublish: z.boolean().optional(), publishMode: z.enum(["inherit", "manual", "auto", "assisted"]).optional() }).parse(payload)); operations.bindAccount({ companyId, accountId: account.id }); return account; });
-  register("accounts:update", (_event, payload) => { const input = z.object({ id: idSchema, data: z.object({ accountAlias: z.string().trim().min(1).max(100).optional(), enabled: z.boolean().optional(), loginStatus: z.enum(["logged_in", "logged_out", "expired", "needs_user_action", "unknown"]).optional(), pausedReason: z.string().nullable().optional(), allowAutoPublish: z.boolean().optional(), publishMode: z.enum(["inherit", "manual", "auto", "assisted"]).optional(), minimumIntervalSeconds: z.number().int().min(0).max(86400).optional() }) }).parse(payload); return repository.updateAccount(input.id, input.data); });
+  register("accounts:update", (_event, payload) => { const input = z.object({ id: idSchema, data: z.object({ accountAlias: z.string().trim().min(1).max(100).optional(), enabled: z.boolean().optional(), loginStatus: z.enum(["logged_in", "logged_out", "expired", "needs_user_action", "unknown"]).optional(), pausedReason: z.string().nullable().optional(), allowAutoPublish: z.boolean().optional(), publishMode: z.enum(["inherit", "manual", "auto", "assisted"]).optional(), minimumIntervalSeconds: z.number().int().min(0).max(86400).optional() }) }).parse(payload); const account = repository.getAccountById(input.id); if (!account) throw new Error("账号不存在"); sessionRuntime?.invalidate(input.id, account.platformKey); return repository.updateAccount(input.id, input.data); });
   register("accounts:set-credentials", (_event, payload) => {
     const input = z.object({ accountId: idSchema, platformKey: idSchema, values: z.record(z.string(), z.string().max(8192)) }).parse(payload);
     if (input.platformKey === "website") throw new Error("官网凭据须通过 Main 安全文件导入入口配置");
@@ -1596,6 +1614,7 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
       if (!allowed.has(key)) throw new Error(`不允许的凭据字段：${key}`);
       if (value.trim()) credentials.set(`account:${input.accountId}:${input.platformKey}:${key}`, value.trim());
     }
+    sessionRuntime?.invalidate(input.accountId, input.platformKey);
     const fields = adapter.getCredentialSchema().map((field) => ({ ...field, configured: credentials.has(`account:${input.accountId}:${input.platformKey}:${field.key}`) }));
     return { configured: fields.filter((field) => field.required).every((field) => field.configured), fields };
   });
@@ -1788,6 +1807,7 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
     const input = z.object({ accountId: idSchema, platformKey: idSchema }).parse(payload);
     const account = repository.getAccountById(input.accountId, input.platformKey);
     if (!account) throw new Error("账号与平台不匹配");
+    sessionRuntime?.invalidate(input.accountId, input.platformKey);
     const adapter = registry.getForConnection(input.platformKey);
     const action = createUserAction("CONNECT_ACCOUNT");
     if (input.platformKey === "douyin") {
@@ -1971,12 +1991,19 @@ export function registerIpc(deps: IpcDependencies): AccountSessionRehydrationCoo
   register("settings:test-ai", async () => {
     return testAiConnection(repository, aiCredentials, logger);
   });
+  const fullSnapshotRoot=join(dirname(app.getPath("userData")),"geo-full-snapshots");
+  const isolatedRestoreRoot=join(dirname(app.getPath("userData")),"geo-isolated-restores");
+  register("backups:queue-full",()=>{if(!deps.queueClosedSnapshot)throw new Error("当前运行方式不支持关闭后完整快照");return deps.queueClosedSnapshot();});
+  register("backups:full-list",()=>{try{return readdirSync(fullSnapshotRoot).filter(name=>!name.includes(".")||name.startsWith("snapshot-")).filter(name=>{try{return statSync(join(fullSnapshotRoot,name)).isDirectory();}catch{return false;}}).sort().reverse().slice(0,100).map(name=>{const directory=join(fullSnapshotRoot,name);try{const manifest=JSON.parse(readFileSync(join(directory,"manifest.json"),"utf8")) as {status?:string;createdAt?:string;totalBytes?:number};return{directory,status:manifest.status??"Incomplete",createdAt:manifest.createdAt??"",totalBytes:manifest.totalBytes??0};}catch{return{directory,status:"Incomplete",createdAt:"",totalBytes:0};}});}catch{return[];}});
+  register("backups:validate-full",(_event,payload)=>{const {path}=z.strictObject({path:z.string().min(1).max(1000)}).parse(payload);const result=validateFullSnapshot(path,app.getVersion());return{valid:result.valid,message:result.message};});
+  register("backups:restore-isolated",(_event,payload)=>{const {path}=z.strictObject({path:z.string().min(1).max(1000)}).parse(payload);const destination=join(isolatedRestoreRoot,new Date().toISOString().replace(/[:.]/gu,"-"),"b01-isolated-user-data");return restoreFullSnapshot(path,destination,app.getVersion(),[app.getPath("userData"),join(app.getPath("appData"),"codex-media-publisher")]);});
   register("backups:list", () => { const dir = join(dataDirectory, "backups"); try { return readdirSync(dir).filter((name) => name.endsWith(".db")).sort().reverse().map((name) => join(dir, name)); } catch { return []; } });
   register("backups:create", async () => { const dir = join(dataDirectory, "backups"); const path = join(dir, `publisher-${new Date().toISOString().replace(/[:.]/gu, "-")}.db`); await backupDatabase(repository.db, path); return path; });
   register("backups:validate", (_event, payload) => validateDatabaseBackup(z.object({ path: z.string().min(1) }).parse(payload).path));
   register("backups:restore", (_event, payload) => { const input = z.object({ path: z.string().min(1), confirm: z.literal(true) }).parse(payload); const result = validateDatabaseBackup(input.path); if (!result.valid) throw new Error(`备份校验失败：${result.message}`); if (!deps.restoreDatabase) throw new Error("当前运行模式不支持自动恢复，请关闭应用后手动恢复"); deps.restoreDatabase(input.path); return { accepted: true }; });
-  void resumeRunningBatches(repository, logger, coverDir, aiCredentials);
-  void resumeContentStudioTasks(repository, logger, { createAiProvider: () => createAiProvider(repository, aiCredentials, logger) });
+  // A process restart is not consent for another paid request. Preserve unfinished legacy tasks for explicit review.
+  logger.info("AI", "AUTO_REPLAY_PAUSED", "重启后的未知生成结果保留，未经人工确认不自动补发", {});
+
   void scheduler;
   return sessionRuntime;
 }

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { assertNoUnsubmittedEdits } from "./draft-working-copies";
 import { z } from "zod";
 import { createAICenterStore, type AppRepository, type GenerationHistory } from "@publisher/db";
 import type { ExcelArticleRowInput, ExcelImportPreview } from "@publisher/domain";
@@ -77,11 +78,11 @@ export class ContentOperations {
   private readonly runningQueues = new Set<string>();
   private readonly runningCompanies = new Set<string>();
 
-  constructor(private readonly repository: AppRepository, private readonly aiCenter: ContentOperationsAIPort, private readonly runtimeHealth?: (accountId: string) => OperationsRuntimeHealth | null) {
+  constructor(private readonly repository: AppRepository, private readonly aiCenter: ContentOperationsAIPort, private readonly runtimeHealth?: (accountId: string) => OperationsRuntimeHealth | null, autoBindLegacyAccounts = true) {
     const timestamp = now();
     const interruptedQueueIds = (this.repository.db.prepare("SELECT id FROM operations_generation_queues WHERE status='Running'").all() as Row[]).map((row) => text(row.id));
     this.repository.db.transaction(() => {
-      this.initializeSafeLegacyAccountBindings(timestamp);
+      if (autoBindLegacyAccounts) this.initializeSafeLegacyAccountBindings(timestamp);
       const interrupted = this.repository.db.prepare("SELECT * FROM operations_generation_items WHERE status='Running' ORDER BY queue_id,source_index,CASE item_kind WHEN 'Source' THEN 0 ELSE 1 END").all() as Row[];
       for (const item of interrupted) this.reconcileInterruptedItem(item, timestamp);
       this.repository.db.prepare("UPDATE operations_generation_queues SET status='Failed',updated_at=? WHERE status='Running'").run(timestamp);
@@ -191,12 +192,14 @@ export class ContentOperations {
 
   approvedForPublish(companyId: string, articleId: string): boolean {
     const article = this.assertArticleCompany(idSchema.parse(companyId), idSchema.parse(articleId));
+    try { assertNoUnsubmittedEdits(this.repository, article.id); } catch { return false; }
     return article.status !== "archived" && this.repository.isContentApproved("article", article.id, article.contentHash);
   }
 
   reviewArticle(payload: unknown): OperationsReviewItem {
     const input = reviewSchema.parse(payload);
     const article = this.assertArticleCompany(input.companyId, input.articleId);
+    assertNoUnsubmittedEdits(this.repository, article.id);
     if (article.contentHash !== input.expectedContentHash) throw operationsError("ARTICLE_CONTENT_CHANGED", "内容已变更，请重新审核当前版本");
     if (input.action === "approve") {
       const state = this.repository.getContentQualityState("article", article.id);

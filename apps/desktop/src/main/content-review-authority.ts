@@ -1,8 +1,10 @@
 import type { AppRepository } from "@publisher/db";
 import type { PublishJob } from "@publisher/domain";
+import { assertNoUnsubmittedEdits } from "./draft-working-copies";
 
 /** Read-only authority: legacy review settings cannot approve current content. */
 export function assertCurrentContentApproved(repository: AppRepository, articleId: string): void {
+  assertNoUnsubmittedEdits(repository, articleId);
   const article = repository.getArticle(articleId), state = repository.getContentQualityState("article", articleId);
   if (!article || article.status === "archived" || state?.status !== "Approved" || state.contentHash !== article.contentHash)
     throw new Error("内容尚未人工审核通过，请先进入内容审核");

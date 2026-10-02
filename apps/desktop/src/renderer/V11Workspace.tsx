@@ -1,3 +1,4 @@
+import { useWorkingDraft, DraftRecoveryNotice } from "./use-working-draft";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { DeveloperModeContext } from "./developer-mode";
 import { productErrorMessage, type ProductPreflightResult } from "../shared/product-platform-policy";
@@ -227,9 +228,16 @@ export function V11ArticleLibrary({ refresh, refreshKey, onNavigate }: { refresh
 }
 
 function ArticleEditor({ article, editable, onClose, onSaved }: { article: Article; editable: boolean; onClose: () => void; onSaved: () => void }): JSX.Element {
-  const [title, setTitle] = useState(article.title); const [body, setBody] = useState(article.body); const [busy, setBusy] = useState(false);
-  const save = async (): Promise<void> => { setBusy(true); try { await window.publisherAPI.articles.update(article.id, { title, body }); onSaved(); } finally { setBusy(false); } };
-  return <div className="drawer-backdrop" onClick={onClose}><aside className="drawer v11-drawer" onClick={(event) => event.stopPropagation()}><div className="drawer-head"><div><span className="eyebrow">文章内容</span><h2>{editable ? "修改文章" : "查看文章"}</h2></div><button className="icon-button" onClick={onClose}>×</button></div><label>标题<input value={title} readOnly={!editable} onChange={(event) => setTitle(event.target.value)} /></label><label>内容<textarea rows={16} value={body} readOnly={!editable} onChange={(event) => setBody(event.target.value)} /></label><div className="drawer-footer"><button className="secondary-button" onClick={onClose}>{editable ? "取消" : "关闭"}</button>{editable && <button className="primary-button" disabled={busy} onClick={() => void save()}>{busy ? "保存中…" : "保存修改"}</button>}</div></aside></div>;
+  const [title, setTitle] = useState(article.title), [body, setBody] = useState(article.body), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const draft = useWorkingDraft({ companyId: article.brandId, documentKind: "Article", documentId: article.id }, editable, snapshot => { setTitle(snapshot.title); setBody(snapshot.body); });
+  const close = async (): Promise<void> => { try { await draft.leave(); onClose(); } catch (reason) { setError(reason instanceof Error ? reason.message : "保存未完成，请留在编辑页重试"); } };
+  const save = async (): Promise<void> => { setBusy(true); try { await draft.commit(); onSaved(); } catch (reason) { setError(reason instanceof Error ? reason.message : "提交失败，恢复草稿已保留"); } finally { setBusy(false); } };
+  return <div className="drawer-backdrop" onClick={() => void close()}><aside className="drawer v11-drawer" onClick={event => event.stopPropagation()}><div className="drawer-head"><div><span className="eyebrow">内容编辑</span><h2>{editable ? "修改草稿" : "查看文章"}</h2></div><button className="icon-button" aria-label="关闭草稿编辑" onClick={() => void close()}>×</button></div>
+    {editable && <DraftRecoveryNotice draft={draft} />}{error && <p className="notice error">{error}</p>}
+    <label>标题<input aria-label="编辑文章标题" value={title} readOnly={!editable} disabled={editable && !draft.ready} onCompositionStart={() => draft.composition(true)} onCompositionEnd={() => draft.composition(false)} onChange={event => { setTitle(event.target.value); draft.capture({ title: event.target.value, body }); }} /></label>
+    <label>正文<textarea aria-label="编辑文章正文" rows={16} value={body} readOnly={!editable} disabled={editable && !draft.ready} onCompositionStart={() => draft.composition(true)} onCompositionEnd={() => draft.composition(false)} onChange={event => { setBody(event.target.value); draft.capture({ title, body: event.target.value }); }} /></label>
+    <div className="drawer-footer"><button className="secondary-button" onClick={() => void close()}>{editable ? "保留工作副本并关闭" : "关闭"}</button>{editable && <button className="primary-button" disabled={busy || !draft.ready} onClick={() => void save()}>{busy ? "提交中…" : "提交修改并重新审核"}</button>}</div>
+  </aside></div>;
 }
 
 function ArticleReview({ article, onClose, onChanged }: { article: Article; onClose: () => void; onChanged: () => void }): JSX.Element {

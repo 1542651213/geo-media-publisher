@@ -4,6 +4,9 @@ import type { PublisherApi } from "../shared/api";
 const invoke = <T>(channel: string, payload?: unknown): Promise<T> => ipcRenderer.invoke(channel, payload) as Promise<T>;
 
 const api: PublisherApi = {
+  accountOnboarding: { preview: () => invoke("account-onboarding:preview"), confirm: input => invoke("account-onboarding:confirm", input) },
+  drafts: { open: input => invoke("drafts:open", input), get: input => invoke("drafts:get", input), persist: input => invoke("drafts:persist", input), listRecovery: input => invoke("drafts:list-recovery", input), commit: input => invoke("drafts:commit", input), discard: input => invoke("drafts:discard", input), release: input => invoke("drafts:release", input), resolve: input => invoke("drafts:resolve", input) },
+  lifecycle: { onDraftFlush: listener => { const handler = (_event: Electron.IpcRendererEvent, requestId: string): void => listener(requestId); ipcRenderer.on("drafts:flush-request", handler); return () => ipcRenderer.removeListener("drafts:flush-request", handler); }, draftFlushResult: (requestId, success) => ipcRenderer.send("drafts:flush-result", requestId, success) },
   sessions: { snapshots: () => invoke("sessions:snapshots"), refresh: accountId => invoke("sessions:refresh", { accountId }) },
   workspace: { companies: () => invoke("workspace:companies"), current: () => invoke("workspace:current"), select: companyId => invoke("workspace:select", { companyId }) },
   operations: {
@@ -70,8 +73,9 @@ const api: PublisherApi = {
   jobs: { list: (filters) => invoke("jobs:list", filters), createVideo: (input) => invoke("jobs:create-video", input), prepareExistingDouyin: (id) => invoke("jobs:prepare-existing-douyin", { id }), run: (id) => invoke("jobs:run", { id }), confirm: (id, dryRun = false) => invoke("jobs:confirm", { id, dryRun }), reconcile: (id) => invoke("jobs:reconcile", { id }), reconcileBrowser: (id) => invoke("jobs:reconcile-browser", { id }), reconcileNotSubmitted: (id) => invoke("jobs:reconcile-not-submitted", { id }), retry: (id) => invoke("jobs:retry", { id }), recover: () => invoke("jobs:recover") },
   logs: { list: (limit, filters) => invoke("logs:list", { limit, ...filters }), export: () => invoke("logs:export") },
   notifications: { list: (limit) => invoke("notifications:list", { limit }), markRead: (id) => invoke("notifications:read", { id }), markAllRead: () => invoke("notifications:read-all") },
-  backups: { list: () => invoke("backups:list"), create: () => invoke("backups:create"), validate: (path) => invoke("backups:validate", { path }), restore: (path) => invoke("backups:restore", { path, confirm: true }) },
+  backups: { queueFull:()=>invoke("backups:queue-full"),fullList:()=>invoke("backups:full-list"),validateFull:path=>invoke("backups:validate-full",{path}),restoreIsolated:path=>invoke("backups:restore-isolated",{path}), list: () => invoke("backups:list"), create: () => invoke("backups:create"), validate: (path) => invoke("backups:validate", { path }), restore: (path) => invoke("backups:restore", { path, confirm: true }) },
   settings: { get: () => invoke("settings:get"), update: (key, value) => invoke("settings:update", { key, value }), setSecret: (kind, value) => invoke("settings:set-secret", { kind, value }), testAi: () => invoke("settings:test-ai") }
 };
 
 contextBridge.exposeInMainWorld("publisherAPI", api);
+
