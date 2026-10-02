@@ -3,16 +3,15 @@ import type { AppRepository } from "@publisher/db";
 import type { Account } from "@publisher/domain";
 import type { OperationsRuntimeHealth } from "../shared/content-operations";
 import type { AccountBindingBlocker, AccountBindingBlockerCode, AccountOnboardingAccount, AccountOnboardingConfirmationResult,
-  AccountOnboardingEvidence, AccountOnboardingEvidenceState, AccountOnboardingSource } from "../shared/account-onboarding";
+  AccountOnboardingEvidenceState } from "../shared/account-onboarding";
 import { productPlatform } from "../shared/product-platform-policy";
+import { collectAccountOwnershipEvidence } from './account-ownership-evidence';
 
 const idSchema = z.string().trim().min(1).max(200);
 const confirmationSchema = z.strictObject({ accountId: idSchema, companyId: idSchema, expectedVersion: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   expectedCompanyId: idSchema.nullable(), confirmReassignment: z.boolean().optional().default(false) });
 
 interface BindingRow { account_id: string; company_id: string; version: number }
-interface HistoryRow { account_id: string; job_id: string; article_id: string; company_id: string }
-interface EvidenceAccumulator { companyId: string; jobCount: number; articles: Set<string>; sources: AccountOnboardingSource[] }
 interface ReferenceGuard { code: AccountBindingBlockerCode; scope: "BindingChange" | "Reassignment"; summary: string; sql: string }
 
 export interface AccountOnboardingOptions {
@@ -56,29 +55,12 @@ export class AccountOnboarding {
     const companies = new Map(this.repository.listBrands().map(company => [company.id, company]));
     const bindings = new Map((this.repository.db.prepare("SELECT account_id,company_id,version FROM operations_account_company_bindings").all() as BindingRow[])
       .map(binding => [binding.account_id, binding]));
-    const byAccount = new Map<string, Map<string, EvidenceAccumulator>>();
-    // Only relational metadata is read; article body/title, PublishRecord responses and credentials are absent.
-    const history = this.repository.db.prepare(`SELECT j.account_id,j.id AS job_id,a.id AS article_id,a.brand_id AS company_id
-      FROM publish_jobs j JOIN articles a ON a.id=j.article_id JOIN brands b ON b.id=a.brand_id
-      ORDER BY j.account_id,a.brand_id,j.created_at,j.id`).all() as HistoryRow[];
-    for (const row of history) {
-      let evidence = byAccount.get(row.account_id);
-      if (!evidence) { evidence = new Map(); byAccount.set(row.account_id, evidence); }
-      let entry = evidence.get(row.company_id);
-      if (!entry) { entry = { companyId: row.company_id, jobCount: 0, articles: new Set(), sources: [] }; evidence.set(row.company_id, entry); }
-      entry.jobCount += 1;
-      entry.articles.add(row.article_id);
-      if (entry.sources.length < 3) entry.sources.push({ jobId: row.job_id, articleId: row.article_id, brandId: row.company_id });
-    }
+    const byAccount = collectAccountOwnershipEvidence(this.repository);
     return this.repository.listAccounts({ includeArchived: true }).map((account): AccountOnboardingAccount => {
       const binding = bindings.get(account.id);
       const currentCompanyId = binding?.company_id ?? null;
       const currentCompany = currentCompanyId ? companies.get(currentCompanyId) : null;
-      const evidence: AccountOnboardingEvidence[] = [...(byAccount.get(account.id)?.values() ?? [])].map(entry => {
-        const company = companies.get(entry.companyId);
-        return { companyId: entry.companyId, companyName: company?.companyName || company?.name || "企业资料缺失", source: "HistoricalJobArticleBrand" as const,
-          jobCount: entry.jobCount, articleCount: entry.articles.size, brandCount: 1, sources: entry.sources };
-      });
+      const evidence = byAccount.get(account.id) ?? [];
       const evidenceState: AccountOnboardingEvidenceState = binding ? "Confirmed" : evidence.length === 1 ? "Unique" : evidence.length > 1 ? "Conflict" : "NoEvidence";
       const suggested = evidenceState === "Unique" ? evidence[0] : null;
       const health = this.options.runtimeHealth?.(account.id, account.platformKey) ?? null;
@@ -89,8 +71,9 @@ export class AccountOnboarding {
         ? "历史使用企业与当前已确认归属不同，修改前须 Owner 核对" : null;
       return { accountId: account.id, platformKey: account.platformKey, accountName: account.accountName || account.accountAlias || account.name,
         enabled: account.enabled, archived, currentCompanyId, currentCompanyName: currentCompany ? currentCompany.companyName || currentCompany.name : null,
-        currentBindingVersion: binding ? this.validVersion(binding.version) : 0, evidenceState, suggestedCompanyId: suggested?.companyId ?? null,
-        suggestedCompanyName: suggested?.companyName ?? null, evidence, evidenceSummary: evidence.length ? evidence.map(entry => `${entry.companyName}：${entry.jobCount} 个历史任务、${entry.articleCount} 篇文章`).join("；") : "没有可核验的历史任务、文章和企业关系；昵称不作为归属证据",
+        currentBindingVersion: binding ? this.validVersion(binding.version) : 0, evidenceState,
+        confidence: conflictReason ? 'CONFLICT' : binding ? 'HIGH' : evidence.length === 0 ? 'NO_EVIDENCE' : evidence.some(entry => entry.jobCount >= 2 || entry.recordCount || entry.officialOperationCount) ? 'MEDIUM' : 'LOW', suggestedCompanyId: suggested?.companyId ?? null,
+        suggestedCompanyName: suggested?.companyName ?? null, evidence, evidenceSummary: evidence.length ? evidence.map(entry => `${entry.companyName}：${entry.jobCount} 个历史任务、${entry.recordCount} 条发布记录、${entry.imageCount} 个图片关系、${entry.officialOperationCount} 次官网操作、${entry.articleCount} 篇文章`).join("；") : "没有可核验的历史任务、文章和企业关系；昵称不作为归属证据",
         conflictReason, verificationState, checkedAt: health?.checkedAt ?? null, platformOrdinaryEnabled: productPlatform(account.platformKey)?.ordinaryPublishEnabled === true,
         articlePublishEligibility: "NotEvaluated", bindingBlockers, canConfirm: !archived && (Boolean(binding) || bindingBlockers.length === 0),
         canReassign: !archived && Boolean(binding) && bindingBlockers.length === 0,

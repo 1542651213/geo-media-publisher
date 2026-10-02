@@ -2,21 +2,29 @@ import type { OperationsRuntimeAuthState } from "./content-operations";
 
 export const ACCOUNT_ONBOARDING_EVIDENCE_STATES = ["Unique", "Conflict", "NoEvidence", "Confirmed"] as const;
 export type AccountOnboardingEvidenceState = typeof ACCOUNT_ONBOARDING_EVIDENCE_STATES[number];
+export const OWNERSHIP_CONFIDENCES = ['HIGH', 'MEDIUM', 'LOW', 'CONFLICT', 'NO_EVIDENCE'] as const;
+export type OwnershipConfidence = typeof OWNERSHIP_CONFIDENCES[number];
+export type OwnershipSourceKind = 'HistoricalJob' | 'PublishRecord' | 'SelectedImage' | 'OfficialApiOperation';
 
 export interface AccountOnboardingSource {
   jobId: string;
   articleId: string;
   brandId: string;
+  kind?: OwnershipSourceKind;
+  referenceId?: string;
 }
 
 /** Safe source references and counts only. Historical usage does not prove a successful publish. */
 export interface AccountOnboardingEvidence {
   companyId: string;
   companyName: string;
-  source: "HistoricalJobArticleBrand";
+  source: "HistoricalJobArticleBrand" | "RelationalMetadata";
   jobCount: number;
   articleCount: number;
   brandCount: number;
+  recordCount: number;
+  imageCount: number;
+  officialOperationCount: number;
   sources: AccountOnboardingSource[];
 }
 
@@ -40,6 +48,7 @@ export interface AccountOnboardingAccount {
   currentCompanyName: string | null;
   currentBindingVersion: number;
   evidenceState: AccountOnboardingEvidenceState;
+  confidence: OwnershipConfidence;
   suggestedCompanyId: string | null;
   suggestedCompanyName: string | null;
   evidence: AccountOnboardingEvidence[];
