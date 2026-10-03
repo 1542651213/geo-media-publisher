@@ -1,62 +1,48 @@
-import { AIWorkloadNotice } from "./AIWorkloadNotice";
-import type { AIWorkloadPreview } from "../shared/ai-request-budget";
-import { AccountOwnershipReview } from "./AccountOwnershipReview";
-import { useEffect, useMemo, useRef, useState } from "react";
 import type { JSX } from "react";
-import { JobsBoard } from "./JobsBoard";
+import { useEffect,useMemo,useRef,useState } from "react";
+import type { AIWorkloadPreview } from "../shared/ai-request-budget";
 import type {
-  ContentPlanItem,
-  OperationsApi,
-  OperationsFact,
-  OperationsGenerationItem,
-  OperationsGenerationQueue,
-  OperationsImportMapping,
-  OperationsImportPreview,
-  OperationsOwnerAction,
-  OperationsPlanStatus,
-  OperationsReviewItem,
-  OperationsSnapshot,
-  OperationsStudioDefaults,
-  OperationsUsageRow,
+ContentPlanItem,
+OperationsApi,
+OperationsFact,
+OperationsGenerationItem,
+OperationsGenerationQueue,
+OperationsImportMapping,
+OperationsImportPreview,
+OperationsPlanStatus,
+OperationsReviewItem,
+OperationsStudioDefaults,
+OperationsUsageRow
 } from "../shared/content-operations";
-import type { ProductHealthStatus } from "../shared/product-platform-policy";
-import { platformLabel } from "./v11-ui-model";
+import { AIWorkloadNotice } from "./AIWorkloadNotice";
+import { JobsBoard } from "./JobsBoard";
 import {
-  advanceWorkspaceRequest,
-  startOperationsQueueRefresh, canonicalStudioTargets,
-  factExpiryIso,
-  generationProgressPercent,
-  initialOperationsUiState,
-  isValidGenerationCount,
-  isCurrentWorkspaceResponse,
-  operationsHealthPresentation,
-  operationsPage,
-  operationsPlatformOptions,
-  planMatchesStatus,
-  planDraftBody,
-  planStatusLabel,
-  preparePlanAndNavigate,
-  queueActionAvailability,
-  transitionAndRunGenerationQueue,
-  type OperationsTab,
-  type WorkspaceRequestToken,
+advanceWorkspaceRequest,
+canonicalStudioTargets,
+factExpiryIso,
+generationProgressPercent,
+initialOperationsUiState,
+isCurrentWorkspaceResponse,
+isValidGenerationCount,
+operationsPage,
+operationsPlatformOptions,
+planDraftBody,
+planMatchesStatus,
+planStatusLabel,
+preparePlanAndNavigate,
+queueActionAvailability,
+startOperationsQueueRefresh,
+transitionAndRunGenerationQueue,
+type OperationsTab,
+type WorkspaceRequestToken
 } from "./operations-center-ui";
 import "./operations-center.css";
+import { OwnerTab } from "./operations/OwnerActions";
+import { TodayTab } from "./operations/TodayWorkspace";
+import type { OperationsViewSnapshot,PlatformHealthRow } from "./operations/view-types";
+import { platformLabel } from "./v11-ui-model";
 
 type DateRange = 1 | 7 | 30;
-
-interface PlatformHealthRow {
-  platformKey: string;
-  status: ProductHealthStatus;
-  message: string;
-}
-
-interface OperationsViewSnapshot extends OperationsSnapshot {
-  platformHealth: PlatformHealthRow[];
-
-  providers: Array<{ id: string; name: string; models: string[]; configured: boolean }>;
-  templates: Array<{ id: string; name: string }>;
-}
 
 type RendererOperationsApi = OperationsApi & {
   pickImportFile(): Promise<{ fileName: string; columns: string[]; rows: Array<Record<string, string>> } | null>;
@@ -250,27 +236,6 @@ export function OperationsCenter({ companyId, initialTab = "today", onNavigate, 
   </div>;
 }
 
-function TodayTab({ snapshot, onNavigate, onTab }: { snapshot: OperationsViewSnapshot; onNavigate?: (route: string) => void; onTab: (tab: OperationsTab) => void }): JSX.Element {
-  const metrics = [
-    ["待审核", snapshot.dashboard.pendingReview, "review"], ["待发布", snapshot.dashboard.approved, "publish"], ["今日已发布", snapshot.dashboard.todayPublished, "publish"],
-    ["生成中", snapshot.dashboard.generating, "queue"], ["失败", snapshot.dashboard.failed, "queue"], ["需要 Owner 处理", snapshot.dashboard.needsOwnerAction, "owner"],
-  ] as const;
-  return <>
-    <section className="operations-metrics">{metrics.map(([label, value, target]) => <button type="button" key={label} onClick={() => onTab(target)}><span>{label}</span><strong>{value}</strong><em>查看详情</em></button>)}</section>
-    <div className="operations-two-column">
-      <section className="panel operations-panel"><div className="panel-heading"><div><h3>平台状态</h3><span>展示最近一次可信检查结果；未知状态不会被当成已登录。</span></div></div>
-        {snapshot.platformHealth.length === 0 ? <Empty title="暂无实时平台状态" description="当前企业没有可关联的实时账号健康结果；不会使用持久化登录标记代替身份核验。" /> : <div className="operations-list">{snapshot.platformHealth.map(row => { const presentation = operationsHealthPresentation(row.status); return <div key={`${row.platformKey}-${row.message}`}><div><strong>{platformLabel(row.platformKey)}</strong><span>{row.message}</span></div><Status label={presentation.label} status={row.status} tone={presentation.tone} /></div>; })}</div>}
-      </section>
-      <section className="panel operations-panel"><div className="panel-heading"><div><h3>快捷操作</h3><span>所有生成和导入操作只产生草稿。</span></div></div><div className="operations-shortcuts">
-        <button className="primary-button" onClick={() => onTab("queue")}>生成今日内容</button>
-        <button className="secondary-button" onClick={() => onTab("review")}>审核草稿</button>
-        <button className="secondary-button" onClick={() => onTab("plan")}>查看内容计划</button>
-        <button className="secondary-button" disabled={!onNavigate} title={onNavigate ? "" : "当前容器未提供页面导航"} onClick={() => onNavigate?.("publishing")}>进入发布中心</button>
-      </div></section>
-    </div>
-  </>;
-}
-
 function ReviewTab({ rows, busy, selectedId, onSelect, onNavigate, onReview }: { rows: OperationsReviewItem[]; busy: boolean; selectedId: string; onSelect: (id: string) => void; onNavigate?: (route: string) => void; onReview: (row: OperationsReviewItem, action: "approve" | "return_to_draft" | "archive") => Promise<void> }): JSX.Element {
   const [page, setPage] = useState(1);
   const view = operationsPage(rows, page);
@@ -341,12 +306,6 @@ function ImportTab({ companyId, busy, preview, onPreview, onMessage, onReload }:
   const commit = async (): Promise<void> => { if (!preview) return; setWorking(true); try { const result = await operationsApi().commitImport({ companyId, previewId: preview.previewId }); onMessage(`已导入 ${result.imported} 条草稿；跳过重复 ${result.skippedDuplicates} 条；失败 ${result.failed} 条。`); onPreview(null); setFileData(null); await onReload(); } catch (error) { onMessage(error instanceof Error ? error.message : "导入未完成"); } finally { setWorking(false); } };
   const errors = preview?.rows.flatMap(row => row.errors) ?? [];
   return <section className="panel operations-panel"><div className="panel-heading"><div><h3>Excel / CSV 批量导入</h3><span>Select File → Preview → Column Mapping → Validation → Import as Draft</span></div><button className="primary-button" disabled={busy || working} onClick={() => void selectFile()}>{working ? "正在处理…" : "选择 CSV / XLSX"}</button></div><div className="notice">导入只创建草稿，不创建发布任务，也不会自动提交到平台。</div>{!preview || !fileData ? <Empty title="尚未选择文件" description="选择文件后先预览、映射并查看逐行错误。" /> : <><div className="operations-import-summary"><strong>{preview.fileName}</strong><span>{preview.totalRows} 行 · {preview.validRows} 可导入 · {preview.duplicateRows} 可能重复</span></div><div className="operations-mapping">{importFields.map(field => <label key={field.key}>{field.label}{field.required && <em>必填</em>}<select disabled={working} value={mapping[field.key] ?? ""} onChange={event => void remap(field.key, event.target.value)}><option value="">不导入</option>{fileData.columns.map(column => <option value={column} key={column}>{column}</option>)}</select></label>)}</div>{errors.length > 0 && <div className="operations-errors"><h4>逐行错误</h4>{errors.map((error, index) => <div key={`${error.row}-${error.column}-${index}`}><strong>第 {error.row} 行</strong><span>{error.column}</span><p>{error.reason}</p></div>)}</div>}<button className="primary-button" disabled={working || preview.validRows === 0} title={preview.validRows === 0 ? "没有通过校验的行" : ""} onClick={() => void commit()}>Import as Draft</button></>}</section>;
-}
-
-function OwnerTab({ rows, companyId, busy, onNavigate, onAction }: { rows: OperationsOwnerAction[]; companyId: string; busy: boolean; onNavigate?: (route: string) => void; onAction: (action: () => Promise<unknown>, success: string) => Promise<void> }): JSX.Element {
-  const routeForAction=(action:string):string=>action.includes("AI")?"ai-center":action.includes("发布")||action.includes("reconcile")?"publishing":"accounts";
-  return <div className="operations-stack"><section className="panel operations-panel"><h3>Owner Action Required</h3><p>账号归属、运行时认证和文章发布资格分别核对。历史任务只提供归属线索。</p>{rows.map(row=><article className="owner-action-row" key={row.id}><strong>{row.what}</strong><p>{row.why}</p><small>最近检查：{dateText(row.lastCheckedAt)}</small><button className="secondary-button" disabled={!onNavigate} onClick={()=>onNavigate?.(routeForAction(row.action))}>{row.action}</button></article>)}</section>
-    <AccountOwnershipReview companyId={companyId} busy={busy} onAction={onAction} /></div>;
 }
 
 function OperationsPagination({ view, onPage }: { view: { page: number; pages: number; total: number }; onPage: (page: number) => void }): JSX.Element {

@@ -1,3 +1,4 @@
+import { rendererSource } from "./renderer-source";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import {
@@ -83,7 +84,7 @@ describe("R1.15-F operations center UI safety", () => {
     expect(calls).toEqual(["transition", "run"]);
     releaseRun?.();
 
-    const source = readFileSync("apps/desktop/src/renderer/OperationsCenter.tsx", "utf8");
+    const source = rendererSource("OperationsCenter");
     for (const action of ["resumeGenerationQueue", "retryFailedGeneration", "resolveRecoverableGeneration", "resolveValidationGeneration"]) {
       expect(source).toContain(`transitionAndRunGenerationQueue(() => operationsApi().${action}`);
     }
@@ -99,7 +100,7 @@ describe("R1.15-F operations center UI safety", () => {
     );
     expect(calls).toEqual(["prepare", "navigate"]);
 
-    const source = readFileSync("apps/desktop/src/renderer/OperationsCenter.tsx", "utf8");
+    const source = rendererSource("OperationsCenter");
     expect(source).toContain("operationsApi().preparePlanGeneration");
     expect(source).not.toContain('disabled={busy || Boolean(row.articleId) || !onNavigate}');
     expect(source).not.toContain("studioPurposes");
@@ -164,7 +165,7 @@ describe("R1.15-F operations center UI safety", () => {
   });
 
   it("uses live product health and human publish status labels in the operations view", () => {
-    const source = readFileSync("apps/desktop/src/renderer/OperationsCenter.tsx", "utf8");
+    const source = rendererSource("OperationsCenter");
     expect(source).toContain("window.publisherAPI.product.health()");
     expect(source).not.toContain("account.loginStatus");
     const jobs = readFileSync("apps/desktop/src/renderer/JobsBoard.tsx", "utf8");
@@ -176,7 +177,7 @@ describe("R1.15-F operations center UI safety", () => {
   });
 
   it("exposes the complete draft-only operations workspace without final publish controls", () => {
-    const source = readFileSync("apps/desktop/src/renderer/OperationsCenter.tsx", "utf8");
+    const source = rendererSource("OperationsCenter");
     for (const label of ["今日工作台", "内容审核", "草稿生成队列", "内容计划", "事实资料库", "AI 用量", "批量导入", "Owner 处理", "发布看板"]) {
       expect(source).toContain(label);
     }
@@ -186,7 +187,7 @@ describe("R1.15-F operations center UI safety", () => {
     expect(source).not.toContain("confirmPublish");
   });
   it("keeps saved-result reconciliation separate from an explicit remaining-budget run", () => {
-    const source = readFileSync("apps/desktop/src/renderer/OperationsCenter.tsx", "utf8");
+    const source = rendererSource("OperationsCenter");
     expect(source).toContain('onAction(() => operationsApi().reconcileGenerationQueue');
     expect(source).not.toContain('transitionAndRunGenerationQueue(() => operationsApi().reconcileGenerationQueue');
     expect(source).toContain('继续剩余预算生成');

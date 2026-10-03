@@ -1,6 +1,8 @@
 import { useEffect, useState, type JSX } from 'react';
 import type { WorkspaceJobPage, WorkspaceJobQuery } from '../shared/workspace-jobs';
 import { platformLabel, publishStatusLabel, publishStatusTone } from './v11-ui-model';
+import { LoadingState, EmptyState } from './design/WorkspacePrimitives';
+import { jobStateDescription } from './design/presentation';
 
 export function JobsBoard({ companyId, refreshVersion = 0 }: { companyId: string; refreshVersion?: number }): JSX.Element {
   const [query, setQuery] = useState<WorkspaceJobQuery>({ page: 1 });
@@ -24,9 +26,9 @@ export function JobsBoard({ companyId, refreshVersion = 0 }: { companyId: string
       <label className="operations-checkbox"><input type="checkbox" checked={query.ownerOnly === true} disabled={loading} onChange={event => change({ ownerOnly: event.target.checked })} />只看 Owner 处理项</label>
     </div>
     {error && <div role="alert" className="notice error">{error}</div>}
-    {loading ? <p role="status">正在读取当前企业的任务…</p> : rows.length === 0 ? <div className="empty-state"><h3>当前筛选没有记录</h3><p>调整平台、账号、日期或状态筛选。</p></div> : <div className="operations-table operations-publish-table">
+    {loading ? <LoadingState title="正在读取当前企业的任务…" description="核对完整历史与当前筛选。首次读取可能需要几秒，任务状态以实际回执为准。" rows={4} /> : rows.length === 0 ? <EmptyState title="当前筛选没有记录" description="调整平台、账号、日期或状态筛选。正式操作请在发布中心逐项确认。" /> : <div className="operations-table operations-publish-table">
       <div className="operations-table-head"><span>内容</span><span>平台</span><span>账号</span><span>日期</span><span>状态</span></div>
-      {rows.map(row => <div className="operations-table-row" key={row.id}><strong>{row.title}</strong><span>{platformLabel(row.platform)}</span><span>{row.account}</span><span>{row.date ? new Date(row.date).toLocaleString('zh-CN') : '—'}</span><div><span className={`status-chip ${publishStatusTone(row.status)}`}>{publishStatusLabel(row.status)}</span>{row.ownerActionRequired && <small className="operations-warning">需要 Owner 处理</small>}</div></div>)}
+      {rows.map(row => <div className="operations-table-row" key={row.id}><strong>{row.title}</strong><span>{platformLabel(row.platform)}</span><span>{row.account}</span><span>{row.date ? new Date(row.date).toLocaleString('zh-CN') : '—'}</span><div><span className={`status-chip ${publishStatusTone(row.status)}`}>{publishStatusLabel(row.status)}</span><span className="job-state-hint">{jobStateDescription(row.status)}</span>{row.ownerActionRequired && <small className="operations-warning">需要 Owner 处理</small>}</div></div>)}
     </div>}
     {data && <nav className="operations-toolbar" aria-label="运营记录分页"><span>共 {data.total} 条 · 第 {data.page} / {data.pages} 页</span><button className="secondary-button" disabled={loading || data.page === 1} onClick={() => setQuery(current => ({ ...current, page: data.page - 1 }))}>上一页</button><button className="secondary-button" disabled={loading || data.page === data.pages} onClick={() => setQuery(current => ({ ...current, page: data.page + 1 }))}>下一页</button></nav>}
   </section>;

@@ -1,30 +1,158 @@
-.product-ai-center > .row-actions { flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
-.product-ai-center fieldset { display: grid; gap: 18px; }
-.product-ai-center .panel, .product-account-health { padding: 22px; }
-.product-ai-center .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 22px; }
-.product-ai-center .form-grid > :not(label), .product-ai-center .form-grid > label:has(textarea), .product-ai-center .form-grid > .check-row { grid-column: 1 / -1; }
-.product-ai-center .form-grid > label { display: flex; flex-direction: column; gap: 7px; min-width: 0; font-size: 13px; color: #40566e; }
-.product-ai-center input:not([type=checkbox]), .product-ai-center select, .product-ai-center textarea { box-sizing: border-box; width: 100%; min-height: 40px; padding: 10px 12px; border: 1px solid #d8e2ee; border-radius: 6px; background: #fff; color: #253b53; font: inherit; }
-.product-ai-center textarea { line-height: 1.75; resize: vertical; min-height: 160px; }
-.product-ai-center input:focus, .product-ai-center select:focus, .product-ai-center textarea:focus { outline: 2px solid #aacbf7; outline-offset: 1px; }
-.product-ai-center input:disabled, .product-ai-center textarea:disabled { background: #f6f8fb; color: #526780; }
-.product-ai-center .check-row { display: flex !important; flex-direction: row !important; align-items: center; gap: 10px; padding: 8px 0; }
-.product-ai-center .check-row input { flex: 0 0 auto; }
-.product-ai-center .check-row span { color: #75869b; font-size: 12px; }
-.product-ai-center .form-grid .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.product-ai-center .form-grid > button { justify-self: start; }
-.product-ai-center h3, .product-account-health h3 { margin: 0 0 8px; font-size: 17px; }
-.product-ai-center p, .product-account-health p { color: #6d7f94; line-height: 1.7; font-size: 13px; margin: 6px 0; }
-.product-ai-center .table-row { display: grid; grid-template-columns: 1.2fr .8fr 1.4fr 1fr 1.3fr .7fr auto; align-items: center; gap: 14px; padding: 15px 0; border-bottom: 1px solid #e8eef5; font-size: 12px; line-height: 1.6; }
-.product-ai-center .table-row > * { min-width: 0; overflow-wrap: anywhere; }
-.product-ai-center .form-grid .table-row { grid-template-columns: 1.3fr 1fr 1fr 1fr auto; }
-.product-ai-center .table-row:last-child { border-bottom: 0; }
-.product-account-health .table-row { display: grid; grid-template-columns: 90px 1fr 1fr 110px 90px 130px 2fr; gap: 12px; align-items: center; padding: 14px 0; border-bottom: 1px solid #e8eef5; font-size: 12px; line-height: 1.6; }
-.product-account-health .table-row > * { min-width: 0; overflow-wrap: anywhere; }
-@media (max-width: 1150px) {
-  .product-ai-center .table-row, .product-ai-center .form-grid .table-row, .product-account-health .table-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.product-ai-center > .row-actions {
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
 }
+
+.product-ai-center fieldset {
+  display: grid;
+  gap: 18px;
+}
+
+.product-ai-center .panel, .product-account-health {
+  padding: 22px;
+}
+
+.product-ai-center .form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 22px;
+}
+
+.product-ai-center .form-grid > :not(label), .product-ai-center .form-grid > label:has(textarea), .product-ai-center .form-grid > .check-row {
+  grid-column: 1 / -1;
+}
+
+.product-ai-center .form-grid > label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--color-primary-hover);
+}
+
+.product-ai-center input:not([type=checkbox]), .product-ai-center select, .product-ai-center textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-primary-soft);
+  border-radius: var(--radius-card);
+  background: var(--surface-card);
+  color: var(--color-primary-hover);
+  font: inherit;
+}
+
+.product-ai-center textarea {
+  line-height: 1.75;
+  resize: vertical;
+  min-height: 160px;
+}
+
+.product-ai-center input:focus, .product-ai-center select:focus, .product-ai-center textarea:focus {
+  outline: 2px solid var(--color-primary-border);
+  outline-offset: 1px;
+}
+
+.product-ai-center input:disabled, .product-ai-center textarea:disabled {
+  background: var(--color-primary-soft);
+  color: var(--text-primary);
+}
+
+.product-ai-center .check-row {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.product-ai-center .check-row input {
+  flex: 0 0 auto;
+}
+
+.product-ai-center .check-row span {
+  color: var(--text-secondary);
+  font-size: var(--font-compact);
+}
+
+.product-ai-center .form-grid .row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.product-ai-center .form-grid > button {
+  justify-self: start;
+}
+
+.product-ai-center h3, .product-account-health h3 {
+  margin: 0 0 8px;
+  font-size: 17px;
+}
+
+.product-ai-center p, .product-account-health p {
+  color: var(--text-secondary);
+  line-height: 1.7;
+  font-size: 13px;
+  margin: 6px 0;
+}
+
+.product-ai-center .table-row {
+  display: grid;
+  grid-template-columns: 1.2fr .8fr 1.4fr 1fr 1.3fr .7fr auto;
+  align-items: center;
+  gap: 14px;
+  padding: 15px 0;
+  border-bottom: 1px solid var(--color-primary-soft);
+  font-size: var(--font-compact);
+  line-height: 1.6;
+}
+
+.product-ai-center .table-row > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.product-ai-center .form-grid .table-row {
+  grid-template-columns: 1.3fr 1fr 1fr 1fr auto;
+}
+
+.product-ai-center .table-row:last-child {
+  border-bottom: 0;
+}
+
+.product-account-health .table-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 1fr 110px 90px 130px 2fr;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--color-primary-soft);
+  font-size: var(--font-compact);
+  line-height: 1.6;
+}
+
+.product-account-health .table-row > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1150px) {
+
+.product-ai-center .table-row, .product-ai-center .form-grid .table-row, .product-account-health .table-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+}
+
 @media (max-width: 850px) {
-  .product-ai-center .form-grid { grid-template-columns: minmax(0, 1fr); }
-  .product-ai-center .check-row { flex-wrap: wrap; }
+
+.product-ai-center .form-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.product-ai-center .check-row {
+  flex-wrap: wrap;
+}
 }

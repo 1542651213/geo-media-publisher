@@ -1,3 +1,4 @@
+import { rendererSource } from "./renderer-source";
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { ToutiaoSessionActivation, type ToutiaoSessionActivationDeps, type ToutiaoSessionSnapshot } from "../apps/desktop/src/main/toutiao-session-activation";
@@ -31,7 +32,7 @@ describe("Toutiao BrowserSession activation", () => {
   it("routes explicit activation and read-only status through main IPC without a publish call", () => {
     const ipc = readFileSync(new URL("../apps/desktop/src/main/ipc.ts", import.meta.url), "utf8");
     const preload = readFileSync(new URL("../apps/desktop/src/main/preload.ts", import.meta.url), "utf8");
-    const workspace = readFileSync(new URL("../apps/desktop/src/renderer/V11Workspace.tsx", import.meta.url), "utf8");
+    const workspace = rendererSource("V11Workspace");
     expect(ipc).toContain('register("accounts:activate-session"');
     expect(ipc).toContain('register("accounts:get-runtime-session-status"');
     expect(preload).toContain('invoke("accounts:activate-session"');

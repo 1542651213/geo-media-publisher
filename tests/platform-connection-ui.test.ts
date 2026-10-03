@@ -1,3 +1,4 @@
+import { rendererSource } from "./renderer-source";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import type { Platform } from "@publisher/domain";
@@ -48,7 +49,7 @@ describe("V1.0.1 platform connection UI decisions", () => {
   it("shows BrowserAutomation as the actual connection mode in the account center", () => {
     expect(platformConnectionModeLabel(platform())).toBe("浏览器自动化");
     expect(platformConnectionModeLabel(platform({ integrationMode: "API", accountConnectionMode: "BrowserAutomation" }))).toBe("浏览器自动化");
-    expect(readFileSync("apps/desktop/src/renderer/V11Workspace.tsx", "utf8")).toContain("platformConnectionModeLabel(platform)");
+    expect(rendererSource("V11Workspace")).toContain("platformConnectionModeLabel(platform)");
     expect(readFileSync("apps/desktop/src/renderer/PlatformConnectionCenter.tsx", "utf8")).toContain("accountConnectionMode");
     expect(readFileSync("apps/desktop/src/renderer/PlatformSelfTestCenter.tsx", "utf8")).toContain("accountConnectionMode");
   });

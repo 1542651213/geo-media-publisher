@@ -10,6 +10,7 @@ import { productErrorMessage, productPlatform } from "../shared/product-platform
 import "./product-ai-center.css";
 import { useWorkingDraft, DraftRecoveryNotice } from "./use-working-draft";
 import { flushDraftEditors } from "./draft-autosave-controller";
+import { LoadingState, StatusBadge } from './design/WorkspacePrimitives';
 
 type Tab = "studio" | "providers" | "context" | "templates" | "history";
 const labels: Record<Tab, string> = { studio: "AI Content Studio", providers: "AI Provider Center", context: "企业 AI 资料", templates: "提示词模板", history: "生成历史" };
@@ -57,11 +58,12 @@ export function ProductAICenter({ initialTab = "studio", refresh }: { initialTab
   const latestTemplates = templates.filter(item => !templates.some(other => other.templateId === item.templateId && other.version > item.version));
   const selectedProfile = profiles.find(item => item.id === profileId);
   return <div className="product-ai-center">
-    <div className="page-title"><div><h2>{labels[tab]}</h2><p>从企业已确认资料生成本地草稿，人工编辑和审核后再走正式发布流程。</p></div></div>
-    <div className="row-actions">{(Object.keys(labels) as Tab[]).map(item => <button key={item} className={tab === item ? "primary-button" : "secondary-button"} disabled={busy} onClick={() => void act(async () => { await flushDraftEditors(); setTab(item); })}>{labels[item]}</button>)}</div>
+    <div className="page-title"><div><div className="eyebrow">AI 与内容工作台</div><h2>{labels[tab]}</h2><p>使用企业已确认资料生成本地草稿，人工编辑和审核后再进入发布流程。</p></div><StatusBadge label="AI 输出 = Draft" tone="blue" /></div>
+    <div className="ai-brand-context"><div><strong>{brands.find(item => item.id === companyId)?.companyName || '请先选择企业'}</strong> · 当前企业资料与生成上下文</div><span>Provider {selectedProfile?.displayName || '未选择'} · Model {model || '未选择'}</span></div>
+    <nav className="ai-tabs" aria-label="AI 功能">{(Object.keys(labels) as Tab[]).map(item => <button key={item} className={tab === item ? "active" : ""} aria-pressed={tab === item} disabled={busy} onClick={() => void act(async () => { await flushDraftEditors(); setTab(item); })}>{labels[item]}</button>)}</nav>
     {message && <div role="status" className="notice">{message}</div>}
     {busy&&tab==="studio"&&<button className="secondary-button" onClick={()=>void window.publisherAPI.aiCenter.cancel(companyId).then(()=>setMessage("已请求取消；已发出请求的结果需核对，不会自动追加请求。"))}>取消本次生成</button>}
-    {tab==="studio"&&studioLoading&&(defaultsLoadFailed?<button className="secondary-button" onClick={()=>setDefaultsRevision(value=>value+1)}>重新载入企业生成资料</button>:<p role="status">正在载入企业生成资料…</p>)}
+    {tab==="studio"&&studioLoading&&(defaultsLoadFailed?<button className="secondary-button" onClick={()=>setDefaultsRevision(value=>value+1)}>重新载入企业生成资料</button>:<LoadingState title="正在载入企业生成资料…" description="读取当前企业的事实、模板与预算默认值。" rows={2} />)}
     <fieldset disabled={busy||(tab==="studio"&&studioLoading)} style={{ border: 0, padding: 0, minWidth: 0 }}>
     {tab === "providers" && <section className="panel form-grid">
       <h3>服务商配置</h3><label>服务商<select aria-label="AI 服务商" disabled={Boolean(providerEdit.id) || busy} value={providerEdit.provider} onChange={event => selectDefinition(event.target.value as ProviderKey)}>{definitions.map(item => <option key={item.key} value={item.key}>{item.displayName}</option>)}</select></label>

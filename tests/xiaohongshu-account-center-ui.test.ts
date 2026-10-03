@@ -1,3 +1,4 @@
+import { rendererSource } from "./renderer-source";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import type { AccountManagementRow } from "../apps/desktop/src/shared/api";
@@ -82,13 +83,13 @@ describe("BrowserAutomation account creation semantics", () => {
   });
 
   it("uses the exact pending account for browser login completion", () => {
-    const source = readFileSync("apps/desktop/src/renderer/V11Workspace.tsx", "utf8");
+    const source = rendererSource("V11Workspace");
     expect(source).toContain("setPendingLogin({ accountId: account.id, platformKey });");
     expect(source).toContain('accounts.completeLogin(pendingLogin.accountId, pendingLogin.platformKey, "")');
   });
 
   it("exposes a dedicated XHS controlled self-test entry without changing generic self-test", () => {
-    const source = readFileSync("apps/desktop/src/renderer/V11Workspace.tsx", "utf8");
+    const source = rendererSource("V11Workspace");
     expect(source).toContain("首次上传后发现");
     expect(source).toContain("supportsControlledPostUploadDiscovery");
     expect(source).toContain("CONTROLLED_SELF_TEST_CONFIRMATION");
@@ -127,9 +128,9 @@ describe("BrowserAutomation account creation semantics", () => {
     expect(source).toContain("selectedAccountId");
     expect(source).toContain('"add-account"');
     expect(source).toContain('kind: "view-account", label: "选择账号"');
-    expect(readFileSync("apps/desktop/src/renderer/V11Workspace.tsx", "utf8")).toContain("browser && !connected && rows.length === 0");
-    expect(readFileSync("apps/desktop/src/renderer/V11Workspace.tsx", "utf8")).toContain("const accountId = row.account.id");
-    expect(readFileSync("apps/desktop/src/renderer/V11Workspace.tsx", "utf8")).toContain("runSafe(accountId)");
+    expect(rendererSource("V11Workspace")).toContain("browser && !connected && rows.length === 0");
+    expect(rendererSource("V11Workspace")).toContain("const accountId = row.account.id");
+    expect(rendererSource("V11Workspace")).toContain("runSafe(accountId)");
   });
 
   it("summarizes multiple accounts without calling a connected platform not connected", () => {
@@ -178,8 +179,8 @@ describe("BrowserAutomation account creation semantics", () => {
   });
 
   it("uses removal wording and the history-preserving confirmation", () => {
-    const workspaceSource = readFileSync("apps/desktop/src/renderer/V11Workspace.tsx", "utf8");
-    const appSource = readFileSync("apps/desktop/src/renderer/App.tsx", "utf8");
+    const workspaceSource = rendererSource("V11Workspace");
+    const appSource = rendererSource("App");
     expect(workspaceSource).toContain(">移除</button>");
     expect(workspaceSource).toContain("移除后会清除此账号的登录状态和本地会话，但不会删除历史发布记录。");
     expect(appSource).toContain(">移除</button>");

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { rendererSource } from "./renderer-source";
 import { describe, expect, it, vi } from "vitest";
 import type { BrowserSessionHeartbeatInput } from "../apps/desktop/src/shared/api";
 import { createSessionHeartbeatController, type HeartbeatScheduler } from "../apps/desktop/src/renderer/session-heartbeat";
@@ -97,8 +97,8 @@ describe("automatic canonical session heartbeat wiring", () => {
   });
 
   it("wires both account-center login and check-login actions to the controller", () => {
-    const app = readFileSync(new URL("../apps/desktop/src/renderer/App.tsx", import.meta.url), "utf8");
-    const workspace = readFileSync(new URL("../apps/desktop/src/renderer/V11Workspace.tsx", import.meta.url), "utf8");
+    const app = rendererSource("App");
+    const workspace = rendererSource("V11Workspace");
 
     expect(app).toContain("beginPostLoginHeartbeat(account.id, account.platformKey)");
     expect(app).toContain("runCheckLoginWithHeartbeats(account.id, account.platformKey");
