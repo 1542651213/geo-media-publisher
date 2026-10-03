@@ -25,8 +25,8 @@ export function JobsBoard({ companyId, refreshVersion = 0 }: { companyId: string
       <select aria-label="任务筛选状态" value={query.status ?? ''} disabled={loading} onChange={event => change({ status: event.target.value || undefined })}><option value="">全部状态</option>{data?.statuses.map(status => <option key={status} value={status}>{publishStatusLabel(status)}</option>)}</select>
       <label className="operations-checkbox"><input type="checkbox" checked={query.ownerOnly === true} disabled={loading} onChange={event => change({ ownerOnly: event.target.checked })} />只看 Owner 处理项</label>
     </div>
-    {error && <div role="alert" className="notice error">{error}</div>}
-    {loading ? <LoadingState title="正在读取当前企业的任务…" description="核对完整历史与当前筛选。首次读取可能需要几秒，任务状态以实际回执为准。" rows={4} /> : rows.length === 0 ? <EmptyState title="当前筛选没有记录" description="调整平台、账号、日期或状态筛选。正式操作请在发布中心逐项确认。" /> : <div className="operations-table operations-publish-table">
+    {error && <div role="alert" className="notice error"><strong>任务读取失败，请刷新重试。</strong><details><summary>查看读取诊断</summary><span>{error}</span></details></div>}
+    {loading ? <LoadingState title="正在读取当前企业的任务…" description="核对完整历史与当前筛选。首次读取可能需要几秒，任务状态以实际回执为准。" rows={4} /> : error ? <EmptyState title="任务暂未读取成功" description="当前无法判断是否有符合筛选的记录。请使用上方的“刷新任务状态”重试。" /> : rows.length === 0 ? <EmptyState title="当前筛选没有记录" description="调整平台、账号、日期或状态筛选。正式操作请在发布中心逐项确认。" /> : <div className="operations-table operations-publish-table">
       <div className="operations-table-head"><span>内容</span><span>平台</span><span>账号</span><span>日期</span><span>状态</span></div>
       {rows.map(row => <div className="operations-table-row" key={row.id}><strong>{row.title}</strong><span>{platformLabel(row.platform)}</span><span>{row.account}</span><span>{row.date ? new Date(row.date).toLocaleString('zh-CN') : '—'}</span><div><span className={`status-chip ${publishStatusTone(row.status)}`}>{publishStatusLabel(row.status)}</span><span className="job-state-hint">{jobStateDescription(row.status)}</span>{row.ownerActionRequired && <small className="operations-warning">需要 Owner 处理</small>}</div></div>)}
     </div>}
