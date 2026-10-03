@@ -1,0 +1,372 @@
+{
+  "status": "VERIFIED_OFFLINE_PILOT",
+  "evidenceLayer": "SAME_MACHINE_ADMIN_ACTUAL_NSIS_INSTALLED_SYNTHETIC_DATA",
+  "software": {
+    "deliveryId": "R1.15-I",
+    "appVersion": "1.1.9",
+    "sourceCommit": "77265ff876fbdfb32d1f5c56433590966bec8cd3",
+    "appAsarSha256": "3ae5c3df9047038a2e39e2aa6e31d0eb5fc9a26f5600746e766b02c3242bea5e",
+    "installerFilename": "Geo Media Publisher Setup 1.1.9 - R1.15-I DEPARTMENT PILOT CANDIDATE.exe",
+    "installerBytes": 101309731,
+    "installerSha256": "ae2c936100fb16a8489ef362fdc2fb981499d8d8bf3a932c48b40782d3d009b2",
+    "nsisGuid": "28006b2b-deb4-42ca-9b73-5012d71d0c13",
+    "signatureStatus": "NotSigned",
+    "launcher": "Start-Pilot.cmd",
+    "dataRoute": "NEW_PROFILE_ONLY",
+    "mainMerged": false
+  },
+  "tests": {
+    "sourceCommit": "77265ff876fbdfb32d1f5c56433590966bec8cd3",
+    "files": 243,
+    "count": 1708,
+    "focusedFiles": 9,
+    "focusedTests": 61,
+    "typecheck": "PASS",
+    "lint": "PASS",
+    "build": "PASS"
+  },
+  "installedJourney": {
+    "status": "PASS",
+    "checks": [
+      "emptyProfileNoInheritedAccountsJobsCredentials",
+      "invalidRowsAndCompanyMismatchPreviewBlocked",
+      "xlsxTwoDraftRowsUnicodeNewlineDateAndLongTitle",
+      "csvNormalPreviewAndSameCompanyDuplicateProtection",
+      "formulaCachedValueOnlyNoJobsNoExternalAi",
+      "autosaveNormalExitRestartAndExplicitRecovery",
+      "syntheticImageOrdinaryUiManagedImport",
+      "unapprovedFactsExcludedBeforeHumanReview",
+      "explicitHumanContentReview",
+      "noAccountPublishUiBlockedNoPrepareNoJob",
+      "secondCompanyOrdinaryUiAndMaterialIsolation",
+      "freshProfileHasNo28AccountRequirement",
+      "visibleIIdentityAndSchema",
+      "approvedSyntheticColleaguePackageUiExport",
+      "freshRecipientUiImportDraftUnapprovedFactsNoAuthOrHistory",
+      "ordinaryUiSanitizedDiagnosticExport",
+      "secondInstanceExitAndOriginalWindowActivation",
+      "newProfileCompleteSnapshotNormalUiExit",
+      "syntheticSnapshotVerificationAndIsolatedRestoreUi",
+      "restoredInstalledRestartExecutionPausedAndNoReplay"
+    ],
+    "starts": 5,
+    "normalExits": 5,
+    "directSqlMutations": 0,
+    "networkByStart": [
+      {
+        "blocked": 1,
+        "loopback": 0,
+        "beforeMain": true
+      },
+      {
+        "blocked": 1,
+        "loopback": 0,
+        "beforeMain": true
+      },
+      {
+        "blocked": 1,
+        "loopback": 0,
+        "beforeMain": true
+      },
+      {
+        "blocked": 1,
+        "loopback": 0,
+        "beforeMain": true
+      },
+      {
+        "blocked": 1,
+        "loopback": 0,
+        "beforeMain": true
+      }
+    ],
+    "sourceReadCounts": [
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "sourceModuleCounts": [
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "secondInstance": {
+      "exitCode": 0,
+      "network": {
+        "blocked": 1,
+        "loopback": 0,
+        "beforeMain": true
+      },
+      "primary": {
+        "eventCount": 1,
+        "focused": true,
+        "windowCount": 1
+      }
+    },
+    "newProfileSnapshot": "COMPLETE_VERIFIED_AND_ISOLATED_RESTORE",
+    "restoredAutomaticExecutionDisabled": true,
+    "diagnosticPrivacy": "PASS"
+  },
+  "faults": {
+    "status": "PASS",
+    "kind": "INSTALLED_SYNTHETIC_FAILURE_AND_READONLY_HISTORY_DISPLAY",
+    "directSqlMutations": 0,
+    "realPlatformPassClaimed": false,
+    "cloudRequests": 0,
+    "productionWrites": 0,
+    "checks": [
+      "createFailureKeepsInputAndNoCompanyWritten",
+      "ordinaryUiRetryCreatesExactlyOneCompany",
+      "jobsLoadingFeedback",
+      "jobsReadErrorDoesNotClaimEmptyHistory",
+      "jobsExplicitRefreshRecovery",
+      "simulatedUnknownReadonlyUiNoPublishActionsOrPersistedJob"
+    ],
+    "network": {
+      "blocked": 1,
+      "loopback": 0,
+      "beforeMain": true
+    }
+  },
+  "independentStart": {
+    "status": "PASS",
+    "kind": "SAME_MACHINE_PACKAGED_MAIN_SURVIVES_ACCEPTANCE_CONTROLLER_EXIT",
+    "controllerExitedBeforeObservation": true,
+    "mainContinuedAndOrdinaryUiResponded": true,
+    "codexDesktopProcessStopped": false,
+    "network": {
+      "blocked": 1,
+      "loopback": 0,
+      "beforeMain": true
+    }
+  },
+  "launcher": {
+    "status": "PASS",
+    "productLaunchPerformed": false,
+    "validateOnlyNoProfileWrites": true,
+    "softwareDigestMismatchDenied": true,
+    "productionOverlapDenied": true,
+    "linkedProfileDenied": true,
+    "fileProfileDenied": true,
+    "wrongProfileNameDenied": true,
+    "isolatedTestShortcutTargetAndWorkingDirectoryMatched": true,
+    "ownerDesktopAndStartMenuChanged": false,
+    "windowsSecurityPolicyChanged": false
+  },
+  "actualLauncher": {
+    "status": "PASS",
+    "kind": "ACTUAL_PUBLIC_LAUNCHER_WITH_TEST_ONLY_PRE_MAIN_INSPECTOR_FLAGS",
+    "actualWindowsStartProcessUsed": true,
+    "launcherFilesUnchanged": true,
+    "currentManifestVerified": true,
+    "newProfileChosenByPublicLauncher": true,
+    "normalUiFirstCompany": true,
+    "rememberedInstallRestartPreservesNewProfile": true,
+    "noDirectSqlMutations": true,
+    "networkByStart": [
+      {
+        "rememberedInstallUsed": false,
+        "network": {
+          "blocked": 1,
+          "loopback": 0,
+          "beforeMain": true
+        },
+        "sourceReads": 0,
+        "sourceModules": 0
+      },
+      {
+        "rememberedInstallUsed": true,
+        "network": {
+          "blocked": 1,
+          "loopback": 0,
+          "beforeMain": true
+        },
+        "sourceReads": 0,
+        "sourceModules": 0
+      }
+    ],
+    "productionWrites": 0,
+    "securityPolicyChanged": false
+  },
+  "installation": {
+    "status": "PASS",
+    "scope": "SAME_MACHINE_ADMIN_NEW_NSIS_INSTALL_DIRECTORY",
+    "installerExitCode": 0,
+    "oldRegistrationsPreserved": true,
+    "installerSignature": "NotSigned",
+    "executableSignature": "NotSigned",
+    "autoRunDisabled": true,
+    "ownerShortcutsNotRequested": true,
+    "newWindowsMachine": "NOT_RUN",
+    "standardUser": "NOT_RUN"
+  },
+  "privatePreparationCountsOnly": {
+    "kind": "CURRENT_MATCHING_PROTECTED_CLOSED_COPY_READ_ONLY",
+    "status": "PASS",
+    "sourceMatchesCurrentProductionFingerprint": true,
+    "integrity": "ok",
+    "foreignKeyErrors": 0,
+    "productionBindingTablePresent": false,
+    "accountCount": 28,
+    "unassignedCount": 28,
+    "priorityCandidateCount": 4,
+    "priorityPlatformCounts": {
+      "douyin": 1,
+      "toutiao": 1,
+      "website": 2
+    },
+    "ownershipAssignments": 0,
+    "missingFileCount": 2,
+    "missingAssetRows": 3,
+    "allOtherTableReferenceMatches": 13,
+    "referenceFields": {
+      "publish_jobs.selected_image_asset_id": 5,
+      "publish_records.response_json": 4,
+      "publish_records.selected_image_asset_id": 4
+    },
+    "referenceTablesScanned": 65,
+    "referenceColumnsScanned": 867,
+    "declaredMediaReferenceColumns": [
+      "article_variants.cover_asset_id",
+      "articles.cover_asset_id",
+      "b01_product_e2e_authorization.image_asset_id"
+    ],
+    "privateCompanyCandidateCount": 5,
+    "privateArticleCandidateCount": 9,
+    "privateExistingImageCandidateCount": 3,
+    "contentSelection": "OWNER_CONTENT_SELECTION_REQUIRED",
+    "fullPrivateRestore": "BLOCKED_MISSING_FILES",
+    "retirementProposal": "BLOCKED_REFERENCED_PUBLISH_HISTORY",
+    "retirementExecuted": false,
+    "retiredCredentialMaterialReadOrChanged": false,
+    "privateDetailsOutsideRepository": true,
+    "productionWrites": 0,
+    "closedSourceAndReadonlyCopyUnchanged": true,
+    "network": {
+      "blocked": 1,
+      "loopback": 0,
+      "beforeMain": true
+    }
+  },
+  "screenshots": [
+    {
+      "file": "00-fresh-start.png",
+      "title": "首次进入新库",
+      "caption": "从 Start-Pilot.cmd 启动并核对 I 身份。空库点击右上角“创建企业资料”，填写企业名称和简称。",
+      "width": 1464,
+      "height": 895,
+      "sha256": "367fe38b83412853acae566593ce7bca4b05184ecdf5cf53793cb474c6f8d2db"
+    },
+    {
+      "file": "01-import-preview.png",
+      "title": "导入字段与预览",
+      "caption": "在内容运营的批量导入页选择模板，核对企业和字段映射；向下滚动检查行预览，再选择 Import as Draft。不会创建发布任务。",
+      "width": 1464,
+      "height": 895,
+      "sha256": "cf833b41c74580a9aefcd873481d4a3b3517a3213e77d784f293d9a7f57ef29a"
+    },
+    {
+      "file": "02-import-errors.png",
+      "title": "逐行校验错误",
+      "caption": "合成问题文件有四行错误，零行可导入。下方显示缺失标题、企业不匹配和正文等原因；修改文件后重新预览。",
+      "width": 1464,
+      "height": 895,
+      "sha256": "ef870e28c8eb0f7b96d4a51558a805521de8990a3533f8f1d2b288b0d0573037"
+    },
+    {
+      "file": "03-draft-saved.png",
+      "title": "编辑与自动保存",
+      "caption": "在文章库点“修改”，等待“已保存”。重开后明确恢复上次编辑；提交工作副本后仍需重新审核。",
+      "width": 1464,
+      "height": 895,
+      "sha256": "03e8e1f1941cfcc16530e76945cc692c3dec50288742dc9fd3cdeb887ccb10bf"
+    },
+    {
+      "file": "04-articles.png",
+      "title": "人工审核后的文章",
+      "caption": "仅一条合成流程经过本次人工审核。另两条仍需处理；“可发布”表示内容层状态，账号与平台门禁仍需逐项核对。",
+      "width": 1464,
+      "height": 895,
+      "sha256": "db4eb47726caf717227549c7d861fc2613aaa01beae91afa53666ddc47cd68f8"
+    },
+    {
+      "file": "05-publish-blocked.png",
+      "title": "无账号时的发布保护",
+      "caption": "新库没有已验证账号，开始发布按钮不可用。本轮没有准备远端草稿、媒体上传或最终提交。",
+      "width": 1464,
+      "height": 895,
+      "sha256": "1cd0802e3fc73fbe97c0faf4409da0c41c9eafb821aa8f5c2b99de56b05c7115"
+    },
+    {
+      "file": "06-ai-no-key.png",
+      "title": "AI 服务商未配置",
+      "caption": "现有服务商预设可见，API Key 为空，没有保存或测试连接。今晚不产生 GEO 外部 AI 请求。",
+      "width": 1464,
+      "height": 895,
+      "sha256": "f51b91a7687d7b4b281d3d927371f11255af0887e698e84a83509364b335267d"
+    },
+    {
+      "file": "07-accounts-empty.png",
+      "title": "账号中心的新库状态",
+      "caption": "当前企业没有账号。正式凭据只能由 Owner 后续从安全入口配置，不能继承或复制历史测试凭据。",
+      "width": 1464,
+      "height": 895,
+      "sha256": "2638b635964cf8de80fe3a026840a4df2138ea96a21080f3ae8cb263c931a119"
+    },
+    {
+      "file": "08-home.png",
+      "title": "今日工作台",
+      "caption": "合成资料的待审与已审状态可见；没有可信账号检查结果。首页计数不能替代真实平台验收。",
+      "width": 1464,
+      "height": 895,
+      "sha256": "2672e8e71d844e1c70df465ae6d51d69abbabf9fb9da21ff03bea234fea665e1"
+    },
+    {
+      "file": "09-owner.png",
+      "title": "Owner 处理入口",
+      "caption": "当前新库处理项为零。页面下方 H 交付清单是历史待核对记录，不能当作这个空库已经绑定了历史账号。",
+      "width": 1464,
+      "height": 895,
+      "sha256": "58784f89f4124bcb29f9eb0037222d3dd101fca413752d4dea39e3a7d2204ec1"
+    },
+    {
+      "file": "10-version.png",
+      "title": "确认当前版本",
+      "caption": "在设置展开“构建与数据版本详情”，核对 R1.15-I、1.1.9 和 SOFTWARE.json 中的源码标识。main 仍为 H Candidate。",
+      "width": 1464,
+      "height": 895,
+      "sha256": "b3801c7f9bf32df500fd6383307d90a27b71d94e564546b2a88c42c9a9351f6f"
+    },
+    {
+      "file": "11-backup.png",
+      "title": "创建完整新库快照",
+      "caption": "此图拍于创建前。实际 UI 随后正常关闭、生成 Complete 快照、校验并恢复到另一隔离目录；恢复后自动执行保持关闭。",
+      "width": 1464,
+      "height": 895,
+      "sha256": "380b2326fcf5a6935717f9dc93d263843d9eaa3bdfd0089e47a4b38219ec28c5"
+    },
+    {
+      "file": "12-jobs-simulated-readonly.png",
+      "title": "结果未知的只读演示",
+      "caption": "SIMULATED：内存只读夹具展示 Unknown 和历史状态。真实数据库没有发布任务或记录，不代表真实平台通过；未知结果不可重发。",
+      "width": 1464,
+      "height": 895,
+      "sha256": "e252eccb17b2003563c1ee5e8ced606c9e9b19c63d88620693c534f1a67c1864"
+    }
+  ],
+  "limits": {
+    "separateCleanWindowsMachine": "NOT_RUN",
+    "standardUser": "NOT_RUN",
+    "productionUpgrade": "PENDING_OWNER_AND_BACKUP_REVALIDATION",
+    "fullPrivateMediaRestore": "BLOCKED_MISSING_FILES",
+    "firstRealAccount": "PENDING_OWNER",
+    "realBusinessPublish": "NOT_AUTHORIZED_THIS_TASK",
+    "liveCloudGeneration": "NOT_RUN",
+    "realPlatformNetwork": "NOT_RUN_BY_DESIGN",
+    "mainMerged": false,
+    "allBatch": "OFF"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "deliveryId": "R1.15-I",
+  "appVersion": "1.1.9",
+  "sourceCommit": "77265ff876fbdfb32d1f5c56433590966bec8cd3",
+  "appAsarSha256": "3ae5c3df9047038a2e39e2aa6e31d0eb5fc9a26f5600746e766b02c3242bea5e",
+  "installerFilename": "Geo Media Publisher Setup 1.1.9 - R1.15-I DEPARTMENT PILOT CANDIDATE.exe",
+  "installerBytes": 101309731,
+  "installerSha256": "ae2c936100fb16a8489ef362fdc2fb981499d8d8bf3a932c48b40782d3d009b2",
+  "nsisGuid": "28006b2b-deb4-42ca-9b73-5012d71d0c13",
+  "signatureStatus": "NotSigned",
+  "launcher": "Start-Pilot.cmd",
+  "dataRoute": "NEW_PROFILE_ONLY",
+  "mainMerged": false
+}

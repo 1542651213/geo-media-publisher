@@ -1,111 +1,53 @@
-# Geo Media Publisher · R1.15-H.2 UI Candidate
+# GEO Media Publisher · R1.15-I 部门试用 Candidate
 
-**THIS BRANCH = H.2 UI Candidate · MAIN = H baseline · OWNER VISUAL APPROVAL REQUIRED · MAIN_MERGED = NO。**
+**当前 durable state = LOCAL_PILOT_VERIFIED_GITHUB_DELIVERY_PENDING。MAIN_MERGED = NO；Owner 首次真实使用及 H.2 视觉批准仍需现场完成。**
 
-当前 durable state：**R1_15_H2_UI_REFINEMENT_CANDIDATE_READY_FOR_OWNER_REVIEW**。H.1 基线完整保留；本轮为视觉精修，正式功能状态仍为 H 的 `PARTIAL_BACKUP_REVIEW_REQUIRED`。
+本轮为独立新库部门试用。原生产升级仍为 **PENDING_OWNER_AND_BACKUP_REVALIDATION**，完整私有素材恢复仍 **BLOCKED_MISSING_FILES**；新库通过不会解除原库阻塞。
 
-- 分支 `release/2026-10-03-r1.15-h2-ui-refinement-ready-visual-evidence`；Candidate Tag `r1.15-h2-ui-refinement-candidate-20261003`。最终 HEAD 以 `tag^{commit}` 唯一解析；包内源码 `03f742d17b949023e2a87167fdc8688b1e83420a`。
-- 首页提醒与指标更紧凑，账号健康卡利用有效宽度，归属卡片降低空白，Owner 分优先级且显示平台名，文章操作同一行，编辑抽屉标题空白修复；保留 H.1 克制的紫色品牌与全部发布安全语义。
-- 完整回归 **242 文件 / 1707 测试 PASS**，typecheck / lint / build / package、独立安装 18 阶段员工流程、99 页面布局 + 99 流程状态布局 PASS。
-- 原 production **2599 文件 / 哈希差异 0**；Main 等 360 文件冻结、478 IPC 调用及参数一致。真实发布、final submit、远端写、云 AI、production 写入全部 **0**；ALL_BATCH = OFF。
-- 保留限制：**28 真实账号待 Owner 归属；2 个缺失历史图片未处理；5 条 retired credential 未改写；原 production 未升级；Jobs 冷尾延迟未解决。** 真实平台/云、Windows DPI、硬件 IME 未执行；安装包 **NotSigned / 默认 Electron 图标**。
-- 当前普通发布能力仍为 **抖音、康一官网 OfficialAPI、今日头条 ON**，账号与内容仍需原预检，其余平台和 batch 门禁保持。
-- SECRET_SCAN = **PASS_SOURCE_DOCS_SCREENSHOTS_PREVIEW_PACKAGE**；安装版完整解包 3809 项，0 secret / 0 敏感路径。GitHub 图片渲染 = **PASS_ACTUAL_GITHUB_MARKDOWN_6_IMAGES**（真实浏览器已核验六图全部完成加载）。
+- 分支 `release/2026-10-03-r1.15-i-department-pilot-handoff`；Candidate 交付标识 `r1.15-i-department-pilot-candidate-20261003`。最终交付 HEAD 使用该 `tag^{commit}` 唯一解析；公开同步正在收口。
+- 包内源码 **77265ff876fbdfb32d1f5c56433590966bec8cd3**；应用 **1.1.9 / R1.15-I**。H.2 起点 **5280de63ba7b5f2bd2fbfe078e50ce6f360cc462**，保留 C/D/E/F/G/H/H.1/H.2。main/origin/main 保持 H Candidate **c2017994ef3df592fd17ffa009a56fbcca99796c**。
+- 最小修复：空库通过普通 UI 创建第一家企业，仅调用原有 `brands.create`；显示准确 I 身份。保留紫色界面，Main/IPC/DB/Adapter/发布安全逻辑 **360 文件未变**。
+- 最终全量 **243 文件 / 1708 测试 PASS**；focused **9 文件 / 61 测试 PASS**；typecheck、lint、build、NSIS package 与安装后资源字节核验 PASS。
+- 本机管理员账户、实际 NSIS 新目录安装：**20 项员工 UI 路径 + 6 项故障检查 PASS**。合成导入为 Draft、事实人工核准；同事资料包不继承审批、账号、凭据或历史。新库 Complete 快照、校验、隔离恢复和恢复后暂停自动执行 PASS。
+- 安装版拒绝源码读取，源码模块/读取均 0，无 dev server。验收控制器退出后 Main 仍运行且 UI 响应；**未关闭 Codex 客户端，未验普通 Windows 用户或另一台干净电脑**。
+- 唯一部门 ZIP **41 文件 / 102660837 bytes**，已解压逐文件校验。内含安装包、Start-Pilot 新库入口、本地 HTML 说明、图解、合成模板及校验清单。无自动运行或 Owner 快捷方式；旧安装保留。实际 **NotSigned / 默认 Electron 图标**。
+- 当前普通发布仍为 **抖音、今日头条、康一正式官网 OfficialAPI ON**，原门禁保持；其它平台受限，**ALL_BATCH = OFF**。真实平台网络、登录/绑定/发布和云生成未执行，全部真实写入与 GEO 外部 AI 请求 **0**。
+- 原 production **2599 文件 / 字节与 SHA256 差异 0**。首批私有候选：抖音 1、头条 1、官网 2；真实 28 个账号仍待 Owner。五条 retired credential 未尝试解密或改写。
+- 两份缺图对应三条素材记录。额外关联为 Job 选择字段 5 项、PublishRecord 选择字段 4 项、回执字段 4 项，**不是 13 条不同记录**。退休提案 **BLOCKED_REFERENCED_PUBLISH_HISTORY**，恢复/退休/替换均 0。9 篇原稿和 3 份存在的图片候选仅留仓库外私有位置，待 Owner 选择与审核。
+- 包解包扫描 **3809 项 / 0 secret / 0 敏感路径**；部门 ZIP、表格单元格和图解扫描 PASS。最终源码/待推送历史扫描和 GitHub 图片渲染正在收口。
 
-[Candidate 安装包与离线 HTML 预览](https://github.com/1542651213/geo-media-publisher/releases/tag/r1.15-h2-ui-refinement-candidate-20261003) · [完整 11 组 BEFORE / AFTER 图集](docs/product/R1.15-H2-PHONE-PREVIEW.md) · [双轮 UI Review](docs/product/R1.15-H2-UI-REVIEW.md) · [脱敏验证证据](docs/evidence/r115-h2-ui-verification.json)。
+[唯一部门 ZIP 与 Candidate 安装包](https://github.com/1542651213/geo-media-publisher/releases/tag/r1.15-i-department-pilot-candidate-20261003) · [开始使用](docs/product/department-pilot-quickstart.md) · [首日现场检查单](docs/product/day-one-acceptance.md) · [完整 13 图员工图解](docs/product/r115-i-pilot-preview/index.md) · [离线手机可读 HTML](docs/product/r115-i-pilot-preview/index.html) · [手机预览](docs/product/r115-i-pilot-preview/phone-preview.png)。
 
-**NEXT ACTION：Owner 先在手机查看下列六张精选截图及完整对比图集，再试用 Candidate；完成最终视觉批准后，另行决定 main 集成。**
+**NEXT ACTION：明天 Owner 选定一个真实企业及首批账号，一位同事在实际普通用户/独立 Windows 电脑安装，从 Start-Pilot 新库入口导入完整资料。逐项审核后，再单独授权登录、归属与唯一一条业务发布。原库找回缺图及完整备份重验继续独立处理。**
 
-## 本版本真实安装版精选截图
+## 本版本实际安装版精选截图
 
-以下均来自最终 H.2 独立安装包，同一闭合合成资料、1440×900、100% 应用缩放；不是静态 mock 界面。点击可打开原图放大。
+本轮新 NSIS 安装版，合成资料，**1464×895 / 100% 应用缩放**。完整图集附来源和说明；SIMULATED 任务展示单独标注。GitHub 渲染待推送后实际核验。
 
-### 首页
+### 空库首页与第一家企业入口
 
-[![首页 · H.2 实际安装版](docs/product/r115-h2-ui-preview/01-home-after.png)](docs/product/r115-h2-ui-preview/01-home-after.png)
+[![空库首页 · R1.15-I 安装版](docs/product/r115-i-pilot-preview/00-fresh-start.png)](docs/product/r115-i-pilot-preview/00-fresh-start.png)
 
-### AI Center
+### 合成模板导入预览
 
-[![AI Center · H.2 实际安装版](docs/product/r115-h2-ui-preview/02-ai-after.png)](docs/product/r115-h2-ui-preview/02-ai-after.png)
+[![导入预览 · R1.15-I 安装版](docs/product/r115-i-pilot-preview/01-import-preview.png)](docs/product/r115-i-pilot-preview/01-import-preview.png)
 
-### 账号中心
+### 草稿自动保存
 
-[![账号中心 · H.2 实际安装版](docs/product/r115-h2-ui-preview/05-accounts-after.png)](docs/product/r115-h2-ui-preview/05-accounts-after.png)
+[![草稿已保存 · R1.15-I 安装版](docs/product/r115-i-pilot-preview/03-draft-saved.png)](docs/product/r115-i-pilot-preview/03-draft-saved.png)
 
-### 历史账号归属
+### 无账号发布保护
 
-[![历史账号归属 · H.2 实际安装版](docs/product/r115-h2-ui-preview/06-account-ownership-after.png)](docs/product/r115-h2-ui-preview/06-account-ownership-after.png)
+[![发布按钮阻塞 · R1.15-I 安装版](docs/product/r115-i-pilot-preview/05-publish-blocked.png)](docs/product/r115-i-pilot-preview/05-publish-blocked.png)
 
-### 发布中心
+### 新库账号中心
 
-[![发布中心 · H.2 实际安装版](docs/product/r115-h2-ui-preview/07-publish-after.png)](docs/product/r115-h2-ui-preview/07-publish-after.png)
+[![新库账号中心 · R1.15-I 安装版](docs/product/r115-i-pilot-preview/07-accounts-empty.png)](docs/product/r115-i-pilot-preview/07-accounts-empty.png)
 
-### Owner Center
+### I 包源码与版本识别
 
-[![Owner Center · H.2 实际安装版](docs/product/r115-h2-ui-preview/09-owner-after.png)](docs/product/r115-h2-ui-preview/09-owner-after.png)
+[![当前版本 · R1.15-I 安装版](docs/product/r115-i-pilot-preview/10-version.png)](docs/product/r115-i-pilot-preview/10-version.png)
 
-完整 BEFORE / AFTER 已单独放入 [docs/product 图集](docs/product/R1.15-H2-PHONE-PREVIEW.md)。后续 UI 有明显变化的版本继续遵守 [ready.md 真实截图约定](docs/product/ui-visual-evidence.md)。
+[完整 I 报告与摘要](docs/releases/R1.15-I-READY.md) · [脱敏证据](docs/product/r115-i-pilot-preview/evidence.json) · [checkpoint](docs/releases/R1.15-I-CHECKPOINT.md) · [支持范围](docs/product/department-pilot-support.md) · [问题处理](docs/product/department-pilot-troubleshooting.md) · [原库备份限制](docs/operations/backup-restore.md)。
 
----
-
-<details>
-<summary>H.1 / H 历史交付状态与限制（完整保留）</summary>
-
-# Geo Media Publisher · R1.15-H.1 UI Candidate only
-
-当前 UI durable state：**R1_15_H1_PURPLE_UI_POLISH_CANDIDATE_READY_FOR_OWNER_REVIEW**（本地验收通过，最终安全同步回执随 Candidate 交付）。**Owner visual approval required；当前 production/main 功能基线仍为 H Candidate，MAIN_MERGED = NO。**
-
-- 分支 `release/2026-10-03-r1.15-h1-ui-purple-product-polish`；Candidate Tag `r1.15-h1-ui-purple-polish-candidate-20261003`，HEAD 由 `tag^{commit}` 唯一解析。包内源码 `34004b070d3f53986d71e2255015625be76da8d1`。
-- 紫色 Design Tokens、深紫灰侧栏、中性阅读区、字号/按钮/状态/表单/弹层、首页层级、账号/归属、发布/Owner、AI/Jobs、备份/About 已统一；保留全部发布安全语义。
-- 最终 241 文件 / 1704 测试、typecheck、lint、build、package、独立安装员工 18 阶段均 PASS；11 页面 × 9 窗口/缩放共 99 检查，以及员工流程状态 99 检查 PASS。真实 Windows DPI / 硬件 IME：NOT_RUN。
-- [手机 BEFORE/AFTER 预览](docs/product/R1.15-H1-PHONE-PREVIEW.md) · [UI Review](docs/product/R1.15-H1-UI-REVIEW.md) · [Candidate installer / HTML ZIP](https://github.com/1542651213/geo-media-publisher/releases/tag/r1.15-h1-ui-purple-polish-candidate-20261003) · [脱敏证据](docs/evidence/r115-h1-ui-verification.json)。
-- Main/shared/domain/db/adapter/policy 360 文件未变，478 IPC 调用及参数相同；965 原 CSS selector 顺序保留。Production 2599 文件 SHA256 无变化。真实发布、final submit、远端写、云 AI、production 写入均 0；ALL BATCH = OFF。
-- SECRET_SCAN：PASS_SOURCE_DOCS_SCREENSHOTS_PREVIEW_PACKAGE；安装包完整解包已 PASS，0 secret / 0 敏感路径。安装包 **NotSigned**，未配置正式签名，保留默认 Electron 图标。
-- H 已有的 28 账号归属、2 个缺失历史素材、5 条 retired credential、production upgrade 与 Jobs 冷路径 P95 限制不变。下面完整保留 H handoff。
-- **NEXT ACTION：Owner 在手机审阅 11 组对比及 Candidate；视觉批准后再单独决定是否合并 main。**
-
----
-
-# Geo Media Publisher · R1.15-H Candidate
-
-当前 durable state：**R1_15_H_PARTIAL_BACKUP_REVIEW_REQUIRED**。开发、1698 项回归、构建、隔离安装和员工全流程已完成。5 条无法解密的凭据已分类为同一退役 `kangyi_website` 账号的历史字段，当前能力依赖未知数为 **0**；原密文保持不变。
-
-保留 Candidate 的原因：原生产关闭副本含 **3 条历史测试素材记录，引用 2 个已缺失的外部图片文件**。完整素材快照校验正确阻断，不能宣称完整私有恢复 PASS。另行完成的数据库升级、重启与独立回滚 PASS，不掩盖此限制。原生产尚未升级。
-
-## 当前身份
-
-- 长期分支：`main`。最终交付 HEAD 以 `r1.15-h-production-readiness-candidate-20261003^{commit}` 为唯一解析值；它与 main 交付提交相同。完整 SHA 与远端核验结果记录在本轮最终同步回执。文档自身不嵌入自指的提交哈希。
-- 最终 Tag：[r1.15-h-production-readiness-candidate-20261003](https://github.com/1542651213/geo-media-publisher/releases/tag/r1.15-h-production-readiness-candidate-20261003)。从 G `214849bb677e6e3cab8b3dae11010d4a62df450c` 继续，保留 C/D/E/F/G 全部祖先及历史标签。
-- 应用 1.1.9 / R1.15-H；包内源码 **fa54951e874aa5e38eaf12d2ed38b930e9515e88**，构建时间 `2026-10-02T20:00:24.435Z`。之后只改验收脚本、文档与生成目录的 lint 排除规则，运行时代码与已验收包一致。
-- 安装包：[Geo Media Publisher Setup 1.1.9 - R1.15-H READINESS CANDIDATE.exe](<output/r115-h-package-fa54951/Geo Media Publisher Setup 1.1.9 - R1.15-H READINESS CANDIDATE.exe>)（本机路径），**101299540 bytes / NotSigned**。
-- Installer SHA256：`5546228947ba27c3401c1a82761398057b11c3e4a137664a0047fb675904629c`；安装后 app.asar：`7d24394e58ded1427badf1c68246ff5e64f21612c4275074f38673937a109b34`。
-
-## 已验证能力与限制
-
-| 项目 | 当前结果 |
-| --- | --- |
-| Credential | 私有副本及实际 G→H→G Main 均 21 PASS / 5 FAIL；5 条为 LEGACY_UNUSED / RETIRED，底层解密原因未能确定，未修复、删除或重写 |
-| Owner 归属 | 一页逐项确认、证据和筛选通过合成安装验收；真实 **28 UNASSIGNED**，7 MEDIUM / 1 LOW / 3 CONFLICT / 17 NO_EVIDENCE，自动确认 0 |
-| 私有升级/回滚 | 完整关闭目录逐文件哈希匹配；迁移记录 44→45→44，80 张业务表一致，integrity/FK PASS；完整缺失素材恢复仍 BLOCKED |
-| Scheduler / Session | 正常 Scheduler 参与隔离测试；离线、CHECKING、企业变化、generation 替换、停用、迟到响应及重启保护 PASS |
-| 草稿 / AI | 自动保存、冲突选择、审核失效、冻结记录保护、取消/Unknown 不重放 PASS；20×6 预览为 140 项 / 最多 560 请求，共享并发 1；均为本地 mock |
-| Jobs 性能 | 热切换 median/P95 **646/857→213/326 ms**；冷路径 **1231/4902→976/4855 ms**，冷尾延迟未解决；查询 4629→124，IPC 约 10 MB→0.60 MB |
-| Backup / Colleague | 合成完整快照校验及惰性隔离恢复 PASS；同事资料包审核保护和导入后重新核准 PASS；真实私有完整素材门禁仍受阻 |
-| 安装与界面 | 实际 NSIS 隔离安装、18 项员工路径、单实例/启动崩溃恢复 PASS；11 张真实合成截图，99 项窗口/应用缩放检查，390/760 px 手机索引 PASS |
-| 验证 | 240 文件 / **1698 测试 PASS**；typecheck、lint、build、package PASS；包内 38 个源码 migration 与构建字节一致 |
-
-当前正式普通发布能力仍为 **抖音、康一官网 OfficialAPI、今日头条 ON**；其他平台门禁保持，所有 batch **OFF**。能力开启不等于账号已登录、企业归属已确认或本轮完成了真实发布验收。
-
-本轮真实发帖、final submit、远端草稿/媒体写入、产品外部 AI 请求、生产数据写入、真实企业归属确认均 **0**。原生产目录 **2599 个文件 SHA256 前后相同**。PUBLIC 同步仅含扫描通过的源码、测试、脚本和脱敏文档；私有副本、凭据、备份和原始证据不上传。安装包走既有 GitHub prerelease 资产流程，不进入 Git 源码历史。
-
-## Owner 回来后的 NEXT ACTION
-
-1. 先查看 [备份限制与恢复步骤](docs/operations/backup-restore.md)，核实缺失的历史测试素材，或另行授权处理明确无用的测试记录，再重新通过完整私有快照校验。不要直接覆盖原 production 或用旧程序打开 H 库。
-2. 查看 [5 条凭据分类](docs/security/credential-recovery-classification.md)，保留退役字段；无需为追求 26/26 强行重加密。
-3. 在「内容运营 → Owner 处理」逐项确认 28 个账号真实企业归属；冲突和无证据项可保留未确认。按正常流程登录微博、搜狐 Creator，安全更新需使用的博客园 PAT，并核验实际账号身份。
-4. 配置受控异地备份目标和正式代码签名。硬件 IME、真实 Windows DPI、跨用户解密及异机恢复均尚未验证。真实平台写入与云生成另行授权。
-
-[H 验收与完整报告](docs/releases/R1.15-H-READY.md) · [脱敏证据](docs/evidence/r115-h-verification.json) · [checkpoint](docs/releases/R1.15-H-CHECKPOINT.md) · [员工操作路径](docs/product/operator-quickstart.md) · [Jobs 性能](docs/performance/jobs-page.md) · [本机手机图文预览](output/r115-h-phone-preview-fa54951/index.html)。
-
-[G 时点 READY 原文](docs/releases/R1.15-G-READY-ARCHIVE.md) 与 [F 时点及 C/D/E 历史](docs/releases/R1.15-F-READY-ARCHIVE.md) 保留。未安排自动续跑或新平台工作。
-</details>
+历史：[H.2 UI](docs/releases/R1.15-H2-UI-CANDIDATE.md) · [H.2 ready 存档](docs/releases/R1.15-H2-READY-ARCHIVE.md) · [H.1 UI](docs/releases/R1.15-H1-UI-CANDIDATE.md) · [H 功能 Candidate](docs/releases/R1.15-H-READY.md) · [G](docs/releases/R1.15-G-READY-ARCHIVE.md) · [F/C/D/E](docs/releases/R1.15-F-READY-ARCHIVE.md)。本轮没有合并 main 或安排自动续跑。
