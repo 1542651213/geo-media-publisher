@@ -27,6 +27,12 @@ export async function launchPilot(executable, userData, options = {}) {
   assert.ok(existsSync(executable));
   const run = await earlyInstalled(executable, userData, { beforeMain: beforePilotMain, fixture: { userData, canonical: resolve('.') }, ...options });
   if (run.build) { assert.equal(run.build.packaged, true); assert.ok(['R1.15-H.2', 'R1.15-I'].includes(run.build.deliveryId)); }
+  if (run.evaluate) {
+    const paths = await run.evaluate(electron => Object.fromEntries(['userData', 'sessionData', 'logs', 'temp'].map(name => [name, electron.app.getPath(name)])));
+    const root = resolve(userData, '..');
+    assert.equal(paths.userData, userData); assert.equal(paths.sessionData, join(root, 'session-data')); assert.equal(paths.logs, join(root, 'logs')); assert.equal(paths.temp, join(root, 'temp'));
+    run.paths = paths;
+  }
   return run;
 }
 export function saveEvidence(name, data) { writeFileSync(join(evidenceRoot, name + '.json'), JSON.stringify(data, null, 2)); }

@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+const baseline = '5280de63ba7b5f2bd2fbfe078e50ce6f360cc462';
+const git = (...args) => execFileSync('git', ['-c', 'safe.directory=' + resolve('.').replaceAll('\\', '/'), ...args], { encoding: 'utf8' }).trim();
+const frozen = ['apps/desktop/src/main', 'apps/desktop/src/shared', 'packages', 'PLATFORMS.csv', 'package.json', 'pnpm-lock.yaml'];
+const changed = git('diff', '--name-only', baseline, '--', ...frozen).split('\n').filter(Boolean);
+assert.deepEqual(changed, []); assert.equal(git('ls-files', '--others', '--exclude-standard', '--', ...frozen), '');
+const config = git('diff', baseline, '--', 'electron.vite.config.ts').split('\n').filter(line => /^[+-][^+-]/u.test(line));
+assert.equal(config.length, 2); assert.equal(config[0].slice(1).replace("deliveryId:'R1.15-H.2'", "deliveryId:'R1.15-I'"), config[1].slice(1));
+const renderer = git('diff', '--name-only', baseline, '--', 'apps/desktop/src/renderer').split('\n').filter(Boolean);
+assert.deepEqual(renderer.sort(), ['apps/desktop/src/renderer/AboutRelease.tsx', 'apps/desktop/src/renderer/App.tsx', 'apps/desktop/src/renderer/EnterpriseProfileManager.tsx'].sort());
+const result = { status: 'PASS', baseline, source: git('rev-parse', 'HEAD'), frozenFiles: git('ls-files', '--', ...frozen).split('\n').filter(Boolean).length, changedFrozenFiles: 0, mainIpcSchemaAdapterPublishSemanticsChanged: false, buildMetadataOnly: 'R1.15-I', rendererChanges: renderer, purpose: 'First-company ordinary UI entry and accurate pilot identity; existing purple design retained' };
+writeFileSync('output/r115-i-execution-20261003/semantic-freeze.json', JSON.stringify(result, null, 2)); console.log(JSON.stringify(result));

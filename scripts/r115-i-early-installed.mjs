@@ -8,7 +8,7 @@ import { isolatedEnv } from './r115-g-installed-helpers.mjs';
 
 // Acceptance harness only. Pause before packaged Main, block network, then let
 // the unchanged product startup, migrations and (when allowed) Scheduler run.
-const guard = new Function('electron', 'input', `
+export const guard = new Function('electron', 'input', `
  const require=process.mainModule.require.bind(process.mainModule),fs=require('node:fs');
  if(process.env.GMP_B01_ISOLATED_USER_DATA_DIR!==input.userData||!input.userData.endsWith('b01-isolated-user-data')||!fs.existsSync(input.userData))throw Error('EARLY_ISOLATION_REQUIRED');
  globalThis.__hElectron=electron;globalThis.__hNetwork={blocked:0,loopback:0,beforeMain:true};
@@ -24,7 +24,7 @@ const guard = new Function('electron', 'input', `
 export async function earlyInstalled(executable, userData, { origins = [], beforeMain = null, fixture = null, expectNoWindowExit = false, cwd = resolve(userData, '..', 'empty-working-directory') } = {}) {
   assert.ok(existsSync(executable)); assert.ok(existsSync(userData)); assert.equal(resolve(userData), userData);
   for (const origin of origins) assert.ok(['127.0.0.1', 'localhost', '[::1]'].includes(new URL(origin).hostname));
-  const env = isolatedEnv(userData); delete env.NODE_PATH; delete env.NODE_OPTIONS; env.TEMP = resolve(userData, '..', 'temp'); env.TMP = env.TEMP; env.PATH = process.env.SystemRoot + '\\System32;' + process.env.SystemRoot;
+  const env = isolatedEnv(userData); delete env.NODE_PATH; delete env.NODE_OPTIONS; env.TEMP = resolve(userData, '..', 'temp'); env.TMP = env.TEMP; env.PATH = process.env.SystemRoot + '\\System32;' + process.env.SystemRoot + '\\System32\\WindowsPowerShell\\v1.0;' + process.env.SystemRoot;
   for (const key of Object.keys(env)) if (/BENCHMARK|READONLY_JOB_ID|ACCEPTANCE|NATIVE_SUBMIT|BROWSER_NATIVE_SUBMIT/u.test(key)) delete env[key];
   const processHandle = spawn(executable, ['--inspect-brk=0', '--remote-debugging-port=0'], { env, cwd, windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
   const exit = new Promise(done => processHandle.once('exit', done));
@@ -72,7 +72,7 @@ export async function earlyInstalled(executable, userData, { origins = [], befor
     let page; while (Date.now() - started < 20000) { page = browser.contexts()[0]?.pages()[0]; if (page) break; await new Promise(done => setTimeout(done, 50)); }
     assert.ok(page); page.setDefaultTimeout(15000); await page.getByLabel('当前企业工作区').waitFor();
     const evaluate = async (fn, input) => { const result = await send('Runtime.evaluate', { expression: `(${fn.toString()})(globalThis.__hElectron,${JSON.stringify(input ?? null)})`, awaitPromise: true, returnByValue: true }); if (result.exceptionDetails) throw Error('PRIVATE_MAIN_EVALUATION_FAILED'); return result.result.value; };
-    return { page, evaluate, childProcess:processHandle, guard:startupGuard, exit, dispose:async()=>{socket?.close();await browser.close().catch(()=>{});}, pid: processHandle.pid, build: await page.evaluate(() => window.publisherAPI.product.buildIdentity()), close: async () => {
+    return { page, evaluate, childProcess:processHandle, guard:startupGuard, exit, networkExit:()=>finalNetwork, dispose:async()=>{socket?.close();await browser.close().catch(()=>{});}, pid: processHandle.pid, build: await page.evaluate(() => window.publisherAPI.product.buildIdentity()), close: async () => {
       await evaluate(electron => {setImmediate(()=>electron.app.quit());return true;}); socket.close(); let closeTimer;
       try { await Promise.race([exit, new Promise((_, reject) => { closeTimer = setTimeout(() => reject(Error('OWNED_MAIN_EXIT_TIMEOUT')), 15000); })]); }
       finally { clearTimeout(closeTimer); await browser.close().catch(() => {}); }
