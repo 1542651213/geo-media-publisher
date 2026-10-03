@@ -45,7 +45,7 @@ export function OfficialApiConnections({ refreshKey, onChanged }: { refreshKey: 
     : availability.candidateSelections.length > 0
       ? `官网普通发布仍关闭；仅 Main 指定的 ${availability.candidateSelections.length} 组账号与文章候选可进入准备流程。`
       : "当前仅提供连接管理；官网普通发布仍关闭，也没有临时候选。";
-  return <section className="panel" aria-label="康一官网 OfficialAPI 连接">
+  return <section className="panel official-api-connections" aria-label="康一官网 OfficialAPI 连接">
     <h3>康一官网 · OfficialAPI</h3>
     <p>测试环境与正式环境分别配置。选择本机受控凭据文件，由软件安全保存密钥。</p>
     <div className={availability.ordinaryEnabled ? "notice success" : availability.candidateSelections.length ? "notice warning" : "notice"}>{availabilityText}</div>

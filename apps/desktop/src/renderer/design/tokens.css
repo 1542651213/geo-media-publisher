@@ -49,6 +49,9 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
+  --density-comfortable: 24px;
+  --density-normal: 16px;
+  --density-compact: 10px;
   --radius-small: 6px;
   --radius-control: 8px;
   --radius-card: 12px;

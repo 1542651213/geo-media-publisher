@@ -1,4 +1,4 @@
-/* global window */
+/* global getComputedStyle */
 import { cpSync,mkdirSync,writeFileSync } from 'node:fs';
 import {resolve,join} from 'node:path';
 import {earlyInstalled} from './r115-h-early-installed.mjs';
