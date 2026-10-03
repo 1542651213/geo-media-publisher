@@ -7,7 +7,7 @@
 - 最终 241 文件 / 1704 测试、typecheck、lint、build、package、独立安装员工 18 阶段均 PASS；11 页面 × 9 窗口/缩放共 99 检查，以及员工流程状态 99 检查 PASS。真实 Windows DPI / 硬件 IME：NOT_RUN。
 - [手机 BEFORE/AFTER 预览](docs/product/R1.15-H1-PHONE-PREVIEW.md) · [UI Review](docs/product/R1.15-H1-UI-REVIEW.md) · [Candidate installer / HTML ZIP](https://github.com/1542651213/geo-media-publisher/releases/tag/r1.15-h1-ui-purple-polish-candidate-20261003) · [脱敏证据](docs/evidence/r115-h1-ui-verification.json)。
 - Main/shared/domain/db/adapter/policy 360 文件未变，478 IPC 调用及参数相同；965 原 CSS selector 顺序保留。Production 2599 文件 SHA256 无变化。真实发布、final submit、远端写、云 AI、production 写入均 0；ALL BATCH = OFF。
-- SECRET_SCAN：PENDING_FINAL_SOURCE_COMMIT_SCAN；安装包完整解包已 PASS，0 secret / 0 敏感路径。安装包 **NotSigned**，未配置正式签名，保留默认 Electron 图标。
+- SECRET_SCAN：PASS_SOURCE_DOCS_SCREENSHOTS_PREVIEW_PACKAGE；安装包完整解包已 PASS，0 secret / 0 敏感路径。安装包 **NotSigned**，未配置正式签名，保留默认 Electron 图标。
 - H 已有的 28 账号归属、2 个缺失历史素材、5 条 retired credential、production upgrade 与 Jobs 冷路径 P95 限制不变。下面完整保留 H handoff。
 - **NEXT ACTION：Owner 在手机审阅 11 组对比及 Candidate；视觉批准后再单独决定是否合并 main。**
 

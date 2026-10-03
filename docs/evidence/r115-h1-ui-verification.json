@@ -1,6 +1,6 @@
 {
   "task": "R1.15-H.1_UI_UX_PURPLE_PRODUCT_POLISH",
-  "status": "LOCAL_CANDIDATE_ACCEPTANCE_PASS_PUBLIC_SYNC_PENDING",
+  "status": "R1_15_H1_PURPLE_UI_POLISH_CANDIDATE_READY_FOR_OWNER_REVIEW",
   "baseline": "c2017994ef3df592fd17ffa009a56fbcca99796c",
   "branch": "release/2026-10-03-r1.15-h1-ui-purple-product-polish",
   "candidateTag": "r1.15-h1-ui-purple-polish-candidate-20261003",
@@ -191,7 +191,20 @@
     "rawSecretMatchesPrinted": false,
     "scope": "Entire extracted installed app.asar and packaged resources; installer bytes separately verified identical to the installed package"
   },
-  "publicSourceScan": "PENDING_FINAL_COMMIT_SCAN",
+  "publicSourceScan": {
+    "status": "PASS",
+    "head": "b282c6d833cc726527007788f8796c841aa878c5",
+    "remoteBase": "c2017994ef3df592fd17ffa009a56fbcca99796c",
+    "outgoingCommits": 6,
+    "trackedFiles": 876,
+    "forbiddenPathCount": 0,
+    "strictHistoryFindings": 0,
+    "reviewedPublicTestVectorFindings": 0,
+    "unreviewedHistoryFindings": 0,
+    "currentTreeFindings": 0,
+    "rawSecretMatchesPrinted": false,
+    "privateArtifactsIncluded": false
+  },
   "privateEvidencePublished": false,
   "imageManifest": [
     {
@@ -333,5 +346,13 @@
     "real platform and cloud acceptance not run",
     "Owner visual approval pending",
     "legacy diagnostic JSX and residual CSS debt remain"
-  ]
+  ],
+  "phonePreviewScan": {
+    "Status": "PASS",
+    "SecretFindings": 0,
+    "Scanned": "Offline preview HTML, paired PNG files and preview-check evidence",
+    "ScreenshotVisualPrivacyReview": "PASS_SYNTHETIC_ONLY",
+    "ZipEntries": 23,
+    "ZipSha256": "2232d0d5e683e62fcc18067c6c22d8b41cd4551a6c8083be1411019958c7614f"
+  }
 }
