@@ -50,7 +50,7 @@ export function App(): JSX.Element {
     {route === "ai-center" && <ProductAICenter initialTab="providers" refresh={refresh} />}
     {route === "articles" && <V11ArticleLibrary refresh={refresh} refreshKey={refreshKey} onNavigate={navigate} />}
     {route === "images" && <V11ImageLibrary refresh={refresh} refreshKey={refreshKey} />}
-    {route === "accounts" && <><ProductAccountHealth refreshKey={refreshKey} /><V11AccountsCenter refresh={refresh} refreshKey={refreshKey} onNavigate={navigate} /></>}
+    {route === "accounts" && <><ProductAccountHealth refreshKey={refreshKey} /><div id="account-management"><V11AccountsCenter refresh={refresh} refreshKey={refreshKey} onNavigate={navigate} /></div></>}
     {route === "publishing" && <V11PublishCenter refresh={refresh} refreshKey={refreshKey} onNavigate={navigate} />}
     {route === "statistics" && <V11Statistics refreshKey={refreshKey} />}
     {route === "preferences" && <><AboutRelease/><V11Preferences /></>}
@@ -69,7 +69,7 @@ export function App(): JSX.Element {
     {route === "plans" && <PlansPageV031 refresh={refresh} />}
     {route === "queue" && <QueuePageV031 refresh={refresh} />}
     {route === "logs" && <LogsPage />}
-    {route === "backups" && <><ColleagueDataPackage companyId={companyId} onImported={refresh}/><BackupsPage /></>}
+    {route === "backups" && <><BackupsPage /><ColleagueDataPackage companyId={companyId} onImported={refresh}/></>}
     {route === "settings" && <DeepSeekSettingsPage />}
     {route === "placeholder" && <EmptyState title="模块准备中" description="该扩展入口已纳入工作台导航，后续版本会复用现有数据与任务基础继续完善。" />}
   </div></Layout></DeveloperModeContext.Provider>;

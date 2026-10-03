@@ -13,7 +13,7 @@
 
 .connection-platform-card:hover,.connection-platform-card:focus {
   border-color: var(--color-primary-border);
-  box-shadow: var(--focus-ring);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--text-primary) 7%, transparent);
   outline: none;
 }
 
@@ -38,8 +38,8 @@
   grid-template-columns: 1fr 1fr;
   gap: 8px;
   padding: 11px 0;
-  border-top: 1px solid var(--color-primary-soft);
-  border-bottom: 1px solid var(--color-primary-soft);
+  border-top: 1px solid var(--border-default);
+  border-bottom: 1px solid var(--border-default);
 }
 
 .platform-status-lines span,.platform-status-lines b {
@@ -52,7 +52,7 @@
 }
 
 .platform-status-lines b {
-  color: var(--color-primary-hover);
+  color: var(--text-primary);
   margin-top: 3px;
   font-weight: 600;
 }
@@ -96,8 +96,8 @@
   gap: 12px;
   margin-top: 19px;
   padding: 14px 0;
-  border-top: 1px solid var(--color-primary-soft);
-  border-bottom: 1px solid var(--color-primary-soft);
+  border-top: 1px solid var(--border-default);
+  border-bottom: 1px solid var(--border-default);
 }
 
 .platform-detail-facts span,.platform-detail-facts b {
@@ -110,7 +110,7 @@
 }
 
 .platform-detail-facts b {
-  color: var(--color-primary-hover);
+  color: var(--text-primary);
   margin-top: 5px;
 }
 
@@ -125,7 +125,7 @@
 }
 
 .platform-account-summary strong {
-  color: var(--color-primary-hover);
+  color: var(--text-primary);
 }
 
 .platform-account-picker {
@@ -145,7 +145,7 @@
   grid-template-columns: 1fr auto;
   gap: 4px 10px;
   text-align: left;
-  border: 1px solid var(--color-primary-soft);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-card);
   padding: 10px 12px;
   background: var(--surface-card);
@@ -159,7 +159,7 @@
 }
 
 .platform-account-picker-item strong {
-  color: var(--color-primary-hover);
+  color: var(--text-primary);
   font-size: var(--font-compact);
 }
 
@@ -196,7 +196,7 @@
   position: fixed;
   inset: 0;
   z-index: 30;
-  background: color-mix(in srgb, var(--color-primary) 40%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 40%, transparent);
   display: grid;
   place-items: center;
   padding: 30px;
@@ -209,12 +209,12 @@
   background: var(--surface-card);
   border-radius: var(--radius-card);
   padding: 25px;
-  box-shadow: var(--shadow-card);
+  box-shadow: 0 12px 40px color-mix(in srgb, var(--text-primary) 27%, transparent);
 }
 
 .connection-dialog h3 {
   margin: 0;
-  color: var(--color-primary-hover);
+  color: var(--text-primary);
   font-size: 18px;
 }
 
@@ -227,7 +227,7 @@
 .connection-step {
   padding: 10px 12px;
   border-radius: var(--radius-small);
-  background: var(--color-primary-soft);
+  background: var(--surface-subtle);
   color: var(--text-secondary);
   font-size: var(--font-compact);
 }

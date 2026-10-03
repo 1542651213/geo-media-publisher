@@ -29,7 +29,7 @@
   gap: 7px;
   min-width: 0;
   font-size: 13px;
-  color: var(--color-primary-hover);
+  color: var(--text-primary);
 }
 
 .product-ai-center input:not([type=checkbox]), .product-ai-center select, .product-ai-center textarea {
@@ -37,10 +37,10 @@
   width: 100%;
   min-height: 40px;
   padding: 10px 12px;
-  border: 1px solid var(--color-primary-soft);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-card);
   background: var(--surface-card);
-  color: var(--color-primary-hover);
+  color: var(--text-primary);
   font: inherit;
 }
 
@@ -56,7 +56,7 @@
 }
 
 .product-ai-center input:disabled, .product-ai-center textarea:disabled {
-  background: var(--color-primary-soft);
+  background: var(--surface-subtle);
   color: var(--text-primary);
 }
 
@@ -105,7 +105,7 @@
   align-items: center;
   gap: 14px;
   padding: 15px 0;
-  border-bottom: 1px solid var(--color-primary-soft);
+  border-bottom: 1px solid var(--border-default);
   font-size: var(--font-compact);
   line-height: 1.6;
 }
@@ -129,7 +129,7 @@
   gap: 12px;
   align-items: center;
   padding: 14px 0;
-  border-bottom: 1px solid var(--color-primary-soft);
+  border-bottom: 1px solid var(--border-default);
   font-size: var(--font-compact);
   line-height: 1.6;
 }

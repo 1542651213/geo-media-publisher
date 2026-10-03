@@ -1,7 +1,7 @@
 .operations-center {
   display: grid;
   gap: 18px;
-  color: var(--color-primary-hover);
+  color: var(--text-primary);
 }
 
 .operations-title {
@@ -21,7 +21,7 @@
 
 .operations-title h2 {
   margin: 0 0 6px;
-  color: var(--color-primary-hover);
+  color: var(--text-primary);
   font-size: 25px;
 }
 
@@ -38,7 +38,7 @@
   flex-wrap: wrap;
   gap: 7px;
   padding: 8px;
-  border: 1px solid var(--color-primary-soft);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-card);
   background: var(--surface-card);
 }
@@ -82,7 +82,7 @@
 .operations-metrics button {
   min-width: 0;
   padding: 16px;
-  border: 1px solid var(--color-primary-soft);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-card);
   background: var(--surface-card);
   text-align: left;
@@ -90,7 +90,7 @@
 
 .operations-metrics button:hover {
   border-color: var(--color-primary-border);
-  box-shadow: var(--shadow-card);
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--color-primary) 7%, transparent);
 }
 
 .operations-metrics span,
@@ -104,7 +104,7 @@
 .operations-metrics strong {
   display: block;
   margin: 9px 0;
-  color: var(--color-primary-hover);
+  color: var(--text-primary);
   font-size: 27px;
 }
 
@@ -129,7 +129,7 @@
   gap: 16px;
   min-width: 0;
   padding: 14px 3px;
-  border-top: 1px solid var(--color-primary-soft);
+  border-top: 1px solid var(--border-default);
 }
 
 .operations-card-list article {
@@ -156,7 +156,7 @@
 .operations-list strong,
 .operations-card-list strong,
 .operations-owner-list strong {
-  color: var(--color-primary-hover);
+  color: var(--text-primary);
   font-size: var(--font-compact);
 }
 
@@ -213,11 +213,11 @@
   width: 100%;
   margin-top: 6px;
   padding: 9px 10px;
-  border: 1px solid var(--color-primary-border);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-small);
   outline: none;
   background: var(--surface-card);
-  color: var(--color-primary-hover);
+  color: var(--text-primary);
   font-size: var(--font-compact);
 }
 
@@ -233,7 +233,7 @@
 .operations-toolbar select:focus,
 .operations-mapping select:focus {
   border-color: var(--color-primary-border);
-  box-shadow: var(--focus-ring);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 10%, transparent);
 }
 
 .operations-form-grid label > small {
@@ -266,7 +266,7 @@
   align-items: center;
   gap: 7px;
   padding: 7px 9px;
-  border: 1px solid var(--color-primary-soft);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-small);
   background: var(--surface-card);
   color: var(--text-secondary);
@@ -306,7 +306,7 @@
 
 .operations-table-head {
   padding: 0 10px 9px;
-  border-bottom: 1px solid var(--color-primary-soft);
+  border-bottom: 1px solid var(--border-default);
   color: var(--text-secondary);
   font-size: var(--font-compact);
 }
@@ -314,7 +314,7 @@
 .operations-table-row {
   min-height: 64px;
   padding: 9px 10px;
-  border-bottom: 1px solid var(--color-primary-soft);
+  border-bottom: 1px solid var(--border-default);
   color: var(--text-secondary);
   font-size: var(--font-compact);
 }
@@ -330,7 +330,7 @@
 }
 
 .operations-table-row strong {
-  color: var(--color-primary-hover);
+  color: var(--text-primary);
   font-size: var(--font-compact);
 }
 
@@ -362,7 +362,7 @@
   height: 7px;
   overflow: hidden;
   border-radius: var(--radius-small);
-  background: var(--color-primary-soft);
+  background: var(--surface-subtle);
 }
 
 .operations-progress span {
@@ -421,7 +421,7 @@
   gap: 9px;
   min-width: 0;
   padding: 14px;
-  border: 1px solid var(--color-primary-soft);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-card);
   background: var(--surface-card);
 }
@@ -437,7 +437,7 @@
 }
 
 .operations-calendar strong {
-  color: var(--color-primary-hover);
+  color: var(--text-primary);
   font-size: var(--font-compact);
 }
 
@@ -489,7 +489,7 @@
 }
 
 .operations-import-summary strong {
-  color: var(--color-primary-hover);
+  color: var(--text-primary);
 }
 
 .operations-mapping {
