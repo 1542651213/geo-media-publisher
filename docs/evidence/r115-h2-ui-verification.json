@@ -227,7 +227,15 @@
       "rawSecretMatchesPrinted": false,
       "scope": "Entire extracted installed app.asar and packaged resources; installer bytes separately verified identical to the installed package"
     },
-    "publicSource": "PENDING_FINAL_SOURCE_SCAN",
+    "publicSource": {
+      "status": "PASS",
+      "verifiedSnapshot": "5860bc3adf3a997bb70e9e7897e91ee7c02fe919",
+      "strictHistoryFindings": 0,
+      "currentTreeFindings": 0,
+      "forbiddenPaths": 0,
+      "finalRef": "r1.15-h2-ui-refinement-candidate-20261003^{commit}",
+      "finalFreshScanRequiredBeforePush": true
+    },
     "screenshots": "PASS_VISUAL_SYNTHETIC_ONLY_AND_NO_PNG_TEXT_METADATA",
     "offlinePreview": {
       "status": "PASS",

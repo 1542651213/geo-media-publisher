@@ -10,7 +10,7 @@
 - 原 production **2599 文件 / 哈希差异 0**；Main 等 360 文件冻结、478 IPC 调用及参数一致。真实发布、final submit、远端写、云 AI、production 写入全部 **0**；ALL_BATCH = OFF。
 - 保留限制：**28 真实账号待 Owner 归属；2 个缺失历史图片未处理；5 条 retired credential 未改写；原 production 未升级；Jobs 冷尾延迟未解决。**真实平台/云、Windows DPI、硬件 IME 未执行；安装包 **NotSigned / 默认 Electron 图标**。
 - 当前普通发布能力仍为 **抖音、康一官网 OfficialAPI、今日头条 ON**，账号与内容仍需原预检，其余平台和 batch 门禁保持。
-- SECRET_SCAN = **PENDING_FINAL_SOURCE_SCAN**；安装版完整解包 3809 项，0 secret / 0 敏感路径。GitHub 图片渲染 = **PENDING_ACTUAL_GITHUB_RENDER**，实际浏览器确认后才改为 PASS。
+- SECRET_SCAN = **PASS_SOURCE_DOCS_SCREENSHOTS_PREVIEW_PACKAGE**；安装版完整解包 3809 项，0 secret / 0 敏感路径。GitHub 图片渲染 = **PENDING_ACTUAL_GITHUB_RENDER**，实际浏览器确认后才改为 PASS。
 
 [Candidate 安装包与离线 HTML 预览](https://github.com/1542651213/geo-media-publisher/releases/tag/r1.15-h2-ui-refinement-candidate-20261003) · [完整 11 组 BEFORE / AFTER 图集](docs/product/R1.15-H2-PHONE-PREVIEW.md) · [双轮 UI Review](docs/product/R1.15-H2-UI-REVIEW.md) · [脱敏验证证据](docs/evidence/r115-h2-ui-verification.json)。
 
