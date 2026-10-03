@@ -1,10 +1,10 @@
 # GEO Media Publisher · R1.15-I 部门试用 Candidate
 
-**当前 durable state = LOCAL_PILOT_VERIFIED_GITHUB_DELIVERY_PENDING。MAIN_MERGED = NO；Owner 首次真实使用及 H.2 视觉批准仍需现场完成。**
+**当前 durable state = R1_15_I_DEPARTMENT_PILOT_PREPARED_OWNER_FIRST_RUN_REQUIRED。MAIN_MERGED = NO；Owner 首次真实使用及 H.2 视觉批准仍需现场完成。**
 
 本轮为独立新库部门试用。原生产升级仍为 **PENDING_OWNER_AND_BACKUP_REVALIDATION**，完整私有素材恢复仍 **BLOCKED_MISSING_FILES**；新库通过不会解除原库阻塞。
 
-- 分支 `release/2026-10-03-r1.15-i-department-pilot-handoff`；Candidate 交付标识 `r1.15-i-department-pilot-candidate-20261003`。最终交付 HEAD 使用该 `tag^{commit}` 唯一解析；公开同步正在收口。
+- 分支 `release/2026-10-03-r1.15-i-department-pilot-handoff`；Candidate 交付标识 `r1.15-i-department-pilot-candidate-20261003`。最终交付 HEAD 使用该 `tag^{commit}` 唯一解析；远端分支/Tag/prerelease 资产的实测摘要见 Release 附带的 R1.15-I-FINAL-REPORT.md。
 - 包内源码 **25b96da877389b7cfb34649e0cc9f7e9966df046**；应用 **1.1.9 / R1.15-I**。H.2 起点 **5280de63ba7b5f2bd2fbfe078e50ce6f360cc462**，保留 C/D/E/F/G/H/H.1/H.2。main/origin/main 保持 H Candidate **c2017994ef3df592fd17ffa009a56fbcca99796c**。
 - 最小修复：空库通过普通 UI 创建第一家企业，创建 ACK 后选择对应工作区，读取失败只恢复同一企业，防止重复创建和旧企业误编辑；显示准确 I 身份。保留紫色界面，Main/IPC/DB/Adapter/发布安全逻辑 **360 文件未变**。
 - 最终全量 **243 文件 / 1708 测试 PASS**；focused **9 文件 / 61 测试 PASS**；typecheck、lint、build、NSIS package 与安装后资源字节核验 PASS。
@@ -14,7 +14,7 @@
 - 当前普通发布仍为 **抖音、今日头条、康一正式官网 OfficialAPI ON**，原门禁保持；其它平台受限，**ALL_BATCH = OFF**。真实平台网络、登录/绑定/发布和云生成未执行，全部真实写入与 GEO 外部 AI 请求 **0**。
 - 原 production **2599 文件 / 字节与 SHA256 差异 0**。首批私有候选：抖音 1、头条 1、官网 2；真实 28 个账号仍待 Owner。五条 retired credential 未尝试解密或改写。
 - 两份缺图对应三条素材记录。额外关联为 Job 选择字段 5 项、PublishRecord 选择字段 4 项、回执字段 4 项，**不是 13 条不同记录**。退休提案 **BLOCKED_REFERENCED_PUBLISH_HISTORY**，恢复/退休/替换均 0。9 篇原稿和 3 份存在的图片候选仅留仓库外私有位置，待 Owner 选择与审核。
-- 包解包扫描 **3809 项 / 0 secret / 0 敏感路径**；部门 ZIP、表格单元格和图解扫描 PASS。最终源码/待推送历史扫描和 GitHub 图片渲染正在收口。两个独立审查 Important 已先 RED 再 GREEN；错误导入截图详细行在下方，作为 Minor 延期并提示滚动。
+- 包解包扫描 **3809 项 / 0 secret / 0 敏感路径**；部门 ZIP、表格单元格和图解扫描 PASS。公开源码与待推送历史已扫描通过，最终 HEAD 对应扫描回执见 Release 报告。GitHub ready 六图实际解码/渲染通过，[浏览器回执](docs/evidence/r115-i-github-ready-render.json)。两个独立审查 Important 已先 RED 再 GREEN；错误导入截图详细行在下方，作为 Minor 延期并提示滚动。
 
 [唯一部门 ZIP 与 Candidate 安装包](https://github.com/1542651213/geo-media-publisher/releases/tag/r1.15-i-department-pilot-candidate-20261003) · [开始使用](docs/product/department-pilot-quickstart.md) · [首日现场检查单](docs/product/day-one-acceptance.md) · [完整 13 图员工图解](docs/product/r115-i-pilot-preview/index.md) · [离线手机可读 HTML](docs/product/r115-i-pilot-preview/index.html) · [手机预览](docs/product/r115-i-pilot-preview/phone-preview.png)。
 
@@ -22,7 +22,7 @@
 
 ## 本版本实际安装版精选截图
 
-本轮新 NSIS 安装版，合成资料，**1464×895 / 100% 应用缩放**。完整图集附来源和说明；SIMULATED 任务展示单独标注。GitHub 渲染待推送后实际核验。
+本轮新 NSIS 安装版，合成资料，**1464×895 / 100% 应用缩放**。完整图集附来源和说明；SIMULATED 任务展示单独标注。六图均已在实际 GitHub Markdown 页面完成加载，原始尺寸与本地相同。
 
 ### 空库首页与第一家企业入口
 

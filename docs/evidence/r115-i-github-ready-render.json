@@ -1,0 +1,52 @@
+{
+  "status": "PASS_ACTUAL_GITHUB_MARKDOWN_6_IMAGES",
+  "evidenceKind": "REAL_GITHUB_BROWSER_DOM_IMAGE_DECODE_AND_RENDER",
+  "verifiedDeliveryCommit": "e28d3a0e9bb4b6732b1b9c93178c472c69096da7",
+  "packageSourceCommit": "25b96da877389b7cfb34649e0cc9f7e9966df046",
+  "url": "https://github.com/1542651213/geo-media-publisher/blob/release/2026-10-03-r1.15-i-department-pilot-handoff/ready.md",
+  "images": [
+    {
+      "file": "docs/product/r115-i-pilot-preview/00-fresh-start.png",
+      "complete": true,
+      "naturalWidth": 1464,
+      "naturalHeight": 895,
+      "renderedWidth": 846
+    },
+    {
+      "file": "docs/product/r115-i-pilot-preview/01-import-preview.png",
+      "complete": true,
+      "naturalWidth": 1464,
+      "naturalHeight": 895,
+      "renderedWidth": 846
+    },
+    {
+      "file": "docs/product/r115-i-pilot-preview/03-draft-saved.png",
+      "complete": true,
+      "naturalWidth": 1464,
+      "naturalHeight": 895,
+      "renderedWidth": 846
+    },
+    {
+      "file": "docs/product/r115-i-pilot-preview/05-publish-blocked.png",
+      "complete": true,
+      "naturalWidth": 1464,
+      "naturalHeight": 895,
+      "renderedWidth": 846
+    },
+    {
+      "file": "docs/product/r115-i-pilot-preview/07-accounts-empty.png",
+      "complete": true,
+      "naturalWidth": 1464,
+      "naturalHeight": 895,
+      "renderedWidth": 846
+    },
+    {
+      "file": "docs/product/r115-i-pilot-preview/10-version.png",
+      "complete": true,
+      "naturalWidth": 1464,
+      "naturalHeight": 895,
+      "renderedWidth": 846
+    }
+  ],
+  "mainMerged": false
+}
