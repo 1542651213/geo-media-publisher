@@ -1,4 +1,4 @@
-/* global document */
+/* global document, window */
 import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
@@ -24,7 +24,7 @@ try {
  });
  const page = context.pages()[0]; await page.goto(pathToFileURL(input).href); await page.locator('article').last().waitFor();
  const actual = await page.evaluate(() => ({ images: [...document.images].map(img => ({ complete: img.complete, width: img.naturalWidth, height: img.naturalHeight })),
-  bodyWidth: document.body.scrollWidth, viewport: innerWidth, text: document.body.innerText }));
+  bodyWidth: document.body.scrollWidth, viewport: window.innerWidth, text: document.body.innerText }));
  assert.equal(actual.images.length, 13); assert.ok(actual.images.every(img => img.complete && img.width > 0 && img.height > 0));
  assert.equal(actual.bodyWidth, actual.viewport); assert.match(actual.text, /不是|桌面原图/u);
  assert.equal(blocked, 0, 'Offline guide must not request network resources');

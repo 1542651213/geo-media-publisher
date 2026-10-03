@@ -17,7 +17,7 @@ execFileSync(powershell, ['-NoProfile', '-Command', 'Add-Type -AssemblyName Syst
 const root = join(extracted, 'GEO-R115I-DEPARTMENT-PILOT'), sha = data => createHash('sha256').update(data).digest('hex');
 const checksums = readFileSync(join(root, 'SHA256SUMS.txt'), 'utf8').trim().split(/\r?\n/u);
 for (const line of checksums) {
- const match = /^([a-f0-9]{64})  (.+)$/u.exec(line); assert.ok(match);
+ const match = /^([a-f0-9]{64}) {2}(.+)$/u.exec(line); assert.ok(match);
  const file = resolve(root, match[2]); assert.ok(file.startsWith(root + '\\')); assert.equal(sha(readFileSync(file)), match[1], 'BUNDLE_CHECKSUM_MISMATCH');
 }
 const files = folder => readdirSync(folder, { withFileTypes: true }).flatMap(entry => { assert.equal(entry.isSymbolicLink(), false); return entry.isDirectory() ? files(join(folder, entry.name)) : [join(folder, entry.name)]; });
