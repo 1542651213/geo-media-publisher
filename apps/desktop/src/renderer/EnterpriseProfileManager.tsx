@@ -28,6 +28,10 @@ export function EnterpriseProfileManager({ initialView, refresh, onNavigate }: {
   const [knowledge, setKnowledge] = useState<BrandKnowledgeEntry[]>([]);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newCompanyName, setNewCompanyName] = useState("");
+  const [newName, setNewName] = useState("");
   const current = brands.find((brand) => brand.id === brandId) ?? null;
 
   const applyBrand = (brand: Brand, entries?: BrandKnowledgeEntry[]): void => {
@@ -59,7 +63,7 @@ export function EnterpriseProfileManager({ initialView, refresh, onNavigate }: {
 
   // The editor intentionally performs its first database load only when this route mounts.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { void reload(); }, []);
+  useEffect(() => { void reload().then(() => setLoaded(true)).catch(() => setMessage("企业资料暂时读取失败，请重试。")); }, []);
   useEffect(() => { setView(initialView); }, [initialView]);
 
   const switchBrand = async (nextId: string): Promise<void> => {
@@ -95,10 +99,23 @@ export function EnterpriseProfileManager({ initialView, refresh, onNavigate }: {
     finally { setBusy(false); }
   };
 
-  if (!current) return <section className="panel enterprise-empty"><h2>还没有企业资料</h2><p>请先在高级功能中创建企业，再回到内容生产。</p></section>;
+  const createCompany = async (): Promise<void> => {
+    if (!loaded || busy || !newCompanyName.trim() || !newName.trim()) return;
+    setBusy(true); setMessage("");
+    try {
+      const created = await window.publisherAPI.brands.create({ companyName: newCompanyName.trim(), name: newName.trim(), aiForbiddenClaims: [...CORE_AI_FABRICATION_RULES] });
+      await reload(created.id);
+      setCreating(false); setNewCompanyName(""); setNewName("");
+      setMessage("企业已创建，请核对并完善资料。");
+      refresh();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "企业创建失败，请检查后重试。"); }
+    finally { setBusy(false); }
+  };
+
+  if (!current || creating) return <section className="panel form-panel enterprise-empty"><h2>新建企业工作区</h2><p>填写经核对的企业名称和简称。创建后可以导入草稿并完善资料。</p>{message && <div role="status" className="notice">{message}</div>}{!loaded && <><p>正在读取本机企业资料…</p><button className="secondary-button" onClick={() => void reload().then(() => { setLoaded(true); setMessage(""); }).catch(() => setMessage("企业资料暂时读取失败，请重试。"))}>重新读取资料</button></>}<form onSubmit={event => { event.preventDefault(); void createCompany(); }}><label>企业名称<input aria-label="新企业名称" value={newCompanyName} disabled={!loaded || busy} onChange={event => setNewCompanyName(event.target.value)} /></label><label>企业简称<input aria-label="新企业简称" value={newName} disabled={!loaded || busy} onChange={event => setNewName(event.target.value)} /></label><div className="row-actions"><button className="primary-button" disabled={!loaded || busy || !newCompanyName.trim() || !newName.trim()} type="submit">创建企业</button>{current && <button className="secondary-button" disabled={busy} type="button" onClick={() => setCreating(false)}>取消</button>}</div></form></section>;
 
   return <>
-    <div className="page-title enterprise-page-title"><div><div className="eyebrow">内容生产 / 企业资料</div><h2>{view === "profile" ? "企业资料" : "企业知识库"}</h2><p>{view === "profile" ? "维护稳定的企业基础信息，下一次内容生成会立即使用最新资料。" : "按业务语言管理可扩展事实材料，不显示技术字段。"}</p></div><button className="secondary-button" onClick={() => onNavigate("production")}>返回内容生产</button></div>
+    <div className="page-title enterprise-page-title"><div><div className="eyebrow">内容生产 / 企业资料</div><h2>{view === "profile" ? "企业资料" : "企业知识库"}</h2><p>{view === "profile" ? "维护稳定的企业基础信息，下一次内容生成会立即使用最新资料。" : "按业务语言管理可扩展事实材料，不显示技术字段。"}</p></div><div className="row-actions"><button className="secondary-button" onClick={() => { setCreating(true); setMessage(""); }}>新建企业</button><button className="secondary-button" onClick={() => onNavigate("production")}>返回内容生产</button></div></div>
     <section className="panel enterprise-context-bar">
       <div><span>当前企业</span><strong>{current.companyName}</strong><small>最近更新：{formatDate(latestUpdate(current, knowledge))}</small></div>
       {brands.length > 1 && <label>切换企业<select value={brandId} onChange={(event) => void switchBrand(event.target.value)}>{brands.map((brand) => <option value={brand.id} key={brand.id}>{brand.companyName || brand.name}</option>)}</select></label>}
