@@ -37,12 +37,12 @@ describe('H1 core text contrast', () => {
     const channels = hex.slice(1).match(/../gu)!.map(value => parseInt(value, 16) / 255).map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
     return channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722;
   };
-  it('keeps normal primary, secondary and semantic text at WCAG AA on a white surface', () => {
+  it('keeps normal primary, secondary, metadata and semantic text at WCAG AA on workspace surfaces', () => {
     const css = readFileSync(new URL('../apps/desktop/src/renderer/design/tokens.css', import.meta.url), 'utf8');
-    for (const name of ['text-primary', 'text-secondary', 'color-primary', 'success-text', 'warning-text', 'danger-text']) {
+    for (const name of ['text-primary', 'text-secondary', 'text-muted', 'color-primary', 'success-text', 'warning-text', 'danger-text']) {
       const color = new RegExp(`--${name}:\\s*(#[a-fA-F0-9]{6})`).exec(css)?.[1];
       expect(color, name).toBeTruthy();
-      expect((1.05 / (luminance(color!) + .05)), name).toBeGreaterThanOrEqual(4.5);
+      for (const surface of ['#FFFFFF', '#F6F7FB', '#F0EDFF']) expect(((luminance(surface) + .05) / (luminance(color!) + .05)), name + ' on ' + surface).toBeGreaterThanOrEqual(4.5);
     }
   });
 });

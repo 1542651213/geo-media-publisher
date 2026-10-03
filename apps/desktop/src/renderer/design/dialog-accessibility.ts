@@ -3,28 +3,33 @@ import { useEffect } from 'react';
 /** Focus stays in the visible dialog. Escape invokes its existing close control. */
 export function useDialogAccessibility(): void {
   useEffect(() => {
-    let active: HTMLElement | null = null, previous: HTMLElement | null = null, sequence = 0;
+    let active: HTMLElement | null = null, sequence = 0;
+    const returnFocus = new WeakMap<HTMLElement, HTMLElement | null>();
+    const closeSelector = '[data-dialog-close], .drawer-head .icon-button, .modal-head .icon-button';
     const controls = (): HTMLElement[] => active ? Array.from(active.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex="0"]')).filter(item => item.getClientRects().length > 0 && item.getAttribute('aria-hidden') !== 'true') : [];
     const update = (): void => {
       const visible = Array.from(document.querySelectorAll<HTMLElement>('.drawer, .modal, .v11-modal')).filter(item => item.getClientRects().length > 0);
       const next = visible.at(-1) ?? null;
-      if (next === active) return;
-      if (active && !next && previous?.isConnected) previous.focus({ preventScroll: true });
+      const leaving = active;
+      const changed = next !== active;
+      const restore = changed && leaving ? returnFocus.get(leaving) : null;
+      if (changed && next && !returnFocus.has(next)) returnFocus.set(next, document.activeElement instanceof HTMLElement ? document.activeElement : null);
+      active = next;
       if (next) {
-        if (!active) previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         next.setAttribute('role', 'dialog'); next.setAttribute('aria-modal', 'true');
+        next.tabIndex = -1;
         const heading = next.querySelector<HTMLElement>('h2, h3');
         if (heading) { heading.id ||= `workspace-dialog-title-${++sequence}`; next.setAttribute('aria-labelledby', heading.id); }
-        active = next;
-        const close = next.querySelector<HTMLElement>('.drawer-head .icon-button, .modal-head .icon-button');
+        const close = next.querySelector<HTMLButtonElement>(closeSelector);
         if (close && !close.getAttribute('aria-label')) close.setAttribute('aria-label', '关闭对话框');
-        (close ?? controls()[0] ?? next).focus({ preventScroll: true });
-      } else { active = null; previous = null; }
+        if (changed && restore?.isConnected && next.contains(restore)) restore.focus({ preventScroll: true });
+        else if (changed || !next.contains(document.activeElement)) (close && !close.disabled ? close : controls()[0] ?? next).focus({ preventScroll: true });
+      } else if (restore?.isConnected) restore.focus({ preventScroll: true });
     };
     const keydown = (event: KeyboardEvent): void => {
       if (!active || event.isComposing || event.defaultPrevented) return;
       if (event.key === 'Escape') {
-        const close = active.querySelector<HTMLButtonElement>('.drawer-head .icon-button, .modal-head .icon-button');
+        const close = active.querySelector<HTMLButtonElement>(closeSelector);
         if (close && !close.disabled) { event.preventDefault(); close.click(); }
       }
       if (event.key !== 'Tab') return;
