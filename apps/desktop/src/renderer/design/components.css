@@ -243,6 +243,9 @@ details > p { overflow-wrap: anywhere; }
 .ai-tabs .ai-page-utilities { margin: 0 0 0 auto; }
 .ai-tabs .ai-page-utilities button { border: 1px solid var(--border-default); font-weight: 500; color: var(--text-secondary); }
 .v11-article-row .row-actions { padding-block: calc(var(--density-compact) / 2); }
+@media (max-width: 1250px) {
+  .v11-article-head, .v11-article-row { grid-template-columns: 1.8fr .85fr .8fr 1fr 1.75fr; }
+}
 @media (max-width: 1200px) {
   .sidebar { width: 200px; flex-basis: 200px; }
   .content-area { padding: 24px; }
