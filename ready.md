@@ -1,3 +1,18 @@
+# Geo Media Publisher · R1.15-H.1 UI Candidate only
+
+当前 UI durable state：**R1_15_H1_PURPLE_UI_POLISH_CANDIDATE_READY_FOR_OWNER_REVIEW**（本地验收通过，最终安全同步回执随 Candidate 交付）。**Owner visual approval required；当前 production/main 功能基线仍为 H Candidate，MAIN_MERGED = NO。**
+
+- 分支 `release/2026-10-03-r1.15-h1-ui-purple-product-polish`；Candidate Tag `r1.15-h1-ui-purple-polish-candidate-20261003`，HEAD 由 `tag^{commit}` 唯一解析。包内源码 `34004b070d3f53986d71e2255015625be76da8d1`。
+- 紫色 Design Tokens、深紫灰侧栏、中性阅读区、字号/按钮/状态/表单/弹层、首页层级、账号/归属、发布/Owner、AI/Jobs、备份/About 已统一；保留全部发布安全语义。
+- 最终 241 文件 / 1704 测试、typecheck、lint、build、package、独立安装员工 18 阶段均 PASS；11 页面 × 9 窗口/缩放共 99 检查，以及员工流程状态 99 检查 PASS。真实 Windows DPI / 硬件 IME：NOT_RUN。
+- [手机 BEFORE/AFTER 预览](docs/product/R1.15-H1-PHONE-PREVIEW.md) · [UI Review](docs/product/R1.15-H1-UI-REVIEW.md) · [Candidate installer / HTML ZIP](https://github.com/1542651213/geo-media-publisher/releases/tag/r1.15-h1-ui-purple-polish-candidate-20261003) · [脱敏证据](docs/evidence/r115-h1-ui-verification.json)。
+- Main/shared/domain/db/adapter/policy 360 文件未变，478 IPC 调用及参数相同；965 原 CSS selector 顺序保留。Production 2599 文件 SHA256 无变化。真实发布、final submit、远端写、云 AI、production 写入均 0；ALL BATCH = OFF。
+- SECRET_SCAN：PENDING_FINAL_SOURCE_COMMIT_SCAN；安装包完整解包已 PASS，0 secret / 0 敏感路径。安装包 **NotSigned**，未配置正式签名，保留默认 Electron 图标。
+- H 已有的 28 账号归属、2 个缺失历史素材、5 条 retired credential、production upgrade 与 Jobs 冷路径 P95 限制不变。下面完整保留 H handoff。
+- **NEXT ACTION：Owner 在手机审阅 11 组对比及 Candidate；视觉批准后再单独决定是否合并 main。**
+
+---
+
 # Geo Media Publisher · R1.15-H Candidate
 
 当前 durable state：**R1_15_H_PARTIAL_BACKUP_REVIEW_REQUIRED**。开发、1698 项回归、构建、隔离安装和员工全流程已完成。5 条无法解密的凭据已分类为同一退役 `kangyi_website` 账号的历史字段，当前能力依赖未知数为 **0**；原密文保持不变。

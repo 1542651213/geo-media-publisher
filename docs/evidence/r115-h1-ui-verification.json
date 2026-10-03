@@ -1,0 +1,337 @@
+{
+  "task": "R1.15-H.1_UI_UX_PURPLE_PRODUCT_POLISH",
+  "status": "LOCAL_CANDIDATE_ACCEPTANCE_PASS_PUBLIC_SYNC_PENDING",
+  "baseline": "c2017994ef3df592fd17ffa009a56fbcca99796c",
+  "branch": "release/2026-10-03-r1.15-h1-ui-purple-product-polish",
+  "candidateTag": "r1.15-h1-ui-purple-polish-candidate-20261003",
+  "package": {
+    "status": "PASS",
+    "installerBytes": 101308539,
+    "installerSha256": "fcc8583fe51eaef5c7f8accfe74a7eaf617a56dd747fb3aa9da7b2ed111cb6b9",
+    "installedAppAsarSha256": "492e1ef42fd8c285a61757b68137868b024b4281a50c97e9c994fc4a70275557",
+    "packageRuntimeSourceCommit": "34004b070d3f53986d71e2255015625be76da8d1",
+    "byteParityMainPreloadRendererCSS": true,
+    "closedSnapshotWorkerParity": true,
+    "migrationAndPlatformResourceParity": true,
+    "migrations": 38,
+    "candidateGrantsAbsent": true,
+    "sensitiveResourcesAbsent": true
+  },
+  "installerAuthenticode": "NotSigned",
+  "functionalSemanticsChanged": false,
+  "databaseSchemaChanged": false,
+  "ipcContractChanged": false,
+  "publishGateChanged": false,
+  "finalSubmitChanged": false,
+  "frozenFiles": 360,
+  "rendererIpcCalls": 478,
+  "rendererIpcHash": "067566273e18cccf39b1855d7315a883f1baf646506d258b05d7c60621832297",
+  "originalSelectors": [
+    {
+      "file": "styles.css",
+      "count": 813,
+      "originalSelectorsPreserved": true
+    },
+    {
+      "file": "operations-center.css",
+      "count": 83,
+      "originalSelectorsPreserved": true
+    },
+    {
+      "file": "platform-connection.css",
+      "count": 43,
+      "originalSelectorsPreserved": true
+    },
+    {
+      "file": "product-ai-center.css",
+      "count": 26,
+      "originalSelectorsPreserved": true
+    }
+  ],
+  "fullTests": {
+    "files": 241,
+    "tests": 1704,
+    "status": "PASS",
+    "maxWorkers": 4,
+    "defaultConcurrencyFirstRun": "1 backup test timeout; 1703 passed; unchanged focused 10 passed; final bounded suite all passed"
+  },
+  "typecheck": "PASS",
+  "lint": "PASS",
+  "build": "PASS",
+  "employeeJourney": {
+    "status": "PASS",
+    "stages": {
+      "newEmployeeWorkspace": "PASS",
+      "csvXlsxErrorsAndCorrection": "PASS",
+      "autosaveCompositionPasteUndo": "PASS_REAL_APP_DOM_COMPOSITION",
+      "companyIsolation": "PASS",
+      "normalRestartDraftRecovery": "PASS",
+      "crashRecoveryConflictExplicitChoice": "PASS",
+      "studioBudgetRepairTwoPlatforms": "PASS",
+      "queueBudgetSerialLoopback": "PASS",
+      "sameCompanyImageUi": "PASS",
+      "reviewPreflightNoPrepareAndEditInvalidation": "PASS",
+      "approvedEditRestartStillNeedsReview": "PASS",
+      "ownerSyntheticAssignmentUi": "PASS",
+      "colleaguePackageUi": "PASS",
+      "importedFactExplicitSameRowReviewUi": "PASS",
+      "frozenJobUnchangedAfterArticleEdit": "PASS",
+      "sameDirectorySingleWriter": "PASS",
+      "closedFullSnapshot": "PASS",
+      "isolatedRestoreNoReplay": "PASS"
+    },
+    "normalStarts": 6,
+    "normalExits": 5,
+    "forcedOwnedProcessExits": 1,
+    "localMockRequests": 6,
+    "localModelReads": 1,
+    "maxConcurrentRequests": 1,
+    "unknownMockRoutes": 0,
+    "integrity": "ok",
+    "foreignKeys": 0,
+    "frozenJobPreserved": true,
+    "closedSnapshotAndIsolatedRestore": "PASS"
+  },
+  "visualGates": {
+    "VISUAL_SYSTEM_UNIFIED": "PASS",
+    "PURPLE_BRAND_DIRECTION": "PASS",
+    "TYPOGRAPHY_READABILITY": "PASS",
+    "BUTTON_HIERARCHY": "PASS",
+    "STATUS_SEMANTICS": "PASS",
+    "EMPTY_STATES": "PASS",
+    "LOADING_STATES": "PASS",
+    "FORM_CONSISTENCY": "PASS",
+    "DIALOG_CONSISTENCY": "PASS",
+    "PAGE_LAYOUT_CONSISTENCY": "PASS"
+  },
+  "pageViewportChecks": 99,
+  "operatorStateLayoutChecks": 99,
+  "viewports": [
+    [
+      1366,
+      768
+    ],
+    [
+      1920,
+      1080
+    ],
+    [
+      2560,
+      1440
+    ]
+  ],
+  "appZoom": [
+    1,
+    1.25,
+    1.5
+  ],
+  "realWindowsDpi": "NOT_RUN",
+  "hardwareIme": "NOT_RUN; DOM composition checked",
+  "dialog": {
+    "status": "PASS",
+    "checks": [
+      "busyEscapeDoesNotCancel",
+      "waitingEscapeUsesExistingCancel",
+      "nestedFocusReturnsToTrigger",
+      "sameContainerSuccessRefreshesLabelAndFocus",
+      "tabWrapBothDirections",
+      "imeEscapeIgnored",
+      "successEscapeUsesExistingFinish",
+      "rootFocusRestored"
+    ],
+    "kind": "PACKAGED_RENDERER_DOM_FIXTURE"
+  },
+  "states": {
+    "status": "PASS",
+    "checks": [
+      "loadingSkeletonAndDisabledFilters",
+      "readErrorAlertWithExistingRetry",
+      "retryRecoversOriginalRead",
+      "emptyFilterExplainsNextStep",
+      "credentialInputMaskedAndBlank"
+    ],
+    "kind": "INSTALLED_READ_ONLY_IPC_LATENCY_ERROR_FIXTURE"
+  },
+  "screenshotPairs": 11,
+  "screenshotViewport": [
+    1440,
+    900
+  ],
+  "sameClosedSyntheticFixture": true,
+  "phone": {
+    "screenshotCount": 22,
+    "imageBytes": 1933826,
+    "widths": [
+      390,
+      760
+    ],
+    "loadedAndToggle": "PASS",
+    "horizontalOverflow": false,
+    "publicGallery": "docs/product/R1.15-H1-PHONE-PREVIEW.md"
+  },
+  "productionProtection": {
+    "files": 2599,
+    "changed": 0,
+    "status": "PASS_BYTES_UNCHANGED",
+    "rawManifestExcludedFromPublic": true
+  },
+  "realPlatformPublishCount": 0,
+  "realFinalSubmitCount": 0,
+  "realRemoteWriteCount": 0,
+  "realCloudAiCount": 0,
+  "productionDataWriteCount": 0,
+  "allBatch": "OFF",
+  "mainMerged": false,
+  "ownerVisualApprovalRequired": true,
+  "packageScan": {
+    "status": "PASS",
+    "archiveEntries": 3809,
+    "forbiddenPathCount": 0,
+    "secretFindings": 0,
+    "rawSecretMatchesPrinted": false,
+    "scope": "Entire extracted installed app.asar and packaged resources; installer bytes separately verified identical to the installed package"
+  },
+  "publicSourceScan": "PENDING_FINAL_COMMIT_SCAN",
+  "privateEvidencePublished": false,
+  "imageManifest": [
+    {
+      "path": "docs/product/r115-h1-ui-preview/01-home-after.png",
+      "bytes": 106616,
+      "sha256": "7d5b873b46bd695cf926331a61fbba8f11f6e022b4b3d32191f48f93e9cf0c90"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/01-home-before.png",
+      "bytes": 71359,
+      "sha256": "83432d99ea5bfbec8506fa59f0f4b847788112b4cd874cdf6a097b03401cfc22"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/02-ai-after.png",
+      "bytes": 72961,
+      "sha256": "8cae2d4c0258345dec5bbe044666457aead11cd80e18f739fee922641f5ce4ad"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/02-ai-before.png",
+      "bytes": 65182,
+      "sha256": "9087ec5189eb005aadcc30d0fdbb7213404df193e420e89cba3959b267d33834"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/03-articles-after.png",
+      "bytes": 107920,
+      "sha256": "f54d68d94c6a0733b49d8c57453cab785fffea86bb442973a288e0b8c804c1f3"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/03-articles-before.png",
+      "bytes": 108337,
+      "sha256": "02d260da31fa7564aac118bd072524f8d41c346d630ea869b2e0bf2cee68d98e"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/04-enterprise-after.png",
+      "bytes": 69149,
+      "sha256": "e9e78fcf4359d0ba6dad500737a01a3f787a0f732d1c339e3eda122f063efeda"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/04-enterprise-before.png",
+      "bytes": 57788,
+      "sha256": "4d4d1e09d2bdd916fc49ed0e143786784fc3ccb1ae09ea79b27ed9ed9d45fcb3"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/05-accounts-after.png",
+      "bytes": 97612,
+      "sha256": "a424d26612d1ae61173c8adc9eed8fa167de4537d953fed330c3300ee4daa6ed"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/05-accounts-before.png",
+      "bytes": 103871,
+      "sha256": "6027f15cde021164f6c587829b6e87be63a3941924fe9cc503f2412d50e9ba2c"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/06-account-ownership-after.png",
+      "bytes": 101364,
+      "sha256": "212c1c1809cdf37be0e6306bab6f0b2869f1cb1a46ed47a933b213a392c5f5d8"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/06-account-ownership-before.png",
+      "bytes": 109489,
+      "sha256": "75ef5d42da048cd60c0b216d6bcf8946e18dbf636ba6eda54ad451b9af8c3d50"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/07-publish-after.png",
+      "bytes": 72839,
+      "sha256": "ce792e2994f559c86a53722343bace5ab7f07f1d57151a3828a60b153b07577d"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/07-publish-before.png",
+      "bytes": 60443,
+      "sha256": "39720ccec33623f104c0b9b136b1320e40c52de7194e1a56b1077d89418df9b6"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/08-jobs-after.png",
+      "bytes": 78386,
+      "sha256": "157b14225aa7d10180931a411d7274485da4db5220b691e7e81e7b78ba657690"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/08-jobs-before.png",
+      "bytes": 66926,
+      "sha256": "545a48f943b3f0c92d1e4ff49d1a5bc2de53ea0a6434dd56dcb29dff4770bd85"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/09-owner-after.png",
+      "bytes": 110976,
+      "sha256": "23299e7a584387d1354956a7c16bd352e2b81894bde3b00851a40dead493be86"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/09-owner-before.png",
+      "bytes": 97406,
+      "sha256": "19f094f547b36603b4d32e91732f3f240a2de609ecd225904afe031ab6724d19"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/10-backup-after.png",
+      "bytes": 93095,
+      "sha256": "b4a1b8ee89450ae3b8eef2ba4eb4a4408602b36bf0ef275307ffb82542df8d95"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/10-backup-before.png",
+      "bytes": 93782,
+      "sha256": "c53b0ec7f4cf403dc00aba51dcaae8198c146a12a9a6d2965628c263a276c2fb"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/11-settings-after.png",
+      "bytes": 97815,
+      "sha256": "e8605e12c7ca0af077ae2432dccec1122f572ffa15d2c31b94f53db17c843b3a"
+    },
+    {
+      "path": "docs/product/r115-h1-ui-preview/11-settings-before.png",
+      "bytes": 90510,
+      "sha256": "4fc66372fc8e5ad4d9970ff99f2dd435ea63628c4c3083d5494270e182179c68"
+    }
+  ],
+  "moduleSizes": [
+    {
+      "name": "App.tsx",
+      "before": 110329,
+      "after": 7300
+    },
+    {
+      "name": "V11Workspace.tsx",
+      "before": 148735,
+      "after": 60083
+    },
+    {
+      "name": "OperationsCenter.tsx",
+      "before": 48762,
+      "after": 45064
+    }
+  ],
+  "inheritedLimitations": [
+    "H remains PARTIAL_BACKUP_REVIEW_REQUIRED",
+    "28 production account bindings need Owner confirmation",
+    "2 missing historical media remain unresolved and untouched",
+    "5 retired credential records unchanged",
+    "production upgrade not executed",
+    "Jobs cold P95 limitation inherited; Main query unchanged",
+    "unsigned installer with default Electron icon",
+    "real platform and cloud acceptance not run",
+    "Owner visual approval pending",
+    "legacy diagnostic JSX and residual CSS debt remain"
+  ]
+}
