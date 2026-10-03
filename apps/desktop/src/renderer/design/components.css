@@ -236,9 +236,13 @@ details > p { overflow-wrap: anywhere; }
 .v11-article-row > span, .operations-job-row > span { font-size: var(--font-compact); }
 .job-state-hint { font-size: var(--font-compact); }
 .article-edit-drawer > label { flex: 0 0 auto; display: flex; flex-direction: column; }
+.article-edit-drawer > label:not(.article-body-field) { flex: 0 0 auto; }
 .article-edit-drawer > .article-body-field { flex: 1 0 240px; min-height: 240px; }
 .article-edit-drawer .draft-save-status { padding-bottom: 12px; font-size: var(--font-compact); }
 .draft-save-status > strong { margin-right: 8px; }
+.ai-tabs .ai-page-utilities { margin: 0 0 0 auto; }
+.ai-tabs .ai-page-utilities button { border: 1px solid var(--border-default); font-weight: 500; color: var(--text-secondary); }
+.v11-article-row .row-actions { padding-block: calc(var(--density-compact) / 2); }
 @media (max-width: 1200px) {
   .sidebar { width: 200px; flex-basis: 200px; }
   .content-area { padding: 24px; }

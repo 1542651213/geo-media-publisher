@@ -31,9 +31,9 @@ assert.deepEqual(after, before, 'Renderer IPC invocation or arguments changed');
 const require = createRequire(import.meta.url), viteRequire = createRequire(require.resolve('vite/package.json'));
 const postcss = viteRequire('postcss');
 function selectors(source) { const values = []; postcss.parse(source).walkRules(rule => values.push(rule.selector.replace(/\s+/gu, ' ').trim())); return values; }
-const styles = ['styles.css', 'operations-center.css', 'platform-connection.css', 'product-ai-center.css'].map(file => {
+const styles = ['styles.css', 'design/workspace-layout.css', 'operations-center.css', 'platform-connection.css', 'product-ai-center.css'].map(file => {
   const original = selectors(git('show', `${baseline}:${root}/${file}`));
-  const current = selectors(readFileSync(`${root}/${file}`, 'utf8') + '');
+  const current = selectors(readFileSync(`${root}/${file}`, 'utf8'));
   assert.deepEqual(current, original, `${file}: original dynamic selectors removed or reordered`);
   return { file, selectors: original.length, hash: hash(current), originalSelectorsPreserved: true };
 });
