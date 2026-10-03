@@ -1,3 +1,56 @@
+# Geo Media Publisher · R1.15-H.2 UI Candidate
+
+**THIS BRANCH = H.2 UI Candidate · MAIN = H baseline · OWNER VISUAL APPROVAL REQUIRED · MAIN_MERGED = NO。**
+
+当前 durable state：**本地全部验收 PASS，公开 Candidate 安全同步及真实 GitHub 图片渲染待最后核验**。H.1 基线完整保留；本轮为视觉精修，正式功能状态仍为 H 的 `PARTIAL_BACKUP_REVIEW_REQUIRED`。
+
+- 分支 `release/2026-10-03-r1.15-h2-ui-refinement-ready-visual-evidence`；Candidate Tag `r1.15-h2-ui-refinement-candidate-20261003`。最终 HEAD 以 `tag^{commit}` 唯一解析；包内源码 `03f742d17b949023e2a87167fdc8688b1e83420a`。
+- 首页提醒与指标更紧凑，账号健康卡利用有效宽度，归属卡片降低空白，Owner 分优先级且显示平台名，文章操作同一行，编辑抽屉标题空白修复；保留 H.1 克制的紫色品牌与全部发布安全语义。
+- 完整回归 **242 文件 / 1707 测试 PASS**，typecheck / lint / build / package、独立安装 18 阶段员工流程、99 页面布局 + 99 流程状态布局 PASS。
+- 原 production **2599 文件 / 哈希差异 0**；Main 等 360 文件冻结、478 IPC 调用及参数一致。真实发布、final submit、远端写、云 AI、production 写入全部 **0**；ALL_BATCH = OFF。
+- 保留限制：**28 真实账号待 Owner 归属；2 个缺失历史图片未处理；5 条 retired credential 未改写；原 production 未升级；Jobs 冷尾延迟未解决。**真实平台/云、Windows DPI、硬件 IME 未执行；安装包 **NotSigned / 默认 Electron 图标**。
+- 当前普通发布能力仍为 **抖音、康一官网 OfficialAPI、今日头条 ON**，账号与内容仍需原预检，其余平台和 batch 门禁保持。
+- SECRET_SCAN = **PENDING_FINAL_SOURCE_SCAN**；安装版完整解包 3809 项，0 secret / 0 敏感路径。GitHub 图片渲染 = **PENDING_ACTUAL_GITHUB_RENDER**，实际浏览器确认后才改为 PASS。
+
+[Candidate 安装包与离线 HTML 预览](https://github.com/1542651213/geo-media-publisher/releases/tag/r1.15-h2-ui-refinement-candidate-20261003) · [完整 11 组 BEFORE / AFTER 图集](docs/product/R1.15-H2-PHONE-PREVIEW.md) · [双轮 UI Review](docs/product/R1.15-H2-UI-REVIEW.md) · [脱敏验证证据](docs/evidence/r115-h2-ui-verification.json)。
+
+**NEXT ACTION：Owner 先在手机查看下列六张精选截图及完整对比图集，再试用 Candidate；完成最终视觉批准后，另行决定 main 集成。**
+
+## 本版本真实安装版精选截图
+
+以下均来自最终 H.2 独立安装包，同一闭合合成资料、1440×900、100% 应用缩放；不是静态 mock 界面。点击可打开原图放大。
+
+### 首页
+
+[![首页 · H.2 实际安装版](docs/product/r115-h2-ui-preview/01-home-after.png)](docs/product/r115-h2-ui-preview/01-home-after.png)
+
+### AI Center
+
+[![AI Center · H.2 实际安装版](docs/product/r115-h2-ui-preview/02-ai-after.png)](docs/product/r115-h2-ui-preview/02-ai-after.png)
+
+### 账号中心
+
+[![账号中心 · H.2 实际安装版](docs/product/r115-h2-ui-preview/05-accounts-after.png)](docs/product/r115-h2-ui-preview/05-accounts-after.png)
+
+### 历史账号归属
+
+[![历史账号归属 · H.2 实际安装版](docs/product/r115-h2-ui-preview/06-account-ownership-after.png)](docs/product/r115-h2-ui-preview/06-account-ownership-after.png)
+
+### 发布中心
+
+[![发布中心 · H.2 实际安装版](docs/product/r115-h2-ui-preview/07-publish-after.png)](docs/product/r115-h2-ui-preview/07-publish-after.png)
+
+### Owner Center
+
+[![Owner Center · H.2 实际安装版](docs/product/r115-h2-ui-preview/09-owner-after.png)](docs/product/r115-h2-ui-preview/09-owner-after.png)
+
+完整 BEFORE / AFTER 已单独放入 [docs/product 图集](docs/product/R1.15-H2-PHONE-PREVIEW.md)。后续 UI 有明显变化的版本继续遵守 [ready.md 真实截图约定](docs/product/ui-visual-evidence.md)。
+
+---
+
+<details>
+<summary>H.1 / H 历史交付状态与限制（完整保留）</summary>
+
 # Geo Media Publisher · R1.15-H.1 UI Candidate only
 
 当前 UI durable state：**R1_15_H1_PURPLE_UI_POLISH_CANDIDATE_READY_FOR_OWNER_REVIEW**（本地验收通过，最终安全同步回执随 Candidate 交付）。**Owner visual approval required；当前 production/main 功能基线仍为 H Candidate，MAIN_MERGED = NO。**
@@ -55,3 +108,4 @@
 [H 验收与完整报告](docs/releases/R1.15-H-READY.md) · [脱敏证据](docs/evidence/r115-h-verification.json) · [checkpoint](docs/releases/R1.15-H-CHECKPOINT.md) · [员工操作路径](docs/product/operator-quickstart.md) · [Jobs 性能](docs/performance/jobs-page.md) · [本机手机图文预览](output/r115-h-phone-preview-fa54951/index.html)。
 
 [G 时点 READY 原文](docs/releases/R1.15-G-READY-ARCHIVE.md) 与 [F 时点及 C/D/E 历史](docs/releases/R1.15-F-READY-ARCHIVE.md) 保留。未安排自动续跑或新平台工作。
+</details>

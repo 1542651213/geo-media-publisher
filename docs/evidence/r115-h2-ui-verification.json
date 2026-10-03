@@ -1,0 +1,525 @@
+{
+  "task": "R1.15-H.2",
+  "status": "LOCAL_ACCEPTANCE_PASS_REMOTE_RENDER_PENDING",
+  "candidateOnly": true,
+  "startHead": "0498be171588324c6d65eb593e216dab70526192",
+  "branch": "release/2026-10-03-r1.15-h2-ui-refinement-ready-visual-evidence",
+  "tag": "r1.15-h2-ui-refinement-candidate-20261003",
+  "finalHeadReference": "r1.15-h2-ui-refinement-candidate-20261003^{commit}",
+  "main": "c2017994ef3df592fd17ffa009a56fbcca99796c",
+  "package": {
+    "status": "PASS",
+    "installerBytes": 101311268,
+    "installerSha256": "87b37f73d959995223667e55c216a983217b996bb2ce1079f23530bafcacc0b2",
+    "installedAppAsarSha256": "62530300f0343c919c87f792c4ca901530359ea03d91ff833566462ef7cf841b",
+    "packageRuntimeSourceCommit": "03f742d17b949023e2a87167fdc8688b1e83420a",
+    "byteParityMainPreloadRendererCSS": true,
+    "closedSnapshotWorkerParity": true,
+    "migrationAndPlatformResourceParity": true,
+    "migrations": 38,
+    "candidateGrantsAbsent": true,
+    "sensitiveResourcesAbsent": true
+  },
+  "signature": "NotSigned",
+  "tests": {
+    "focusedBatches": [
+      {
+        "files": 4,
+        "tests": 14
+      },
+      {
+        "files": 2,
+        "tests": 9
+      },
+      {
+        "files": 4,
+        "tests": 29
+      }
+    ],
+    "focusedCountsOverlap": true,
+    "fullFiles": 242,
+    "fullTests": 1707,
+    "maxWorkers": 4,
+    "typecheck": "PASS",
+    "lint": "PASS",
+    "build": "PASS",
+    "package": "PASS"
+  },
+  "freeze": {
+    "baseline": "0498be171588324c6d65eb593e216dab70526192",
+    "files": 360,
+    "functionalSemanticsChanged": false,
+    "databaseSchemaChanged": false,
+    "ipcContractChanged": false,
+    "publishGateChanged": false,
+    "finalSubmitChanged": false,
+    "ipcCalls": 478,
+    "ipcCallHash": "067566273e18cccf39b1855d7315a883f1baf646506d258b05d7c60621832297",
+    "originalCssSelectors": 965,
+    "buildMetadataException": "deliveryId H.2"
+  },
+  "installedEmployee": {
+    "kind": "INSTALLED_SYNTHETIC_UI_LOOPBACK_ONLY",
+    "stages": {
+      "newEmployeeWorkspace": "PASS",
+      "csvXlsxErrorsAndCorrection": "PASS",
+      "autosaveCompositionPasteUndo": "PASS_REAL_APP_DOM_COMPOSITION",
+      "companyIsolation": "PASS",
+      "normalRestartDraftRecovery": "PASS",
+      "crashRecoveryConflictExplicitChoice": "PASS",
+      "studioBudgetRepairTwoPlatforms": "PASS",
+      "queueBudgetSerialLoopback": "PASS",
+      "sameCompanyImageUi": "PASS",
+      "reviewPreflightNoPrepareAndEditInvalidation": "PASS",
+      "approvedEditRestartStillNeedsReview": "PASS",
+      "ownerSyntheticAssignmentUi": "PASS",
+      "colleaguePackageUi": "PASS",
+      "importedFactExplicitSameRowReviewUi": "PASS",
+      "frozenJobUnchangedAfterArticleEdit": "PASS",
+      "singleWriterEnforced": "PASS",
+      "closedFullSnapshot": "PASS",
+      "isolatedRestoreNoReplay": "PASS"
+    },
+    "normalStarts": 6,
+    "normalExits": 5,
+    "ownedCrashInjection": 1,
+    "allStartsGuardedBeforeMain": true,
+    "secondInstanceGuardedBeforeMain": true,
+    "localMockGenerationRequests": 6,
+    "localModelReads": 1,
+    "maxConcurrency": 1,
+    "unknownMockRoutes": 0,
+    "loopbackRequestsByStart": [
+      0,
+      0,
+      7,
+      0,
+      0,
+      0
+    ],
+    "closedSnapshotVerifyAndIsolatedRestore": "PASS",
+    "automaticExecutionDisabledAfterRestore": true,
+    "databaseIntegrity": "ok",
+    "foreignKeyErrors": 0,
+    "frozenJobUnchanged": true
+  },
+  "visual": {
+    "round1Source": "904d93c",
+    "round1ImagesInspected": 11,
+    "round2Source": "03f742d17b949023e2a87167fdc8688b1e83420a",
+    "round2ImagesInspected": 11,
+    "beforeImages": 11,
+    "afterImages": 11,
+    "sameClosedSyntheticFixture": true,
+    "viewport": [
+      1440,
+      900
+    ],
+    "zoom": 1,
+    "gates": {
+      "purpleWeight": "PASS",
+      "bodyContrast": "PASS",
+      "cardCount": "PASS",
+      "buttonHierarchy": "PASS",
+      "spacing": "PASS",
+      "textReadability": "PASS",
+      "overflow": "PASS",
+      "truncation": "PASS",
+      "unnecessaryBlankSpace": "PASS",
+      "pageHierarchy": "PASS"
+    },
+    "editorTitleHeights": [
+      67.796875,
+      67.125
+    ],
+    "pageLayouts": 99,
+    "employeeStateLayouts": 99,
+    "windowSizes": [
+      [
+        1366,
+        768
+      ],
+      [
+        1920,
+        1080
+      ],
+      [
+        2560,
+        1440
+      ]
+    ],
+    "applicationZoom": [
+      1,
+      1.25,
+      1.5
+    ],
+    "realWindowsDpi": "NOT_RUN",
+    "hardwareIme": "NOT_RUN; installed DOM composition verified",
+    "dialog": {
+      "kind": "PACKAGED_RENDERER_DOM_FIXTURE",
+      "checks": [
+        "busyEscapeDoesNotCancel",
+        "waitingEscapeUsesExistingCancel",
+        "nestedFocusReturnsToTrigger",
+        "sameContainerSuccessRefreshesLabelAndFocus",
+        "tabWrapBothDirections",
+        "imeEscapeIgnored",
+        "successEscapeUsesExistingFinish",
+        "rootFocusRestored"
+      ]
+    },
+    "states": {
+      "kind": "INSTALLED_READ_ONLY_IPC_LATENCY_ERROR_FIXTURE",
+      "checks": [
+        "loadingSkeletonAndDisabledFilters",
+        "readErrorAlertWithExistingRetry",
+        "retryRecoversOriginalRead",
+        "unknownResultGuidanceRemainsVisible",
+        "offlineReadUnavailableNotEmpty",
+        "emptyFilterExplainsNextStep",
+        "credentialInputMaskedAndBlank"
+      ]
+    }
+  },
+  "phone": {
+    "images": 22,
+    "imageBytes": 2033326,
+    "layouts": [
+      {
+        "width": 390,
+        "imagesLoaded": 22,
+        "beforeAfterToggle": "PASS",
+        "horizontalOverflow": false,
+        "bodyFontPx": 17
+      },
+      {
+        "width": 760,
+        "imagesLoaded": 22,
+        "beforeAfterToggle": "PASS",
+        "horizontalOverflow": false,
+        "bodyFontPx": 17
+      }
+    ],
+    "externalRequests": 0,
+    "gallery": "docs/product/R1.15-H2-PHONE-PREVIEW.md",
+    "offlinePreview": "Candidate prerelease ZIP"
+  },
+  "productionProtection": {
+    "status": "PASS_BYTES_UNCHANGED",
+    "files": 2599,
+    "changed": 0,
+    "rawManifestPublished": false
+  },
+  "realPlatformPublishCount": 0,
+  "realFinalSubmitCount": 0,
+  "realRemoteWriteCount": 0,
+  "realCloudAiCount": 0,
+  "productionDataWriteCount": 0,
+  "allBatch": "OFF",
+  "mainMerged": false,
+  "ownerVisualApprovalRequired": true,
+  "scans": {
+    "package": {
+      "status": "PASS",
+      "archiveEntries": 3809,
+      "forbiddenPathCount": 0,
+      "secretFindings": 0,
+      "rawSecretMatchesPrinted": false,
+      "scope": "Entire extracted installed app.asar and packaged resources; installer bytes separately verified identical to the installed package"
+    },
+    "publicSource": "PENDING_FINAL_SOURCE_SCAN",
+    "screenshots": "PASS_VISUAL_SYNTHETIC_ONLY_AND_NO_PNG_TEXT_METADATA",
+    "offlinePreview": {
+      "status": "PASS",
+      "secretFindings": 0,
+      "archive": {
+        "name": "GEO-R1.15-H2-BEFORE-AFTER-03f742d.zip",
+        "bytes": 1927120,
+        "sha256": "c84486d340955f407302b747da80dcc6bcee225a4856622141d83f89280e8de4"
+      }
+    }
+  },
+  "imageManifest": [
+    {
+      "name": "01-home-after.png",
+      "bytes": 106097,
+      "sha256": "e72e3db7014c2cd6c360956bcaf1b82a25e50df8f75b41a2e2c3fcb17d99eaae",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "01-home-before.png",
+      "bytes": 106616,
+      "sha256": "7d5b873b46bd695cf926331a61fbba8f11f6e022b4b3d32191f48f93e9cf0c90",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "02-ai-after.png",
+      "bytes": 76610,
+      "sha256": "c7699964fb3d7299a9ebb147b180bf0e0986e8a6ef00b1b20792c12b933ad54a",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "02-ai-before.png",
+      "bytes": 73009,
+      "sha256": "0a27d03543d2eacd423138a783f11c190d7e01fcabeac318f9d1ff6e6d21e208",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "03-articles-after.png",
+      "bytes": 127154,
+      "sha256": "de7b661315bd192699fd4ebc099187c5212a36bbb22490f52f4ea0a81e006481",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "03-articles-before.png",
+      "bytes": 107955,
+      "sha256": "314d76e6445e9e258ac4e2640bbb31195dc2e0afd1151c2d389acfe8584dd5bf",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "04-enterprise-after.png",
+      "bytes": 70729,
+      "sha256": "fdf349c732b49d1c02bcabf6f05473ed4d6021919c776d10d09681c2ef79ed44",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "04-enterprise-before.png",
+      "bytes": 69158,
+      "sha256": "122d7c7e8a8a561c254ebdb2ed5b4e9e2235104ddec565979f01857aeb35267a",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "05-accounts-after.png",
+      "bytes": 95686,
+      "sha256": "f2f1f9bc8ddec4c55e3dffcf177d1e45ce7aab2433227820750c96a2e56717ad",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "05-accounts-before.png",
+      "bytes": 97934,
+      "sha256": "e79a18f49a7509d7d3b4b178611a38e7ddfd5141b07f71481a50af790af9bee0",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "06-account-ownership-after.png",
+      "bytes": 106731,
+      "sha256": "77b89d5264b1208f46b58066e71e7ba70e6132d26aac7885108199beb7a236e0",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "06-account-ownership-before.png",
+      "bytes": 101364,
+      "sha256": "212c1c1809cdf37be0e6306bab6f0b2869f1cb1a46ed47a933b213a392c5f5d8",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "07-publish-after.png",
+      "bytes": 72955,
+      "sha256": "d8ceef596a001dcf2c67ba8bcc24c7899b8a41693815d38e8cde77e363de0521",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "07-publish-before.png",
+      "bytes": 72843,
+      "sha256": "c1988a60f8090c215be1dc9c62025dd58a4fca8030b4cc516d15406623e29107",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "08-jobs-after.png",
+      "bytes": 78592,
+      "sha256": "7ddaa5a20d8e3b007ff07bf445e8a5df5a5b01c20fcd93b2607afcb4c01363ad",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "08-jobs-before.png",
+      "bytes": 78277,
+      "sha256": "2410ef4e139e261f5da84d8256fc3eb3fb5c4429975a9a14b211c728a57eba60",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "09-owner-after.png",
+      "bytes": 109894,
+      "sha256": "7b78febcfafc8c42d6e40bcceab14230671e7eef85f34f2a399e0ce3e761d4cb",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "09-owner-before.png",
+      "bytes": 111062,
+      "sha256": "ca15e87a0a5899d820775f7e4e215d4fc1dcadb575c30dba4fd79bdaae1b96ab",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "10-backup-after.png",
+      "bytes": 81695,
+      "sha256": "d7f4360f6c8a9c5c25e5d474e291dc0273d1fa6e9df73041414578f2499ae8f5",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "10-backup-before.png",
+      "bytes": 93095,
+      "sha256": "b4a1b8ee89450ae3b8eef2ba4eb4a4408602b36bf0ef275307ffb82542df8d95",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "11-settings-after.png",
+      "bytes": 98054,
+      "sha256": "f91652e33369d1cd9958648a9c2ee68487763cb69db8a9a9b79124c1d4e342ee",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    },
+    {
+      "name": "11-settings-before.png",
+      "bytes": 97816,
+      "sha256": "565ed9642a32c1d3d0caf01ee678d68ca72467dc57aba05b6dbecdd8e31bfffc",
+      "width": 1440,
+      "height": 900,
+      "metadataChunks": [
+        "IHDR",
+        "sRGB",
+        "IEND"
+      ]
+    }
+  ],
+  "ready": {
+    "embeddedScreenshots": 6,
+    "pathsRelative": true,
+    "githubActualRender": "PENDING_ACTUAL_GITHUB_RENDER"
+  },
+  "inheritedLimitations": [
+    "H remains PARTIAL_BACKUP_REVIEW_REQUIRED",
+    "28 production accounts require Owner confirmation",
+    "2 missing historical image files untouched",
+    "5 retired credentials unchanged",
+    "production upgrade NOT_RUN",
+    "Jobs cold P95 remains an H limitation; no new performance claim",
+    "unsigned installer/default Electron icon",
+    "real platforms/cloud/Windows DPI/hardware IME NOT_RUN",
+    "Owner visual approval pending",
+    "legacy diagnostic JSX and some CSS debt remain"
+  ]
+}
