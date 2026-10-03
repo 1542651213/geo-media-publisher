@@ -4,19 +4,19 @@
   "software": {
     "deliveryId": "R1.15-I",
     "appVersion": "1.1.9",
-    "sourceCommit": "77265ff876fbdfb32d1f5c56433590966bec8cd3",
-    "appAsarSha256": "3ae5c3df9047038a2e39e2aa6e31d0eb5fc9a26f5600746e766b02c3242bea5e",
+    "sourceCommit": "25b96da877389b7cfb34649e0cc9f7e9966df046",
+    "appAsarSha256": "f6b4bc9b3b1ff5e07c0ead890eaa118dc68f2119fad4113717eb9fd4c3b362ca",
     "installerFilename": "Geo Media Publisher Setup 1.1.9 - R1.15-I DEPARTMENT PILOT CANDIDATE.exe",
-    "installerBytes": 101309731,
-    "installerSha256": "ae2c936100fb16a8489ef362fdc2fb981499d8d8bf3a932c48b40782d3d009b2",
-    "nsisGuid": "28006b2b-deb4-42ca-9b73-5012d71d0c13",
+    "installerBytes": 101310031,
+    "installerSha256": "07c29fbd39de9a3ab1afd5bc1f30c722d68f1c2de8e5cfe2cb5b7a17a69698e6",
+    "nsisGuid": "44885896-b781-48b6-acd8-d07d5a23c58e",
     "signatureStatus": "NotSigned",
     "launcher": "Start-Pilot.cmd",
     "dataRoute": "NEW_PROFILE_ONLY",
     "mainMerged": false
   },
   "tests": {
-    "sourceCommit": "77265ff876fbdfb32d1f5c56433590966bec8cd3",
+    "sourceCommit": "25b96da877389b7cfb34649e0cc9f7e9966df046",
     "files": 243,
     "count": 1708,
     "focusedFiles": 9,
@@ -131,6 +131,99 @@
       "beforeMain": true
     }
   },
+  "companyCreationRecovery": {
+    "status": "PASS",
+    "sourceCommit": "25b96da877389b7cfb34649e0cc9f7e9966df046",
+    "cases": [
+      {
+        "name": "persisted-workspace",
+        "status": "PASS",
+        "checks": [
+          "explicitlySelectedCompanyIsNotUsedForNewCompanyEditor",
+          "normalUiSaveTargetsNewCompanyAndOldCompanyUnchanged"
+        ],
+        "directSqlMutations": 0,
+        "network": {
+          "blocked": 1,
+          "loopback": 0,
+          "beforeMain": true
+        },
+        "networkExit": {
+          "blocked": 1,
+          "loopback": 0,
+          "beforeMain": true
+        },
+        "independence": {
+          "sourceReads": 0,
+          "sourceModules": 0,
+          "cwdIndependent": true,
+          "nodePathAbsent": true,
+          "nodeOptionsAbsent": true,
+          "sessionDataIsolated": true,
+          "tempIsolated": true,
+          "logsIsolated": true
+        }
+      },
+      {
+        "name": "brands:list",
+        "status": "PASS",
+        "checks": [
+          "acknowledgedCompanyRemainsDurableDuringReadFailure",
+          "retryOnlyReadsSameCompanyWithoutSecondCreate"
+        ],
+        "directSqlMutations": 0,
+        "network": {
+          "blocked": 1,
+          "loopback": 0,
+          "beforeMain": true
+        },
+        "networkExit": {
+          "blocked": 1,
+          "loopback": 0,
+          "beforeMain": true
+        },
+        "independence": {
+          "sourceReads": 0,
+          "sourceModules": 0,
+          "cwdIndependent": true,
+          "nodePathAbsent": true,
+          "nodeOptionsAbsent": true,
+          "sessionDataIsolated": true,
+          "tempIsolated": true,
+          "logsIsolated": true
+        }
+      },
+      {
+        "name": "brand-knowledge:list",
+        "status": "PASS",
+        "checks": [
+          "acknowledgedCompanyRemainsDurableDuringReadFailure",
+          "retryOnlyReadsSameCompanyWithoutSecondCreate"
+        ],
+        "directSqlMutations": 0,
+        "network": {
+          "blocked": 1,
+          "loopback": 0,
+          "beforeMain": true
+        },
+        "networkExit": {
+          "blocked": 1,
+          "loopback": 0,
+          "beforeMain": true
+        },
+        "independence": {
+          "sourceReads": 0,
+          "sourceModules": 0,
+          "cwdIndependent": true,
+          "nodePathAbsent": true,
+          "nodeOptionsAbsent": true,
+          "sessionDataIsolated": true,
+          "tempIsolated": true,
+          "logsIsolated": true
+        }
+      }
+    ]
+  },
   "independentStart": {
     "status": "PASS",
     "kind": "SAME_MACHINE_PACKAGED_MAIN_SURVIVES_ACCEPTANCE_CONTROLLER_EXIT",
@@ -192,16 +285,16 @@
     "securityPolicyChanged": false
   },
   "installation": {
+    "standardUser": "NOT_RUN",
     "status": "PASS",
     "scope": "SAME_MACHINE_ADMIN_NEW_NSIS_INSTALL_DIRECTORY",
-    "installerExitCode": 0,
-    "oldRegistrationsPreserved": true,
-    "installerSignature": "NotSigned",
-    "executableSignature": "NotSigned",
-    "autoRunDisabled": true,
     "ownerShortcutsNotRequested": true,
+    "executableSignature": "NotSigned",
+    "installerExitCode": 0,
     "newWindowsMachine": "NOT_RUN",
-    "standardUser": "NOT_RUN"
+    "oldRegistrationsPreserved": true,
+    "autoRunDisabled": true,
+    "installerSignature": "NotSigned"
   },
   "privatePreparationCountsOnly": {
     "kind": "CURRENT_MATCHING_PROTECTED_CLOSED_COPY_READ_ONLY",
@@ -258,7 +351,7 @@
       "caption": "从 Start-Pilot.cmd 启动并核对 I 身份。空库点击右上角“创建企业资料”，填写企业名称和简称。",
       "width": 1464,
       "height": 895,
-      "sha256": "367fe38b83412853acae566593ce7bca4b05184ecdf5cf53793cb474c6f8d2db"
+      "sha256": "f6d3ca69ee46b638de83c315089b86faa408ee9ed33ec70c8983e16521fa5a38"
     },
     {
       "file": "01-import-preview.png",
@@ -266,7 +359,7 @@
       "caption": "在内容运营的批量导入页选择模板，核对企业和字段映射；向下滚动检查行预览，再选择 Import as Draft。不会创建发布任务。",
       "width": 1464,
       "height": 895,
-      "sha256": "cf833b41c74580a9aefcd873481d4a3b3517a3213e77d784f293d9a7f57ef29a"
+      "sha256": "7dee171ef56c72ba590e88e14bc8e3c9dea457071310bda7197df0f6a224a5fd"
     },
     {
       "file": "02-import-errors.png",
@@ -274,7 +367,7 @@
       "caption": "合成问题文件有四行错误，零行可导入。下方显示缺失标题、企业不匹配和正文等原因；修改文件后重新预览。",
       "width": 1464,
       "height": 895,
-      "sha256": "ef870e28c8eb0f7b96d4a51558a805521de8990a3533f8f1d2b288b0d0573037"
+      "sha256": "f5f269644b8424e0c671be14682a6b0290ba24ff73d39ebc3e443c5bb82234eb"
     },
     {
       "file": "03-draft-saved.png",
@@ -282,7 +375,7 @@
       "caption": "在文章库点“修改”，等待“已保存”。重开后明确恢复上次编辑；提交工作副本后仍需重新审核。",
       "width": 1464,
       "height": 895,
-      "sha256": "03e8e1f1941cfcc16530e76945cc692c3dec50288742dc9fd3cdeb887ccb10bf"
+      "sha256": "049d9121b599a6bb384982e404b64de01cbd97d7f78c61470e025b6f342c8dbf"
     },
     {
       "file": "04-articles.png",
@@ -290,7 +383,7 @@
       "caption": "仅一条合成流程经过本次人工审核。另两条仍需处理；“可发布”表示内容层状态，账号与平台门禁仍需逐项核对。",
       "width": 1464,
       "height": 895,
-      "sha256": "db4eb47726caf717227549c7d861fc2613aaa01beae91afa53666ddc47cd68f8"
+      "sha256": "5c0bd249ca19d72df74af0ac6e5728c3b8802a9b035381e7de41d90bf6b6d5a7"
     },
     {
       "file": "05-publish-blocked.png",
@@ -298,7 +391,7 @@
       "caption": "新库没有已验证账号，开始发布按钮不可用。本轮没有准备远端草稿、媒体上传或最终提交。",
       "width": 1464,
       "height": 895,
-      "sha256": "1cd0802e3fc73fbe97c0faf4409da0c41c9eafb821aa8f5c2b99de56b05c7115"
+      "sha256": "6af30a167a99ff802860d6e13cef6f01af82d47350ec49cfe0d196cf0de4bd9d"
     },
     {
       "file": "06-ai-no-key.png",
@@ -306,7 +399,7 @@
       "caption": "现有服务商预设可见，API Key 为空，没有保存或测试连接。今晚不产生 GEO 外部 AI 请求。",
       "width": 1464,
       "height": 895,
-      "sha256": "f51b91a7687d7b4b281d3d927371f11255af0887e698e84a83509364b335267d"
+      "sha256": "d403736fdf485a2bef2914024733a0f75268303a3cea867d82112aae0c3b8742"
     },
     {
       "file": "07-accounts-empty.png",
@@ -314,7 +407,7 @@
       "caption": "当前企业没有账号。正式凭据只能由 Owner 后续从安全入口配置，不能继承或复制历史测试凭据。",
       "width": 1464,
       "height": 895,
-      "sha256": "2638b635964cf8de80fe3a026840a4df2138ea96a21080f3ae8cb263c931a119"
+      "sha256": "029cb1d805f129bb53994743117d3d73476db34882481d916ab05efb10d6cc23"
     },
     {
       "file": "08-home.png",
@@ -322,7 +415,7 @@
       "caption": "合成资料的待审与已审状态可见；没有可信账号检查结果。首页计数不能替代真实平台验收。",
       "width": 1464,
       "height": 895,
-      "sha256": "2672e8e71d844e1c70df465ae6d51d69abbabf9fb9da21ff03bea234fea665e1"
+      "sha256": "f4f46048e3ca6e1e389fa6b3fd4502c06e73d1ad373e525be7d4932fb53970ec"
     },
     {
       "file": "09-owner.png",
@@ -330,7 +423,7 @@
       "caption": "当前新库处理项为零。页面下方 H 交付清单是历史待核对记录，不能当作这个空库已经绑定了历史账号。",
       "width": 1464,
       "height": 895,
-      "sha256": "58784f89f4124bcb29f9eb0037222d3dd101fca413752d4dea39e3a7d2204ec1"
+      "sha256": "bf42bcf04270f40762ec308ed6402f683a00f1e46030b44237afcdc6de235bb2"
     },
     {
       "file": "10-version.png",
@@ -338,7 +431,7 @@
       "caption": "在设置展开“构建与数据版本详情”，核对 R1.15-I、1.1.9 和 SOFTWARE.json 中的源码标识。main 仍为 H Candidate。",
       "width": 1464,
       "height": 895,
-      "sha256": "b3801c7f9bf32df500fd6383307d90a27b71d94e564546b2a88c42c9a9351f6f"
+      "sha256": "0d7520ae3a2c7b3a7c99f0ed9a9195275ae8fbdefb109ef81a645c6420958f3c"
     },
     {
       "file": "11-backup.png",
@@ -346,7 +439,7 @@
       "caption": "此图拍于创建前。实际 UI 随后正常关闭、生成 Complete 快照、校验并恢复到另一隔离目录；恢复后自动执行保持关闭。",
       "width": 1464,
       "height": 895,
-      "sha256": "380b2326fcf5a6935717f9dc93d263843d9eaa3bdfd0089e47a4b38219ec28c5"
+      "sha256": "1bdca2b137800c19d87ae99387bf43efd14c8c69ab6a7f010673777a168ce1c5"
     },
     {
       "file": "12-jobs-simulated-readonly.png",
@@ -354,7 +447,7 @@
       "caption": "SIMULATED：内存只读夹具展示 Unknown 和历史状态。真实数据库没有发布任务或记录，不代表真实平台通过；未知结果不可重发。",
       "width": 1464,
       "height": 895,
-      "sha256": "e252eccb17b2003563c1ee5e8ced606c9e9b19c63d88620693c534f1a67c1864"
+      "sha256": "11638ed35fcd05fa77492f84c54fc7bb2c50c70bd71a50cb633adc9a66e5760c"
     }
   ],
   "limits": {
