@@ -1,6 +1,6 @@
 {
   "task": "R1.15-H.2",
-  "status": "LOCAL_ACCEPTANCE_PASS_REMOTE_RENDER_PENDING",
+  "status": "R1_15_H2_UI_REFINEMENT_CANDIDATE_READY_FOR_OWNER_REVIEW",
   "candidateOnly": true,
   "startHead": "0498be171588324c6d65eb593e216dab70526192",
   "branch": "release/2026-10-03-r1.15-h2-ui-refinement-ready-visual-evidence",
@@ -516,7 +516,8 @@
   "ready": {
     "embeddedScreenshots": 6,
     "pathsRelative": true,
-    "githubActualRender": "PENDING_ACTUAL_GITHUB_RENDER"
+    "githubActualRender": "PASS_ACTUAL_GITHUB_MARKDOWN_6_IMAGES",
+    "renderReceipt": "docs/evidence/r115-h2-github-ready-render.json"
   },
   "inheritedLimitations": [
     "H remains PARTIAL_BACKUP_REVIEW_REQUIRED",

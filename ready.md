@@ -2,15 +2,15 @@
 
 **THIS BRANCH = H.2 UI Candidate · MAIN = H baseline · OWNER VISUAL APPROVAL REQUIRED · MAIN_MERGED = NO。**
 
-当前 durable state：**本地全部验收 PASS，公开 Candidate 安全同步及真实 GitHub 图片渲染待最后核验**。H.1 基线完整保留；本轮为视觉精修，正式功能状态仍为 H 的 `PARTIAL_BACKUP_REVIEW_REQUIRED`。
+当前 durable state：**R1_15_H2_UI_REFINEMENT_CANDIDATE_READY_FOR_OWNER_REVIEW**。H.1 基线完整保留；本轮为视觉精修，正式功能状态仍为 H 的 `PARTIAL_BACKUP_REVIEW_REQUIRED`。
 
 - 分支 `release/2026-10-03-r1.15-h2-ui-refinement-ready-visual-evidence`；Candidate Tag `r1.15-h2-ui-refinement-candidate-20261003`。最终 HEAD 以 `tag^{commit}` 唯一解析；包内源码 `03f742d17b949023e2a87167fdc8688b1e83420a`。
 - 首页提醒与指标更紧凑，账号健康卡利用有效宽度，归属卡片降低空白，Owner 分优先级且显示平台名，文章操作同一行，编辑抽屉标题空白修复；保留 H.1 克制的紫色品牌与全部发布安全语义。
 - 完整回归 **242 文件 / 1707 测试 PASS**，typecheck / lint / build / package、独立安装 18 阶段员工流程、99 页面布局 + 99 流程状态布局 PASS。
 - 原 production **2599 文件 / 哈希差异 0**；Main 等 360 文件冻结、478 IPC 调用及参数一致。真实发布、final submit、远端写、云 AI、production 写入全部 **0**；ALL_BATCH = OFF。
-- 保留限制：**28 真实账号待 Owner 归属；2 个缺失历史图片未处理；5 条 retired credential 未改写；原 production 未升级；Jobs 冷尾延迟未解决。**真实平台/云、Windows DPI、硬件 IME 未执行；安装包 **NotSigned / 默认 Electron 图标**。
+- 保留限制：**28 真实账号待 Owner 归属；2 个缺失历史图片未处理；5 条 retired credential 未改写；原 production 未升级；Jobs 冷尾延迟未解决。** 真实平台/云、Windows DPI、硬件 IME 未执行；安装包 **NotSigned / 默认 Electron 图标**。
 - 当前普通发布能力仍为 **抖音、康一官网 OfficialAPI、今日头条 ON**，账号与内容仍需原预检，其余平台和 batch 门禁保持。
-- SECRET_SCAN = **PASS_SOURCE_DOCS_SCREENSHOTS_PREVIEW_PACKAGE**；安装版完整解包 3809 项，0 secret / 0 敏感路径。GitHub 图片渲染 = **PENDING_ACTUAL_GITHUB_RENDER**，实际浏览器确认后才改为 PASS。
+- SECRET_SCAN = **PASS_SOURCE_DOCS_SCREENSHOTS_PREVIEW_PACKAGE**；安装版完整解包 3809 项，0 secret / 0 敏感路径。GitHub 图片渲染 = **PASS_ACTUAL_GITHUB_MARKDOWN_6_IMAGES**（真实浏览器已核验六图全部完成加载）。
 
 [Candidate 安装包与离线 HTML 预览](https://github.com/1542651213/geo-media-publisher/releases/tag/r1.15-h2-ui-refinement-candidate-20261003) · [完整 11 组 BEFORE / AFTER 图集](docs/product/R1.15-H2-PHONE-PREVIEW.md) · [双轮 UI Review](docs/product/R1.15-H2-UI-REVIEW.md) · [脱敏验证证据](docs/evidence/r115-h2-ui-verification.json)。
 

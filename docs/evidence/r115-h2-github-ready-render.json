@@ -1,0 +1,23 @@
+{
+  "status": "PASS",
+  "kind": "ACTUAL_GITHUB_MARKDOWN_BROWSER_OBSERVATION",
+  "observedHead": "d2e498860ad369b65a1d31cd7e229600282562e3",
+  "branch": "release/2026-10-03-r1.15-h2-ui-refinement-ready-visual-evidence",
+  "url": "https://github.com/1542651213/geo-media-publisher/blob/release/2026-10-03-r1.15-h2-ui-refinement-ready-visual-evidence/ready.md",
+  "previewPressed": true,
+  "embeddedScreenshotCount": 6,
+  "allComplete": true,
+  "brokenImageCount": 0,
+  "images": [
+    { "alt": "首页 · H.2 实际安装版", "file": "01-home-after.png", "complete": true, "naturalWidth": 1440, "naturalHeight": 900 },
+    { "alt": "AI Center · H.2 实际安装版", "file": "02-ai-after.png", "complete": true, "naturalWidth": 1440, "naturalHeight": 900 },
+    { "alt": "账号中心 · H.2 实际安装版", "file": "05-accounts-after.png", "complete": true, "naturalWidth": 1440, "naturalHeight": 900 },
+    { "alt": "历史账号归属 · H.2 实际安装版", "file": "06-account-ownership-after.png", "complete": true, "naturalWidth": 1440, "naturalHeight": 900 },
+    { "alt": "发布中心 · H.2 实际安装版", "file": "07-publish-after.png", "complete": true, "naturalWidth": 1440, "naturalHeight": 900 },
+    { "alt": "Owner Center · H.2 实际安装版", "file": "09-owner-after.png", "complete": true, "naturalWidth": 1440, "naturalHeight": 900 }
+  ],
+  "imageSources": "All six currentSrc values resolve to this branch under docs/product/r115-h2-ui-preview/",
+  "browserScreenshotObserved": true,
+  "laterCommits": "Delivery status/evidence only; image bytes unchanged. Final tag HEAD and remote image SHA256 must be verified separately.",
+  "privateBrowserDataIncluded": false
+}
