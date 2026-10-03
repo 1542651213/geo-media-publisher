@@ -32,6 +32,7 @@ export function EnterpriseProfileManager({ initialView, refresh, onNavigate }: {
   const [creating, setCreating] = useState(false);
   const [newCompanyName, setNewCompanyName] = useState("");
   const [newName, setNewName] = useState("");
+  const [createdCompanyId, setCreatedCompanyId] = useState<string | null>(null);
   const current = brands.find((brand) => brand.id === brandId) ?? null;
 
   const applyBrand = (brand: Brand, entries?: BrandKnowledgeEntry[]): void => {
@@ -54,10 +55,14 @@ export function EnterpriseProfileManager({ initialView, refresh, onNavigate }: {
 
   const reload = async (preferredId?: string): Promise<void> => {
     const nextBrands = await window.publisherAPI.brands.list();
-    setBrands(nextBrands);
-    const next = nextBrands.find((brand) => brand.id === (preferredId ?? brandId)) ?? nextBrands[0];
-    if (!next) return;
+    const next = preferredId ? nextBrands.find((brand) => brand.id === preferredId) : nextBrands.find((brand) => brand.id === brandId) ?? nextBrands[0];
+    if (!next) {
+      if (preferredId) throw new Error("指定企业资料暂时无法读取，请重试。");
+      setBrands(nextBrands);
+      return;
+    }
     const entries = await window.publisherAPI.brandKnowledge.list(next.id);
+    setBrands(nextBrands);
     applyBrand(next, entries);
   };
 
@@ -99,18 +104,37 @@ export function EnterpriseProfileManager({ initialView, refresh, onNavigate }: {
     finally { setBusy(false); }
   };
 
-  const createCompany = async (): Promise<void> => {
-    if (!loaded || busy || !newCompanyName.trim() || !newName.trim()) return;
+  const openCreatedCompany = async (id: string): Promise<void> => {
+    await window.publisherAPI.workspace.select(id);
+    await reload(id);
+    setCreatedCompanyId(null);
+    setCreating(false); setNewCompanyName(""); setNewName("");
+    setMessage("企业已创建，请核对并完善资料。");
+    refresh();
+  };
+
+  const retryCreatedCompany = async (): Promise<void> => {
+    if (!createdCompanyId || busy) return;
     setBusy(true); setMessage("");
-    try {
-      const created = await window.publisherAPI.brands.create({ companyName: newCompanyName.trim(), name: newName.trim(), aiForbiddenClaims: [...CORE_AI_FABRICATION_RULES] });
-      await reload(created.id);
-      setCreating(false); setNewCompanyName(""); setNewName("");
-      setMessage("企业已创建，请核对并完善资料。");
-      refresh();
-    } catch (error) { setMessage(error instanceof Error ? error.message : "企业创建失败，请检查后重试。"); }
+    try { await openCreatedCompany(createdCompanyId); }
+    catch (error) { setMessage(`企业已创建，资料读取尚未完成。${error instanceof Error ? error.message : "请重试读取。"}`); }
     finally { setBusy(false); }
   };
+
+  const createCompany = async (): Promise<void> => {
+    if (!loaded || busy || createdCompanyId || !newCompanyName.trim() || !newName.trim()) return;
+    setBusy(true); setMessage("");
+    let acknowledgedId: string | null = null;
+    try {
+      const created = await window.publisherAPI.brands.create({ companyName: newCompanyName.trim(), name: newName.trim(), aiForbiddenClaims: [...CORE_AI_FABRICATION_RULES] });
+      acknowledgedId = created.id;
+      setCreatedCompanyId(created.id);
+      await openCreatedCompany(created.id);
+    } catch (error) { setMessage(acknowledgedId ? `企业已创建，资料读取尚未完成。${error instanceof Error ? error.message : "请重试读取。"}` : error instanceof Error ? error.message : "企业创建失败，请检查后重试。"); }
+    finally { setBusy(false); }
+  };
+
+  if (createdCompanyId) return <section className="panel form-panel enterprise-empty"><h2>企业已创建</h2><p>“{newCompanyName}”已保存。本页将重新选择并读取该企业的资料。</p>{message && <div role="status" className="notice">{message}</div>}<button className="primary-button" disabled={busy} onClick={() => void retryCreatedCompany()}>{busy ? "正在读取资料…" : "重新读取已创建企业"}</button></section>;
 
   if (!current || creating) return <section className="panel form-panel enterprise-empty"><h2>新建企业工作区</h2><p>填写经核对的企业名称和简称。创建后可以导入草稿并完善资料。</p>{message && <div role="status" className="notice">{message}</div>}{!loaded && <><p>正在读取本机企业资料…</p><button className="secondary-button" onClick={() => void reload().then(() => { setLoaded(true); setMessage(""); }).catch(() => setMessage("企业资料暂时读取失败，请重试。"))}>重新读取资料</button></>}<form onSubmit={event => { event.preventDefault(); void createCompany(); }}><label>企业名称<input aria-label="新企业名称" value={newCompanyName} disabled={!loaded || busy} onChange={event => setNewCompanyName(event.target.value)} /></label><label>企业简称<input aria-label="新企业简称" value={newName} disabled={!loaded || busy} onChange={event => setNewName(event.target.value)} /></label><div className="row-actions"><button className="primary-button" disabled={!loaded || busy || !newCompanyName.trim() || !newName.trim()} type="submit">创建企业</button>{current && <button className="secondary-button" disabled={busy} type="button" onClick={() => setCreating(false)}>取消</button>}</div></form></section>;
 
