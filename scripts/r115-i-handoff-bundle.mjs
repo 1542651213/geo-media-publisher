@@ -10,9 +10,11 @@ const parameters = read('final-package-parameters'), identity = read('package-id
 const employee = read('final-employee-journey'), faults = read('final-offline-ui-faults');
 const independent = read('independent-start'), launcher = read('launcher-validation'), installation = read('final-install');
 const actualLauncher = read('actual-launcher-installed');
-for (const value of [identity, employee, faults, independent, launcher, installation, actualLauncher]) assert.equal(value.status, 'PASS');
+const companyRecovery = read('final-company-creation-recovery');
+for (const value of [identity, employee, faults, independent, launcher, installation, actualLauncher, companyRecovery]) assert.equal(value.status, 'PASS');
 assert.equal(employee.finalRun, true); assert.equal(employee.build.sourceCommit, parameters.source);
 assert.equal(independent.build.sourceCommit, parameters.source);
+for (const item of companyRecovery.cases) { assert.equal(item.status, 'PASS'); assert.equal(item.build.sourceCommit, parameters.source); }
 const testLog = readFileSync(join(evidence, 'final-full-tests.log'), 'utf8');
 const tests = /Test Files\s+(\d+) passed \((\d+)\)[\s\S]+?Tests\s+(\d+) passed \((\d+)\)/u.exec(testLog);
 assert.ok(tests); assert.equal(tests[1], tests[2]); assert.equal(tests[3], tests[4]);
@@ -59,7 +61,8 @@ const publicEvidence = {
   directSqlMutations: employee.directSqlMutations, networkByStart: employee.networkByStart, sourceReadCounts: employee.independenceByStart.map(row => row.sourceReads),
   sourceModuleCounts: employee.independenceByStart.map(row => row.sourceModules), secondInstance: employee.secondInstance,
   newProfileSnapshot: 'COMPLETE_VERIFIED_AND_ISOLATED_RESTORE', restoredAutomaticExecutionDisabled: true, diagnosticPrivacy: 'PASS' },
- faults, independentStart: { status: independent.status, kind: independent.kind, controllerExitedBeforeObservation: independent.controllerExitedBeforeObservation,
+ faults, companyCreationRecovery: { status: companyRecovery.status, sourceCommit: parameters.source, cases: companyRecovery.cases.map(item => ({ name: item.name, status: item.status, checks: item.checks, directSqlMutations: item.directSqlMutations, network: item.network, networkExit: item.networkExit, independence: item.independence })) },
+ independentStart: { status: independent.status, kind: independent.kind, controllerExitedBeforeObservation: independent.controllerExitedBeforeObservation,
   mainContinuedAndOrdinaryUiResponded: independent.mainContinuedAndOrdinaryUiResponded, codexDesktopProcessStopped: false, network: independent.network },
  launcher, actualLauncher, installation, privatePreparationCountsOnly: safePrivateSummary, screenshots,
  limits: { separateCleanWindowsMachine: 'NOT_RUN', standardUser: 'NOT_RUN', productionUpgrade: 'PENDING_OWNER_AND_BACKUP_REVALIDATION',
